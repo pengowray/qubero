@@ -214,7 +214,7 @@ Each row is a block that more than one report used.
 | Claimed against actual | 8 of 8 | Stored sizes, counts, summaries, and second copies, recomputed or compared | `Valid::Eq(Expr)` and checksums in `check.rs`. `consumed_by` marks every length and count | Aggregates in `Expr`. An extent audit over every length. Equality across records, such as a ZIP local header against its central directory entry |
 | Logical against physical | 7 of 8 | For each logical unit, the extents it occupies. For each address, the file offset | `Payload.extents` for SQLite. Decoded spaces in `space.rs`. `placed.rs` | Typed references, and address spaces declared by a table |
 | Known values named | 7 of 8 | A registry of standard constants: tables, magic numbers, program lists, epochs, encoders | Enums, `explain.rs` for expected magic, DiE rules for what made a file | A registry keyed by field, value, or byte pattern |
-| Record table with one sentence per record | 7 of 8 | A summary line per struct or switch case | `named_by`, `name_from`, and `ComputedText` for single fields | Summary text for a whole record |
+| Record table with one sentence per record | 7 of 8 | A summary line per struct or switch case | `reads_as` lines on the records of the eight reports' templates, and every other record's fields named. `named_by`, `name_from`, and `ComputedText` for single fields | Conditions and arithmetic inside a line |
 | From compressed bits to content, stage by stage | 3 of 8, every report whose content is compressed and decodable | For each stage: its size, and which input produced each output byte | Deflate traces (`codec/inflate.rs`, `traced.rs`), decoded spaces and `Space::map_out`. The DOCX and PNG reports matched Qubero's trace code for code | Traces for other codecs. The PNG unfilter with parameters from the header |
 | Wheel-zoomable map with semantic redraw | 5 of 8 | Spans at each depth for a byte range, byte classes, and optionally a memory row | Spans, `overview.rs` byte classes, the hex view | A view that picks the depth from the zoom level |
 | Readings that disagree | 6 of 8, in the notes | The strings view, byte classes, and template types, joined over the same bytes | Each reading exists on its own | The join |
@@ -478,9 +478,35 @@ label and an expression, uses them.
 
 ### Summary text per record
 
-An expression per struct or switch case that renders the record as one line.
-It gives record tables their sentences, gives the listing better row labels,
-and recovers the `[[format]]` attributes the ImHex converter drops.
+A line per structure that renders the record as one line. It gives record
+tables their sentences, gives the listing better row labels, and recovers the
+`[[format]]` attributes the ImHex converter drops.
+
+The IR has had a first form of this since 2026-09-06: `Ty::reads_as` sets
+`StructDef::line`, a list of `LinePart`s, each a field, a word pattern such as
+`{} MCUs`, and a reading to leave out (`quiet`). The report's "Reads as"
+column, the inspector's value box and the value table's cells all use it. On
+2026-09-25 the templates behind the eight reports got lines where their
+records needed one (ZIP local and central entries, MIDI events and chunks,
+SQLite b-tree, overflow and freelist trunk pages, the WAV `fmt ` chunk, ELF
+section and program headers, JPEG quantization tables), and three rules were
+added:
+
+- A number with a unit after it (`{} bytes of data`) is grouped (`1,312`), and
+  the unit is singular for one (`1 channel`).
+- A structure with a line reads it however many fields it has. Before, a
+  structure of more than eight fields had no line at all, so an ELF section
+  header could not have had one.
+- A structure with no line of its own and not drawn on one row reads as its
+  fields with each number, count or run of bytes after its field's name
+  (`note 72 · velocity 0`), leaving out lengths, counts and the fields the
+  structure marks as machinery, at most six parts. Named values, text and
+  magic numbers stand alone. Before, the same record read `72 0`, and a ZIP
+  entry read as `local file 20 2 more deflate 0 33 1825744095 346 1312`.
+
+What `LinePart` cannot say yet: a condition (leave `unpacks to` off a stored
+entry), arithmetic on the value (a pitch bend as one signed number), or a
+number as hex. An expression per part would cover all three.
 
 ### Content roles
 

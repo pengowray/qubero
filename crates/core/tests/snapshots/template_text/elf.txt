@@ -40,7 +40,8 @@ root ELF {
             section_header_entry_size + 16 from file) u32le
             aside
         program_headers: at(program_header_offset from file) ProgramHeader
-            (named by type, unit segment) {
+            (named by type, unit segment, line type then flags then file_size worded "{} bytes
+            in the file" then memory_size worded "{} bytes in memory") {
           type: u32le enum SegmentType {
             0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
             7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
@@ -55,7 +56,7 @@ root ELF {
           align: u32le
         }[program_header_count]
         section_headers: at(section_header_offset from file) SectionHeader
-            (named by name, unit section) {
+            (named by name, unit section, line type then flags then size worded "{} bytes") {
           name_offset: u32le
           name: switch section_name_base {
             0 => bytes[0]
@@ -259,7 +260,8 @@ root ELF {
             section_header_entry_size + 16 from file) u32be
             aside
         program_headers: at(program_header_offset from file) ProgramHeader
-            (named by type, unit segment) {
+            (named by type, unit segment, line type then flags then file_size worded "{} bytes
+            in the file" then memory_size worded "{} bytes in memory") {
           type: u32be enum SegmentType {
             0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
             7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
@@ -274,7 +276,7 @@ root ELF {
           align: u32be
         }[program_header_count]
         section_headers: at(section_header_offset from file) SectionHeader
-            (named by name, unit section) {
+            (named by name, unit section, line type then flags then size worded "{} bytes") {
           name_offset: u32be
           name: switch section_name_base {
             0 => bytes[0]
@@ -481,7 +483,8 @@ root ELF {
             section_header_entry_size + 24 from file) u64le
             aside
         program_headers: at(program_header_offset from file) ProgramHeader
-            (named by type, unit segment) {
+            (named by type, unit segment, line type then flags then file_size worded "{} bytes
+            in the file" then memory_size worded "{} bytes in memory") {
           type: u32le enum SegmentType {
             0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
             7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
@@ -496,7 +499,7 @@ root ELF {
           align: u64le
         }[program_header_count]
         section_headers: at(section_header_offset from file) SectionHeader
-            (named by name, unit section) {
+            (named by name, unit section, line type then flags then size worded "{} bytes") {
           name_offset: u32le
           name: switch section_name_base {
             0 => bytes[0]
@@ -708,7 +711,8 @@ root ELF {
             section_header_entry_size + 24 from file) u64be
             aside
         program_headers: at(program_header_offset from file) ProgramHeader
-            (named by type, unit segment) {
+            (named by type, unit segment, line type then flags then file_size worded "{} bytes
+            in the file" then memory_size worded "{} bytes in memory") {
           type: u32be enum SegmentType {
             0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
             7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
@@ -723,7 +727,7 @@ root ELF {
           align: u64be
         }[program_header_count]
         section_headers: at(section_header_offset from file) SectionHeader
-            (named by name, unit section) {
+            (named by name, unit section, line type then flags then size worded "{} bytes") {
           name_offset: u32be
           name: switch section_name_base {
             0 => bytes[0]

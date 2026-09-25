@@ -61,6 +61,20 @@ pub struct Cell {
     pub contiguous: bool,
 }
 
+/// A unit after a count of one, made singular: ` bytes in the file` becomes
+/// ` byte in the file`. Only the first word, and only a plural of four
+/// letters or more, so a unit such as `fps` or `ms` is left alone.
+fn singular_unit(after: &str) -> String {
+    let lead = after.len() - after.trim_start().len();
+    let (space, rest) = after.split_at(lead);
+    let end = rest.find(' ').unwrap_or(rest.len());
+    let (word, tail) = rest.split_at(end);
+    match word.strip_suffix('s') {
+        Some(one) if word.len() >= 4 && !one.ends_with('s') => format!("{space}{one}{tail}"),
+        _ => after.to_string(),
+    }
+}
+
 /// What family of value this is, in the words the view has layout rules for.
 /// Numbers are right-aligned in their cell and everything else is not, so the
 /// three kinds that are not in the table's vocabulary -- a signature, bytes
@@ -521,9 +535,7 @@ impl Evaluator {
                 // Through whatever the field is wrapped in: a JPEG segment's
                 // body is a switch inside a sized structure, and the reading
                 // wanted is the one at the bottom of that.
-                let mut said = Vec::new();
-                self.one_line(doc, &cp, &mut said)?;
-                said.join(" ")
+                self.record_reading(doc, &cp)?
             } else {
                 match &info.value {
                     Value::Bytes { .. } | Value::Unread { .. } => super::listing::byte_text(info.size_bits / 8),
@@ -539,7 +551,16 @@ impl Evaluator {
             parts.push(match part.word.split_once("{}") {
                 None if part.word.is_empty() => reading,
                 None => format!("{} {reading}", part.word),
-                Some((before, after)) => format!("{before}{reading}{after}"),
+                // A number with a unit after it is a quantity: its digits are
+                // grouped, and the unit is singular for one of them, so the
+                // pattern `{} channels` reads `1 channel`.
+                Some((before, after)) => match reading.parse::<u64>() {
+                    Ok(n) if !after.is_empty() => {
+                        let after = if n == 1 { singular_unit(after) } else { after.to_string() };
+                        format!("{before}{}{after}", super::listing::grouped(n))
+                    }
+                    _ => format!("{before}{reading}{after}"),
+                },
             });
         }
         Ok(parts.join(" \u{b7} "))

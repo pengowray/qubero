@@ -9,7 +9,8 @@ root ZIP {
       0x06064b50 = ZIP64 end, 0x07064b50 = ZIP64 locator
     }
     body: switch signature {
-      0x04034b50 => LocalFile {
+      0x04034b50 => LocalFile (line compression then data_size worded "{} bytes of data" then
+          unpacked_size worded "unpacks to {} bytes") {
         version_needed: u16le
         flags: u16le flags GeneralPurposeFlags {
           bit 0 = encrypted, bit 3 = data descriptor follows, bit 6 = strong encryption,
@@ -93,7 +94,9 @@ root ZIP {
           uncompressed_size: u32le
         }
       }
-      0x02014b50 => CentralDirectoryFile {
+      0x02014b50 => CentralDirectoryFile (line compression then compressed_size worded "{} bytes
+          of data" then uncompressed_size worded "unpacks to {} bytes" then local_header worded
+          "local header {}") {
         version_made_by: u16le
         version_needed: u16le
         flags: u16le flags GeneralPurposeFlags {
@@ -153,7 +156,8 @@ root ZIP {
           }
         }
         comment: text[comment_length] encoding unknown
-        local_header: at(local_header_offset from file) LocalFileHeader (named by name) {
+        local_header: at(local_header_offset from file) LocalFileHeader
+            (named by name, line signature except "\"PK\\x03\\x04\"") {
           signature: magic 50 4B 03 04
           version_needed: u16le
           flags: u16le flags GeneralPurposeFlags {

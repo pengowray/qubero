@@ -2,7 +2,7 @@ template midi
 
 root repeat(until end) Chunk
 
-type Chunk (named by id, contents body) {
+type Chunk (named by id, contents body, line id then body) {
   id: text[4] ascii
   size: u32be
   body: sized(size) switch id {
@@ -25,7 +25,8 @@ type Chunk (named by id, contents body) {
       }
       extra: bytes[remaining]
     }
-    'MTrk' => repeat(until end) Event (named by effective_status, contents message) {
+    'MTrk' => repeat(until end) Event (named by effective_status, contents message, unit event,
+        line delta worded "after {} ticks" except "0" then effective_status then message) {
       delta: vlq
       status: switch peek(u8be) / 128 {
         1 => u8be enum Status {
@@ -145,7 +146,7 @@ type Chunk (named by id, contents body) {
             33 => Port {
               port: u8be
             }
-            81 => Tempo {
+            81 => Tempo (line microseconds_per_quarter worded "{} µs per quarter note") {
               microseconds_per_quarter: u24be
             }
             84 => SmpteOffset {

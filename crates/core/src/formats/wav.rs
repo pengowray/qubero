@@ -466,6 +466,12 @@ fn fmt(endian: Endian) -> T {
             ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible(endian))], T::bytes(E::Remaining))),
         ],
     )
+    .reads_as(&[
+        ("format", "", ""),
+        ("channels", "{} channels", ""),
+        ("sample_rate", "{} Hz", ""),
+        ("bits_per_sample", "{}-bit", ""),
+    ])
 }
 
 /// What `WAVE_FORMAT_EXTENSIBLE` adds: how many of the bits per sample are

@@ -19,7 +19,8 @@ type Chunk (named by id, contents body) {
       peek(u32le) and peek(u32le) <= remaining and peek(u32le) % 2 == 0) and
       ((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 + peek(u32le)
       <= remaining ? peek(u32le) : 0)) switch id {
-    'fmt ' => Format {
+    'fmt ' => Format (line format then channels worded "{} channels" then sample_rate worded "{}
+        Hz" then bits_per_sample worded "{}-bit") {
       format: u16le enum FormatTag {
         0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
         0xfffe = extensible
@@ -951,7 +952,8 @@ type ChunkBE = Chunk (named by id, contents body) {
   size: u32be
   body: sized(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) switch
       id {
-    'fmt ' => Format {
+    'fmt ' => Format (line format then channels worded "{} channels" then sample_rate worded "{}
+        Hz" then bits_per_sample worded "{}-bit") {
       format: u16be enum FormatTag {
         0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
         0xfffe = extensible

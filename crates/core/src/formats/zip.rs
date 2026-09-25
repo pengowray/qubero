@@ -355,7 +355,14 @@ fn local(data_read_elsewhere: bool) -> T {
     // it. Local, since MS-DOS had no zone to record and a ZIP does not add one.
     // An archiver may also write a real timestamp in an extra field, tag 0x5455
     // or 0x000a, which nothing here reads yet.
-    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"));
+    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
+    // The file's name is the record's own name, so the line is how it was
+    // packed: the method and the two sizes.
+    .reads_as(&[
+        ("compression", "", ""),
+        ("data_size", "{} bytes of data", ""),
+        ("unpacked_size", "unpacks to {} bytes", ""),
+    ]);
     match data_read_elsewhere {
         true => entry.field_aside("data"),
         false => entry,
@@ -400,6 +407,15 @@ fn central() -> T {
     // same packed pair. See the local header above.
     .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
     .field_aside("local_header")
+    // The same facts as the local header, and where that header is. The
+    // header's own line is empty while its signature is right, so the address
+    // is all the line says about it until something is wrong there.
+    .reads_as(&[
+        ("compression", "", ""),
+        ("compressed_size", "{} bytes of data", ""),
+        ("uncompressed_size", "unpacks to {} bytes", ""),
+        ("local_header", "local header {}", ""),
+    ])
 }
 
 /// A local file header as the central directory points at it: the signature
@@ -427,6 +443,7 @@ fn local_header() -> T {
             ("extra", extras(zip64_local())),
         ],
     )
+    .reads_as(&[("signature", "", r#""PK\x03\x04""#)])
 }
 
 /// The record a streamed entry writes after its data, holding the numbers its
@@ -601,6 +618,46 @@ mod tests {
             Value::Str("a.txt".into())
         );
         assert_eq!(e.node(&d, &[0, 0, 1, 14]).unwrap().size_bits, 24);
+    }
+
+    /// A central directory entry for `name`, stored, whose local header is
+    /// at `offset`.
+    fn central_entry(name: &[u8], size: u32, offset: u32) -> Vec<u8> {
+        let mut v = b"PK\x01\x02".to_vec();
+        v.extend_from_slice(&20u16.to_le_bytes()); // made by
+        v.extend_from_slice(&20u16.to_le_bytes()); // needed
+        v.extend_from_slice(&[0; 12]); // flags, method, times, crc
+        v.extend_from_slice(&size.to_le_bytes());
+        v.extend_from_slice(&size.to_le_bytes());
+        v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        v.extend_from_slice(&[0; 12]); // extra and comment lengths, disk, attributes
+        v.extend_from_slice(&offset.to_le_bytes());
+        v.extend_from_slice(name);
+        v
+    }
+
+    #[test]
+    fn an_entry_reads_as_how_it_was_packed_and_where_its_header_is() {
+        let mut v = entry(b"a.txt", 0, 1, 1, &[], b"a");
+        let directory = v.len() as u32;
+        v.extend_from_slice(&central_entry(b"a.txt", 1, 0));
+        v.extend_from_slice(&central_entry(b"a.txt", 1, directory));
+        v.extend_from_slice(&end_record());
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(zip());
+        let line = |e: &mut Evaluator, path: &[usize]| e.node(&d, path).unwrap().line;
+        assert_eq!(
+            line(&mut e, &[0, 0]).as_deref(),
+            Some("local file \u{b7} stored \u{b7} 1 byte of data \u{b7} unpacks to 1 byte")
+        );
+        assert_eq!(
+            line(&mut e, &[0, 1]).as_deref(),
+            Some("central directory file \u{b7} stored \u{b7} 1 byte of data \u{b7} unpacks to 1 byte \u{b7} local header @0x0")
+        );
+        // An offset that lands somewhere other than a local header says what
+        // it found there.
+        let wrong = line(&mut e, &[0, 2]).unwrap_or_default();
+        assert!(wrong.ends_with(&format!("local header @0x{directory:x} \u{b7} \"PK\\x01\\x02\"")), "{wrong}");
     }
 
     /// An entry written as a stream: `compressed_size` is zero, flag bit 3 is

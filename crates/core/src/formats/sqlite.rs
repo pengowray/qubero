@@ -290,7 +290,9 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, usable: E,
     // the cell pointers and the cells. Nothing else in the template reads any
     // of it, so the shapes cannot tell it apart from a field worth reading;
     // the listing folds it behind the page all the same.
-    T::structure(name, fields).machinery(&["page_type", "first_freeblock", "cell_content_start", "fragmented_free_bytes"])
+    T::structure(name, fields)
+        .machinery(&["page_type", "first_freeblock", "cell_content_start", "fragmented_free_bytes"])
+        .reads_as(&[("page_type", "", ""), ("cell_count", "{} cells", ""), ("right_most_page", "right-most child page {}", "")])
 }
 
 /// The page size in bytes, as the header field that works it out.
@@ -332,6 +334,7 @@ fn freelist_trunk() -> T {
         ],
     )
     .machinery(&["next_trunk_offset"])
+    .reads_as(&[("next_trunk", "next trunk page {}", "0"), ("leaf_count", "{} leaf pages", "")])
 }
 
 /// A page on the freelist that is not a trunk. SQLite never reads one, and
@@ -381,7 +384,9 @@ fn other_page(n: E) -> T {
             T::structure(
                 "Overflow",
                 vec![("next_page", T::u32(Big)), ("content", T::bytes(E::Remaining))],
-            ),
+            )
+            // The last page of a chain has no next page, and says 0.
+            .reads_as(&[("next_page", "next page {}", "0"), ("content", "", "")]),
         )],
         T::bytes(E::Remaining),
     )
@@ -671,6 +676,8 @@ mod tests {
         // One more page, starting at a page boundary.
         assert_eq!(ev.node(&d, &[PAGES]).unwrap().child_count, 1);
         assert_eq!(ev.node(&d, &[PAGES, 0, 0]).unwrap().offset_bits, PAGE as u64 * 8);
+        // A page reads as its type and how many cells it holds.
+        assert_eq!(ev.node(&d, &[PAGE1]).unwrap().line.as_deref(), Some("table leaf \u{b7} 1 cell"));
     }
 
     #[test]

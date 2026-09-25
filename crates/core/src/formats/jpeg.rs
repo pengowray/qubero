@@ -295,10 +295,10 @@ fn quant_table() -> T {
         ],
     )
     .counted_as("table")
-    // Sixty-four values every time, so their count says nothing; the table is
-    // its number, which is its name, and the precision only when it is the
-    // one that is worth remarking on.
-    .reads_as(&[("precision", "", "8-bit")])
+    // Sixty-four values every time, so their count says nothing. The table
+    // is its number, and the precision only when it is the one that is worth
+    // remarking on.
+    .reads_as(&[("id", "table {}", ""), ("precision", "", "8-bit")])
 }
 
 /// `APP0`, which is JFIF in every file that has one, and which is what makes a

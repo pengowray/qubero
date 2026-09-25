@@ -1154,16 +1154,50 @@ impl Evaluator {
         child_count: u64,
     ) -> R<Option<String>> {
         const FIELDS: u64 = 8;
-        if self.lining || !worth_a_line || child_count == 0 || child_count > FIELDS {
+        if self.lining || !worth_a_line || child_count == 0 {
             return Ok(None);
         }
-        let mut said = Vec::new();
-        let got = self.one_line(doc, path, &mut said);
-        match got {
-            Ok(()) => Ok(Some(said.join(" ")).filter(|s| !s.is_empty())),
+        // A structure that says what it reads as reads only the fields it
+        // names, so how many fields it has costs nothing: an ELF section
+        // header is ten fields and a line of three.
+        let declared = self.struct_of(&self.memo[path].ty.clone()).is_some_and(|d| !d.line.is_empty());
+        if !declared && child_count > FIELDS {
+            return Ok(None);
+        }
+        match self.record_reading(doc, path) {
+            Ok(said) => Ok(Some(said).filter(|s| !s.is_empty())),
             Err(e) if e.interrupted() => Err(e),
             Err(_) => Ok(None),
         }
+    }
+
+    /// What a node reads as on one line: the line its structure declares, or
+    /// else its fields in order.
+    ///
+    /// A structure drawn on one row reads as its values alone, the way an
+    /// instruction reads as its operands. Any other structure with no line of
+    /// its own says which field each number is: a MIDI note is `note 72 ·
+    /// velocity 0`, and `72 0` is two numbers the reader has to count off
+    /// against the field tree.
+    pub(super) fn record_reading<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<String> {
+        // Past this many parts a line is a list of the record's fields, and
+        // the field tree already is one.
+        const PARTS: usize = 6;
+        let def = self.struct_of(&self.memo[path].ty.clone());
+        let labels = def.as_ref().is_some_and(|d| d.line.is_empty() && !d.inline);
+        let mut said = Vec::new();
+        let was = std::mem::replace(&mut self.lining, true);
+        let got = self.one_line_walk(doc, path, labels, &mut said);
+        self.lining = was;
+        got?;
+        if !labels {
+            return Ok(said.join(" "));
+        }
+        if said.len() > PARTS {
+            said.truncate(PARTS);
+            said.push("\u{2026}".to_string());
+        }
+        Ok(said.join(" \u{b7} "))
     }
 
     /// A structure that reads on one row, as its fields' values in order. A
@@ -1175,13 +1209,21 @@ impl Evaluator {
         // would read the same leaves once per level of nesting, so the walk
         // says it is under way and the nodes it asks for come back without one.
         let was = std::mem::replace(&mut self.lining, true);
-        let got = self.one_line_walk(doc, path, out);
+        let got = self.one_line_walk(doc, path, false, out);
         self.lining = was;
         got
     }
 
-    fn one_line_walk<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<String>) -> R<()> {
+    /// The walk under [`Self::one_line`]. With `labels`, a part that does
+    /// not say what it is on its own goes after its field's name: a number,
+    /// a count, a run of bytes. A named value, text and a magic number say
+    /// what they are already.
+    fn one_line_walk<S: Source>(&mut self, doc: &Document<S>, path: &[usize], labels: bool, out: &mut Vec<String>) -> R<()> {
         let info = self.node(doc, path)?;
+        // A structure drawn on one row inside a record still reads as its
+        // values alone.
+        let labels = labels && !(info.composite && self.struct_of(&self.memo[path].ty.clone()).is_some_and(|d| d.inline));
+        let named = |text: String| if labels { format!("{} {text}", info.name) } else { text };
         if !info.composite {
             // A field of no bits is an absence, not an empty value: the switch
             // for an opcode with no immediate selects one.
@@ -1194,8 +1236,9 @@ impl Evaluator {
                     Value::Bytes { .. } | Value::Unread { .. } => byte_text(info.size_bits / 8),
                     v => brief(v),
                 };
+                let says_itself = matches!(&info.value, Value::Enum { name: Some(_), .. } | Value::Str(_) | Value::Magic { .. });
                 if !text.is_empty() {
-                    out.push(text);
+                    out.push(if says_itself { text } else { named(text) });
                 }
             }
             return Ok(());
@@ -1212,7 +1255,7 @@ impl Evaluator {
         // bytes give, and for the same reason.
         if matches!(ty, Ty::Decoded { .. } | Ty::Stitched { .. }) {
             if info.size_bits > 0 {
-                out.push(byte_text(info.size_bits / 8));
+                out.push(named(byte_text(info.size_bits / 8)));
             }
             return Ok(());
         }
@@ -1225,11 +1268,10 @@ impl Evaluator {
             let mut child = path.to_vec();
             child.push(0);
             let there = self.node(doc, &child)?;
-            let mut said = Vec::new();
-            self.one_line(doc, &child, &mut said)?;
+            let said = self.record_reading(doc, &child)?;
             let at = address_text(there.offset_bits, there.space);
-            let reading = far_end(&there, said.join(" "));
-            out.push(if reading.is_empty() { at } else { format!("{at} · {reading}") });
+            let reading = far_end(&there, said);
+            out.push(named(if reading.is_empty() { at } else { format!("{at} · {reading}") }));
             return Ok(());
         }
         if matches!(
@@ -1237,7 +1279,7 @@ impl Evaluator {
             Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
         ) {
             let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
-            out.push(count_text(info.child_count, &unit));
+            out.push(named(count_text(info.child_count, &unit)));
             return Ok(());
         }
         // A structure that has said what it reads as says it here too, so a
@@ -1262,7 +1304,16 @@ impl Evaluator {
         let quiet: Vec<bool> = match self.struct_of(&ty) {
             Some(def) => {
                 let m = crate::machinery::measurers(&def);
-                (0..def.fields.len()).map(|i| m[i].is_some() && crate::machinery::hint(&def, i) != Some(false)).collect()
+                // A line that names its fields also leaves out the ones the
+                // structure calls its own plumbing: a b-tree page's free-block
+                // offsets are numbers, and a label does not make them worth
+                // reading.
+                (0..def.fields.len())
+                    .map(|i| {
+                        let hint = crate::machinery::hint(&def, i);
+                        (m[i].is_some() && hint != Some(false)) || (labels && hint == Some(true))
+                    })
+                    .collect()
             }
             None => Vec::new(),
         };
@@ -1272,7 +1323,7 @@ impl Evaluator {
             }
             let mut child = path.to_vec();
             child.push(i);
-            self.one_line(doc, &child, out)?;
+            self.one_line_walk(doc, &child, labels, out)?;
         }
         Ok(())
     }

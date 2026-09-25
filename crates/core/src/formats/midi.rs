@@ -96,6 +96,7 @@ fn chunk() -> T {
             ),
         ],
     )
+    .reads_as(&[("id", "", ""), ("body", "", "")])
 }
 
 fn header() -> T {
@@ -187,6 +188,11 @@ fn event() -> T {
             ("message", T::switch(E::field("effective_status"), cases, running_status())),
         ],
     )
+    .counted_as("event")
+    // The time since the event before, where there is any, then the event.
+    // A status that running status leaves out is read from the event before,
+    // so a note written as two bytes still says it is a note.
+    .reads_as(&[("delta", "after {} ticks", "0"), ("effective_status", "", ""), ("message", "", "")])
 }
 
 fn channel_message(high: u8) -> T {
@@ -218,7 +224,11 @@ fn meta() -> T {
     cases.push((0x20, T::structure("ChannelPrefix", vec![("channel", T::u8())])));
     cases.push((0x21, T::structure("Port", vec![("port", T::u8())])));
     // Microseconds in a quarter note: 500000 is 120 beats a minute.
-    cases.push((0x51, T::structure("Tempo", vec![("microseconds_per_quarter", T::UInt { bits: 24, endian: Big })])));
+    cases.push((
+        0x51,
+        T::structure("Tempo", vec![("microseconds_per_quarter", T::UInt { bits: 24, endian: Big })])
+            .reads_as(&[("microseconds_per_quarter", "{} µs per quarter note", "")]),
+    ));
     cases.push((
         0x54,
         T::structure(
@@ -369,6 +379,26 @@ mod tests {
         let w = ev.prepare_write(&d, &[1, 2, 3, 0], "3").unwrap();
         assert_eq!(w.data, vec![0x80, 0x03]);
         assert_eq!(w.n_bits, 16);
+    }
+
+    #[test]
+    fn an_event_reads_as_its_time_its_kind_and_its_fields() {
+        let d = Document::new(MemSource(file()));
+        let mut ev = Evaluator::new(midi());
+        let line = |ev: &mut Evaluator, path: &[usize]| ev.node(&d, path).unwrap().line;
+        assert_eq!(line(&mut ev, &[1]).as_deref(), Some("MTrk \u{b7} 5 events"));
+        assert_eq!(line(&mut ev, &[1, 2, 0]).as_deref(), Some("meta \u{b7} track name \u{b7} Piano"));
+        assert_eq!(line(&mut ev, &[1, 2, 1]).as_deref(), Some("meta \u{b7} tempo \u{b7} 500,000 \u{b5}s per quarter note"));
+        assert_eq!(line(&mut ev, &[1, 2, 2]).as_deref(), Some("note on ch1 \u{b7} note 60 \u{b7} velocity 100"));
+        assert_eq!(
+            line(&mut ev, &[1, 2, 3]).as_deref(),
+            Some("after 480 ticks \u{b7} note off ch1 \u{b7} note 60 \u{b7} velocity 64")
+        );
+        // A header with no line of its own names each number by its field.
+        assert_eq!(
+            line(&mut ev, &[0]).as_deref(),
+            Some("MThd \u{b7} tracks play together \u{b7} track_count 1 \u{b7} in_frames 0 \u{b7} rate 480")
+        );
     }
 
     #[test]
