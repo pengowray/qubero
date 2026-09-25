@@ -71,7 +71,15 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   // A list says how many it holds as well as how big it is: `pages: 73 pages,
   // 37,376 bytes`.
   const only = g.units.length === 1 ? g.units[0]?.node : undefined;
-  const count = g.units.length > 1 ? counted(g.units.length, g.unitWord) : only?.list === true ? counted(only.child_count, childWord(only)) : null;
+  // A kind of element says how many there are even when there is one, so
+  // `table interior in pages` reads as one page of the list, like its
+  // neighbour `overflow in pages: 40 items`.
+  const count =
+    g.units.length > 1 || g.kind !== null
+      ? counted(g.units.length, g.unitWord)
+      : only?.list === true
+        ? counted(only.child_count, childWord(only))
+        : null;
   // The colon stays with the name, and the facts wrap as one piece, so a
   // narrow column never starts a line with the colon.
   const lead = document.createElement("span");

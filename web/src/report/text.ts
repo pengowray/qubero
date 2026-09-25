@@ -369,7 +369,7 @@ export const RV = {
     if (others > 0) parts.push(`${counted(others, "way")} to find a field or set its length`);
     return `The template also declares ${listText(parts)} that this file does not use.`;
   },
-  profileShowUnused: "Show them",
+  profileShowUnused: "Show them in the table",
   profileHideUnused: "Hide them",
   profileCaptionFile: "A field counts once in each group it belongs to: a named value is also the number under it.",
   choicesHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} that could take more forms than this file uses`,
