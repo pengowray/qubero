@@ -61,18 +61,24 @@ pub struct Cell {
     pub contiguous: bool,
 }
 
-/// A unit after a count of one, made singular: ` bytes in the file` becomes
-/// ` byte in the file`. Only the first word, and only a plural of four
-/// letters or more, so a unit such as `fps` or `ms` is left alone.
+/// A unit after a count of one, made singular: ` bytes of data` becomes
+/// ` byte of data`, and ` leaf pages` becomes ` leaf page`. The noun is the
+/// last word before the first `of`, `in`, `per` or `to`, or the last word
+/// where there is none of those. Only a plural of four letters or more is
+/// changed, so a unit such as `fps`, `ms` or `µs` is left alone.
 fn singular_unit(after: &str) -> String {
-    let lead = after.len() - after.trim_start().len();
-    let (space, rest) = after.split_at(lead);
-    let end = rest.find(' ').unwrap_or(rest.len());
-    let (word, tail) = rest.split_at(end);
-    match word.strip_suffix('s') {
-        Some(one) if word.len() >= 4 && !one.ends_with('s') => format!("{space}{one}{tail}"),
-        _ => after.to_string(),
+    let words: Vec<&str> = after.split(' ').collect();
+    let stop = words.iter().position(|w| matches!(*w, "of" | "in" | "per" | "to")).unwrap_or(words.len());
+    let Some(noun) = words[..stop].iter().rposition(|w| !w.is_empty()) else { return after.to_string() };
+    let word = words[noun];
+    let plural = word.len() >= 4 && word.bytes().all(|b| b.is_ascii_alphabetic()) && word.ends_with('s') && !word.ends_with("ss");
+    if !plural {
+        return after.to_string();
     }
+    let mut out = words;
+    let one = &word[..word.len() - 1];
+    out[noun] = one;
+    out.join(" ")
 }
 
 /// What family of value this is, in the words the view has layout rules for.
@@ -641,6 +647,18 @@ mod tests {
 
     fn doc(bytes: Vec<u8>) -> Document<MemSource> {
         Document::new(MemSource(bytes))
+    }
+
+    #[test]
+    fn a_unit_after_one_is_singular_in_its_noun() {
+        assert_eq!(singular_unit(" bytes of data"), " byte of data");
+        assert_eq!(singular_unit(" leaf pages"), " leaf page");
+        assert_eq!(singular_unit(" bytes in the file"), " byte in the file");
+        assert_eq!(singular_unit(" MCUs"), " MCU");
+        assert_eq!(singular_unit(" \u{b5}s per quarter note"), " \u{b5}s per quarter note");
+        assert_eq!(singular_unit("-bit"), "-bit");
+        assert_eq!(singular_unit(" Hz"), " Hz");
+        assert_eq!(singular_unit(" fps"), " fps");
     }
 
     fn chunk_bytes(id: &[u8; 4], body: &[u8]) -> Vec<u8> {

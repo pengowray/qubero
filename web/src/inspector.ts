@@ -26,7 +26,7 @@ import type { ArchiveSumSlot } from "./sumjob.ts";
 import { anyStored, clauseStored, readShown, storedLine, templateLine, writeShown, type StoredLine } from "./storedpath.ts";
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
-import { CHILD_PAGE, insideValue, PREVIEW_CHARS, PREVIEW_ITEMS, type Inside } from "./composite.ts";
+import { CHILD_PAGE, insideValue, LINE_CHARS, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
@@ -2738,7 +2738,7 @@ export class Inspector {
     // has something better. The count comes back for a structure with no
     // reading, and for one whose reading is too long to sit in the column.
     const line = kid.line ?? "";
-    if (line !== "" && line.length <= PREVIEW_CHARS) return { text: line, count: false };
+    if (line !== "" && line.length <= LINE_CHARS) return { text: line, count: false };
     return { text: countText(kid.child_count, childWord(kid)), count: true };
   }
 
@@ -3227,7 +3227,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
  *  fields it has where it does not. */
 function structText(n: TemplateNode): string {
   const line = n.line ?? "";
-  return line !== "" && line.length <= PREVIEW_CHARS ? line : countText(n.child_count, childWord(n));
+  return line !== "" && line.length <= LINE_CHARS ? line : countText(n.child_count, childWord(n));
 }
 
 /** How a screen reader is told which field this is. The type is dropped for a

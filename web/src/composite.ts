@@ -27,6 +27,11 @@ export const CHILD_PAGE = 12;
  *  like the whole of it, which the count it replaced never did. */
 export const PREVIEW_ITEMS = 8;
 export const PREVIEW_CHARS = 48;
+/** The longest line a structure's own reading (`TemplateNode.line`) is shown
+ *  at. Longer than a joined preview, because the core writes the line whole
+ *  and names each number in it: `after 20 ticks · note on ch2 · note 72 ·
+ *  velocity 0` is 51 characters and is not a fraction of anything. */
+export const LINE_CHARS = 96;
 
 /** The one value a structure was written to carry, when it has one. */
 export type Inside =
