@@ -109,7 +109,7 @@ function arrangeChoice(opts: BarOpts): HTMLElement {
 /** A fact's value as the bar shows it: a number gets its thousands separators,
  *  since `44,100` is read at a glance and `44100` is counted. Anything else is
  *  shown as the core wrote it. */
-function factValue(value: string): string {
+export function factValue(value: string): string {
   const n = Number(value);
   return value.trim() !== "" && Number.isFinite(n) ? n.toLocaleString() : value;
 }

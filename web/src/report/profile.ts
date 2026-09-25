@@ -91,6 +91,13 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
     td.textContent = text;
     return td;
   };
+  // Kinds the template declares and this file does not use are folded away,
+  // behind one line that says how many there are: the rows the file uses are
+  // the ones a reader came for. A group with none of its rows in use folds
+  // away with them.
+  const folded: HTMLTableRowElement[] = [];
+  let valuesFolded = 0;
+  let othersFolded = 0;
   for (const cat of CATEGORY_ORDER) {
     const rows = joined.filter((j) => j.row.category === cat);
     if (rows.length === 0) continue;
@@ -102,10 +109,22 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
     gh.textContent = CATEGORY[cat] ?? cat;
     g.append(gh);
     body.append(g);
+    if (withTemplate && rows.every((j) => (j.file?.fields ?? 0) === 0)) {
+      g.hidden = true;
+      folded.push(g);
+    }
     for (const j of rows) {
       const tr = document.createElement("tr");
       const inFile = j.file?.fields ?? 0;
-      if (inFile === 0) tr.className = "is-unused";
+      if (inFile === 0) {
+        tr.className = "is-unused";
+        if (withTemplate) {
+          tr.hidden = true;
+          folded.push(tr);
+          if (VALUE_CATEGORIES.has(cat)) valuesFolded++;
+          else othersFolded++;
+        }
+      }
       let label = rowLabel(j.row);
       // What a codec's streams came to, where the file opened any.
       if (j.file !== null && j.file.category === "codec" && j.file.unpacked_fields > 0) {
@@ -122,6 +141,23 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
   }
   t.append(body);
   wrap.append(t);
+  if (folded.length > 0) {
+    const p = document.createElement("p");
+    p.className = "rv-note";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rv-button";
+    b.textContent = RV.profileShowUnused;
+    b.setAttribute("aria-expanded", "false");
+    b.addEventListener("click", () => {
+      const open = b.getAttribute("aria-expanded") !== "true";
+      for (const tr of folded) tr.hidden = !open;
+      b.setAttribute("aria-expanded", String(open));
+      b.textContent = open ? RV.profileHideUnused : RV.profileShowUnused;
+    });
+    p.append(`${RV.profileUnused(valuesFolded, othersFolded)} `, b);
+    wrap.append(p);
+  }
   const cap = document.createElement("p");
   cap.className = "rv-note";
   cap.textContent = withTemplate ? RV.profileCaption : RV.profileCaptionFile;

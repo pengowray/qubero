@@ -2,15 +2,17 @@
 // record table for a list of records, and a hex strip for bytes with no
 // structure. Shared by the parts section and the content section.
 
-import type { Doc, TemplateNode } from "../doc.ts";
+import type { Doc, TableFact, TemplateNode } from "../doc.ts";
 import { fieldClass } from "../fieldstyle.ts";
+import { childWord, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
 import { formatOffset } from "../format.ts";
+import { factValue } from "../tablebar.ts";
 import type { TablePlan } from "../tableplan.ts";
 import type { ReportData } from "./data.ts";
 import { byteRef, dumpRows, pointAt } from "./refs.ts";
 import type { ReportHost } from "./section.ts";
 import { stripIndex } from "./partrules.ts";
-import { bitsText, clip, RV } from "./text.ts";
+import { bitsText, clip, counted, RV } from "./text.ts";
 
 /** Bytes shown inline in a row. */
 const INLINE_BYTES = 8;
@@ -45,9 +47,27 @@ function head(...names: string[]): HTMLTableSectionElement {
   return thead;
 }
 
+/**
+ * What a field holds, for the value column. A plain value or a structure's
+ * one-line reading is itself. A structure with neither is never its bare count
+ * of children: a compressed stream says what it is and what it unpacks to, or
+ * why it was not unpacked, and anything else says how many of what it holds.
+ */
+export function valueText(doc: Doc, n: TemplateNode): string {
+  if (n.refused !== null) return DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
+  if (n.line !== null) return n.line;
+  if (!n.composite || n.kind !== "composite") return n.value;
+  if (n.decoded) {
+    const kids = doc.templateChildren(n.path, 0, Math.min(n.child_count, 8));
+    const root = kids.status === "ok" ? kids.node.find((k) => k.space_root) : undefined;
+    return root === undefined ? n.type : RV.unpacksTo(n.type, bitsText(root.size_bits));
+  }
+  return counted(n.child_count, childWord(n));
+}
+
 /** A value as the listing writes it, with the wrong-value glyph in front of it
  *  when the core says something is wrong, and the reason on hover. */
-function valueCell(n: TemplateNode): HTMLTableCellElement {
+function valueCell(doc: Doc, n: TemplateNode): HTMLTableCellElement {
   const td = document.createElement("td");
   td.className = `rv-val ${fieldClass(n.kind)}`;
   if (n.problem !== undefined) {
@@ -58,7 +78,7 @@ function valueCell(n: TemplateNode): HTMLTableCellElement {
     td.append(mark, " ");
     td.title = n.problem.text;
   }
-  td.append(n.line ?? n.value);
+  td.append(valueText(doc, n));
   return td;
 }
 
@@ -90,7 +110,7 @@ export function fieldTable(doc: Doc, data: ReportData, fields: readonly Template
     }
     tr.append(
       cell("td", name, "rv-cell-name"),
-      valueCell(n),
+      valueCell(doc, n),
       atCell(n),
       cell("td", bitsText(n.size_bits), "rv-num", RV.colSize),
       cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex", RV.colBytes),
@@ -143,6 +163,20 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
   wrap.append(t);
   if (more > 0) wrap.append(moreLine(more, word));
   return wrap;
+}
+
+/**
+ * A table's facts as the report shows them. Each is named by its own field,
+ * without the structures it was read through: `body.sample_rate` is
+ * `sample_rate`, unless two facts would then have one name. A number gets its
+ * thousands separators, as the table view writes it.
+ */
+export function factRows(facts: readonly TableFact[]): { readonly name: string; readonly value: string }[] {
+  const short = facts.map((f) => f.label.replace(/^.*\./, ""));
+  return facts.map((f, i) => {
+    const name = short[i] ?? f.label;
+    return { name: short.indexOf(name) === short.lastIndexOf(name) ? name : f.label, value: factValue(f.value) };
+  });
 }
 
 /** The first rows of a table as the table view reads them: its own columns,

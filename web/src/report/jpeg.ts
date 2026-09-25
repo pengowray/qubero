@@ -79,6 +79,8 @@ function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: bo
   const names = map.scan.map((i) => map.channels[i]?.name ?? "");
   const h = document.createElement("h2");
   h.textContent = several ? JPEG.headingOf(names, node.size_bits / 8) : JPEG.heading(node.size_bits / 8);
+  // The scan's part section points here, by the path of the scan's data.
+  h.dataset.rvScan = node.path.join("/");
   out.push(h);
 
   const g = geometry(map);

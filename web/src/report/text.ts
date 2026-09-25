@@ -264,10 +264,16 @@ export const RV = {
   colBytes: "First bytes",
   colField: "Field",
   colValue: "Value",
+  /** A compressed stream in the value column, beside its size in the file:
+   *  `jpeg scan, unpacks to 115,200 bytes`. */
+  unpacksTo: (codec: string, size: string): string => `${codec}, unpacks to ${size}`,
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   /** Neighbouring fields of one name, as one row. */
   runOf: (name: string, n: number): string => `${name} × ${n.toLocaleString()}`,
   showInListing: "Show in the listing",
+  /** Under a JPEG scan's card, with the heading of the section that decodes
+   *  it as a link in place of `heading`. */
+  scanDecodedBelow: (heading: string): string => `The report decodes this scan below, in “${heading}”.`,
   allZero: (n: number): string => (n === 1 ? "The byte is zero." : `All ${bytesText(n)} are zero.`),
   classesOf: (text: number, zero: number, other: number, total: number): string =>
     `${percentText(text, total)} text, ${percentText(zero, total)} zero, and ${percentText(other, total)} other bytes, over the first ${bytesText(total)}.`,
@@ -354,7 +360,17 @@ export const RV = {
   notInFile: "none",
   unpackedTo: (streams: number, size: string): string => `${counted(streams, "stream")} opened, unpacked to ${size}`,
   profileCaption:
-    "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows; a row with none in this file is a kind the file does not use.",
+    "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows.",
+  /** Under the table, for the rows folded away: what the template declares
+   *  and this file does not use, by the table's two halves. */
+  profileUnused: (values: number, others: number): string => {
+    const parts: string[] = [];
+    if (values > 0) parts.push(counted(values, "kind") + " of value");
+    if (others > 0) parts.push(`${counted(others, "way")} to find a field or set its length`);
+    return `The template also declares ${listText(parts)} that this file does not use.`;
+  },
+  profileShowUnused: "Show them",
+  profileHideUnused: "Hide them",
   profileCaptionFile: "A field counts once in each group it belongs to: a named value is also the number under it.",
   choicesHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} that could take more forms than this file uses`,
   choiceField: "Field",

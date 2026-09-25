@@ -10,7 +10,9 @@
 import { cardState } from "../contentcard.ts";
 import { tablePlan } from "../tableplan.ts";
 import { childWord } from "../strings.ts";
+import { factRows } from "./bodies.ts";
 import { findingCounts, findingsOf } from "./findings.ts";
+import type { ListFact, PartsModel } from "./model.ts";
 import { landmarks } from "./profiletext.ts";
 import { WAIT, type ReportCtx, type Section } from "./section.ts";
 import { counted, fileSizeText, listText, pluralOf, RV, sentenceCase } from "./text.ts";
@@ -70,7 +72,7 @@ export const briefSection: Section = {
             parts.td.textContent = RV.partsCount(total, groups.length);
             parts.tr.hidden = false;
           }
-          for (const l of (m?.lists ?? []).filter((x) => x.count > 0).slice(0, LISTS_SHOWN)) {
+          for (const l of m === null ? [] : listRows(m).slice(0, LISTS_SHOWN)) {
             const name = document.createElement("code");
             name.textContent = l.node.name;
             const r = row(name, lists);
@@ -95,8 +97,10 @@ export const briefSection: Section = {
           const first = walk.tables[0];
           const plan = first === undefined ? null : tablePlan(ctx.doc, first);
           if (plan !== null) {
-            for (const f of plan.facts) {
-              const r = row(f.label, facts);
+            for (const f of factRows(plan.facts)) {
+              const name = document.createElement("code");
+              name.textContent = f.name;
+              const r = row(name, facts);
               r.td.textContent = f.value;
               r.tr.hidden = false;
             }
@@ -142,3 +146,18 @@ export const briefSection: Section = {
     return box;
   },
 };
+
+/**
+ * The lists that get a row of their own under the count of parts. A list
+ * whose elements are the parts, and is the only one, would only say again
+ * what the parts row says: a ZIP file's 23 parts are its 23 records. Where the
+ * parts come from several lists, each list's count says how the parts divide
+ * among them: an ELF file's segments and sections. A list that is one part,
+ * such as a run of numbers, counts something the parts row does not.
+ */
+export function listRows(m: PartsModel): ListFact[] {
+  const key = (p: readonly number[]): string => p.join("/");
+  const asParts = new Set<string>();
+  for (const g of m.groups) for (const u of g.units) if (u.list !== null) asParts.add(key(u.list.path));
+  return m.lists.filter((l) => l.count > 0 && !(asParts.size === 1 && asParts.has(key(l.node.path))));
+}

@@ -63,13 +63,16 @@ export const directoriesSection: Section = {
  *  this is what tells them apart. */
 type Place = { readonly name: string; readonly kind: string | null };
 
-/** Where the list at `path` is, or null for a list at the top of the file. */
+/** Where the list at `path` is, or null for a list at the top of the file
+ *  and for one placed by an offset. An ELF file's section header table is
+ *  held by a pointer in its header, with no bytes of its own there, and
+ *  "section_headers in header" would put the table inside the header. */
 function placeOf(doc: Doc, path: readonly number[]): Place | null | typeof WAIT {
   if (path.length < 2) return null;
   const parentPath = path.slice(0, -1);
   const parent = ok(doc.templateNode(parentPath));
   if (parent === WAIT) return WAIT;
-  if (parent === null) return null;
+  if (parent === null || parent.size_bits === 0) return null;
   const outer = ok(doc.templateNode(parentPath.slice(0, -1)));
   if (outer === WAIT) return WAIT;
   if (outer === null || !outer.list) return { name: parent.name, kind: null };

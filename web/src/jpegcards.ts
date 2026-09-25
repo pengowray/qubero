@@ -314,11 +314,25 @@ function frameCard(c: DrawContext, host: HTMLElement, body: TemplateNode, marker
 
 // ----- the scan -----
 
-/** The scan, which is nearly the whole file and none of which is decoded.
- *  What can honestly be said about it is on one line; the header that says
- *  which tables each channel reads with is behind a control, because a
- *  reader who has scrolled to the scan is usually looking for the size of it
- *  rather than for its six header fields. */
+/** The entropy-coded data of a scan segment, or null while it is being read.
+ *  It is `decoded` with no `refused` reason where the core decoded it, which
+ *  is a baseline scan; a progressive, arithmetic-coded, lossless,
+ *  hierarchical or 12-bit scan has the reason instead. */
+export function scanEntropy(doc: Doc, segment: TemplateNode): TemplateNode | null {
+  const body = kid(doc, segment, 1);
+  return body === null || body.type !== "Scan" ? null : kid(doc, body, 2);
+}
+
+/** True for entropy-coded data the core decoded into blocks. */
+export function entropyDecoded(entropy: TemplateNode): boolean {
+  return entropy.decoded && entropy.refused === null;
+}
+
+/** The scan, which is nearly the whole file. What can honestly be said about
+ *  it is on one line: its channels, its size, and whether it was decoded. The
+ *  header that says which tables each channel reads with is behind a control,
+ *  because a reader who has scrolled to the scan is usually looking for the
+ *  size of it rather than for its six header fields. */
 function scanCard(c: DrawContext, host: HTMLElement, body: TemplateNode): void {
   const header = kid(c.doc, body, 1);
   const entropy = kid(c.doc, body, 2);
@@ -330,7 +344,8 @@ function scanCard(c: DrawContext, host: HTMLElement, body: TemplateNode): void {
     line.append(fieldButton(c, components, "jc-fact", JPEG.scanComponents(countText(channels.length, JPEG.channelNoun))));
   }
   if (entropy !== null) {
-    line.append(fieldButton(c, entropy, "jc-fact", JPEG.scanEntropy(formatBytes(entropy.size_bits / 8))));
+    const size = formatBytes(entropy.size_bits / 8);
+    line.append(fieldButton(c, entropy, "jc-fact", entropyDecoded(entropy) ? JPEG.scanEntropyDecoded(size) : JPEG.scanEntropy(size)));
     const restarts = restartCount(c.doc, entropy);
     if (restarts === null) line.append(el("span", "jc-fact jc-dim", JPEG.scanRestartsUnread));
     else if (restarts > 0) line.append(el("span", "jc-fact", JPEG.scanRestarts(countText(restarts, JPEG.restartNoun))));

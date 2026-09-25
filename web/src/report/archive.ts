@@ -44,7 +44,10 @@ export function archiveContent(doc: Doc): Rendered {
     t.body.append(tr);
   }
   sec.append(t.el);
-  const more = Math.max(0, o.total - Math.min(leaves.length, ROWS), leaves.length - ROWS);
+  // `total` counts every row the Logical tab would draw, the outline's own
+  // root and group rows among them, so the entries not listed here are the
+  // ones the outline did not read and the leaves past `ROWS`.
+  const more = Math.max(0, o.total - o.nodes.length) + Math.max(0, leaves.length - ROWS);
   if (more > 0) sec.append(note(RV.moreEntries(more)));
   return sec;
 }

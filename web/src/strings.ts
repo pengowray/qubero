@@ -2354,11 +2354,12 @@ export const JPEG = {
    *  h × v because the two numbers are not interchangeable. */
   frameColumns: ["channel", "sampling h × v", "quantisation table"] as const,
   /** The scan's summary line, which is all of it that shows until the reader
-   *  asks for more. The entropy-coded bits are almost the whole file and are
-   *  not decoded, so the honest facts are how many channels are in the scan
-   *  and how much of the file the bits take. */
+   *  asks for more: how many channels are in the scan, how much of the file
+   *  the entropy-coded bits take, and whether they were decoded. A baseline
+   *  scan is; the kinds a baseline decoder cannot read are not. */
   scanComponents: (channels: string): string => `${channels} in this scan`,
   scanEntropy: (size: string): string => `${size} of entropy-coded data, not decoded`,
+  scanEntropyDecoded: (size: string): string => `${size} of entropy-coded data, decoded`,
   /** Only when there are any. A file with no restart markers says nothing
    *  rather than "0 restart markers", which reads as a fault. */
   scanRestarts: (count: string): string => `${count} in the data`,

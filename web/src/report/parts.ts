@@ -10,6 +10,7 @@
 
 import type { TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
+import { entropyDecoded, scanEntropy } from "../jpegcards.ts";
 import { childWord } from "../strings.ts";
 import { tablePlan } from "../tableplan.ts";
 import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./bodies.ts";
@@ -159,7 +160,7 @@ function unitBody(ctx: ReportCtx, u: Unit): HTMLElement | null | typeof WAIT {
     const box = document.createElement("div");
     // The listing's card for the node, where it draws one, above its fields.
     const card = formatCard(doc, n);
-    if (card !== null) box.append(card);
+    if (card !== null) box.append(card, ...decodedBelow(ctx, n));
     box.append(fieldTable(doc, ctx.data, opened.fields, Math.max(0, n.child_count - FIELDS)));
     if (opened.list !== null) {
       const list = listBody(ctx, opened.list);
@@ -229,6 +230,39 @@ function openBody(
   const innerList = real.find((k) => k.list && k.size_bits * 2 >= n.size_bits && k.child_count > 0) ?? null;
   const named = real.filter((k) => k !== innerList).map((k) => ({ ...k, name: `${body.name}.${k.name}` }));
   return { fields: [...kids.slice(0, i), ...named, ...kids.slice(i + 1)], list: innerList };
+}
+
+/**
+ * For a JPEG scan the report decodes further down, a line that says so and
+ * links to that section, so the card's "decoded" has somewhere to go. The
+ * line shows once the section is drawn, and never where it is not: a scan
+ * past the ones the section draws, or one whose trace did not come.
+ */
+function decodedBelow(ctx: ReportCtx, segment: TemplateNode): HTMLElement[] {
+  const entropy = scanEntropy(ctx.doc, segment);
+  if (entropy === null || !entropyDecoded(entropy)) return [];
+  const p = document.createElement("p");
+  p.className = "rv-note";
+  p.hidden = true;
+  const key = entropy.path.join("/");
+  ctx.live(() => {
+    if (!ctx.data.drawn("jpeg")) return false;
+    const target = p.closest(".rv-page")?.querySelector<HTMLElement>(`[data-rv-scan="${key}"]`) ?? null;
+    if (target === null) return true;
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "rv-jump";
+    a.textContent = target.textContent;
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    const [before, after] = RV.scanDecodedBelow("\u0000").split("\u0000");
+    p.replaceChildren(before ?? "", a, after ?? "");
+    p.hidden = false;
+    return true;
+  });
+  return [p];
 }
 
 function moreWithListing(ctx: ReportCtx, n: TemplateNode, more: number, word: string): HTMLElement {
