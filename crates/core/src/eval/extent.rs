@@ -280,7 +280,7 @@ fn peeks(e: &Expr) -> bool {
         | Expr::Min(a, c)
         | Expr::Max(a, c) => peeks(a) || peeks(c),
         Expr::Cond { when, then, otherwise } => peeks(when) || peeks(then) || peeks(otherwise),
-        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) => peeks(a),
+        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) | Expr::Words { value: a, .. } => peeks(a),
         Expr::PadTo { n, .. } => peeks(n),
         _ => false,
     }

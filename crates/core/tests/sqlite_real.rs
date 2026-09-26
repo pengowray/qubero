@@ -121,6 +121,27 @@ fn the_trunk_reads_as_the_pages_it_lists() {
     assert_eq!(uint(&mut ev, &doc, &count), 26);
 }
 
+/// Each page of the run is labelled with its page number in the file, which
+/// is two more than its index: page 1 holds the header and is not in the run.
+/// The number is the one a pointer to the page holds, so the right-most child
+/// the root page names is the page labelled with that number.
+#[test]
+fn each_page_is_labelled_with_its_number_in_the_file() {
+    let Some((doc, mut ev)) = open() else { return };
+    let pages = child(&mut ev, &doc, &[], "pages");
+    let name = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[pages.as_slice(), &[i]].concat()).unwrap().name;
+    assert_eq!(name(&mut ev, 0), "[0] page 2");
+    assert_eq!(name(&mut ev, TRUNK as usize - 2), "[7] page 9");
+    assert_eq!(name(&mut ev, 15), "[15] page 17");
+    assert_eq!(name(&mut ev, 72), "[72] page 74");
+    // The list keeps its own name, and an element is still found by index.
+    assert_eq!(ev.node(&doc, &pages).unwrap().name, "pages");
+    let root = [pages.as_slice(), &[0]].concat();
+    let right = child(&mut ev, &doc, &root, "right_most_page");
+    let right = uint(&mut ev, &doc, &right) as usize;
+    assert_eq!(name(&mut ev, right - 2), format!("[{}] page {right}", right - 2));
+}
+
 /// The template types an overflow page by ruling everything else out, since
 /// it cannot see the cell that points at it. The rows can: following every
 /// live row's chain has to land on exactly the pages the template called

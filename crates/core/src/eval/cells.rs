@@ -61,6 +61,30 @@ pub struct Cell {
     pub contiguous: bool,
 }
 
+/// A reading put into the words a format gave for it.
+///
+/// `word` is a pattern rather than a prefix: a restart interval is `240 MCUs`
+/// and a sequence count is `seq 4903`, and a format that can only put its word
+/// in front cannot say the first one. A pattern with no `{}` goes in front.
+/// Shared by a record's line and [`crate::template::Expr::Words`], so a number
+/// reads the same in both.
+pub(super) fn in_words(word: &str, reading: String) -> String {
+    match word.split_once("{}") {
+        None if word.is_empty() => reading,
+        None => format!("{word} {reading}"),
+        // A number with a unit after it is a quantity: its digits are
+        // grouped, and the unit is singular for one of them, so the pattern
+        // `{} channels` reads `1 channel`.
+        Some((before, after)) => match reading.parse::<u64>() {
+            Ok(n) if !after.is_empty() => {
+                let after = if n == 1 { singular_unit(after) } else { after.to_string() };
+                format!("{before}{}{after}", super::listing::grouped(n))
+            }
+            _ => format!("{before}{reading}{after}"),
+        },
+    }
+}
+
 /// A unit after a count of one, made singular: ` bytes of data` becomes
 /// ` byte of data`, and ` leaf pages` becomes ` leaf page`. The noun is the
 /// last word before the first `of`, `in`, `per` or `to`, or the last word
@@ -551,23 +575,7 @@ impl Evaluator {
             if reading.is_empty() || reading == *part.quiet {
                 continue;
             }
-            // `word` is a pattern rather than a prefix: a restart interval is
-            // `240 MCUs` and a sequence count is `seq 4903`, and a format that
-            // can only put its word in front cannot say the first one.
-            parts.push(match part.word.split_once("{}") {
-                None if part.word.is_empty() => reading,
-                None => format!("{} {reading}", part.word),
-                // A number with a unit after it is a quantity: its digits are
-                // grouped, and the unit is singular for one of them, so the
-                // pattern `{} channels` reads `1 channel`.
-                Some((before, after)) => match reading.parse::<u64>() {
-                    Ok(n) if !after.is_empty() => {
-                        let after = if n == 1 { singular_unit(after) } else { after.to_string() };
-                        format!("{before}{}{after}", super::listing::grouped(n))
-                    }
-                    _ => format!("{before}{reading}{after}"),
-                },
-            });
+            parts.push(in_words(&part.word, reading));
         }
         Ok(parts.join(" \u{b7} "))
     }

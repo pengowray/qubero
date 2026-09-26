@@ -912,6 +912,8 @@ impl Evaluator {
             Expr::RealText(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) => {
                 self.from_expr(doc, at, a, role, out)?
             }
+            // A number written into words comes from the fields its number does.
+            Expr::Words { value, .. } => self.from_expr(doc, at, value, role, out)?,
             _ => {}
         }
         Ok(())

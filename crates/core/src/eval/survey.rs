@@ -442,7 +442,7 @@ fn expr_reads_value(e: &Expr, name: &str, depth: u32) -> bool {
         | Expr::Min(a, b)
         | Expr::Max(a, b) => r(a) || r(b),
         Expr::Cond { when, then, otherwise } => r(when) || r(then) || r(otherwise),
-        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) | Expr::RealText(a) | Expr::Placer(a) | Expr::StartOf(a) => r(a),
+        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) | Expr::RealText(a) | Expr::Placer(a) | Expr::StartOf(a) | Expr::Words { value: a, .. } => r(a),
         Expr::PadTo { n, .. } => r(n),
         Expr::PeekAt { skip, .. } => r(skip),
         Expr::PeekIn { at, .. } => r(at),

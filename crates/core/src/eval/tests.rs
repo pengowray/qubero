@@ -3474,6 +3474,46 @@ fn the_elements_of_a_list_can_take_their_displayed_names_from_the_file() {
 }
 
 #[test]
+fn the_elements_of_a_list_can_be_named_by_a_number_written_in_words() {
+    // A list numbered from 2 in the file's own count, the way SQLite's pages
+    // after the first are, and a second list whose words carry a unit.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("pages", T::array(T::u8(), E::lit(12))),
+            ("runs", T::array(T::u8(), E::lit(2))),
+            ("after", T::computed(E::elem_field("pages", E::lit(1), &[]))),
+        ],
+    )
+    .field_elem_named_from("pages", E::words("page {}", E::idx().add(E::lit(2))))
+    .field_elem_named_from("runs", E::words("{} bytes of data", E::idx().mul(E::lit(1000)).add(E::lit(1))));
+    let d = doc(&[0, 9, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().name, "[0] page 2");
+    assert_eq!(ev.node(&d, &[0, 11]).unwrap().name, "[11] page 13");
+    // A number with a unit after it reads as a record's line reads one:
+    // grouped, and singular for one.
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().name, "[0] 1 byte of data");
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().name, "[1] 1,001 bytes of data");
+    // The index is still the name an expression reaches an element by.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(9));
+    // Written out, the number stays in view as the working it is.
+    assert_eq!(crate::template_text::expr(&E::words("page {}", E::idx().add(E::lit(2)))), "words(\"page {}\", index + 2)");
+}
+
+#[test]
+fn a_number_in_words_is_text_and_not_a_number() {
+    // Asked for as a number, the words fail and say where the number is,
+    // rather than answering with it and leaving the words unread.
+    let t = T::structure("Root", vec![("data", T::bytes(E::words("{} bytes", E::lit(3))))]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(
+        failure(ev.node(&doc(&[0; 4]), &[0]).unwrap_err()),
+        "text where a number is needed; the number is the expression inside words(...)"
+    );
+}
+
+#[test]
 fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
     // A word packing six-bit differences, the way a Steim2 word does, read as
     // fields of the number rather than as bits of the bytes.
