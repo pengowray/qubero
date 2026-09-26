@@ -470,6 +470,64 @@ fields), and they are what the check-IR-gaps memory calls S5-adjacent: reading
 over many elements at once. A template-level list of summary facts, each a
 label and an expression, uses them.
 
+**What the IR has (2026-09-26).** `LenOf`, `SumOf`, `MaxOf`, `ProductOf` and
+`PopCount`, each over a sibling array of plain numbers, and
+`TableShape.facts`, which lists fields to show above a table. None of them
+reads a field of each record in a list, and none counts only some records.
+
+**What the eight reports needed that it cannot say:**
+
+- How many records of one kind a list holds: MIDI note-on events with a
+  velocity above 0, SQLite pages by page type, ZIP entries by method.
+- The largest, smallest or total value of one field across a list of
+  records: the largest advance width in a TrueType `hmtx` table, the glyph
+  bounding box as the minimum and maximum of four fields over every `glyf`
+  header, the total unpacked size of a ZIP's entries.
+- A list of facts the template declares for the whole file, each shown as a
+  number and what it is a share of: "27 of 74 pages (36%)".
+
+**Proposal.**
+
+1. `Expr::Over { walk: Arc<[Step]>, op: Fold, of: Option<Box<Expr>>, when:
+   Option<Box<Expr>> }`, with `Fold` one of `Count`, `Sum`, `Min` and `Max`.
+   `walk` is the `Step` list `Ty::Gather` already uses. A MIDI file is a list
+   of chunks, and a track chunk's `body` is its list of events, so every event
+   of every track is `[Each, Field("body"), Each]`; the header chunk's `body`
+   is not a list, and `Each` passes over it. `of` is
+   evaluated at each record the walk reaches, and `Count` needs none. `when`
+   is evaluated at each record too, and a record counts only where it is not
+   0. A bounding-box union is a `Min` and a `Max` of four fields, so it needs
+   no operation of its own.
+2. `Template::facts: Vec<Fact>`, where a `Fact` has a `label`, a `value`
+   expression, an optional `of` expression for the total the value is a share
+   of, and an optional UCUM `unit` like `TableShape.units`.
+3. `Valid::Eq(Expr::Over(..))` on a stored summary field: TrueType
+   `maxp.numGlyphs`, `hhea.advanceWidthMax`, `head.xMin` and the rest. A
+   stored summary that disagrees with the records it summarises is then a
+   wrong value, marked like any other (see `DESIGN-wrong-values.md`).
+
+**Constraints.**
+
+- An `Over` reads every record the walk reaches. Facts are worked out once
+  per reading and kept, the way the report's survey walk is, and never while a
+  node resolves. A `Valid::Eq` over one is checked only when its field is
+  asked about, with a cap on records like the 64 KiB cap on eager checksums;
+  past the cap it says the check was not run, as a checksum does.
+- The evaluator arm goes in its own `#[inline(never)]` function returning
+  `R<T>`, or the stack-depth tests overflow.
+- `Step::Each` yields nothing over a list of plain numbers. A total over one
+  of those stays `SumOf` or `MaxOf`.
+- Records inside an unpacked stream, such as a gzip member's contents, cannot
+  be walked to until a path can cross into a stream's space.
+
+**Where facts show.** Each template fact is a row of the facts table at the
+top of the report, after "Size" and "Parts": the value with its comparison,
+linked to the records it counted, with the expression on hover.
+
+**Open questions.** Whether facts also show in the inspector on the root
+node, and who writes their labels: the template author, following the same
+string rules as the rest of the interface.
+
 ### Prose in three tiers
 
 - `Field.doc`, which exists: what one field is.
