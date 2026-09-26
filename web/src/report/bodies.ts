@@ -124,8 +124,11 @@ export function fieldTable(doc: Doc, data: ReportData, fields: readonly Template
 }
 
 /** Records, one row each: its place in the list, address, size, what it reads
- *  as, and its first bytes. */
-export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: number, word: string): HTMLElement {
+ *  as, and its first bytes. `heading` is what the table's heading calls every
+ *  row, which a row's line leaves out: in a table of local file records, the
+ *  line `local file · deflate · 399 bytes of data` reads `deflate · 399 bytes
+ *  of data`. */
+export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: number, word: string, heading: readonly string[] = []): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "rv-tablewrap";
   const t = document.createElement("table");
@@ -150,8 +153,9 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
     // Bytes read as bytes say nothing the next column does not, and a
     // structure with no one-line reading has only its count of fields.
     if (n.line !== null) {
-      reads.append(clip(n.line, READS_CHARS));
-      if (n.line.length > READS_CHARS) reads.title = n.line;
+      const line = withoutLead(n.line, heading);
+      reads.append(clip(line, READS_CHARS));
+      if (line.length > READS_CHARS) reads.title = line;
     }
     else if (n.kind !== "bytes" && n.kind !== "unread" && !n.composite) reads.append(n.value);
     if (n.problems_within[0] > 0) reads.classList.add("has-invalid");
@@ -163,6 +167,15 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
   wrap.append(t);
   if (more > 0) wrap.append(moreLine(more, word));
   return wrap;
+}
+
+/** `line` without a first part that is one of `names`. */
+function withoutLead(line: string, names: readonly string[]): string {
+  for (const name of names) {
+    if (line === name) return "";
+    if (line.startsWith(`${name} \u00b7 `)) return line.slice(name.length + 3);
+  }
+  return line;
 }
 
 /**

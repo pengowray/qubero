@@ -148,7 +148,7 @@ function bodyOf(ctx: ReportCtx, g: Group): HTMLElement | null | typeof WAIT {
   if (g.units.length > 1) {
     const nodes = g.units.map((u) => u.node).filter((n): n is TemplateNode => n !== null);
     const box = document.createElement("div");
-    box.append(recordTable(doc, nodes.slice(0, ROWS), Math.max(0, nodes.length - ROWS), g.unitWord));
+    box.append(recordTable(doc, nodes.slice(0, ROWS), Math.max(0, nodes.length - ROWS), g.unitWord, [g.kind ?? "", g.label].filter((s) => s !== "")));
     return box;
   }
   return unitBody(ctx, g.units[0] as Unit);

@@ -3,6 +3,10 @@
 Notes from Pengo, kept here so they are not lost between sessions. Newest
 section first. A ticked item is done; the rest are open.
 
+## 2026-09-26
+
+- [ ] Report view drawn twice: once, two `.reportview` elements were on screen, one under the other, each a whole report of `xlsx/excel16-formulas.xlsx`. The steps were: open `zip/streamed-data-descriptors.zip` with `?url=`, click Report, open the xlsx with `?url=` in the same tab, click Report straight away. Did not happen again in three tries.
+
 ## 2026-09-18
 
 Refactoring, for when no other agent is editing `crates/core/src/formats/`:
