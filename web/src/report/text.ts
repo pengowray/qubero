@@ -108,7 +108,8 @@ export const RV = {
   findingUndefined: (n: number): string => counted(n, "undefined value"),
   findingRefused: (n: number): string => counted(n, "stream that did not unpack"),
   findingGap: (n: number): string => counted(n, "unmapped range"),
-  findingExtent: (n: number): string => counted(n, "length that does not match its part"),
+  findingExtent: (n: number): string =>
+    n === 1 ? "1 length that does not match its part" : `${n.toLocaleString()} lengths that do not match their parts`,
   findingTextNum: (n: number): string =>
     n === 1 ? "1 list of numbers that contains text" : `${n.toLocaleString()} lists of numbers that contain text`,
   /** The quiet line the values without a name open from. */
