@@ -39,7 +39,7 @@ Open:
 - [ ] Diagram: stylistic simplification when a structure is simple. MIDI-style illustration: `[Header Chunk id:'MThd' size body][Event Chunks: Event Chunk id:'MTrk' size body | ...]`. Could be heuristic or baked in; must not change the IR. Possibly a second, provably equivalent IR just for display.
 - [ ] Diagram: large numbers of fields; the boxes-and-arrows view could get mixed in when there are many.
 - [ ] Diagram: a way to see actual data without switching to hex view; maybe example data; optionally laid out as hex.
-- [ ] Diagram: always allow scroll-zoom out at least as far as "Fit" goes.
+- [x] Diagram: always allow scroll-zoom out at least as far as "Fit" goes.
 - [ ] Diagram loading: show the spinning Qubero logo while the diagram is first built.
 - [ ] `chunk-indexes-large.h5`: why is Strips almost empty when Boxes and Arrows is huge?
 - [ ] `H-CAL_FAC_V03-729273600-5094000.gwf` (LIGO/Virgo frame): wild; diagrams will be a challenge. `(nFrame < 4294967295) * nFrame × 4 bytes` is surely necessary but far too verbose for display.

@@ -64,7 +64,8 @@ export const ROW_CAP = 24;
  *  counted. */
 const CASE_CAP = 8;
 
-/** How far the drawing may be scaled by the wheel, either way. */
+/** How far the drawing may be scaled by the wheel, either way. The wheel also
+ *  goes out as far as `Fit` does, on a drawing too big for this. */
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 3;
 
@@ -1486,12 +1487,19 @@ export class DiagramView {
     const w = this.board.clientWidth;
     const h = this.board.clientHeight;
     if (w === 0 || h === 0 || this.extent.w === 0 || this.extent.h === 0) return;
-    // Never magnified past life size: a format with three fields blown up to
-    // fill a wide window reads as a mistake.
-    this.scale = Math.min(1, w / this.extent.w, h / this.extent.h);
+    this.scale = this.fitScale();
     this.tx = Math.max(0, (w - this.extent.w * this.scale) / 2);
     this.ty = Math.max(0, (h - this.extent.h * this.scale) / 2);
     this.apply();
+  }
+
+  /** The scale `fit` uses. Never magnified past life size: a format with three
+   *  fields blown up to fill a wide window reads as a mistake. */
+  private fitScale(): number {
+    const w = this.board.clientWidth;
+    const h = this.board.clientHeight;
+    if (w === 0 || h === 0 || this.extent.w === 0 || this.extent.h === 0) return 1;
+    return Math.min(1, w / this.extent.w, h / this.extent.h);
   }
 
   private apply(): void {
@@ -1548,7 +1556,8 @@ export class DiagramView {
         const rect = this.board.getBoundingClientRect();
         const px = ev.clientX - rect.left;
         const py = ev.clientY - rect.top;
-        const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.scale * Math.exp(-ev.deltaY / 500)));
+        const least = Math.min(MIN_SCALE, this.fitScale());
+        const next = Math.min(MAX_SCALE, Math.max(least, this.scale * Math.exp(-ev.deltaY / 500)));
         // Zoom about the pointer, so the box under it stays under it.
         this.tx = px - ((px - this.tx) / this.scale) * next;
         this.ty = py - ((py - this.ty) / this.scale) * next;
