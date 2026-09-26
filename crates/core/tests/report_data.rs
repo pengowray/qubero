@@ -162,9 +162,23 @@ fn text_read_as_samples_is_found_inside_the_samples() {
 }
 
 #[test]
-fn samples_read_where_they_are_hold_no_text() {
-    for name in ["xc1060673-kuhls-pipistrelle-data-size-short.wav", "pcm-s16le-stereo-44100.wav", "ieee-float32-stereo-48000.wav"] {
-        let Some((doc, mut ev)) = open("wav", name, "wav") else {
+fn numbers_read_where_they_are_hold_no_text() {
+    let files = [
+        ("wav", "xc1060673-kuhls-pipistrelle-data-size-short.wav", "wav"),
+        ("wav", "pcm-s16le-stereo-44100.wav", "wav"),
+        // Each of these had long runs of text in its numbers before one of
+        // the rules in `textnum.rs`: 32 characters or more in the SEG-Y,
+        // FITS and torch files, 16 or more in the IEEE WAV. Floats close
+        // together have one byte the same in each (SEG-Y, IEEE WAV), and
+        // numbers whose high byte stays the same read as UTF-16 (FITS, the
+        // torch tensor).
+        ("wav", "ieee-float32-stereo-48000.wav", "wav"),
+        ("segy", "small.sgy", "segy"),
+        ("fits", "test0.fits", "fits"),
+        ("torch", "long-storage-zip.pt", "torchzip"),
+    ];
+    for (kind, name, template) in files {
+        let Some((doc, mut ev)) = open(kind, name, template) else {
             eprintln!("{}", qubero_samples::missing());
             return;
         };
