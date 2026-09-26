@@ -386,6 +386,7 @@ fn value_used(ty: &Ty, name: &str, depth: u32) -> bool {
         },
         Ty::UIntExpr { bits, .. } => e(bits),
         Ty::Array { elem, count } => e(count) || t(elem),
+        Ty::Raster { width, height, bits_per_pixel, pixel, .. } => e(width) || e(height) || e(bits_per_pixel) || t(pixel),
         Ty::Repeat { elem, until } => matches!(until, crate::template::Until::While(x) if e(x)) || t(elem),
         Ty::PointerList { offsets, adjust, elem, .. } => &**offsets == name || e(adjust) || t(elem),
         Ty::Chain { first, adjust, elem, .. } => e(first) || e(adjust) || t(elem),
@@ -628,7 +629,7 @@ impl<S: Source> Watch<S> for Follow {
                 let kind = match &pr.ty {
                     Ty::Struct(s) if s.overlap => Up::Plain("overlap"),
                     Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => Up::Plain("follows"),
-                    Ty::Array { .. } | Ty::Repeat { .. } => Up::Plain("element"),
+                    Ty::Array { .. } | Ty::Repeat { .. } | Ty::Raster { .. } => Up::Plain("element"),
                     Ty::At { anchor, at, .. } => Up::At(*anchor, at.clone()),
                     Ty::PointerList { adjust, .. } => Up::Pointers(from_end(adjust)),
                     Ty::Chain { first, adjust, .. } => Up::Chain(from_end(first) || from_end(adjust)),

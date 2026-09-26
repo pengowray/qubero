@@ -580,7 +580,8 @@ impl Declared<'_> {
                     self.ty_named(&f.ty, place, false, d, &f.name);
                 }
             }
-            Ty::Array { elem, .. } => {
+            // A picture's pixels are counted by its width and height.
+            Ty::Array { elem, .. } | Ty::Raster { pixel: elem, .. } => {
                 own(Sizing::Count, &mut self.tally);
                 self.ty_named(elem, Some("element"), false, d, name);
             }
@@ -686,6 +687,21 @@ mod tests {
 
     fn row<'a>(p: &'a Profile, category: &str, kind: &str) -> Option<&'a ProfileRow> {
         p.rows.iter().find(|r| r.category == category && r.kind == kind)
+    }
+
+    #[test]
+    fn a_pictures_pixels_are_elements_counted_by_its_size() {
+        let root = T::structure(
+            "Image",
+            vec![
+                ("width", T::u8()),
+                ("height", T::u8()),
+                ("pixels", T::raster(E::field("width"), E::field("height"), E::lit(8), crate::template::RasterOrder::Rows, T::u8())),
+            ],
+        );
+        let p = template_profile(&Template::new("test", root));
+        assert_eq!(row(&p, "sizing", "count").map(|r| r.fields), Some(1), "the picture");
+        assert_eq!(row(&p, "placement", "element").map(|r| r.fields), Some(1), "its pixel");
     }
 
     #[test]

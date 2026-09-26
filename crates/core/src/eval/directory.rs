@@ -293,9 +293,9 @@ impl Build {
     }
 }
 
-/// Whether a type is a list, of any of the five kinds.
+/// Whether a type is a list, of any of the six kinds.
 fn is_list(ty: &Ty) -> bool {
-    matches!(ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
+    matches!(ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. })
 }
 
 /// Name and measure one directory and the first of its entries.
