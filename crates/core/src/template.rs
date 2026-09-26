@@ -697,6 +697,25 @@ pub enum Expr {
     /// short text field already has one: its bytes as a big-endian number,
     /// which is what lets a switch key on `IHDR`.
     RealText(Box<Expr>),
+    /// A number written into words, as text: `page {}` with the number where
+    /// `{}` is. What a list says its elements are called when the file
+    /// numbers them differently from the list: SQLite's page run starts at
+    /// page 2, so element 15 is `page 17`, and the element is labelled
+    /// `[15] page 17`. See [`Field::elem_name_from`].
+    ///
+    /// The number is written the way a record's line writes one into its
+    /// word pattern: grouped, with the unit made singular for one, when
+    /// words follow `{}` (`{} channels` reads `1 channel`), and as bare
+    /// digits when nothing does, since `page 1234` names a page rather than
+    /// counting anything. A pattern with no `{}` puts the number after it.
+    ///
+    /// Explicit because arithmetic has no text: a sum read where text is
+    /// wanted fails, and this is the one way a template says it means the
+    /// digits. Asked for as a number it fails too, the way
+    /// [`Expr::RealText`] does, rather than answering with the number
+    /// inside: that number is `value`, and a template wanting it should ask
+    /// for it there instead of for the words around it.
+    Words { pattern: Arc<str>, value: Box<Expr> },
     /// Two to an integer power, which is as often negative as not: a GRIB
     /// value's binary scale factor is -5 as readily as 5. A real, and not a
     /// shift, since two to the minus five is a fraction. In a whole number it
@@ -1103,6 +1122,11 @@ impl Expr {
     /// The real number the text `e` lands on spells. See [`Expr::RealText`].
     pub fn real_text(e: Expr) -> Expr {
         Expr::RealText(Box::new(e))
+    }
+    /// The number `value` written into `pattern` at `{}`, as text:
+    /// `words("page {}", idx().add(lit(2)))`. See [`Expr::Words`].
+    pub fn words(pattern: &str, value: Expr) -> Expr {
+        Expr::Words { pattern: pattern.into(), value: Box::new(value) }
     }
     /// Two to the power `e`. See [`Expr::Pow2`].
     pub fn pow2(e: Expr) -> Expr {

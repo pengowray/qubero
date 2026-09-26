@@ -312,6 +312,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         // A NIfTI-1 header's `vox_offset` places the voxels through its whole
         // part, and is plumbing for them the same as a length field is.
         Expr::Trunc(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::RealText(a) => expr_refs(a, out),
+        Expr::Words { value, .. } => expr_refs(value, out),
         // What a record says, and a record is somewhere else entirely: the
         // names inside are its fields, not siblings of this one.
         Expr::Placer(_) => {}

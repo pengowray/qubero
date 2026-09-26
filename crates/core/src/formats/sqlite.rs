@@ -521,7 +521,10 @@ fn database(name: &str, root: &str, application_id: T) -> Template {
         // run is where those bytes belong. Counted in both places, a trunk
         // would be two pages.
         .field_aside("freelist")
-        .field_aside("free_pages"),
+        .field_aside("free_pages")
+        // Each page by its number in the file, which is the number every
+        // pointer to it holds: `pages[15]` is `[15] page 17`.
+        .field_elem_named_from("pages", E::words("page {}", E::idx().add(E::lit(2)))),
     )
 }
 

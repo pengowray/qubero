@@ -29,6 +29,10 @@ fn tag_key(tag: &Tag) -> Option<TagKey> {
 /// fraction. The one way through is named, since it is the fix.
 const REAL_IN_WHOLE: &str = "a real number where a whole number is needed; trunc(...) drops the fraction";
 
+/// What a whole-number expression says when it meets a number written into
+/// words. The number is the expression inside, and that is what to ask for.
+const WORDS_IN_WHOLE: &str = "text where a number is needed; the number is the expression inside words(...)";
+
 /// The same said of a field, after its name: a float asked for as a whole
 /// number is not "not a number", which would send a reader looking for text.
 const REAL_IS_NOT_WHOLE: &str = "is a real number, but a whole number is needed here; trunc(...) drops the fraction";
@@ -631,6 +635,7 @@ impl Evaluator {
             // something it cannot mean, and rounding it quietly would place
             // bytes at an offset nobody wrote. `trunc` is the way in.
             Expr::Real(_) | Expr::RealText(_) => return fail(REAL_IN_WHOLE),
+            Expr::Words { .. } => return fail(WORDS_IN_WHOLE),
             // In a whole number these are the shift and the power they would
             // be. A negative power is a fraction, and says so rather than
             // pointing at `trunc`, which would make it nought.
@@ -1148,10 +1153,32 @@ impl Evaluator {
             let (end, frame) = self.placer_frame(doc, at)?;
             return self.text_at(doc, &end, &inner.clone(), frame);
         }
+        // A number the template asked to have written as text, which is the
+        // one piece of text here that no field holds.
+        if let Expr::Words { pattern, value } = e {
+            return self.words_text(doc, at, pattern, value, here);
+        }
         match self.text_path(doc, at, e, here)? {
             Some(p) => self.text_of(doc, &p),
             None => Ok(String::new()),
         }
+    }
+
+    /// The number `value` comes to, written into `pattern`. See
+    /// [`Expr::Words`]. Out of line and cold, since it formats text and the
+    /// frame of every text question should not carry that.
+    #[cold]
+    #[inline(never)]
+    fn words_text<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        pattern: &str,
+        value: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<String> {
+        let n = self.eval_expr_at(doc, at, value, here)?;
+        Ok(super::cells::in_words(pattern, n.to_string()))
     }
 
     /// Where the field an expression names is, for the expressions that name

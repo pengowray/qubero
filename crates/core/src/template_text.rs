@@ -189,6 +189,8 @@
 //! spells, `2.0E+01` included), `pow2(e)` and `pow10(e)` (two or ten to a whole
 //! power, a fraction when the power is negative) and `trunc(x)` (the whole part
 //! of a real, which is the only way one becomes a size).
+//! And one that makes text: `words("page {}", index + 2)` (the number written
+//! where `{}` is, for a label).
 //!
 //! Numbers are decimal, with three exceptions. A number whose bytes spell
 //! printable ASCII with letters in it is written as those bytes in single
@@ -1337,6 +1339,10 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         Expr::Pow2(a) => format!("pow2({})", write_expr(a, 0, false, leaf)?),
         Expr::Pow10(a) => format!("pow10({})", write_expr(a, 0, false, leaf)?),
         Expr::Trunc(a) => format!("trunc({})", write_expr(a, 0, false, leaf)?),
+        // A call around the number rather than one leaf, so the fields the
+        // number is worked out from stay where a reader can see them:
+        // `words("page {}", index + 2)`.
+        Expr::Words { pattern, value } => format!("words({pattern:?}, {})", write_expr(value, 0, false, leaf)?),
         Expr::Bit(a, i) => format!("bit({}, {i})", write_expr(a, 0, false, leaf)?),
         Expr::Mod(a, b) => two(a, b, "%", leaf)?,
         Expr::Eq(a, b) => two(a, b, "==", leaf)?,
