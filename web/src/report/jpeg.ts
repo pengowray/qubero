@@ -117,7 +117,7 @@ function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: bo
     const n = map.block_codes.filter((c) => c === 0).length;
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.textContent = JPEG.coarse(n);
+    p.textContent = JPEG.coarse(n, map.step_limit);
     out.push(p);
   }
   out.push(channelTable(map), kindTable(map));
@@ -463,7 +463,7 @@ function blockWalk(
   if (!named) {
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.textContent = JPEG.unnamedBlock;
+    p.textContent = JPEG.unnamedBlock(map.step_limit);
     out.push(p);
     return out;
   }

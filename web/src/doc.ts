@@ -2095,6 +2095,8 @@ export type JpegScan = {
     readonly unnamed: number;
   };
   readonly coarse: boolean;
+  /** How many steps a trace names before it stops naming them. */
+  readonly step_limit: number;
 };
 
 export type JpegChannel = {

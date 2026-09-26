@@ -55,12 +55,9 @@ export const JPEG = {
   tipBits: (bits: number, whole: number): string => `${bitCount(bits)}, ${share(bits, whole)} of the scan`,
   tipChannel: (channel: string, bits: number, blocks: number): string =>
     `${channel}: ${bitCount(bits)} in ${counted(blocks, "block")}`,
-  /** 4,000,000 is `codec::MAX_STEPS`. */
-  coarse: (n: number): string =>
-    "Qubero lists the first 4,000,000 Huffman codes one by one. " +
-    (n === 1
-      ? `In the walkthrough, the last block shows its codes as a single "unnamed codes" entry. `
-      : `In the walkthrough, each of the last ${n.toLocaleString()} blocks shows its codes as a single "unnamed codes" entry. `) +
+  coarse: (n: number, limit: number): string =>
+    `Qubero lists the first ${limit.toLocaleString()} Huffman codes one by one. ` +
+    (n === 1 ? "The last block is past that limit, so the walkthrough cannot show its codes. " : `The last ${n.toLocaleString()} blocks are past that limit, so the walkthrough cannot show their codes. `) +
     "The map and the bit tables still count every bit.",
 
   // ----- where the bits go -----
@@ -83,7 +80,7 @@ export const JPEG = {
     padding: "Padding to the end of a byte",
     stuffed: "Stuffed 00 bytes after each ff of data",
     markers: "Restart markers",
-    unnamed: "Codes not named one by one",
+    unnamed: "Codes not listed one by one",
   } as Readonly<Record<string, string>>,
   total: "Total",
 
@@ -96,7 +93,8 @@ export const JPEG = {
   blockButton: (channel: string, x: number, y: number): string => `${channel} ${x}, ${y}`,
   blockButtonLabel: (channel: string, x: number, y: number): string => `${channel} block ${x}, ${y}`,
   inListing: "Show in the listing",
-  unnamedBlock: "This block is past the limit on codes named one by one, so only its extent is known.",
+  unnamedBlock: (limit: number): string =>
+    `Codes not listed: this block is past the limit of ${limit.toLocaleString()} Huffman codes listed one by one. The map still counts its bits.`,
   stripCaptionLead: (codes: number, bits: number): string => `${counted(codes, "code")} in ${bitCount(bits)}.`,
   stripCaption: "Each box is one code, as its bits: the Huffman code first, then its value bits in lighter type. Hover a box for what it says.",
   codeNo: "#",
@@ -110,8 +108,8 @@ export const JPEG = {
     `AC ${value} at zigzag position ${k}` + (run === 0 ? "" : run === 1 ? ", after 1 zero" : `, after ${run} zeros`),
   saysZrl: (k: number): string => `ZRL: 16 zeros, zigzag positions ${k} to ${k + 15}`,
   saysEob: (k: number): string => `EOB: zigzag positions ${k} to 63 are zero`,
-  saysUnnamed: "Codes not named",
-  stuffedNote: "a stuffed 00 byte sits inside these bits, and is left out of them",
+  saysUnnamed: "Codes not listed",
+  stuffedNote: "the At range also includes a stuffed 00 byte, which the Bits column leaves out",
 
   // ----- the grids -----
   zigzagLabel: "As coded, in zigzag order",

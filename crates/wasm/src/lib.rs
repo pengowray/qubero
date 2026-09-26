@@ -3254,6 +3254,9 @@ struct JpegScanDto {
     block_codes: Vec<u16>,
     totals: JpegTotalsDto,
     coarse: bool,
+    /// How many steps a trace names before it stops; see
+    /// [`qubero_core::codec::MAX_STEPS`].
+    step_limit: f64,
 }
 
 #[derive(Serialize)]
@@ -3328,6 +3331,7 @@ fn jpeg_scan_dto(m: qubero_core::eval::JpegScanMap) -> JpegScanDto {
             unnamed: t.unnamed as f64,
         },
         coarse: m.coarse,
+        step_limit: qubero_core::codec::MAX_STEPS as f64,
     }
 }
 
