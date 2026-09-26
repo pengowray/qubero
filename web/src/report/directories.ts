@@ -77,7 +77,7 @@ function placeOf(doc: Doc, path: readonly number[]): Place | null | typeof WAIT 
   if (outer === WAIT) return WAIT;
   if (outer === null || !outer.list) return { name: parent.name, kind: null };
   const bare = stripIndex(parent.name);
-  if (bare !== "") return { name: bare, kind: null };
+  if (bare !== "") return { name: bare, kind: elementKind(parent.type, outer.type) };
   const index = parentPath[parentPath.length - 1] ?? 0;
   return { name: `${outer.name}[${index}]`, kind: elementKind(parent.type, outer.type) };
 }

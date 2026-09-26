@@ -68,6 +68,9 @@ export type Unit = {
   /** What kind of element this is, by its type in the template, where the
    *  elements of its list are not all one type: `table leaf`. */
   readonly kind?: string | null;
+  /** True when an element's label is a name the format gives it (`page 17`,
+   *  `.text`), rather than its list and index. */
+  readonly ownName?: boolean;
   /** True for bytes no part covers: bytes no field covers, or, with
    *  `unexamined`, bytes the report stopped looking into. */
   readonly gap: boolean;
@@ -486,9 +489,11 @@ function elementUnit(n: TemplateNode, list: TemplateNode): Unit {
     label: bare === "" ? `${list.name}[${index}]` : bare,
     named: bare === "",
     list,
-    // An element with a name of its own goes by it; one known only by its
-    // place goes by its type as well, where the type tells it apart.
-    kind: bare === "" ? elementKind(n.type, list.type) : null,
+    // Its type, where the list holds several: an element known only by its
+    // place goes by it, and so do the elements of a long list grouped by
+    // type, named or not (`table leaf in pages`, not `page 17`).
+    kind: elementKind(n.type, list.type),
+    ownName: bare !== "",
   };
 }
 
@@ -595,7 +600,10 @@ function groupUnits(units: readonly Unit[]): Group[] {
     const sameLabel = us.every((u) => u.label === first.label);
     // Elements known only by their place, in a list of several types, go by
     // their type and the list: `overflow in pages`, as the ledger names them.
-    const kind = first.variant === null && first.list !== null && first.kind != null && us.every((u) => u.kind === first.kind) ? first.kind : null;
+    // An element with a name of its own, read element by element, goes by
+    // its name: `.text`, not `progbits in sections`.
+    const alone = first.list !== null && first.ownName === true && uniqueLists.get(pathKey(first.list.path)) === true;
+    const kind = !alone && first.variant === null && first.list !== null && first.kind != null && us.every((u) => u.kind === first.kind) ? first.kind : null;
     return {
       key,
       // Several elements that took one case go by the case; several with

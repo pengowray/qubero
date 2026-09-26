@@ -326,7 +326,7 @@ export const RV = {
     n === 1 ? "1 list points to other parts of the file" : `${n.toLocaleString()} lists point to other parts of the file`,
   /** Between the list's name and the structure it is a field of, and before
    *  that structure's name, the kind of element it is where that says more:
-   *  `cell_pointers in table interior pages[0]`. */
+   *  `cell_pointers in table interior page 2`. */
   dirIn: " in ",
   dirKind: (kind: string): string => `${kind} `,
   /** After the list's name, and where it is. */
