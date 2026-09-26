@@ -222,7 +222,8 @@ pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, 
     let name = symbol_name(step);
     let with = |what: &str| match stuffed {
         0 => what.to_string(),
-        _ => format!("{what}, with a stuffed 00 byte"),
+        1 => format!("{what}, plus a stuffed 00 byte"),
+        n => format!("{what}, plus {n} stuffed 00 bytes"),
     };
     let code = match step.kind {
         StepKind::Dc { size: 0, .. } | StepKind::Zrl { .. } | StepKind::Eob { .. } => {

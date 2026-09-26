@@ -478,7 +478,7 @@ fn a_code_over_a_stuffed_byte_reads_without_it() {
         let node = ev.node(&d, &[path.as_slice(), &[1, mcu, unit - first, code]].concat()).unwrap();
         assert_eq!(node.offset_bits, run.offset_bits + s.in_bits.start);
         assert_eq!(node.size_bits, s.in_bits.end - s.in_bits.start);
-        assert!(node.type_name.ends_with("with a stuffed 00 byte"), "{}", node.type_name);
+        assert!(node.type_name.ends_with("plus a stuffed 00 byte"), "{}", node.type_name);
         let Value::Str(bits) = &node.value else { panic!() };
         assert_eq!(bits.len() as u64, node.size_bits - 8);
         seen += 1;

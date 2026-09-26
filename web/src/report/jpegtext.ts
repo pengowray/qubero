@@ -55,8 +55,13 @@ export const JPEG = {
   tipBits: (bits: number, whole: number): string => `${bitCount(bits)}, ${share(bits, whole)} of the scan`,
   tipChannel: (channel: string, bits: number, blocks: number): string =>
     `${channel}: ${bitCount(bits)} in ${counted(blocks, "block")}`,
+  /** 4,000,000 is `codec::MAX_STEPS`. */
   coarse: (n: number): string =>
-    `This scan has more codes than Qubero names one by one, so ${counted(n, "block")} past that limit are counted whole, and their codes are not shown.`,
+    "Qubero lists the first 4,000,000 Huffman codes one by one. " +
+    (n === 1
+      ? `In the walkthrough, the last block shows its codes as a single "unnamed codes" entry. `
+      : `In the walkthrough, each of the last ${n.toLocaleString()} blocks shows its codes as a single "unnamed codes" entry. `) +
+    "The map and the bit tables still count every bit.",
 
   // ----- where the bits go -----
   channelsLead: (channel: string, bitShare: string, blockShare: string): string =>
