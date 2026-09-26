@@ -23,6 +23,7 @@ use super::ledger::{without_index, Ledger, Tally as Books};
 use super::origin::Role;
 use super::profile::{at_kind, from_end, sizing_kind, value_keys, Key, Profile, Tally as Counts};
 use super::space::Opened;
+use super::textnum::{Found, TextInNumbers, Tally as Texts};
 use super::watch::{Closing, Watch};
 use super::*;
 
@@ -93,6 +94,20 @@ impl ReportWalk {
         self.follow.build.directories()
     }
 
+    /// Every run of numbers with text in it. Read once the walk is over, so
+    /// empty until then; `done` once every run has been read.
+    pub fn text_in_numbers(&self) -> TextInNumbers {
+        self.follow.text.answer(self.done)
+    }
+
+    /// Count text of at least `n` characters inside runs of numbers, rather
+    /// than [`TEXT_MIN_CHARS`](super::TEXT_MIN_CHARS). For measuring where
+    /// that minimum should be.
+    pub fn with_text_min(mut self, n: usize) -> ReportWalk {
+        self.follow.text.set_min_chars(n);
+        self
+    }
+
     /// How far into the file the walk has reached.
     pub fn reached_bits(&self) -> u64 {
         self.kinds.totals().reached_bits
@@ -137,6 +152,7 @@ impl Evaluator {
         if walk.follow.started {
             let space = walk.follow.space;
             walk.follow.books.scan(self, doc, space)?;
+            walk.follow.text.scan(self, doc, space)?;
         }
         walk.follow.build.step(self, doc, &walk.root)?;
         walk.done = true;
@@ -249,6 +265,8 @@ struct Ready {
     length_after: Option<bool>,
     elements: Option<Elements>,
     absent: bool,
+    /// For a run of numbers, what the text stage needs to know about it.
+    numbers: Option<Found>,
 }
 
 /// What a structure's declaration says about its fields, worked out once per
@@ -288,6 +306,7 @@ struct Follow {
     counts: Counts,
     audit: Audit,
     build: Build,
+    text: Texts,
     fields: FxHashMap<usize, std::rc::Rc<Fields>>,
     keys: FxHashMap<usize, (Ty, String, u64)>,
     /// The template, copied once when the walk starts rather than once a
@@ -312,6 +331,7 @@ impl Follow {
             counts: Counts::default(),
             audit,
             build: Build::default(),
+            text: Texts::default(),
             fields: FxHashMap::default(),
             keys: FxHashMap::default(),
             template: std::rc::Rc::new(Template::new("", Ty::u8())),
@@ -785,6 +805,9 @@ impl<S: Source> Watch<S> for Follow {
                 out.inherit = true;
             }
         }
+        if !out.absent {
+            out.numbers = ev.numbers_found(doc, path, r)?;
+        }
         self.pending = Some(out);
         Ok(())
     }
@@ -877,12 +900,13 @@ impl<S: Source> Watch<S> for Follow {
     }
 
     fn leaf(&mut self, ev: &Evaluator, path: &[usize], r: &Resolved, bits: u64, scale: u64) {
-        let Some(ready) = self.take(path) else { return };
+        let Some(mut ready) = self.take(path) else { return };
         self.seq += 1;
         let size = bits / scale.max(1);
         if ready.absent {
             return;
         }
+        self.numbers(path, r, scale, &mut ready);
         if self.stack.is_empty() {
             self.root_part = (ready.part, ready.group);
             self.started = true;
@@ -931,8 +955,9 @@ impl<S: Source> Watch<S> for Follow {
     }
 
     fn open(&mut self, ev: &Evaluator, path: &[usize], r: &Resolved, scale: u64) {
-        let Some(ready) = self.take(path) else { return };
+        let Some(mut ready) = self.take(path) else { return };
         self.seq += 1;
+        self.numbers(path, r, scale, &mut ready);
         let size = r.size.unwrap_or(0);
         if self.stack.is_empty() {
             self.root_part = (ready.part, ready.group);
@@ -1029,6 +1054,18 @@ impl Follow {
             if from >= c.offset && to <= c.end {
                 c.reach = c.reach.max(to);
             }
+        }
+    }
+
+    /// A run of numbers, kept for the text stage. Only one the file holds
+    /// once: a run inside a run of same-shaped records is walked for the
+    /// first record only, and stands for all of them.
+    fn numbers(&mut self, path: &[usize], r: &Resolved, scale: u64, ready: &mut Ready) {
+        if scale != 1 {
+            return;
+        }
+        if let Some(found) = ready.numbers.take() {
+            self.text.add(path, r.offset, found);
         }
     }
 

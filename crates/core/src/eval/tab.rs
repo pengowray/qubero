@@ -337,6 +337,15 @@ impl<'a, S: Source> Tab<'a, S> {
         d
     }
 
+    /// Every run of numbers with text in it, its paths the tab's own.
+    pub fn report_text_in_numbers(&self, walk: &ReportWalk) -> TextInNumbers {
+        let mut t = walk.text_in_numbers();
+        for r in &mut t.runs {
+            r.path = self.path_out(&r.path).unwrap_or_default();
+        }
+        t
+    }
+
     /// The most advanced unfinished walk of a list among the tab's fields.
     pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
         let mut found = self.ev.extent_estimate_under(&self.root)?;

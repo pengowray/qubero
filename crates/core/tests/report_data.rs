@@ -13,7 +13,7 @@
 //! `qubero-samples`. With neither, each test says so and passes.
 
 use qubero_core::document::Document;
-use qubero_core::eval::{template_profile, Evaluator, KindWalk, Ledger, ReportWalk};
+use qubero_core::eval::{template_profile, Evaluator, KindWalk, Ledger, ReportWalk, TEXT_MIN_CHARS};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
@@ -118,6 +118,63 @@ fn a_riff_size_past_the_end_of_the_file_is_found() {
     // The D500X block is the data chunk's, and so is every sample.
     let l = w.ledger();
     assert!(bits(&l, "data", "content") >= 300_980 * 8);
+}
+
+/// The bat recorder's WAV with one byte of its D500X block changed, so the
+/// template no longer knows the block and reads it as the first 490 samples:
+/// what any recorder does whose block the template has no case for.
+fn unknown_recorder() -> Option<Document<MemSource>> {
+    let path = qubero_samples::roots().into_iter().map(|r| r.join("wav").join("xc1060673-kuhls-pipistrelle-data-size-short.wav")).find(|p| p.exists())?;
+    let mut bytes = std::fs::read(&path).unwrap();
+    // The firmware version, `D500X V2.2.6 ...`, which is how the template
+    // tells the block is there.
+    assert_eq!(&bytes[0xf0..0xf5], b"D500X");
+    bytes[0xf0] = b'E';
+    Some(Document::new(MemSource(bytes)))
+}
+
+#[test]
+fn text_read_as_samples_is_found_inside_the_samples() {
+    let Some(doc) = unknown_recorder() else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let mut ev = Evaluator::new(formats::template("wav").unwrap());
+    let w = walk(&doc, &mut ev, None);
+    let t = w.text_in_numbers();
+    assert!(t.done);
+    assert_eq!(t.min_chars as usize, TEXT_MIN_CHARS);
+    assert_eq!(t.runs.len(), 1, "{t:#?}");
+    let r = &t.runs[0];
+    assert_eq!((r.name.as_str(), r.what.as_str(), r.element_bits), ("samples", "i16 le", 16));
+    assert_eq!(r.offset_bits, 0x2c * 8);
+    // Twelve of the block's sixteen lines are 20 characters or longer. None of
+    // the real samples after the block reads as text that long.
+    assert_eq!(r.texts, 12);
+    assert_eq!(r.first.len(), 5);
+    assert_eq!(r.first[0].offset_bits, 0xf0 * 8);
+    assert_eq!(r.first[0].text, "E500X V2.2.6 140516, 17:19:14");
+    assert!(r.first.iter().all(|x| x.offset_bits < 0x400 * 8 && x.encoding == "ASCII"));
+    // In small goes, the same answer.
+    let mut ev = Evaluator::new(formats::template("wav").unwrap());
+    let stepped = walk(&doc, &mut ev, Some(50));
+    assert_eq!(stepped.text_in_numbers(), t);
+}
+
+#[test]
+fn samples_read_where_they_are_hold_no_text() {
+    for name in ["xc1060673-kuhls-pipistrelle-data-size-short.wav", "pcm-s16le-stereo-44100.wav", "ieee-float32-stereo-48000.wav"] {
+        let Some((doc, mut ev)) = open("wav", name, "wav") else {
+            eprintln!("{}", qubero_samples::missing());
+            return;
+        };
+        let w = walk(&doc, &mut ev, None);
+        let t = w.text_in_numbers();
+        assert!(t.done, "{name}");
+        assert!(t.numeric_bytes > 0, "{name}");
+        assert_eq!(t.scanned_bytes, t.numeric_bytes, "{name}");
+        assert!(t.runs.is_empty(), "{name}: {t:#?}");
+    }
 }
 
 #[test]
@@ -234,6 +291,7 @@ fn a_walk_in_small_goes_answers_what_one_go_does() {
     assert_eq!(whole.profile(), stepped.profile());
     assert_eq!(whole.audit(), stepped.audit());
     assert_eq!(whole.directories(), stepped.directories());
+    assert_eq!(whole.text_in_numbers(), stepped.text_in_numbers());
 }
 
 #[test]

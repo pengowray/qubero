@@ -64,6 +64,7 @@ mod stitch;
 mod survey;
 mod tab;
 mod table;
+mod textnum;
 mod time;
 mod traced;
 mod valid;
@@ -95,6 +96,7 @@ pub use directory::{Directories, Directory, DirectoryEntry, DirectoryTarget};
 pub use survey::ReportWalk;
 pub use listing::{magic_reading, Span, SpanPart};
 pub use readas::{NotText, ReadAs};
+pub use textnum::{NumbersWithText, TextInNumbers, TextRun, TEXT_MIN_CHARS};
 pub use relate::write_expr;
 pub use schema::Descriptions;
 
@@ -937,6 +939,11 @@ impl Evaluator {
     /// reading has reached.
     pub(super) fn spend(&mut self, at_bits: u64) -> R<()> {
         self.go.spend(at_bits)
+    }
+
+    /// Charge `n` elements' worth of work at once. See `Go::spend_n`.
+    pub(super) fn spend_n(&mut self, at_bits: u64, n: u64) -> R<()> {
+        self.go.spend_n(at_bits, n)
     }
 
     /// Read something with one more read open, and close it again afterwards.
