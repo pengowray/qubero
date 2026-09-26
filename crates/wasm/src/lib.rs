@@ -3497,8 +3497,13 @@ struct MapStepDto {
     /// Where in the file the run the step was read from starts: the run the
     /// stream was unpacked from, or for a stream joined from several, the run
     /// of the part the step belongs to. The step's own bits count from there,
-    /// so the file's bits are this plus them.
+    /// so the file's bits are this plus them. For a step whose run is not in
+    /// the file (`in_file` false), where the run starts in the stream it is in.
     run_offset_bits: f64,
+    /// Whether the run is in the file. False for a stream declared inside
+    /// another stream, such as a PNG's zlib stream inside the IDAT chunks'
+    /// joined data, whose bits are that stream's and not the file's.
+    in_file: bool,
 }
 
 /// Which way a step of a space was asked for, which is how its run is found
@@ -3528,10 +3533,25 @@ fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, asked: AskedBy) -> 
             (run.run_space, run.run_offset_bits)
         }
     };
-    (run_space == 0).then(|| step_dto(s, run_offset_bits))
+    (run_space == 0).then(|| step_dto(s, run_offset_bits, true))
 }
 
-fn step_dto(s: MapStep, run_offset_bits: u64) -> MapStepDto {
+/// The same, including a step whose run is inside another stream, marked with
+/// `in_file` false, for a caller that draws the step rather than marking its
+/// bits in the file.
+fn any_space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, byte: u64) -> Option<MapStepDto> {
+    let sp = e.space(space)?;
+    let (run_space, run_offset_bits) = match sp.run() {
+        Some(run) => (run.run_space, run.run_offset_bits),
+        None => {
+            let run = sp.run_at(byte)?;
+            (run.run_space, run.run_offset_bits)
+        }
+    };
+    Some(step_dto(s, run_offset_bits, run_space == 0))
+}
+
+fn step_dto(s: MapStep, run_offset_bits: u64, in_file: bool) -> MapStepDto {
     let mut dto = MapStepDto {
         in_start: s.in_bits.start as f64,
         in_end: s.in_bits.end as f64,
@@ -3543,6 +3563,7 @@ fn step_dto(s: MapStep, run_offset_bits: u64) -> MapStepDto {
         len: None,
         dist: None,
         run_offset_bits: run_offset_bits as f64,
+        in_file,
     };
     match s.kind {
         StepKind::Header(f, v) => {
@@ -3839,6 +3860,19 @@ impl Editor {
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
+    }
+
+    /// `map_out`, including a step whose run is inside another stream rather
+    /// than in the file, with `in_file` false: what the report draws a codes
+    /// ribbon from for a PNG's zlib stream, whose run is the IDAT chunks'
+    /// joined data.
+    pub fn map_out_any(&mut self, space: u32, byte: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<MapStepDto>>(Err(err));
+        }
+        let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
+        reply(Ok(e.map_out(core, byte as u64).and_then(|s| any_space_step_dto(e, core, s, byte as u64))))
     }
 
     /// Which step read the bit at `bit` of the file, when that bit is in the

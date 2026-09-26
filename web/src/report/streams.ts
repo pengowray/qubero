@@ -297,7 +297,7 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
   const read: MapStep[] = [];
   let out = 0;
   while (read.length < SCAN_STEPS && out < space.lengthBytes) {
-    const s = space.mapOut(out);
+    const s = space.mapOutAny(out);
     if (s === null) break;
     read.push(s);
     out = Math.max(out + 1, s.out_end);
@@ -372,7 +372,8 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
     },
     onPick: (i) => {
       const s = steps[i];
-      if (s === undefined) return;
+      // A code inside a joined stream has no one place in the file to go to.
+      if (s === undefined || s.in_file === false) return;
       ctx.host.pick({ startBit: s.run_offset_bits + s.in_start, endBit: s.run_offset_bits + s.in_end });
     },
   });

@@ -2053,6 +2053,10 @@ export type MapStep = {
    *  stream was unpacked from, or the run of the step's part for a stream
    *  joined from several. `in_start` and `in_end` count from there. */
   readonly run_offset_bits: number;
+  /** False when the run is inside another stream rather than in the file, so
+   *  `run_offset_bits` counts in that stream: a PNG's zlib stream inside the
+   *  IDAT chunks' joined data. Only `mapOutAny` returns such a step. */
+  readonly in_file?: boolean;
 };
 
 /**
@@ -2494,6 +2498,14 @@ export class Doc {
   /** Where the byte at `byte` of this space came from, or null. */
   mapOut(byte: number): MapStep | null {
     const r = this.handleReply<MapStep | null>(this.editor.map_out(this.space, byte));
+    return r.status === "ok" ? r.node : null;
+  }
+
+  /** `mapOut`, including a step whose run is inside another stream, which
+   *  has `in_file` false. For drawing a stream's codes, not for marking their
+   *  bits in the file. */
+  mapOutAny(byte: number): MapStep | null {
+    const r = this.handleReply<MapStep | null>(this.editor.map_out_any(this.space, byte));
     return r.status === "ok" ? r.node : null;
   }
 
