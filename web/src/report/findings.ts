@@ -5,8 +5,9 @@
 // docs/DESIGN-wrong-values.md and "The extent audit" in
 // docs/DESIGN-report-view.md): values the format rules out and checksums that
 // fail, compressed streams that would not unpack, lengths that do not match
-// the parts they size, and bytes no field describes. Values Qubero has no name
-// for come last and quietly, as one line that opens into the list: an
+// the parts they size, text inside what the template reads as numbers (see
+// "Readings that disagree"), and bytes no field describes. Values Qubero has
+// no name for come last and quietly, as one line that opens into the list: an
 // undefined value is a gap in the template, not a fact about the file, and a
 // file whose only findings are those gets no heading at all.
 //
@@ -14,10 +15,10 @@
 // beside what the format expects, and a length that does not match shows the
 // stated and the actual end side by side, drawn at one scale.
 
-import { formatOffset } from "../format.ts";
 import { checkGap } from "../gapcheck.ts";
 import type { Doc } from "../doc.ts";
-import type { ExtentAudit, ExtentCheck } from "./coredata.ts";
+import { formatBytes, formatOffset } from "../format.ts";
+import type { ExtentAudit, ExtentCheck, NumbersWithText, TextInNumbers } from "./coredata.ts";
 import type { ReportData } from "./data.ts";
 import { extentFigure } from "./extentfigure.ts";
 import { signatureOnly } from "./identity.ts";
@@ -30,8 +31,12 @@ import { walkProblems, walkTemplate } from "./walk.ts";
 const SHOWN = 50;
 /** Places one finding row names before it counts the rest. */
 const PLACES = 8;
+/** Characters of a run of text the core sends, and bytes of a long list it
+ *  scans: its first and last 512 KiB. See `crates/core/src/eval/textnum.rs`. */
+const PREVIEW_CHARS = 48;
+const ENDS = 1024 * 1024;
 
-export type FindingKind = "invalid" | "refused" | "extent" | "gap" | "zeros" | "undefined";
+export type FindingKind = "invalid" | "refused" | "extent" | "textnum" | "gap" | "zeros" | "undefined";
 
 export type Finding = {
   readonly kind: FindingKind;
@@ -45,6 +50,9 @@ export type Finding = {
   readonly bits: number;
   /** For a length that does not match its part: the core's numbers. */
   readonly extent?: ExtentCheck;
+  /** For a list of numbers with text inside it: the list and the text, and
+   *  the shortest text counted. */
+  readonly textNum?: { readonly run: NumbersWithText; readonly minChars: number };
   /** Within a kind, lower first. */
   readonly rank: number;
 };
@@ -54,34 +62,38 @@ export type Findings = {
   readonly counts: Readonly<Record<FindingKind, number>>;
   /** True when there are more wrong values than were collected. */
   readonly more: boolean;
-  /** False until the core's extent audit has finished. */
+  /** False until every stage of the core's walk has finished: the extent
+   *  audit, and the text inside lists of numbers. */
   readonly complete: boolean;
   /** The reader's reason, when the file would not read at all. */
   readonly rootFailed: string | null;
+  /** Bytes of what the template reads as numbers, and how many of them were
+   *  scanned for text. Null until known. */
+  readonly textScan: { readonly scanned: number; readonly numeric: number } | null;
 };
 
-const KIND_ORDER: Readonly<Record<FindingKind, number>> = { invalid: 0, refused: 1, extent: 2, gap: 3, zeros: 4, undefined: 5 };
+const KIND_ORDER: Readonly<Record<FindingKind, number>> = { invalid: 0, refused: 1, extent: 2, textnum: 3, gap: 4, zeros: 5, undefined: 6 };
 
 /** Which extent verdicts say the most about the file. */
 const VERDICT_RANK: Readonly<Record<string, number>> = { "past-file": 0, "past-parent": 1, unreadable: 2, stretched: 3, short: 4 };
 
-type Base = Omit<Findings, "complete" | "rootFailed">;
+type Base = Omit<Findings, "complete" | "rootFailed" | "textScan">;
 
 /** Every finding so far, sorted, or `WAIT` while the walks still need bytes.
- *  The lengths are added once the core's audit is over, and `complete` says
- *  whether it is. */
+ *  The lengths and the text inside numbers are added once every stage of the
+ *  core's walk is over, and `complete` says whether it is. */
 export function findingsOf(doc: Doc, data: ReportData): Findings | typeof WAIT {
   const base = data.memo("findings-base", () => collect(doc, data));
   if (base === WAIT) return WAIT;
   const core = data.core();
   const audit = core?.audit ?? null;
-  const final = core === null || core.failed !== null || audit?.done === true;
-  if (!final) return { ...base, complete: false, rootFailed: null };
-  return data.memo("findings", () => withAudit(doc, base, audit));
+  const final = core === null || core.failed !== null || (audit?.done === true && core.dirs?.done === true);
+  if (!final) return { ...base, complete: false, rootFailed: null, textScan: null };
+  return data.memo("findings", () => withAudit(doc, base, audit, core?.textNum ?? null));
 }
 
 function collect(doc: Doc, data: ReportData): Base | typeof WAIT {
-  const counts: Record<FindingKind, number> = { invalid: 0, refused: 0, extent: 0, gap: 0, zeros: 0, undefined: 0 };
+  const counts: Record<FindingKind, number> = { invalid: 0, refused: 0, extent: 0, textnum: 0, gap: 0, zeros: 0, undefined: 0 };
   if (doc.template === null) return { items: [], counts, more: false };
   const problems = walkProblems(doc);
   if (problems === WAIT) return WAIT;
@@ -149,7 +161,7 @@ function byWeight(a: Finding, b: Finding): number {
   return KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.rank - b.rank || b.bits - a.bits || a.target.startBit - b.target.startBit;
 }
 
-function withAudit(doc: Doc, base: Base, audit: ExtentAudit | null): Findings {
+function withAudit(doc: Doc, base: Base, audit: ExtentAudit | null, textNum: TextInNumbers | null): Findings {
   const items = [...base.items];
   const counts = { ...base.counts };
   for (const c of audit?.checks ?? []) {
@@ -157,8 +169,35 @@ function withAudit(doc: Doc, base: Base, audit: ExtentAudit | null): Findings {
     items.push(extentFinding(doc, c));
     counts.extent++;
   }
+  // A template built from a file(1) rule claims nothing past its signature,
+  // as for the gaps.
+  const text = textNum !== null && !signatureOnly(doc) ? textNum : null;
+  for (const r of text?.runs ?? []) {
+    const f = textNumFinding(r, text?.min_chars ?? 0);
+    if (f === null) continue;
+    items.push(f);
+    counts.textnum++;
+  }
   items.sort(byWeight);
-  return { items, counts, more: base.more, complete: true, rootFailed: audit?.root_failed ?? null };
+  const textScan = text === null ? null : { scanned: text.scanned_bytes, numeric: text.numeric_bytes };
+  return { items, counts, more: base.more, complete: true, rootFailed: audit?.root_failed ?? null, textScan };
+}
+
+/** A list of numbers with text inside it, as a finding that points at its
+ *  first run of text. Within the kind, the most text first. */
+function textNumFinding(r: NumbersWithText, minChars: number): Finding | null {
+  const first = r.first[0];
+  if (first === undefined) return null;
+  return {
+    kind: "textnum",
+    target: { startBit: first.offset_bits, endBit: first.offset_bits + first.size_bits },
+    name: r.name,
+    text: RV.textNumReason(r.texts, r.text_bytes, r.what),
+    value: null,
+    bits: r.text_bytes * 8,
+    textNum: { run: r, minChars },
+    rank: 0,
+  };
 }
 
 /** A length that does not match its part, as a finding. */
@@ -189,6 +228,7 @@ export function findingCounts(f: Findings): string[] {
   if (f.counts.invalid > 0) out.push(RV.findingInvalid(f.counts.invalid));
   if (f.counts.refused > 0) out.push(RV.findingRefused(f.counts.refused));
   if (f.counts.extent > 0) out.push(RV.findingExtent(f.counts.extent));
+  if (f.counts.textnum > 0) out.push(RV.findingTextNum(f.counts.textnum));
   const gaps = f.counts.gap + f.counts.zeros;
   if (gaps > 0) out.push(RV.findingGap(gaps));
   return out;
@@ -237,12 +277,22 @@ function findingsBody(doc: Doc, f: Findings): Node[] {
     for (const row of rows.slice(0, SHOWN)) list.append(findingRow(doc, row));
     out.push(list);
     const listed = rows.slice(0, SHOWN).reduce((n, r) => n + r.length, 0);
-    const total = f.counts.invalid + f.counts.refused + f.counts.extent + f.counts.gap + f.counts.zeros;
+    const total = f.counts.invalid + f.counts.refused + f.counts.extent + f.counts.textnum + f.counts.gap + f.counts.zeros;
     if (total > listed) {
       const more = document.createElement("p");
       more.className = "rv-note";
       more.textContent = RV.moreFindings(total - listed);
       out.push(more);
+    }
+    // Not every number was scanned for text, so a list with none found may
+    // still hold some past what was scanned. Said under a list of findings
+    // only: on its own it would be a note about nothing found.
+    const scan = f.textScan;
+    if (scan !== null && scan.scanned < scan.numeric) {
+      const p = document.createElement("p");
+      p.className = "rv-note";
+      p.textContent = RV.textNumFile(formatBytes(scan.scanned), formatBytes(scan.numeric));
+      out.push(p);
     }
   }
   // The values the template has no name for: one quiet line that opens into
@@ -270,7 +320,12 @@ function alike(items: readonly Finding[]): Finding[][] {
   const rows: Finding[][] = [];
   const byKey = new Map<string, Finding[]>();
   for (const f of items) {
-    const key = f.extent !== undefined ? `extent@${f.target.startBit}:${f.extent.length_path.join("/")}` : `${f.kind}\u0000${f.name ?? ""}\u0000${f.text}\u0000${f.value ?? ""}`;
+    const key =
+      f.extent !== undefined
+        ? `extent@${f.target.startBit}:${f.extent.length_path.join("/")}`
+        : f.textNum !== undefined
+          ? `textnum@${f.textNum.run.offset_bits}`
+          : `${f.kind}\u0000${f.name ?? ""}\u0000${f.text}\u0000${f.value ?? ""}`;
     let row = byKey.get(key);
     if (row === undefined) {
       row = [];
@@ -302,8 +357,11 @@ function findingRow(doc: Doc, same: readonly Finding[]): HTMLElement {
     what.append(code, " ");
   }
   if (same.length === 1) {
-    what.append(byteRef(f.target, f.name ?? undefined, formatOffset(f.target.startBit)));
-    if (f.extent === undefined) what.append(`, ${bitsText(f.bits)}`);
+    // A list of numbers links to its first run of text, and its reason says
+    // how much text there is.
+    const label = f.textNum !== undefined ? RV.textNumRunLabel : (f.name ?? undefined);
+    what.append(byteRef(f.target, label, formatOffset(f.target.startBit)));
+    if (f.extent === undefined && f.textNum === undefined) what.append(`, ${bitsText(f.bits)}`);
   } else {
     what.append(`${RV.inPlaces(same.length)}: `);
     same.slice(0, PLACES).forEach((s, i) => {
@@ -332,7 +390,47 @@ function findingRow(doc: Doc, same: readonly Finding[]): HTMLElement {
     li.append(v);
   }
   if (f.extent !== undefined) li.append(extentDetail(doc, f.extent));
+  if (f.textNum !== undefined) li.append(textNumDetail(f.textNum.run, f.textNum.minChars));
   return li;
+}
+
+/** A list of numbers with text inside it: why that matters, the first runs
+ *  of text, and how much of the list was scanned. */
+function textNumDetail(r: NumbersWithText, minChars: number): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "rv-extent rv-textnum";
+  const why = document.createElement("p");
+  why.className = "rv-note";
+  why.textContent = RV.textNumWhy(minChars);
+  box.append(why);
+  const head = document.createElement("div");
+  head.className = "rv-muted";
+  head.textContent = RV.textNumFirst(r.first.length, r.texts);
+  box.append(head);
+  const list = document.createElement("ul");
+  list.className = "rv-textnum-runs";
+  for (const t of r.first) {
+    const li = document.createElement("li");
+    const target = { startBit: t.offset_bits, endBit: t.offset_bits + t.size_bits };
+    const q = document.createElement("q");
+    const bytes = t.size_bits / 8;
+    const cut = [...t.text].length >= PREVIEW_CHARS && bytes > PREVIEW_CHARS;
+    q.textContent = cut ? `${t.text}\u2026` : t.text;
+    const size = document.createElement("span");
+    size.className = "rv-muted";
+    size.textContent = RV.textNumRunSize(bytes);
+    li.append(byteRef(target, RV.textNumRunLabel), " ", q, " ", size);
+    list.append(li);
+  }
+  box.append(list);
+  const size = r.size_bits / 8;
+  if (r.scanned_bytes < size) {
+    const p = document.createElement("p");
+    p.className = "rv-note";
+    p.textContent = r.scanned_bytes === ENDS && size > ENDS ? RV.textNumEnds(formatBytes(ENDS / 2), formatBytes(size)) : RV.textNumPart(r.scanned_bytes, size);
+    box.append(p);
+  }
+  return box;
 }
 
 /** A length that does not match its part: the numbers side by side, and the

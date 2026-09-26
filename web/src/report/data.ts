@@ -7,7 +7,7 @@
 // further.
 
 import type { Doc, OverviewState } from "../doc.ts";
-import type { Directories, ExtentAudit, Ledger, Profile, ReportStep } from "./coredata.ts";
+import type { Directories, ExtentAudit, Ledger, Profile, ReportStep, TextInNumbers } from "./coredata.ts";
 import { buildParts, partsBudget, type Budget, type PartsModel } from "./model.ts";
 import { WAIT } from "./section.ts";
 
@@ -34,7 +34,7 @@ export class ReportData {
   private scanState: OverviewState | null = null;
   private scanStepped = -1;
   private pass = 0;
-  private readonly coreState: CoreReport = { profile: null, ledger: null, audit: null, dirs: null, template: undefined, failed: null };
+  private readonly coreState: CoreReport = { profile: null, ledger: null, audit: null, dirs: null, textNum: null, template: undefined, failed: null };
   private coreStepped = -1;
   private coreSnapshot = 0;
   /** Which of the three snapshots is taken next while the walk runs. */
@@ -124,9 +124,10 @@ export class ReportData {
   }
 
   /**
-   * The core's four views of the file for the report, taking one more go of
-   * the walk they share: the format profile, the byte ledger, the extent
-   * audit and the directories, and the template's own profile beside them.
+   * The core's views of the file for the report, taking one more go of the
+   * walk they share: the format profile, the byte ledger, the extent audit,
+   * the directories and the text inside lists of numbers, and the template's
+   * own profile beside them.
    * Each is null until the walk has answered it once, and each says `done`
    * when it is final. Null as a whole where there is no template, or where
    * the `src/pkg` in use has no such calls.
@@ -168,6 +169,8 @@ export class ReportData {
         if (turn === -1 || turn === 0) c.ledger = take<Ledger>("byte_ledger_step") ?? c.ledger;
         if (turn === -1 || turn === 1) c.profile = take<Profile>("format_profile_step") ?? c.profile;
         if (turn === -1 || turn === 2) c.audit = take<ExtentAudit>("extent_audit_step") ?? c.audit;
+        // Found in the walk's last stages, so only asked for once it is over.
+        if (turn === -1) c.textNum = take<TextInNumbers>("text_in_numbers_step") ?? c.textNum;
       }
     }
     if (c.template === undefined) {
@@ -184,6 +187,9 @@ export type CoreReport = {
   ledger: Ledger | null;
   audit: ExtentAudit | null;
   dirs: Directories | null;
+  /** The lists of numbers with text inside them; null until the walk is
+   *  over, and where the `src/pkg` in use has no such call. */
+  textNum: TextInNumbers | null;
   /** The template's profile, counted over its declarations; undefined until
    *  asked. */
   template: Profile | null | undefined;

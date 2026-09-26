@@ -14,6 +14,15 @@ import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.t
 import { RV } from "../src/report/text.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
+test("text inside a list of numbers is counted with its nouns, one and many", () => {
+  assert.equal(RV.findingTextNum(1), "1 list of numbers that contains text");
+  assert.equal(RV.findingTextNum(3), "3 lists of numbers that contain text");
+  assert.equal(RV.textNumReason(12, 338, "i16 le"), "12 runs of text, 338 bytes in total, in a list the template reads as i16 le numbers");
+  assert.equal(RV.textNumReason(1, 29, "f32 be"), "1 run of text, 29 bytes, in a list the template reads as f32 be numbers");
+  assert.equal(RV.textNumFirst(5, 12), "First 5 of 12 runs of text");
+  assert.equal(RV.textNumFirst(3, 3), "3 runs of text");
+});
+
 function row(part: number[], partName: string, group: string, role: LedgerRow["role"], bits: number, first: number[], firstOffset: number, extra: Partial<LedgerRow> = {}): LedgerRow {
   return {
     part,
