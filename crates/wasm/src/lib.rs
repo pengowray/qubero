@@ -595,6 +595,44 @@ struct DirectoryTargetDto {
     aside: bool,
 }
 
+/// Every run of numbers with text in it. See
+/// `qubero_core::eval::textnum`.
+#[derive(Serialize)]
+struct TextInNumbersDto {
+    done: bool,
+    /// The shortest text counted, in characters.
+    min_chars: f64,
+    /// Bytes of numbers the walk found, and how many of them were read.
+    numeric_bytes: f64,
+    scanned_bytes: f64,
+    runs: Vec<NumbersWithTextDto>,
+}
+
+#[derive(Serialize)]
+struct NumbersWithTextDto {
+    path: Vec<usize>,
+    name: String,
+    /// What one element is: `i16 le`.
+    what: String,
+    element_bits: f64,
+    offset_bits: f64,
+    size_bits: f64,
+    scanned_bytes: f64,
+    texts: f64,
+    text_bytes: f64,
+    /// The first five, in file order.
+    first: Vec<TextRunDto>,
+}
+
+#[derive(Serialize)]
+struct TextRunDto {
+    offset_bits: f64,
+    size_bits: f64,
+    /// "ASCII" | "UTF-8" | "UTF-16 LE" | "UTF-16 BE"
+    encoding: &'static str,
+    text: String,
+}
+
 /// One kind-and-type pair, and what the file spends on it.
 #[derive(Serialize)]
 struct KindTotalDto {
@@ -3211,6 +3249,35 @@ fn directories_dto(d: qubero_core::eval::Directories) -> DirectoriesDto {
     }
 }
 
+fn text_in_numbers_dto(t: qubero_core::eval::TextInNumbers) -> TextInNumbersDto {
+    TextInNumbersDto {
+        done: t.done,
+        min_chars: t.min_chars as f64,
+        numeric_bytes: t.numeric_bytes as f64,
+        scanned_bytes: t.scanned_bytes as f64,
+        runs: t
+            .runs
+            .into_iter()
+            .map(|r| NumbersWithTextDto {
+                path: r.path,
+                name: r.name,
+                what: r.what,
+                element_bits: r.element_bits as f64,
+                offset_bits: r.offset_bits as f64,
+                size_bits: r.size_bits as f64,
+                scanned_bytes: r.scanned_bytes as f64,
+                texts: r.texts as f64,
+                text_bytes: r.text_bytes as f64,
+                first: r
+                    .first
+                    .into_iter()
+                    .map(|x| TextRunDto { offset_bits: x.offset_bits as f64, size_bits: x.size_bits as f64, encoding: x.encoding, text: x.text })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 fn wanted(e: &Evaluator) -> Vec<f64> {
     e.wanted().into_iter().map(|m| m.chunk as f64).collect()
 }
@@ -4236,8 +4303,8 @@ impl Editor {
     /// counted over the file's fields, with `bits` and the pointer
     /// directions filled in. `done` says when to stop asking.
     ///
-    /// The report's four stepped answers share one walk, so asking for any of
-    /// them carries all four on. An edit throws the walk away.
+    /// The report's stepped answers share one walk, so asking for any of
+    /// them carries all of them on. An edit throws the walk away.
     pub fn format_profile_step(&mut self, space: u32) -> String {
         self.report_go(space, |_, w| profile_dto(w.profile()))
     }
@@ -4269,6 +4336,17 @@ impl Editor {
     /// and `done` false until then.
     pub fn directories_step(&mut self, space: u32) -> String {
         self.report_go(space, |tab, w| directories_dto(tab.report_directories(w)))
+    }
+
+    /// One go of the report's walk, answered with every run the template
+    /// reads as numbers that holds text: `{done, min_chars, numeric_bytes,
+    /// scanned_bytes, runs: [{path, name, what, element_bits, offset_bits,
+    /// size_bits, scanned_bytes, texts, text_bytes, first: [{offset_bits,
+    /// size_bits, encoding, text}]}]}`. The runs are read once the walk is
+    /// over, so `runs` is empty and `done` false until then. `scanned_bytes`
+    /// below `numeric_bytes` means only part of the numbers were read.
+    pub fn text_in_numbers_step(&mut self, space: u32) -> String {
+        self.report_go(space, |tab, w| text_in_numbers_dto(tab.report_text_in_numbers(w)))
     }
 
     // ----- templates -----

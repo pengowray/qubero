@@ -1,5 +1,6 @@
 // The shapes of what the core answers for the report: the format profile, the
-// byte ledger, the extent audit and the directories. See "Report data from the
+// byte ledger, the extent audit, the directories, and the text found inside
+// lists of numbers. See "Report data from the
 // core" in docs/DESIGN-report-view.md. Offsets and sizes are bits throughout,
 // and every string key here is part of the interface: the web writes the words
 // for each (`report/text.ts`, `report/profiletext.ts`).
@@ -143,5 +144,44 @@ export type Directories = {
   readonly lists: readonly Directory[];
 };
 
-/** The four stepped answers, which share one walk in the core. */
-export type ReportStep = "format_profile_step" | "byte_ledger_step" | "extent_audit_step" | "directories_step";
+/** A run of text inside a list of numbers. */
+export type TextRun = {
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  /** `ASCII` | `UTF-8` */
+  readonly encoding: string;
+  /** The start of the text, at most 48 characters. */
+  readonly text: string;
+};
+
+/** A list the template reads as numbers, with text inside it. */
+export type NumbersWithText = {
+  readonly path: readonly number[];
+  readonly name: string;
+  /** What one element is, as the strings view says it: `i16 le`. */
+  readonly what: string;
+  readonly element_bits: number;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  /** Bytes of the list scanned for text: all of it, or its first and last
+   *  512 KiB when it is longer than 1 MiB, or less where the file's 4 MiB of
+   *  scanning ran out. See `crates/core/src/eval/textnum.rs`. */
+  readonly scanned_bytes: number;
+  readonly texts: number;
+  readonly text_bytes: number;
+  /** The first five runs of text, in file order. */
+  readonly first: readonly TextRun[];
+};
+
+export type TextInNumbers = {
+  readonly done: boolean;
+  /** The shortest text counted, in characters. */
+  readonly min_chars: number;
+  /** Bytes the template reads as numbers, and how many were scanned. */
+  readonly numeric_bytes: number;
+  readonly scanned_bytes: number;
+  readonly runs: readonly NumbersWithText[];
+};
+
+/** The stepped answers, which share one walk in the core. */
+export type ReportStep = "format_profile_step" | "byte_ledger_step" | "extent_audit_step" | "directories_step" | "text_in_numbers_step";

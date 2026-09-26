@@ -129,7 +129,7 @@ fn element_kind(kind: &str) -> Option<NotText> {
 
 /// The type an element is declared as, past the names and wrappers that say
 /// nothing about what it holds.
-fn plain<'t>(template: &'t Template, mut ty: &'t Ty) -> &'t Ty {
+pub(super) fn plain<'t>(template: &'t Template, mut ty: &'t Ty) -> &'t Ty {
     loop {
         ty = match ty {
             Ty::Named(n) => match template.types.get(&**n) {

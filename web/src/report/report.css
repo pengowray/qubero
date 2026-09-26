@@ -636,6 +636,23 @@
 .rv-extent-facts dd {
   margin: 0;
 }
+/* A list of numbers with text inside it: its first runs of text. */
+.rv-textnum {
+  font-size: 13px;
+}
+.rv-textnum .rv-note {
+  margin: 0 0 4px;
+}
+.rv-textnum-runs {
+  list-style: none;
+  padding: 0;
+  margin: 2px 0 4px;
+}
+.rv-textnum-runs q {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .rv-extentbox {
   margin: 8px 0 4px;
   max-width: 640px;

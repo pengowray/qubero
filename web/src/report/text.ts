@@ -35,6 +35,11 @@ export function counted(n: number, noun: string): string {
   return `${n.toLocaleString()} ${n === 1 ? noun : pluralOf(noun)}`;
 }
 
+/** `1 run of text`, `12 runs of text`. */
+function runsOfText(n: number): string {
+  return `${n.toLocaleString()} ${n === 1 ? "run" : "runs"} of text`;
+}
+
 /** The verb that agrees with a count: `1 entry points`, `4 entries point`. */
 export function agree(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
@@ -104,6 +109,8 @@ export const RV = {
   findingRefused: (n: number): string => counted(n, "stream that did not unpack"),
   findingGap: (n: number): string => counted(n, "unmapped range"),
   findingExtent: (n: number): string => counted(n, "length that does not match its part"),
+  findingTextNum: (n: number): string =>
+    n === 1 ? "1 list of numbers that contains text" : `${n.toLocaleString()} lists of numbers that contain text`,
   /** The quiet line the values without a name open from. */
   undefinedLine: (n: number): string => (n === 1 ? "1 value the template has no name for" : `${n.toLocaleString()} values the template has no name for`),
   rootFailed: (why: string): string => `The file would not read: ${why}`,
@@ -159,6 +166,28 @@ export const RV = {
   refused: (why: string): string =>
     why === "too-large" ? "Too large to unpack here" : why === "unaligned" ? "Does not start on a byte boundary, so it was not unpacked" : "Did not unpack",
   stored: "Stored",
+
+  // Text inside a list of numbers. "List of numbers" throughout, for what
+  // the template reads as a run of values of one type.
+  /** After the field's name and the link to its first run of text. `what` is
+   *  the element type as the strings view writes it, `i16 le`. */
+  textNumReason: (texts: number, bytes: number, what: string): string =>
+    `${runsOfText(texts)}, ${bytesText(bytes)}${texts === 1 ? "" : " in total"}, in a list the template reads as ${what} numbers`,
+  textNumWhy: (minChars: number): string =>
+    `The template may be reading the wrong bytes as numbers here: text of ${minChars} characters or more rarely occurs by chance in a list of numbers.`,
+  /** Above the runs of text listed under the row. */
+  textNumFirst: (shown: number, total: number): string =>
+    shown < total ? `First ${shown} of ${runsOfText(total)}` : sentenceCase(runsOfText(total)),
+  /** Each run's length, after its text. */
+  textNumRunSize: (bytes: number): string => `(${bytesText(bytes)})`,
+  /** The bold name over a run of text's bytes in the hover. */
+  textNumRunLabel: "Run of text",
+  /** A list longer than 1 MiB is scanned at its two ends. */
+  textNumEnds: (half: string, whole: string): string => `Scanned for text: the first ${half} and the last ${half} of this list's ${whole}.`,
+  textNumPart: (scanned: number, whole: number): string =>
+    `Scanned for text: ${bytesText(scanned)} of this list's ${bytesText(whole)}. The report scans at most 4 MiB of numbers per file.`,
+  /** Under the findings, when not every number in the file was scanned. */
+  textNumFile: (scanned: string, whole: string): string => `Scanned for text: ${scanned} of the ${whole} the template reads as numbers.`,
   /** One finding in several places: `in 22 places: @0x6, @0x399, …`. */
   inPlaces: (n: number): string => `in ${n.toLocaleString()} places`,
   andMore: (n: number): string => `and ${n.toLocaleString()} more`,

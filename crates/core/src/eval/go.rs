@@ -249,6 +249,19 @@ impl Go {
         Ok(())
     }
 
+    /// Charge `n` elements' worth of work at once, which may take the
+    /// allowance past empty: the work is done whole, and the next charge
+    /// hands back.
+    pub(super) fn spend_n(&mut self, at_bits: u64, n: u64) -> R<()> {
+        self.reached_bits = self.reached_bits.max(at_bits);
+        let Some(left) = self.left.as_mut() else { return Ok(()) };
+        if *left == 0 {
+            return Err(EvalError::Busy { reached_bits: self.reached_bits });
+        }
+        *left = left.saturating_sub(n);
+        Ok(())
+    }
+
     /// Note that one more read is open, and refuse it if the stack this go has
     /// spent is past what a read may. `depth` is only for what it says.
     ///
