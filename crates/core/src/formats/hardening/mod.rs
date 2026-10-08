@@ -170,7 +170,7 @@ pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Harden
 /// libc it was checked against, kept here so that the count depends on the
 /// program alone. A function is fortifiable when a program calls it by either
 /// name, and fortified when it calls the `_chk` one.
-const FORTIFIABLE: &[&str] = &[
+pub const FORTIFIABLE: &[&str] = &[
     "asprintf", "confstr", "dprintf", "explicit_bzero", "fdelt", "fgets", "fgets_unlocked", "fgetws",
     "fgetws_unlocked", "fprintf", "fread", "fread_unlocked", "fwprintf", "getcwd", "getdomainname", "getgroups",
     "gethostname", "getlogin_r", "gets", "getwd", "longjmp", "mbsnrtowcs", "mbsrtowcs", "mbstowcs", "memcpy",

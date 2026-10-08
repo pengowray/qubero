@@ -390,6 +390,15 @@ fn the_host_programs_read_as_checksec_reads_them() {
         return;
     }
     let chk = libc_chk();
+    // The pass counts against the list bundled with it, from glibc 2.39;
+    // `checksec` counts against this machine's libc. The counts are only
+    // comparable where the two lists are the same.
+    let mut bundled: Vec<String> = hardening::FORTIFIABLE.iter().map(|s| s.to_string()).collect();
+    bundled.sort();
+    let same_list = chk == bundled;
+    if !same_list {
+        eprintln!("not comparing fortify counts: this machine's libc has a different _chk list from the bundled glibc 2.39 one");
+    }
     for name in ["/bin/bash", "/usr/bin/ls", "/usr/bin/ssh", "/usr/bin/python3"] {
         let path = Path::new(name);
         if !path.exists() {
@@ -412,7 +421,7 @@ fn the_host_programs_read_as_checksec_reads_them() {
         let fortify = row(rows, "fortify");
         let counted = (fortify.count.unwrap(), fortify.total.unwrap());
         let said = (theirs[8].parse::<u64>().unwrap(), theirs[9].parse::<u64>().unwrap());
-        if counted != said {
+        if same_list && counted != said {
             // `checksec` counts lines of `readelf --dyn-syms`; this counts
             // names. Worked out from `readelf` both ways, the line count is
             // `checksec`'s and the name count is this one's, so a function
