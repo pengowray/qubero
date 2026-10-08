@@ -237,6 +237,7 @@ impl Pe {
         rows.push(match (&self.load_config, self.load_field(&SECURITY_COOKIE)) {
             (_, Some((cookie, e))) if cookie != 0 => Row::new("gs", "found", Rating::Good).evidence([e, self.load_config_ev()]),
             (_, Some((_, e))) => Row::new("gs", "not-found", Rating::Bad).evidence([e, self.load_config_ev()]),
+            (LoadConfig::Absent, _) => Row::new("gs", "no-load-config", Rating::Unknown).evidence([self.load_config_ev()]),
             _ => Row::new("gs", "unknown", Rating::Unknown).evidence([self.load_config_ev()]),
         });
 
@@ -399,7 +400,7 @@ mod tests {
         let names: Vec<&str> = aslr.evidence.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["dll_characteristics", "characteristics", "basereloc"]);
         // No load configuration: nothing says whether the stack is checked.
-        assert_eq!(row(&rows, "gs").state, "unknown");
+        assert_eq!(row(&rows, "gs").state, "no-load-config");
         assert_eq!(row(&rows, "cfg").count, None);
     }
 
