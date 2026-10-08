@@ -3310,6 +3310,10 @@ export const DIAGRAM = {
   /** Over an empty board while a new drawing is built and laid out, which
    *  takes seconds for a format of a few hundred types. */
   drawing: "Drawing the diagram…",
+  /** Over the empty board for a format read as one value, such as JSON or a
+   *  pickle read as the object it builds: what the file holds decides its
+   *  structure, so the format has no boxes to draw. */
+  nothingToDraw: (format: string): string => `${format} has no fixed layout of fields to draw. This file's fields are in the Listing.`,
   /** The title of a strip that stands for several types with the same
    *  fields, such as NumPy's 26 datetime64 and timedelta64 units. The first
    *  name leads, so a reader looking for it finds it; the hover lists all. */

@@ -5934,6 +5934,20 @@ table.rec tr.is-on td {
   animation: dv-busy-in 120ms ease-out 200ms both;
   will-change: opacity;
 }
+.dv-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--muted);
+  cursor: default;
+}
+.dv-empty[hidden] {
+  display: none;
+}
 .dv-busy qubero-spinner {
   height: 44px;
   width: 30px;

@@ -346,6 +346,9 @@ export class DiagramView {
   private readonly busy: HTMLElement;
   /** A new drawing has started and not yet finished. See `build`. */
   private freshPending = false;
+  /** Over the board for a format with nothing to draw: one read as a single
+   *  value, such as a JSON document. */
+  private readonly empty: HTMLElement;
   private readonly lines: SVGSVGElement;
   private readonly note: HTMLElement;
   private diagram: TemplateDiagram | null = null;
@@ -523,7 +526,10 @@ export class DiagramView {
     this.busy.className = "dv-busy";
     this.busy.setAttribute("role", "status");
     this.busy.append(spinner(), DIAGRAM.drawing);
-    this.board.append(this.stage, this.busy);
+    this.empty = document.createElement("div");
+    this.empty.className = "dv-empty";
+    this.empty.hidden = true;
+    this.board.append(this.stage, this.busy, this.empty);
     this.el.append(this.note, bar, this.board);
     this.bindPanZoom();
     // A press on the picture that lands on no row lets go of the marked one,
@@ -592,6 +598,8 @@ export class DiagramView {
     this.diagram = d;
     this.opened.clear();
     this.about = d === null ? DIAGRAM.noTemplate : DIAGRAM.about(formatName);
+    this.empty.textContent = DIAGRAM.nothingToDraw(formatName);
+    this.empty.hidden = d === null || d.types.length > 0;
     this.note.classList.toggle("is-warn", d === null);
     // A new diagram starts on the root type at life size: that is where the
     // format starts, and life size is the only scale its rows can be read at.

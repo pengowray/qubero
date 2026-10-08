@@ -196,12 +196,18 @@ pub fn diagram(t: &Template) -> Diagram {
 /// The name of the template's root, when the root is just a reference into the
 /// type table. Wrappers that say where the root sits or how big it is do not
 /// change which type it is.
+///
+/// A root that is a list of a named type is drawn from that type. GRIB and
+/// BUFR files are a run of chunks, each a message or trailing bytes, and the
+/// chunk is the whole of what there is to draw; looking no further than the
+/// list drew nothing at all.
 fn root_name(ty: &Ty) -> Option<String> {
     match ty {
         Ty::Named(n) => Some(n.to_string()),
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::At { inner, .. } => {
             root_name(inner)
         }
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => root_name(elem),
         _ => None,
     }
 }
@@ -1452,9 +1458,14 @@ mod tests {
 
     #[test]
     fn every_builtin_draws_something() {
+        // Templates that read the whole file as one value: a JSON document, a
+        // pickle read as the object it builds, a schema, a run of machine
+        // code. There is no fixed layout in them to draw.
+        const WHOLE_VALUE: &[&str] = &["com", "claudetheme", "json", "omezarr", "torchlegacy", "picklefpf", "joblib", "gltf", "vrm"];
         for name in crate::formats::builtin_names() {
             let Some(t) = crate::formats::builtin(name) else { continue };
             let d = diagram(&t);
+            assert_eq!(d.types.is_empty(), WHOLE_VALUE.contains(&name), "{name}: {} boxes", d.types.len());
             // Every edge lands on a row that exists: a view indexes straight
             // into these, and an index past the end is a crash in the browser
             // rather than a missing arrow.
