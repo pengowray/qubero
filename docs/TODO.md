@@ -41,7 +41,7 @@ Open:
 - [ ] Diagram: a way to see actual data without switching to hex view; maybe example data; optionally laid out as hex.
 - [x] Diagram: always allow scroll-zoom out at least as far as "Fit" goes.
 - [x] Diagram loading: the spinning Qubero logo and "Drawing the diagram…" while a new drawing is built (2026-10-08). The click no longer blocks, and HDF5 arrows mode is ready in about 2.4 s instead of 9 s: the redraw for the file's count joins the new drawing instead of starting a second one, and the rebuild for late fonts is skipped when the fonts were already loaded. A fold opening still rebuilds every box.
-- [ ] `chunk-indexes-large.h5`: why is Strips almost empty when Boxes and Arrows is huge?
+- [x] `chunk-indexes-large.h5`: Strips was almost empty because the HDF5 root is a choice on the signature, and a choice drawn as a strip opened onto nothing. Fixed for all 18 formats with a choice at the root (Mach-O, Parquet, SEG-Y, JPEG 2000, MATLAB, ...), 2026-10-08.
 - [ ] `H-CAL_FAC_V03-729273600-5094000.gwf` (LIGO/Virgo frame): wild; diagrams will be a challenge. `(nFrame < 4294967295) * nFrame × 4 bytes` is surely necessary but far too verbose for display.
 - [ ] `channels-structured-v2.npy` strips view: what's with all the datetime64s? Similar in `proto4-unframed-payload.pickle`.
 - [ ] Hex view: jump to top of field / previous field / next field when fields are big (e.g. `system_area 32,768 bytes · continued`).

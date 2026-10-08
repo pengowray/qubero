@@ -104,6 +104,36 @@ test("a choice is one box with its cases in it, and a strip for each case", () =
   ]);
 });
 
+test("a choice at the root opens onto its cases, as a field's choice does", () => {
+  // HDF5 chooses on its signature before anything else, and so do Mach-O,
+  // Parquet and fifteen more. The root has no field to fold the choice into,
+  // so it is a strip of cases, and each case still has its own strip below.
+  const d = made(
+    [
+      box("hdf5", [row("0x894844460d0a1a0a", "HDF5"), row("_", "HDF5")], { kind: "switch" }),
+      box("HDF5", [row("signature", "magic[8]")]),
+      box("HDF5", [row("user_block", "bytes")], { key: "k:HDF5 searched" }),
+    ],
+    [
+      { from: [0, 0], to: 1, role: "case", label: "" },
+      { from: [0, 1], to: 2, role: "case", label: "" },
+    ],
+  );
+  const p = plan(d, 24, all);
+  assert.deepEqual(
+    p.strips.map((s) => [s.box, s.depth]),
+    [
+      [0, 0],
+      [1, 1],
+      [2, 1],
+    ],
+  );
+  assert.deepEqual(
+    p.strips[0]?.items.map((i) => i.links),
+    [[{ strip: 1, reference: false }], [{ strip: 2, reference: false }]],
+  );
+});
+
 test("a type read twice is drawn once, and the second use is a mention of it", () => {
   const d = made(
     [box("Root", [row("a", "Part"), row("b", "Part")]), box("Part", [row("n", "u8")])],

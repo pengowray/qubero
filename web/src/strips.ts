@@ -95,7 +95,16 @@ export type Plan = {
 /** One case of a choice: what is read for it to be taken, and what it reads. */
 type Case = { label: string; to: number };
 
-/** Where a row's type edge goes, and where a switch's cases go. */
+/**
+ * Where a row's type edge goes, and where a switch's cases go.
+ *
+ * `type` is keyed by box and row. A switch's rows are its cases, and each
+ * case's edge says what that case reads, which is the same question a type
+ * edge answers for a field, so the cases go in `type` too. That is what lets
+ * a switch drawn as a strip of its own open onto its cases. It only is one
+ * where nothing could fold it into a field's box: as the root, which HDF5's
+ * is, choosing on the signature.
+ */
 function targets(d: TemplateDiagram): { type: Map<string, number>; caseOf: Map<number, Case[]> } {
   const type = new Map<string, number>();
   const caseOf = new Map<number, Case[]>();
@@ -105,6 +114,7 @@ function targets(d: TemplateDiagram): { type: Map<string, number>; caseOf: Map<n
       const row = d.types[e.from[0]]?.rows[e.from[1]];
       if (row === undefined || d.types[e.to] === undefined) continue;
       caseOf.set(e.from[0], [...(caseOf.get(e.from[0]) ?? []), { label: row.name, to: e.to }]);
+      type.set(`${e.from[0]}:${e.from[1]}`, e.to);
     }
   }
   return { type, caseOf };
