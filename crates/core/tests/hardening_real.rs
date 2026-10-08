@@ -181,6 +181,83 @@ fn the_dynamic_busybox_names_its_library_and_its_build() {
     assert!(rows.iter().any(|r| r.key == "bti") && !rows.iter().any(|r| r.key == "ibt"));
 }
 
+/// The three Windows builds of busybox, against their headers read by hand
+/// (a few lines of Python over `struct.unpack`, since nothing like `checksec`
+/// for PE is to hand). The i686 build was linked with its relocations taken
+/// out and without the dynamic base flag; the other two are relocatable, and
+/// only the ARM64 one has a load configuration, whose cookie is zero because
+/// llvm-mingw does not use it.
+#[test]
+fn the_windows_busyboxes_read_as_their_headers_say() {
+    let Some(dir) = qubero_samples::dir("pe") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let expected: &[(&str, &[(&str, &str)], Option<u64>)] = &[
+        (
+            "busybox-w32-aarch64.exe",
+            &[
+                ("aslr", "on"),
+                ("high-entropy-va", "on"),
+                ("dep", "on"),
+                ("cfg", "off"),
+                ("gs", "not-found"),
+                ("safeseh", "n/a"),
+                ("signature", "none"),
+                ("force-integrity", "off"),
+                ("appcontainer", "off"),
+            ],
+            Some(0),
+        ),
+        (
+            "busybox-w32-i686.exe",
+            &[
+                ("aslr", "off"),
+                ("high-entropy-va", "n/a"),
+                ("dep", "on"),
+                ("cfg", "off"),
+                ("gs", "unknown"),
+                ("safeseh", "off"),
+                ("signature", "none"),
+                ("force-integrity", "off"),
+                ("appcontainer", "off"),
+            ],
+            None,
+        ),
+        (
+            "busybox-w32-x86_64.exe",
+            &[
+                ("aslr", "on"),
+                ("high-entropy-va", "on"),
+                ("dep", "on"),
+                ("cfg", "off"),
+                ("gs", "unknown"),
+                ("safeseh", "n/a"),
+                ("signature", "none"),
+                ("force-integrity", "off"),
+                ("appcontainer", "off"),
+            ],
+            None,
+        ),
+    ];
+    let mut read_any = false;
+    for &(name, states, guard_count) in expected {
+        let path = dir.join(name);
+        if !path.exists() {
+            continue;
+        }
+        read_any = true;
+        let (h, doc, mut ev) = read(&path, "pe");
+        assert_eq!(h.format, "pe");
+        let rows = &h.parts[0].rows;
+        let got: Vec<(&str, &str)> = rows.iter().map(|r| (r.key, r.state)).collect();
+        assert_eq!(got, states, "{name}");
+        assert_eq!(row(rows, "cfg").count, guard_count, "{name}");
+        evidence_is_where_it_says(name, &h, &doc, &mut ev);
+    }
+    assert!(read_any, "{}", qubero_samples::missing());
+}
+
 /// The fortify columns of `checksec`, worked out from `readelf --dyn-syms`
 /// the way the script does it: names with their leading underscores and their
 /// version cut off, fortified when the name is one of libc's `_chk` functions

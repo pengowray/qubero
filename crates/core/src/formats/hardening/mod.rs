@@ -22,6 +22,7 @@
 //! and what they are called on screen is the view's to say.
 
 mod elf;
+mod pe;
 
 use crate::document::Document;
 use crate::eval::{EvalError, Evaluator, R, Value};
@@ -153,6 +154,7 @@ impl Row {
 pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Hardening>> {
     let parts = match ev.template().name.as_str() {
         "elf" => ("elf", elf::read(ev, doc)?),
+        "pe" => ("pe", pe::read(ev, doc)?),
         _ => return Ok(None),
     };
     Ok(Some(Hardening { format: parts.0, parts: parts.1 }))
