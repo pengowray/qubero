@@ -12,7 +12,9 @@
 //!
 //! Section contents are read for what the section header says they are: a
 //! symbol table as symbols, a string table as the strings in it, a relocation
-//! table as relocations. A section of type `nobits` is the one that has to be
+//! table as relocations, the dynamic section as its tagged entries with each
+//! library named, and a note section as its notes. A section of type `nobits`
+//! is the one that has to be
 //! handled apart. `.bss` has a size and an offset like any other section and
 //! occupies none of the file, so reading its bytes where it points would claim
 //! bytes belonging to whatever comes next.
@@ -38,7 +40,7 @@
 
 use super::bpf_opcodes::{OPCODES, REGS};
 use crate::code::Isa;
-use crate::template::{Anchor, Endian, Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 const CLASS: &[(i128, &str)] = &[(1, "32-bit"), (2, "64-bit")];
 
@@ -147,6 +149,109 @@ const SEGMENT_TYPE: &[(i128, &str)] = &[
 ];
 
 const SEGMENT_FLAGS: &[(u32, &str)] = &[(0, "execute"), (1, "write"), (2, "read")];
+
+/// What an entry of the dynamic section is. The tag is the whole of what says
+/// how to read the word after it: an address, a size, a count, a set of
+/// flags, or an offset into the string table the section links to.
+const DYNAMIC_TAG: &[(i128, &str)] = &[
+    (0, "null"),
+    (1, "needed"),
+    (2, "pltrelsz"),
+    (3, "pltgot"),
+    (4, "hash"),
+    (5, "strtab"),
+    (6, "symtab"),
+    (7, "rela"),
+    (8, "relasz"),
+    (9, "relaent"),
+    (10, "strsz"),
+    (11, "syment"),
+    (12, "init"),
+    (13, "fini"),
+    (14, "soname"),
+    (15, "rpath"),
+    (16, "symbolic"),
+    (17, "rel"),
+    (18, "relsz"),
+    (19, "relent"),
+    (20, "pltrel"),
+    (21, "debug"),
+    (22, "textrel"),
+    (23, "jmprel"),
+    (24, "bind_now"),
+    (25, "init_array"),
+    (26, "fini_array"),
+    (27, "init_arraysz"),
+    (28, "fini_arraysz"),
+    (29, "runpath"),
+    (30, "flags"),
+    (32, "preinit_array"),
+    (33, "preinit_arraysz"),
+    (34, "symtab_shndx"),
+    (35, "relrsz"),
+    (36, "relr"),
+    (37, "relrent"),
+    (0x6fff_fef5, "gnu_hash"),
+    (0x6fff_fff0, "versym"),
+    (0x6fff_fff9, "relacount"),
+    (0x6fff_fffa, "relcount"),
+    (0x6fff_fffb, "flags_1"),
+    (0x6fff_fffc, "verdef"),
+    (0x6fff_fffd, "verdefnum"),
+    (0x6fff_fffe, "verneed"),
+    (0x6fff_ffff, "verneednum"),
+];
+
+/// The tags whose word is an offset into the dynamic string table: a library
+/// to load, this library's own name, and the two lists of directories to look
+/// for libraries in.
+const DYNAMIC_NAMED: &[i128] = &[1, 14, 15, 29];
+
+/// `DT_FLAGS`, the bits the standard defines.
+const DYNAMIC_FLAGS: &[(u32, &str)] = &[(0, "origin"), (1, "symbolic"), (2, "textrel"), (3, "bind now"), (4, "static TLS")];
+
+/// `DT_FLAGS_1`, the bits the GNU and Solaris linkers added after it. `now`
+/// says the same thing as `DT_FLAGS`' `bind now`, and `pie` is the one way an
+/// executable built to load anywhere says so in a word of its own.
+const DYNAMIC_FLAGS_1: &[(u32, &str)] = &[
+    (0, "now"),
+    (1, "global"),
+    (2, "group"),
+    (3, "nodelete"),
+    (4, "loadfltr"),
+    (5, "initfirst"),
+    (6, "noopen"),
+    (7, "origin"),
+    (8, "direct"),
+    (9, "trans"),
+    (10, "interpose"),
+    (11, "nodeflib"),
+    (12, "nodump"),
+    (13, "confalt"),
+    (14, "endfiltee"),
+    (15, "dispreldne"),
+    (16, "disprelpnd"),
+    (17, "nodirect"),
+    (18, "ignmuldef"),
+    (19, "noksyms"),
+    (20, "nohdr"),
+    (21, "edited"),
+    (22, "noreloc"),
+    (23, "symintpose"),
+    (24, "globaudit"),
+    (25, "singleton"),
+    (26, "stub"),
+    (27, "pie"),
+];
+
+/// What a note owned by `GNU` is. A note's type means something only to the
+/// owner whose name it carries, so these names are given only to a note whose
+/// name is `GNU`.
+const GNU_NOTE: &[(i128, &str)] = &[(1, "ABI tag"), (3, "build ID"), (4, "gold version"), (5, "property")];
+
+/// `GNU\0` read as one big-endian word, which is how a note's type field asks
+/// whether the name after it is GNU's.
+const GNU_NAME: i128 = 0x474e_5500;
 
 const SYMBOL_BIND: &[(i128, &str)] = &[(0, "local"), (1, "global"), (2, "weak"), (10, "GNU unique")];
 
@@ -466,6 +571,8 @@ fn section_body(bits: u32, e: Endian) -> T {
             (2, T::array(symbol(bits, e), size().div(E::lit(sym_size(bits))))),
             (3, T::sized(size(), T::repeat(T::cstr(), Until::End))),
             (4, T::array(relocation(bits, e, true), size().div(E::lit(rela_size(bits))))),
+            (6, dynamic(bits, e)),
+            (7, T::sized(size(), T::repeat(note(e), Until::End))),
             // A section with no bits in the file. Its size is what it will
             // take in memory, and reading that many bytes here would read
             // whatever follows it in the file instead.
@@ -500,6 +607,122 @@ fn symbol(bits: u32, e: Endian) -> T {
         fields.push(("section_index", T::u16(e)));
     }
     T::structure("Symbol", fields).counted_as("symbol")
+}
+
+/// The dynamic section: what the loader reads to put a program together, as a
+/// list of tagged words ending in a `null` one.
+///
+/// Four of the tags name something, a library or a directory, and the word
+/// after them is an offset into the string table this section's header links
+/// to. That table's offset is written in its own section header and nowhere
+/// else, so it is read the way `section_name_base` is: straight out of the
+/// section header table, at `link` entries in, rather than through
+/// `section_headers`. `strings_at` is then a field of this structure, and each
+/// entry reads its name from there by looking outward through the list it is
+/// in.
+fn dynamic(bits: u32, e: Endian) -> T {
+    let link = E::elem_field("section_headers", E::idx(), &["link"]);
+    let size = E::elem_field("section_headers", E::idx(), &["size"]);
+    let word = if bits == 64 { 8 } else { 4 };
+    T::structure(
+        "Dynamic",
+        vec![
+            (
+                "strings_at",
+                T::at(
+                    E::field("section_header_offset")
+                        .add(link.mul(E::field("section_header_entry_size")))
+                        .add(E::lit(if bits == 64 { 24 } else { 16 })),
+                    addr(bits, e),
+                ),
+            ),
+            ("entries", T::array(dynamic_entry(bits, e), size.div(E::lit(2 * word)))),
+        ],
+    )
+    // One field of the string table's own header, read a second time. The
+    // header owns those bytes.
+    .field_aside("strings_at")
+}
+
+/// One entry of the dynamic section: a tag, and a word the tag says how to
+/// read.
+fn dynamic_entry(bits: u32, e: Endian) -> T {
+    let named = DYNAMIC_NAMED
+        .iter()
+        .map(|&tag| E::field("tag").equal_to(E::lit(tag)))
+        .reduce(|a, b| a.either(b))
+        .expect("at least one tag names something");
+    T::structure(
+        "DynamicEntry",
+        vec![
+            ("tag", T::enumeration_hex("DynamicTag", addr(bits, e), DYNAMIC_TAG)),
+            (
+                "value",
+                T::switch(
+                    E::field("tag"),
+                    vec![
+                        (30, T::flags("DynamicFlags", addr(bits, e), DYNAMIC_FLAGS)),
+                        (0x6fff_fffb, T::flags("DynamicFlags1", addr(bits, e), DYNAMIC_FLAGS_1)),
+                    ],
+                    addr(bits, e),
+                ),
+            ),
+            // The library or directory the word points at, for the four tags
+            // whose word is an offset into the string table. Not there for the
+            // rest, and not there either when the section links to no string
+            // table: section 0's offset is nought, and a name read from there
+            // would be the file's own magic.
+            (
+                "name",
+                T::when(
+                    E::field("strings_at").not_equal(E::lit(0)).both(named),
+                    T::at(E::field("strings_at").add(E::field("value")), T::cstr()),
+                ),
+            ),
+        ],
+    )
+    .named_by("tag")
+    // The name's bytes belong to the string table and are counted there.
+    .field_aside("name")
+    .counted_as("entry")
+    // Named by its tag, so the line is what the tag says: the library for a
+    // `needed`, the bits for `flags`, and the number for the rest. A `needed`
+    // shows its offset after the name, which is the number the file holds.
+    .reads_as(&[("name", "", ""), ("value", "", "")])
+}
+
+/// One note: who wrote it, what kind it is, and what it says. A note's type is
+/// a number whose meaning belongs to the owner named after it, so the type is
+/// read as one of GNU's only where the four bytes after it are `GNU\0`, which
+/// is what the name is when it is GNU's. Asking that before the name has been
+/// read is what `peek_at` is for: the name starts four bytes past where the
+/// type does.
+///
+/// The name and the description are each padded to a multiple of four bytes.
+/// A note segment aligned to eight may pad to eight instead; the GNU notes this
+/// is read for have sizes that come out the same either way.
+fn note(e: Endian) -> T {
+    let gnu = E::field("name_size").equal_to(E::lit(4)).both(E::peek_at(E::lit(32), 32, Big).equal_to(E::lit(GNU_NAME)));
+    T::structure(
+        "Note",
+        vec![
+            ("name_size", T::u32(e)),
+            ("desc_size", T::u32(e)),
+            ("type", T::switch(gnu, vec![(1, T::enumeration("GnuNoteType", T::u32(e), GNU_NOTE))], T::u32(e))),
+            (
+                "name",
+                T::text(
+                    StrLen::Padded { size: E::field("name_size").add(E::field("name_size").pad_to(4)), pad: 0 },
+                    Encoding::Utf8,
+                ),
+            ),
+            ("desc", T::bytes(E::field("desc_size"))),
+            ("padding", T::bytes(E::field("desc_size").pad_to(4))),
+        ],
+    )
+    .named_by("name")
+    .counted_as("note")
+    .reads_as(&[("type", "", ""), ("desc_size", "{} bytes", "")])
 }
 
 /// A relocation: where to patch, which symbol to patch it with, and how. The
@@ -564,6 +787,224 @@ fn instruction(e: Endian) -> T {
         ],
     )
     .counted_as("instruction")
+}
+
+/// Small ELF files assembled from parts, for the tests here and for the ones
+/// that read what a program was built with.
+#[cfg(test)]
+pub(crate) mod fixture {
+    /// A 64-bit little-endian ELF: the header, the program headers straight
+    /// after it, each section's bytes in order eight-aligned, the section name
+    /// table, and the section header table last. A section is loaded at the
+    /// same address as its offset in the file, which keeps a segment that
+    /// covers it simple to write down.
+    #[derive(Debug, Clone, Default)]
+    pub struct Elf {
+        pub kind: u16,
+        pub machine: u16,
+        pub sections: Vec<Section>,
+        pub segments: Vec<Segment>,
+        /// Write no section header table, the way `sstrip` leaves a program.
+        pub no_section_headers: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct Section {
+        pub name: String,
+        pub kind: u32,
+        pub flags: u64,
+        /// The section linked to, by name.
+        pub link: Option<String>,
+        pub entry_size: u64,
+        pub data: Vec<u8>,
+    }
+
+    /// What a segment covers.
+    #[derive(Debug, Clone)]
+    pub enum Covers {
+        Nothing,
+        Section(String),
+        WholeFile,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Segment {
+        pub kind: u32,
+        pub flags: u32,
+        pub covers: Covers,
+    }
+
+    pub const HEADER: u64 = 64;
+    pub const PHDR: u64 = 56;
+    pub const SHDR: u64 = 64;
+
+    impl Elf {
+        pub fn new(kind: u16, machine: u16) -> Elf {
+            Elf { kind, machine, ..Elf::default() }
+        }
+
+        pub fn section(mut self, name: &str, kind: u32, data: Vec<u8>) -> Elf {
+            self.sections.push(Section { name: name.into(), kind, data, ..Section::default() });
+            self
+        }
+
+        /// A section that links to another by name, with the size of one of
+        /// its entries.
+        pub fn linked(mut self, name: &str, kind: u32, link: &str, entry_size: u64, data: Vec<u8>) -> Elf {
+            self.sections.push(Section { name: name.into(), kind, link: Some(link.into()), entry_size, data, ..Section::default() });
+            self
+        }
+
+        pub fn segment(mut self, kind: u32, flags: u32, covers: Covers) -> Elf {
+            self.segments.push(Segment { kind, flags, covers });
+            self
+        }
+
+        /// The section name table's bytes, and each section's name offset in
+        /// it. The table is the last section.
+        fn names(&self) -> (Vec<u8>, Vec<u32>) {
+            let mut table = vec![0u8];
+            let mut at = Vec::new();
+            for s in &self.sections {
+                at.push(table.len() as u32);
+                table.extend_from_slice(s.name.as_bytes());
+                table.push(0);
+            }
+            at.push(table.len() as u32);
+            table.extend_from_slice(b".shstrtab\0");
+            (table, at)
+        }
+
+        /// Where each section's bytes start, the name table's last, and where
+        /// the section header table starts.
+        fn layout(&self) -> (Vec<u64>, u64) {
+            let (names, _) = self.names();
+            let mut at = HEADER + PHDR * self.segments.len() as u64;
+            let mut out = Vec::new();
+            for len in self.sections.iter().map(|s| s.data.len()).chain([names.len()]) {
+                at = at.next_multiple_of(8);
+                out.push(at);
+                at += len as u64;
+            }
+            (out, at.next_multiple_of(8))
+        }
+
+        /// Where the named section's bytes start in the built file.
+        pub fn offset_of(&self, name: &str) -> u64 {
+            let i = self.sections.iter().position(|s| s.name == name).expect("a section of that name");
+            self.layout().0[i]
+        }
+
+        /// The index the named section has in the section header table.
+        pub fn index_of(&self, name: &str) -> usize {
+            1 + self.sections.iter().position(|s| s.name == name).expect("a section of that name")
+        }
+
+        pub fn build(&self) -> Vec<u8> {
+            let (names, name_at) = self.names();
+            let (offsets, headers_at) = self.layout();
+            let count = self.sections.len() as u16 + 2;
+            let mut v = b"\x7fELF\x02\x01\x01\x00".to_vec();
+            v.extend_from_slice(&[0; 8]);
+            v.extend_from_slice(&self.kind.to_le_bytes());
+            v.extend_from_slice(&self.machine.to_le_bytes());
+            v.extend_from_slice(&1u32.to_le_bytes());
+            v.extend_from_slice(&0u64.to_le_bytes()); // entry
+            v.extend_from_slice(&(if self.segments.is_empty() { 0 } else { HEADER }).to_le_bytes());
+            v.extend_from_slice(&(if self.no_section_headers { 0 } else { headers_at }).to_le_bytes());
+            v.extend_from_slice(&0u32.to_le_bytes()); // flags
+            v.extend_from_slice(&64u16.to_le_bytes());
+            v.extend_from_slice(&(PHDR as u16).to_le_bytes());
+            v.extend_from_slice(&(self.segments.len() as u16).to_le_bytes());
+            v.extend_from_slice(&(SHDR as u16).to_le_bytes());
+            v.extend_from_slice(&(if self.no_section_headers { 0 } else { count }).to_le_bytes());
+            v.extend_from_slice(&(if self.no_section_headers { 0 } else { count - 1 }).to_le_bytes());
+            let total = headers_at + if self.no_section_headers { 0 } else { SHDR * count as u64 };
+            for seg in &self.segments {
+                let (at, len) = match &seg.covers {
+                    Covers::Nothing => (0, 0),
+                    Covers::Section(name) => (self.offset_of(name), self.sections[self.index_of(name) - 1].data.len() as u64),
+                    Covers::WholeFile => (0, total),
+                };
+                v.extend_from_slice(&seg.kind.to_le_bytes());
+                v.extend_from_slice(&seg.flags.to_le_bytes());
+                for word in [at, at, at, len, len, 8] {
+                    v.extend_from_slice(&word.to_le_bytes());
+                }
+            }
+            for (data, at) in self.sections.iter().map(|s| s.data.as_slice()).chain([names.as_slice()]).zip(&offsets) {
+                v.resize(*at as usize, 0);
+                v.extend_from_slice(data);
+            }
+            v.resize(headers_at as usize, 0);
+            if self.no_section_headers {
+                return v;
+            }
+            v.extend_from_slice(&[0; SHDR as usize]);
+            let strtab = Section { kind: 3, ..Section::default() };
+            for (i, s) in self.sections.iter().chain([&strtab]).enumerate() {
+                let len = if i == self.sections.len() { names.len() } else { s.data.len() } as u64;
+                let link = s.link.as_deref().map_or(0, |l| self.index_of(l)) as u32;
+                v.extend_from_slice(&name_at[i].to_le_bytes());
+                v.extend_from_slice(&s.kind.to_le_bytes());
+                v.extend_from_slice(&s.flags.to_le_bytes());
+                v.extend_from_slice(&offsets[i].to_le_bytes()); // address
+                v.extend_from_slice(&offsets[i].to_le_bytes());
+                v.extend_from_slice(&len.to_le_bytes());
+                v.extend_from_slice(&link.to_le_bytes());
+                v.extend_from_slice(&0u32.to_le_bytes());
+                v.extend_from_slice(&8u64.to_le_bytes());
+                v.extend_from_slice(&s.entry_size.to_le_bytes());
+            }
+            v
+        }
+    }
+
+    /// A dynamic section's bytes from its tags and words.
+    pub fn dynamic(entries: &[(u64, u64)]) -> Vec<u8> {
+        entries.iter().flat_map(|(tag, value)| [tag.to_le_bytes(), value.to_le_bytes()]).flatten().collect()
+    }
+
+    /// A string table holding `names`, and the offset of each in it.
+    pub fn strings(names: &[&str]) -> (Vec<u8>, Vec<u64>) {
+        let mut table = vec![0u8];
+        let mut at = Vec::new();
+        for n in names {
+            at.push(table.len() as u64);
+            table.extend_from_slice(n.as_bytes());
+            table.push(0);
+        }
+        (table, at)
+    }
+
+    /// A symbol table whose symbols have these name offsets, after the null
+    /// symbol every table starts with. Global functions, undefined.
+    pub fn symbols(names: &[u64]) -> Vec<u8> {
+        let mut v = vec![0u8; 24];
+        for &n in names {
+            v.extend_from_slice(&(n as u32).to_le_bytes());
+            v.push(0x12);
+            v.push(0);
+            v.extend_from_slice(&0u16.to_le_bytes());
+            v.extend_from_slice(&0u64.to_le_bytes());
+            v.extend_from_slice(&0u64.to_le_bytes());
+        }
+        v
+    }
+
+    /// One note, its name and description each padded to four bytes.
+    pub fn note(name: &str, kind: u32, desc: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&(name.len() as u32 + 1).to_le_bytes());
+        v.extend_from_slice(&(desc.len() as u32).to_le_bytes());
+        v.extend_from_slice(&kind.to_le_bytes());
+        v.extend_from_slice(name.as_bytes());
+        v.push(0);
+        v.resize(v.len().next_multiple_of(4), 0);
+        v.extend_from_slice(desc);
+        v.resize(v.len().next_multiple_of(4), 0);
+        v
+    }
 }
 
 #[cfg(test)]
@@ -778,6 +1219,81 @@ mod tests {
         v.extend(shdr(1, 1, 6, 64, text.len() as u64));
         v.extend(shdr(7, 3, 0, 64 + text.len() as u64, names.len() as u64));
         v
+    }
+
+    /// A shared library's dynamic section and the string table it links to:
+    /// a library it needs, a directory to look in, and the two words of flags.
+    fn dynamic_library() -> fixture::Elf {
+        let (strings, at) = fixture::strings(&["libc.so.6", "$ORIGIN/lib"]);
+        let entries = fixture::dynamic(&[
+            (1, at[0]),         // needed
+            (29, at[1]),        // runpath
+            (30, 0x8),          // flags: bind now
+            (0x6fff_fffb, 0x0800_0001), // flags_1: now, pie
+            (0, 0),
+        ]);
+        fixture::Elf::new(3, 62).section(".dynstr", 3, strings).linked(".dynamic", 6, ".dynstr", 16, entries)
+    }
+
+    /// Every entry of the dynamic section named by its tag, and a library
+    /// named by the string the entry's word points at. The string table's
+    /// offset is a field of the section, and an entry two lists further in
+    /// reaches it by looking outward.
+    #[test]
+    fn a_dynamic_section_names_the_libraries_it_needs() {
+        let elf = dynamic_library();
+        let d = Document::new(MemSource(elf.build()));
+        let mut ev = Evaluator::new(super::elf());
+        let at = elf.index_of(".dynamic");
+        let body = vec![7, 16, at];
+        assert_eq!(ev.node(&d, &body).unwrap().type_name, "Dynamic");
+        // `at` is a node with the field it placed as its one child.
+        let strings_at = ev.child_named(&d, &body, "strings_at").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &[strings_at.as_slice(), &[0]].concat()).unwrap().value, Value::UInt(elf.offset_of(".dynstr") as u128));
+        let entries = ev.child_named(&d, &body, "entries").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &entries).unwrap().child_count, 5);
+        let entry = |i: usize| [entries.as_slice(), &[i]].concat();
+        assert_eq!(ev.node(&d, &entry(0)).unwrap().name, "[0] needed");
+        let name = |ev: &mut Evaluator, i: usize| [ev.child_named(&d, &entry(i), "name").unwrap().unwrap(), vec![0]].concat();
+        let first = name(&mut ev, 0);
+        assert_eq!(ev.node(&d, &first).unwrap().value, Value::Str("libc.so.6".into()));
+        // Its bytes are the string table's, read from there.
+        assert_eq!(ev.node(&d, &first).unwrap().offset_bits, (elf.offset_of(".dynstr") + 1) * 8);
+        let second = name(&mut ev, 1);
+        assert_eq!(ev.node(&d, &second).unwrap().value, Value::Str("$ORIGIN/lib".into()));
+        let flags = ev.child_named(&d, &entry(2), "value").unwrap().unwrap();
+        assert!(matches!(ev.node(&d, &flags).unwrap().value, Value::Flags { set, .. } if set == ["bind now"]));
+        let flags = ev.child_named(&d, &entry(3), "value").unwrap().unwrap();
+        assert!(matches!(ev.node(&d, &flags).unwrap().value, Value::Flags { set, .. } if set == ["now", "pie"]));
+        // A tag whose word is not an offset into the strings has no name.
+        let name = ev.child_named(&d, &entry(2), "name").unwrap().unwrap();
+        assert!(ev.node(&d, &name).unwrap().absent);
+    }
+
+    /// A note is called what its owner calls itself, and its type is read as
+    /// one of GNU's only when the owner is GNU: type 3 of a Go note is not a
+    /// build ID.
+    #[test]
+    fn a_note_is_named_by_its_owner_and_typed_by_it() {
+        let mut notes = fixture::note("GNU", 3, &[0xab; 20]);
+        notes.extend(fixture::note("Go", 3, b"go-build-id"));
+        let elf = fixture::Elf::new(2, 62).section(".note", 7, notes);
+        let d = Document::new(MemSource(elf.build()));
+        let mut ev = Evaluator::new(super::elf());
+        let body = vec![7, 16, elf.index_of(".note")];
+        assert_eq!(ev.node(&d, &body).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[body.as_slice(), &[0]].concat()).unwrap().name, "[0] GNU");
+        let kind = ev.child_named(&d, &[body.as_slice(), &[0]].concat(), "type").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &kind).unwrap().value, Value::Enum { raw: 3, name: Some("build ID".into()), hex: false });
+        let desc = ev.child_named(&d, &[body.as_slice(), &[0]].concat(), "desc").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &desc).unwrap().size_bits, 20 * 8);
+        // The Go note's description is eleven bytes, padded to twelve.
+        let go = [body.as_slice(), &[1]].concat();
+        assert_eq!(ev.node(&d, &go).unwrap().name, "[1] Go");
+        let kind = ev.child_named(&d, &go, "type").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &kind).unwrap().value, Value::UInt(3));
+        let padding = ev.child_named(&d, &go, "padding").unwrap().unwrap();
+        assert_eq!(ev.node(&d, &padding).unwrap().size_bits, 8);
     }
 
     /// A big-endian 32-bit header, which is the other end of what the switches

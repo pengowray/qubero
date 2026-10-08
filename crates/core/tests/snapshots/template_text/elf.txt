@@ -209,6 +209,59 @@ root ELF {
             info: u32le
             addend: u32le
           }[section_headers[index].size / 12]
+          6 => Dynamic {
+            strings_at: at(section_header_offset + section_headers[index].link *
+                section_header_entry_size + 16 from file) u32le
+                aside
+            entries: DynamicEntry (named by tag, unit entry, line name then value) {
+              tag: u32le enum DynamicTag {
+                0x00 = null, 0x01 = needed, 0x02 = pltrelsz, 0x03 = pltgot, 0x04 = hash,
+                0x05 = strtab, 0x06 = symtab, 0x07 = rela, 0x08 = relasz, 0x09 = relaent,
+                0x0a = strsz, 0x0b = syment, 0x0c = init, 0x0d = fini, 0x0e = soname,
+                0x0f = rpath, 0x10 = symbolic, 0x11 = rel, 0x12 = relsz, 0x13 = relent,
+                0x14 = pltrel, 0x15 = debug, 0x16 = textrel, 0x17 = jmprel, 0x18 = bind_now,
+                0x19 = init_array, 0x1a = fini_array, 0x1b = init_arraysz, 0x1c = fini_arraysz,
+                0x1d = runpath, 0x1e = flags, 0x20 = preinit_array, 0x21 = preinit_arraysz,
+                0x22 = symtab_shndx, 0x23 = relrsz, 0x24 = relr, 0x25 = relrent,
+                0x6ffffef5 = gnu_hash, 0x6ffffff0 = versym, 0x6ffffff9 = relacount,
+                0x6ffffffa = relcount, 0x6ffffffb = flags_1, 0x6ffffffc = verdef,
+                0x6ffffffd = verdefnum, 0x6ffffffe = verneed, 0x6fffffff = verneednum
+              }
+              value: switch tag {
+                30 => u32le flags DynamicFlags {
+                  bit 0 = origin, bit 1 = symbolic, bit 2 = textrel, bit 3 = bind now,
+                  bit 4 = static TLS
+                }
+                0x6ffffffb => u32le flags DynamicFlags1 {
+                  bit 0 = now, bit 1 = global, bit 2 = group, bit 3 = nodelete,
+                  bit 4 = loadfltr, bit 5 = initfirst, bit 6 = noopen, bit 7 = origin,
+                  bit 8 = direct, bit 9 = trans, bit 10 = interpose, bit 11 = nodeflib,
+                  bit 12 = nodump, bit 13 = confalt, bit 14 = endfiltee, bit 15 = dispreldne,
+                  bit 16 = disprelpnd, bit 17 = nodirect, bit 18 = ignmuldef, bit 19 = noksyms,
+                  bit 20 = nohdr, bit 21 = edited, bit 22 = noreloc, bit 23 = symintpose,
+                  bit 24 = globaudit, bit 25 = singleton, bit 26 = stub, bit 27 = pie
+                }
+                _ => u32le
+              }
+              name: optional(when strings_at != 0 and (tag == 1 or tag == 14 or tag == 15 or tag
+                  == 29)) at(strings_at + value from file) text until 0x00 utf8
+                  aside
+            }[section_headers[index].size / 8]
+          }
+          7 => sized(section_headers[index].size) repeat(until end) Note
+              (named by name, unit note, line type then desc_size worded "{} bytes") {
+            name_size: u32le
+            desc_size: u32le
+            type: switch name_size == 4 and peek(u32be at 32 bits) == 1196315904 {
+              1 => u32le enum GnuNoteType {
+                1 = ABI tag, 3 = build ID, 4 = gold version, 5 = property
+              }
+              _ => u32le
+            }
+            name: text[name_size + padding(name_size, 4)] padded with 0x00 utf8
+            desc: bytes[desc_size]
+            padding: bytes[padding(desc_size, 4)]
+          }
           8 => bytes[0]
           9 => Relocation (unit relocation) {
             offset: u32le
@@ -429,6 +482,59 @@ root ELF {
             info: u32be
             addend: u32be
           }[section_headers[index].size / 12]
+          6 => Dynamic {
+            strings_at: at(section_header_offset + section_headers[index].link *
+                section_header_entry_size + 16 from file) u32be
+                aside
+            entries: DynamicEntry (named by tag, unit entry, line name then value) {
+              tag: u32be enum DynamicTag {
+                0x00 = null, 0x01 = needed, 0x02 = pltrelsz, 0x03 = pltgot, 0x04 = hash,
+                0x05 = strtab, 0x06 = symtab, 0x07 = rela, 0x08 = relasz, 0x09 = relaent,
+                0x0a = strsz, 0x0b = syment, 0x0c = init, 0x0d = fini, 0x0e = soname,
+                0x0f = rpath, 0x10 = symbolic, 0x11 = rel, 0x12 = relsz, 0x13 = relent,
+                0x14 = pltrel, 0x15 = debug, 0x16 = textrel, 0x17 = jmprel, 0x18 = bind_now,
+                0x19 = init_array, 0x1a = fini_array, 0x1b = init_arraysz, 0x1c = fini_arraysz,
+                0x1d = runpath, 0x1e = flags, 0x20 = preinit_array, 0x21 = preinit_arraysz,
+                0x22 = symtab_shndx, 0x23 = relrsz, 0x24 = relr, 0x25 = relrent,
+                0x6ffffef5 = gnu_hash, 0x6ffffff0 = versym, 0x6ffffff9 = relacount,
+                0x6ffffffa = relcount, 0x6ffffffb = flags_1, 0x6ffffffc = verdef,
+                0x6ffffffd = verdefnum, 0x6ffffffe = verneed, 0x6fffffff = verneednum
+              }
+              value: switch tag {
+                30 => u32be flags DynamicFlags {
+                  bit 0 = origin, bit 1 = symbolic, bit 2 = textrel, bit 3 = bind now,
+                  bit 4 = static TLS
+                }
+                0x6ffffffb => u32be flags DynamicFlags1 {
+                  bit 0 = now, bit 1 = global, bit 2 = group, bit 3 = nodelete,
+                  bit 4 = loadfltr, bit 5 = initfirst, bit 6 = noopen, bit 7 = origin,
+                  bit 8 = direct, bit 9 = trans, bit 10 = interpose, bit 11 = nodeflib,
+                  bit 12 = nodump, bit 13 = confalt, bit 14 = endfiltee, bit 15 = dispreldne,
+                  bit 16 = disprelpnd, bit 17 = nodirect, bit 18 = ignmuldef, bit 19 = noksyms,
+                  bit 20 = nohdr, bit 21 = edited, bit 22 = noreloc, bit 23 = symintpose,
+                  bit 24 = globaudit, bit 25 = singleton, bit 26 = stub, bit 27 = pie
+                }
+                _ => u32be
+              }
+              name: optional(when strings_at != 0 and (tag == 1 or tag == 14 or tag == 15 or tag
+                  == 29)) at(strings_at + value from file) text until 0x00 utf8
+                  aside
+            }[section_headers[index].size / 8]
+          }
+          7 => sized(section_headers[index].size) repeat(until end) Note
+              (named by name, unit note, line type then desc_size worded "{} bytes") {
+            name_size: u32be
+            desc_size: u32be
+            type: switch name_size == 4 and peek(u32be at 32 bits) == 1196315904 {
+              1 => u32be enum GnuNoteType {
+                1 = ABI tag, 3 = build ID, 4 = gold version, 5 = property
+              }
+              _ => u32be
+            }
+            name: text[name_size + padding(name_size, 4)] padded with 0x00 utf8
+            desc: bytes[desc_size]
+            padding: bytes[padding(desc_size, 4)]
+          }
           8 => bytes[0]
           9 => Relocation (unit relocation) {
             offset: u32be
@@ -656,6 +762,59 @@ root ELF {
             symbol: u32le
             addend: u64le
           }[section_headers[index].size / 24]
+          6 => Dynamic {
+            strings_at: at(section_header_offset + section_headers[index].link *
+                section_header_entry_size + 24 from file) u64le
+                aside
+            entries: DynamicEntry (named by tag, unit entry, line name then value) {
+              tag: u64le enum DynamicTag {
+                0x00 = null, 0x01 = needed, 0x02 = pltrelsz, 0x03 = pltgot, 0x04 = hash,
+                0x05 = strtab, 0x06 = symtab, 0x07 = rela, 0x08 = relasz, 0x09 = relaent,
+                0x0a = strsz, 0x0b = syment, 0x0c = init, 0x0d = fini, 0x0e = soname,
+                0x0f = rpath, 0x10 = symbolic, 0x11 = rel, 0x12 = relsz, 0x13 = relent,
+                0x14 = pltrel, 0x15 = debug, 0x16 = textrel, 0x17 = jmprel, 0x18 = bind_now,
+                0x19 = init_array, 0x1a = fini_array, 0x1b = init_arraysz, 0x1c = fini_arraysz,
+                0x1d = runpath, 0x1e = flags, 0x20 = preinit_array, 0x21 = preinit_arraysz,
+                0x22 = symtab_shndx, 0x23 = relrsz, 0x24 = relr, 0x25 = relrent,
+                0x6ffffef5 = gnu_hash, 0x6ffffff0 = versym, 0x6ffffff9 = relacount,
+                0x6ffffffa = relcount, 0x6ffffffb = flags_1, 0x6ffffffc = verdef,
+                0x6ffffffd = verdefnum, 0x6ffffffe = verneed, 0x6fffffff = verneednum
+              }
+              value: switch tag {
+                30 => u64le flags DynamicFlags {
+                  bit 0 = origin, bit 1 = symbolic, bit 2 = textrel, bit 3 = bind now,
+                  bit 4 = static TLS
+                }
+                0x6ffffffb => u64le flags DynamicFlags1 {
+                  bit 0 = now, bit 1 = global, bit 2 = group, bit 3 = nodelete,
+                  bit 4 = loadfltr, bit 5 = initfirst, bit 6 = noopen, bit 7 = origin,
+                  bit 8 = direct, bit 9 = trans, bit 10 = interpose, bit 11 = nodeflib,
+                  bit 12 = nodump, bit 13 = confalt, bit 14 = endfiltee, bit 15 = dispreldne,
+                  bit 16 = disprelpnd, bit 17 = nodirect, bit 18 = ignmuldef, bit 19 = noksyms,
+                  bit 20 = nohdr, bit 21 = edited, bit 22 = noreloc, bit 23 = symintpose,
+                  bit 24 = globaudit, bit 25 = singleton, bit 26 = stub, bit 27 = pie
+                }
+                _ => u64le
+              }
+              name: optional(when strings_at != 0 and (tag == 1 or tag == 14 or tag == 15 or tag
+                  == 29)) at(strings_at + value from file) text until 0x00 utf8
+                  aside
+            }[section_headers[index].size / 16]
+          }
+          7 => sized(section_headers[index].size) repeat(until end) Note
+              (named by name, unit note, line type then desc_size worded "{} bytes") {
+            name_size: u32le
+            desc_size: u32le
+            type: switch name_size == 4 and peek(u32be at 32 bits) == 1196315904 {
+              1 => u32le enum GnuNoteType {
+                1 = ABI tag, 3 = build ID, 4 = gold version, 5 = property
+              }
+              _ => u32le
+            }
+            name: text[name_size + padding(name_size, 4)] padded with 0x00 utf8
+            desc: bytes[desc_size]
+            padding: bytes[padding(desc_size, 4)]
+          }
           8 => bytes[0]
           9 => Relocation (unit relocation) {
             offset: u64le
@@ -884,6 +1043,59 @@ root ELF {
             }
             addend: u64be
           }[section_headers[index].size / 24]
+          6 => Dynamic {
+            strings_at: at(section_header_offset + section_headers[index].link *
+                section_header_entry_size + 24 from file) u64be
+                aside
+            entries: DynamicEntry (named by tag, unit entry, line name then value) {
+              tag: u64be enum DynamicTag {
+                0x00 = null, 0x01 = needed, 0x02 = pltrelsz, 0x03 = pltgot, 0x04 = hash,
+                0x05 = strtab, 0x06 = symtab, 0x07 = rela, 0x08 = relasz, 0x09 = relaent,
+                0x0a = strsz, 0x0b = syment, 0x0c = init, 0x0d = fini, 0x0e = soname,
+                0x0f = rpath, 0x10 = symbolic, 0x11 = rel, 0x12 = relsz, 0x13 = relent,
+                0x14 = pltrel, 0x15 = debug, 0x16 = textrel, 0x17 = jmprel, 0x18 = bind_now,
+                0x19 = init_array, 0x1a = fini_array, 0x1b = init_arraysz, 0x1c = fini_arraysz,
+                0x1d = runpath, 0x1e = flags, 0x20 = preinit_array, 0x21 = preinit_arraysz,
+                0x22 = symtab_shndx, 0x23 = relrsz, 0x24 = relr, 0x25 = relrent,
+                0x6ffffef5 = gnu_hash, 0x6ffffff0 = versym, 0x6ffffff9 = relacount,
+                0x6ffffffa = relcount, 0x6ffffffb = flags_1, 0x6ffffffc = verdef,
+                0x6ffffffd = verdefnum, 0x6ffffffe = verneed, 0x6fffffff = verneednum
+              }
+              value: switch tag {
+                30 => u64be flags DynamicFlags {
+                  bit 0 = origin, bit 1 = symbolic, bit 2 = textrel, bit 3 = bind now,
+                  bit 4 = static TLS
+                }
+                0x6ffffffb => u64be flags DynamicFlags1 {
+                  bit 0 = now, bit 1 = global, bit 2 = group, bit 3 = nodelete,
+                  bit 4 = loadfltr, bit 5 = initfirst, bit 6 = noopen, bit 7 = origin,
+                  bit 8 = direct, bit 9 = trans, bit 10 = interpose, bit 11 = nodeflib,
+                  bit 12 = nodump, bit 13 = confalt, bit 14 = endfiltee, bit 15 = dispreldne,
+                  bit 16 = disprelpnd, bit 17 = nodirect, bit 18 = ignmuldef, bit 19 = noksyms,
+                  bit 20 = nohdr, bit 21 = edited, bit 22 = noreloc, bit 23 = symintpose,
+                  bit 24 = globaudit, bit 25 = singleton, bit 26 = stub, bit 27 = pie
+                }
+                _ => u64be
+              }
+              name: optional(when strings_at != 0 and (tag == 1 or tag == 14 or tag == 15 or tag
+                  == 29)) at(strings_at + value from file) text until 0x00 utf8
+                  aside
+            }[section_headers[index].size / 16]
+          }
+          7 => sized(section_headers[index].size) repeat(until end) Note
+              (named by name, unit note, line type then desc_size worded "{} bytes") {
+            name_size: u32be
+            desc_size: u32be
+            type: switch name_size == 4 and peek(u32be at 32 bits) == 1196315904 {
+              1 => u32be enum GnuNoteType {
+                1 = ABI tag, 3 = build ID, 4 = gold version, 5 = property
+              }
+              _ => u32be
+            }
+            name: text[name_size + padding(name_size, 4)] padded with 0x00 utf8
+            desc: bytes[desc_size]
+            padding: bytes[padding(desc_size, 4)]
+          }
           8 => bytes[0]
           9 => Relocation (unit relocation) {
             offset: u64be
