@@ -213,6 +213,28 @@ impl<'a, S: Source> Tab<'a, S> {
         }))
     }
 
+    /// What the program the tab reads was built to withstand, with every
+    /// piece of evidence's path given as the tab's. See
+    /// [`crate::formats::hardening`].
+    ///
+    /// Nothing for a tab over a stream read where it was declared: its
+    /// template is the file's, and what is under the stream is not a program
+    /// that template describes. Nothing either for a template that is not a
+    /// program's.
+    pub fn hardening(&mut self) -> R<Option<crate::formats::hardening::Hardening>> {
+        if !self.root.is_empty() {
+            return Ok(None);
+        }
+        let Some(mut found) = crate::formats::hardening::read(self.ev, self.doc)? else { return Ok(None) };
+        for part in &mut found.parts {
+            part.path = self.path_out(&part.path).unwrap_or_default();
+            for e in part.rows.iter_mut().flat_map(|r| r.evidence.iter_mut()) {
+                e.path = self.path_out(&e.path).unwrap_or_default();
+            }
+        }
+        Ok(Some(found))
+    }
+
     /// Which fields settled the shape of the one at `path`. One outside the
     /// stream keeps its name and what it says, and loses its path: the tab has
     /// no row for it to go to.

@@ -3462,6 +3462,86 @@ fn jpeg_block_dto(b: qubero_core::eval::JpegBlockTrace) -> JpegBlockDto {
     }
 }
 
+/// What a program was built to withstand, as `hardening` hands it over. See
+/// [`qubero_core::formats::hardening::Hardening`].
+#[derive(Serialize)]
+struct HardeningDto {
+    /// `elf`, `pe` or `macho`.
+    format: &'static str,
+    parts: Vec<HardeningPartDto>,
+}
+
+#[derive(Serialize)]
+struct HardeningPartDto {
+    /// Empty for one program; the CPU for each slice of a universal Mach-O.
+    name: String,
+    /// The program's header node.
+    path: Vec<usize>,
+    rows: Vec<HardeningRowDto>,
+}
+
+#[derive(Serialize)]
+struct HardeningRowDto {
+    key: &'static str,
+    state: &'static str,
+    /// `good`, `partial`, `bad`, `info`, `unknown` or `n/a`.
+    verdict: &'static str,
+    count: Option<f64>,
+    total: Option<f64>,
+    items: Vec<String>,
+    more: Vec<String>,
+    /// Most direct first; at most a dozen.
+    evidence: Vec<EvidenceDto>,
+}
+
+#[derive(Serialize)]
+struct EvidenceDto {
+    /// The node holding the bytes, or empty when no field covers them.
+    path: Vec<usize>,
+    offset_bits: f64,
+    size_bits: f64,
+    what: &'static str,
+    name: String,
+}
+
+fn hardening_dto(h: qubero_core::formats::hardening::Hardening) -> HardeningDto {
+    HardeningDto {
+        format: h.format,
+        parts: h
+            .parts
+            .into_iter()
+            .map(|p| HardeningPartDto {
+                name: p.name,
+                path: p.path,
+                rows: p
+                    .rows
+                    .into_iter()
+                    .map(|r| HardeningRowDto {
+                        key: r.key,
+                        state: r.state,
+                        verdict: r.rating.as_str(),
+                        count: r.count.map(|n| n as f64),
+                        total: r.total.map(|n| n as f64),
+                        items: r.items,
+                        more: r.more,
+                        evidence: r
+                            .evidence
+                            .into_iter()
+                            .map(|e| EvidenceDto {
+                                path: e.path,
+                                offset_bits: e.offset_bits as f64,
+                                size_bits: e.size_bits as f64,
+                                what: e.what,
+                                name: e.name,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 /// The chunks a reading waits on, as a byte read reports chunks not loaded.
 /// Nothing for any other error: the read then answers from what is there.
 fn chunks_of(err: EvalError) -> Vec<f64> {
@@ -5233,6 +5313,52 @@ impl Editor {
             Err(why) => return why,
         };
         let r = tab.jpeg_block(&p, index as usize).map(|b| b.map(jpeg_block_dto));
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
+    }
+
+    /// What the program in the tab over `space` was built to withstand, the
+    /// way `checksec` reports it, with the bytes behind every answer:
+    /// {status:"ok",node:{format,parts}}, or a null node when the template is
+    /// not `elf`, `pe` or `macho`, or the tab is over a stream read where it
+    /// was declared. Same envelope as `template_node`, so bytes the pass needs
+    /// and has not got come back as pending with the chunks to fetch.
+    ///
+    /// `format` is `elf`, `pe` or `macho`. `parts` is one
+    /// {name,path,rows} per program: `name` is empty for a file holding one,
+    /// and the CPU for each slice of a universal Mach-O; `path` is the
+    /// program's header node.
+    ///
+    /// A row is {key,state,verdict,count,total,items,more,evidence}. `key`
+    /// names the protection (`relro`, `canary`, `nx`, `aslr`, ...) and `state`
+    /// is what was found, in a word fixed per key. `verdict` is `good`,
+    /// `partial`, `bad`, `info`, `unknown` or `n/a`. `count` and `total` are
+    /// numbers or null. `items` and `more` are names: fortified calls and the
+    /// unfortified ones, a search path's directories, the libraries needed.
+    /// `evidence` is at most a dozen {path,offset_bits,size_bits,what,name},
+    /// most direct first: `path` is the tab's node holding the bytes, empty
+    /// where no field covers them; `what` is `segment`, `section`, `header`,
+    /// `dynamic`, `symbol`, `string`, `note`, `directory`, `command` or
+    /// `bytes`; `name` is the format's own spelling, `GNU_STACK` or
+    /// `BIND_NOW` or `__stack_chk_fail`.
+    ///
+    /// Worked out in one go rather than in slices, as `elf_contents` is: the
+    /// pass reads a few hundred fields and a symbol table's strings, and
+    /// stopping part way would leave nothing to carry on from.
+    pub fn hardening(&mut self, space: u32) -> String {
+        if let Err(why) = self.go(space) {
+            return why;
+        }
+        let sh = self.sm();
+        if !matches!(sh.template.as_str(), "elf" | "pe" | "macho") || sh.view.is_some() {
+            return reply::<Option<HardeningDto>>(Ok(None));
+        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.set_slice(None);
+        let r = tab.hardening().map(|h| h.map(hardening_dto));
+        tab.ev.set_slice(Some(WORK_SLICE));
         reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
     }
 

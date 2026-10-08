@@ -102,6 +102,7 @@ mod recognise;
 pub mod sqlite_overflow;
 mod uf2;
 mod hackrffw;
+pub mod hardening;
 mod hdf4;
 mod hdf4_records;
 mod hdf5;
