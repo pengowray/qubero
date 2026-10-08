@@ -658,8 +658,9 @@ impl Elf {
         if entries.is_empty() {
             return Row::new(key, "none", Rating::Good).evidence(self.dynamic_ev.clone());
         }
-        let dirs: Vec<String> =
-            entries.iter().flat_map(|e| e.name.clone().unwrap_or_default().split(':').map(str::to_string).collect::<Vec<_>>()).collect();
+        // An entry whose string could not be read names no directory, rather
+        // than an empty one.
+        let dirs: Vec<String> = entries.iter().filter_map(|e| e.name.as_deref()).flat_map(|n| n.split(':').map(str::to_string)).collect();
         let unsafe_dir = dirs.iter().any(|d| !(d.starts_with('/') || d.starts_with("$ORIGIN") || d.starts_with("${ORIGIN}")));
         Row::new(key, "set", if unsafe_dir { Rating::Bad } else { Rating::Info }).items(dirs).evidence(entries.iter().map(|e| e.ev.clone()))
     }
@@ -681,6 +682,12 @@ struct Symbols {
     counts: Vec<u64>,
 }
 
+/// How much of the dynamic symbol table and its strings is read at most. A
+/// real one is a few megabytes at the very largest; a section header that
+/// claims more is damaged, and reading the whole file because it said so
+/// would answer nothing better.
+const LIMIT: u64 = 64 << 20;
+
 /// The needles the static tables' strings are searched for: the canary's
 /// three names, SafeStack's, and the end of a CFI name.
 fn needles() -> Vec<&'static [u8]> {
@@ -697,9 +704,9 @@ impl Symbols {
             // table runs to tens of thousands of them. Each is `record` bytes,
             // which is what the template counts them by too, so the one at `k`
             // is the template's element `k`.
-            let bytes = read_at(doc, s.offset, s.size)?;
+            let bytes = read_at(doc, s.offset, s.size.min(LIMIT))?;
             let table = match strings_of(s) {
-                Some(t) => read_at(doc, t.offset, t.size)?,
+                Some(t) => read_at(doc, t.offset, t.size.min(LIMIT))?,
                 None => Vec::new(),
             };
             let names = bytes
