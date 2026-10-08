@@ -3307,6 +3307,9 @@ export const DIAGRAM = {
   /** Between the line above and what it says was left out of the drawing. */
   noteJoin: " · ",
   noTemplate: "No format chosen. Pick one above to draw its structure.",
+  /** Over an empty board while a new drawing is built and laid out, which
+   *  takes seconds for a format of a few hundred types. */
+  drawing: "Drawing the diagram…",
   /**
    * Types the picture leaves out.
    *

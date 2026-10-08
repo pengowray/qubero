@@ -36,6 +36,7 @@ import { fieldClass } from "./fieldstyle.ts";
 import { DIAGRAM, roleLabel } from "./strings.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
 import { rememberChoice, storedText } from "./stored.ts";
+import { spinner } from "./spinner.ts";
 import {
   boxBadge,
   caseCountTitle,
@@ -315,12 +316,26 @@ function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string
   return node;
 }
 
+/** Once what is on screen now has been painted: two frames, the first to
+ *  schedule the paint and the second to run after it. A hidden tab runs no
+ *  frames, so a timer stands in rather than leaving the drawing waiting. */
+function afterPaint(): Promise<void> {
+  return new Promise((done) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => done()));
+    window.setTimeout(done, 100);
+  });
+}
+
 export class DiagramView {
   readonly el: HTMLElement;
   /** What the wheel and the drag act on. Clips; the stage inside it moves. */
   private readonly board: HTMLElement;
   /** Everything that is drawn, moved and scaled as one. */
   private readonly stage: HTMLElement;
+  /** The spinner and its line, over the board while a new drawing is built. */
+  private readonly busy: HTMLElement;
+  /** A new drawing has started and not yet finished. See `build`. */
+  private freshPending = false;
   private readonly lines: SVGSVGElement;
   private readonly note: HTMLElement;
   private diagram: TemplateDiagram | null = null;
@@ -467,7 +482,7 @@ export class DiagramView {
     this.modeBtn.addEventListener("change", () => {
       this.mode = this.modeBtn.value === "strips" ? "strips" : "arrows";
       rememberChoice(MODE_KEY, this.mode);
-      void this.build().then(() => this.home());
+      void this.build(true);
     });
     // What the count is doing, in the toolbar rather than on a line of its own
     // under it: a line that comes and goes moves the drawing as it does, and
@@ -494,7 +509,11 @@ export class DiagramView {
     this.stage.className = "dv-stage";
     this.lines = svg("svg", { class: "dv-lines" });
     this.stage.append(this.lines);
-    this.board.append(this.stage);
+    this.busy = document.createElement("div");
+    this.busy.className = "dv-busy";
+    this.busy.setAttribute("role", "status");
+    this.busy.append(spinner(), DIAGRAM.drawing);
+    this.board.append(this.stage, this.busy);
     this.el.append(this.note, bar, this.board);
     this.bindPanZoom();
     // A press on the picture that lands on no row lets go of the marked one,
@@ -564,13 +583,12 @@ export class DiagramView {
     this.opened.clear();
     this.about = d === null ? DIAGRAM.noTemplate : DIAGRAM.about(formatName);
     this.note.classList.toggle("is-warn", d === null);
-    this.build();
     // A new diagram starts on the root type at life size: that is where the
     // format starts, and life size is the only scale its rows can be read at.
     // Fitting a format of seventy types into a window would land the reader on
     // a wall of four-point text. `Fit` is one click away for the reader who
     // wants the shape of the whole thing first.
-    this.home();
+    void this.build(true);
   }
 
   /** Measure, place and draw again, keeping wherever the reader had panned to.
@@ -580,8 +598,24 @@ export class DiagramView {
     void this.build();
   }
 
-  private async build(): Promise<void> {
+  /**
+   * Build, measure and lay out the drawing.
+   *
+   * `fresh` is a new drawing rather than the same one again: a new template
+   * or the other mode. A few hundred types take seconds to build and lay out,
+   * most of it blocking, so a fresh build puts the spinner up and lets it
+   * paint before starting, keeps the boxes out of sight until they are in
+   * place, and ends on the root type. A relayout does none of that, since on
+   * a small format it is over in a frame and the spinner would only flash.
+   *
+   * A build that takes over from a fresh one still under way is part of the
+   * same new drawing: the count of the open file lands straight after a new
+   * template is shown, and its redraw would otherwise drop the spinner and
+   * the move to the root type.
+   */
+  private async build(fresh = false): Promise<void> {
     const gen = ++this.generation;
+    fresh ||= this.freshPending;
     for (const p of this.placed) p.el.remove();
     this.placed = [];
     for (const l of this.laid) l.el.remove();
@@ -589,7 +623,28 @@ export class DiagramView {
     this.lines.replaceChildren();
     this.note.replaceChildren(this.about);
     const d = this.diagram;
+    this.freshPending = fresh && d !== null;
+    this.board.classList.toggle("is-drawing", this.freshPending);
     if (d === null) return;
+    try {
+      if (fresh) {
+        await afterPaint();
+        if (gen !== this.generation) return;
+      }
+      if (!(await this.draw(d, gen))) return;
+      if (fresh) {
+        this.freshPending = false;
+        this.home();
+      }
+    } finally {
+      if (gen === this.generation) this.board.classList.remove("is-drawing");
+    }
+  }
+
+  /** The body of `build`, once the board is cleared and the spinner is up. */
+  private async draw(d: TemplateDiagram, gen: number): Promise<boolean> {
+    // Whether the boxes about to be measured are measured in the real fonts.
+    const inRealFonts = document.fonts.status === "loaded";
     if (d.omitted > 0) {
       const omitted = document.createElement("span");
       omitted.className = "dv-omitted";
@@ -621,17 +676,22 @@ export class DiagramView {
       this.apply();
       this.measure();
       await this.layout(d, shown, gen);
-      if (gen !== this.generation) return;
+      if (gen !== this.generation) return false;
       this.drawRoutes();
     }
     // A box measured in a fallback font is the wrong height, and every arrow
-    // into it lands on the wrong row. Once, when the real fonts arrive.
+    // into it lands on the wrong row. Once, when the real fonts arrive, and
+    // not at all when they were already here: a few hundred types take
+    // seconds to draw, and drawing them twice for nothing doubles that.
     if (!this.fontsSettled) {
       this.fontsSettled = true;
-      void document.fonts.ready.then(() => {
-        if (this.diagram !== null) void this.build();
-      });
+      if (!inRealFonts) {
+        void document.fonts.ready.then(() => {
+          if (this.diagram !== null) void this.build();
+        });
+      }
     }
+    return true;
   }
 
   /** Measure and draw the arrows again, without moving a box.

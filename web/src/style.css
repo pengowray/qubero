@@ -5911,6 +5911,42 @@ table.rec tr.is-on td {
 .dv-board.is-panning {
   cursor: grabbing;
 }
+/* A new drawing being built: the boxes are measured where they stand, so
+   they are hidden rather than taken out, and the spinner stands in for them.
+   It fades in after a moment so a small format, drawn in a frame or two,
+   does not flash it. */
+.dv-busy {
+  display: none;
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  cursor: default;
+}
+.dv-board.is-drawing .dv-stage {
+  visibility: hidden;
+}
+.dv-board.is-drawing .dv-busy {
+  display: flex;
+  animation: dv-busy-in 120ms ease-out 200ms both;
+  will-change: opacity;
+}
+.dv-busy qubero-spinner {
+  height: 44px;
+  width: 30px;
+  margin: 0;
+}
+@keyframes dv-busy-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 /* Everything drawn, moved and scaled as one. */
 .dv-stage {
   position: absolute;
