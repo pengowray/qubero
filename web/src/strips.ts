@@ -80,6 +80,14 @@ export type Strip = {
   path: string;
   /** The diagram's key for it, which is what the census counts by. */
   key: string;
+  /**
+   * The other types this strip also stands for: cases of the same choice
+   * whose fields are the same as this type's, with nothing below them. NumPy's
+   * dtype choice has 26 of them, every datetime64 and timedelta64 unit, each
+   * one field of an i64, and 26 copies of one box is a picture of nothing.
+   * Empty for nearly every strip.
+   */
+  alike: { box: number; key: string; name: string }[];
   items: Item[];
   /** The strip and box this one hangs under, for the funnel. Null for the
    *  root. */
@@ -179,9 +187,12 @@ export function plan(d: TemplateDiagram, rowCap: number, shown: (box: number) =>
     }
     const here = strips.length;
     at.set(box, here);
-    strips.push({ box, depth, name: b.name, path: b.path, key: b.key, items: [], from });
+    strips.push({ box, depth, name: b.name, path: b.path, key: b.key, alike: [], items: [], from });
     return here;
   };
+  // A type with nothing below it: no field of it, and no case if it is a
+  // choice, leads to another type.
+  const leaf = (box: number): boolean => (d.types[box]?.rows ?? []).every((_, row) => !type.has(`${box}:${row}`));
 
   const root = open(0, 0, null);
   if (root === null) return { strips, omitted };
@@ -212,19 +223,52 @@ export function plan(d: TemplateDiagram, rowCap: number, shown: (box: number) =>
         item.note = target.name;
         outs = picks.map((c) => c.to);
       }
+      const link = (to: number, reference: boolean): void => {
+        if (!item.links.some((l) => l.strip === to)) item.links.push({ strip: to, reference });
+      };
+      // Cases with the same fields and nothing below them share the strip of
+      // the first of them. Only among the cases of one choice: two such types
+      // reached from different fields are two different things in the file.
+      const sameAs = new Map<number, number>();
+      if (outs.length > 1) {
+        const firstOf = new Map<string, number>();
+        for (const box of outs) {
+          if (!shown(box) || at.has(box) || !leaf(box)) continue;
+          const shape = shapeOf(d.types[box]);
+          const first = firstOf.get(shape);
+          if (first === undefined) firstOf.set(shape, box);
+          else if (first !== box) sameAs.set(box, first);
+        }
+      }
       for (const box of outs) {
         if (!shown(box)) continue;
         const already = at.get(box);
+        // A case that shares an earlier case's strip finds it here, and is
+        // already joined to it by that case's link.
         if (already !== undefined) {
-          item.links.push({ strip: already, reference: true });
+          link(already, true);
           continue;
         }
         const made = open(box, strip.depth + 1, { strip: i, item: k });
-        if (made !== null) item.links.push({ strip: made, reference: false });
+        if (made === null) continue;
+        link(made, false);
+        for (const [other, first] of sameAs) {
+          const b = d.types[other];
+          if (first !== box || b === undefined) continue;
+          at.set(other, made);
+          strips[made]?.alike.push({ box: other, key: b.key, name: b.name });
+        }
       }
     }
   }
   return { strips, omitted };
+}
+
+/** What a type's strip looks like, as a key: two types with the same key draw
+ *  the same row of boxes, whatever they are called. */
+function shapeOf(b: DiagramBox | undefined): string {
+  if (b === undefined) return "";
+  return JSON.stringify([b.kind, b.rows.map((r) => [r.name, r.type_text, r.size_text, r.pos_text, r.list, r.kind])]);
 }
 
 /** One type's boxes, in the order the file writes them. */

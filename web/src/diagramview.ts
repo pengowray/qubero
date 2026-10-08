@@ -316,6 +316,16 @@ function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string
   return node;
 }
 
+/** The census keys of every type a strip stands for. */
+function stripKeys(strip: Strip): string[] {
+  return [strip.key, ...strip.alike.map((a) => a.key)];
+}
+
+/** The first of these counts the file has any of, or the first at all. */
+function firstHeld<T extends { count: number }>(counts: readonly T[]): T | undefined {
+  return counts.find((x) => x.count > 0) ?? counts[0];
+}
+
 /** Once what is on screen now has been painted: two frames, the first to
  *  schedule the paint and the second to run after it. A hidden tab runs no
  *  frames, so a timer stands in rather than leaving the drawing waiting. */
@@ -1038,18 +1048,22 @@ export class DiagramView {
     head.className = "dv-strip-name";
     const label = document.createElement("span");
     label.className = "dv-box-label";
-    label.textContent = strip.name;
-    label.title = DIAGRAM.boxPath(strip.path);
+    const names = [strip.name, ...strip.alike.map((a) => a.name)];
+    label.textContent = names.length > 1 ? DIAGRAM.alikeTitle(names) : strip.name;
+    label.title = names.length > 1 ? DIAGRAM.alikeHover(names) : DIAGRAM.boxPath(strip.path);
     head.append(label);
     const c = this.census;
     if (c !== null) {
-      const has = this.boxCount.get(strip.key) ?? 0;
+      // A strip standing for several types counts all of them, and goes to
+      // the first of them the file has.
+      const keys = stripKeys(strip);
+      const has = keys.reduce((n, k) => n + (this.boxCount.get(k) ?? 0), 0);
       el.classList.toggle("is-unused", isUnused(has, c.state));
       if (isUnused(has, c.state)) el.title = DIAGRAM.unusedTitle;
-      const said = countTitle(has, strip.name, c);
+      const said = countTitle(has, label.textContent, c);
       const text = boxBadge(has, c.state);
       if (text !== null) head.append(this.badge(text, said));
-      this.offerGo(head, null, c.boxes.find((b) => b.key === strip.key), "");
+      this.offerGo(head, null, firstHeld(c.boxes.filter((b) => keys.includes(b.key))), "");
     }
     const line = document.createElement("div");
     line.className = "dv-strip-row";
@@ -1132,15 +1146,17 @@ export class DiagramView {
     const c = this.census;
     const pick = item.row >= 0 && this.canPick(strip.box, item.row) ? { box: strip.box, row: item.row } : null;
     let said = "";
+    const keys = stripKeys(strip);
     if (c !== null && item.row >= 0) {
-      const held = this.rowCount.get(rowKey(strip.key, item.row)) ?? 0;
+      const held = keys.reduce((n, k) => n + (this.rowCount.get(rowKey(k, item.row)) ?? 0), 0);
       el.classList.toggle("is-unused", isUnused(held, c.state));
       said = countTitle(held, item.name, c);
-      const text = rowBadge(held, this.boxCount.get(strip.key) ?? 0, c.state);
+      const whole = keys.reduce((n, k) => n + (this.boxCount.get(k) ?? 0), 0);
+      const text = rowBadge(held, whole, c.state);
       if (text !== null) name.append(this.badge(text, said));
     }
     if (item.row >= 0) {
-      this.offerGo(el, pick, c?.rows.find((x) => x.key === strip.key && x.row === item.row), said);
+      this.offerGo(el, pick, firstHeld(c?.rows.filter((x) => keys.includes(x.key) && x.row === item.row) ?? []), said);
       this.selectable(el, strip.box, item.row);
     }
     into.append(el);

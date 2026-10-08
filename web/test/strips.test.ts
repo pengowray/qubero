@@ -104,6 +104,52 @@ test("a choice is one box with its cases in it, and a strip for each case", () =
   ]);
 });
 
+test("cases with the same fields and nothing below them share one strip", () => {
+  // NumPy's dtype choice: every datetime64 unit is one i64, and so is every
+  // timedelta64 unit. One strip stands for all of them; a case with other
+  // fields still gets its own.
+  const count = (): DiagramRow[] => [row("count", "i64 le")];
+  const d = made(
+    [
+      box("Field", [row("value", "switch on dtype")]),
+      box("switch on dtype", [row("'<M8[Y]'", "datetime64[Y]"), row("'<M8[M]'", "datetime64[M]"), row("'<c8'", "Complex"), row("'<m8[s]'", "timedelta64[s]")], {
+        kind: "switch",
+      }),
+      box("datetime64[Y]", count()),
+      box("datetime64[M]", count()),
+      box("Complex", [row("re", "f32 le"), row("im", "f32 le")]),
+      box("timedelta64[s]", count()),
+    ],
+    [
+      { from: [0, 0], to: 1, role: "type", label: "" },
+      { from: [1, 0], to: 2, role: "case", label: "" },
+      { from: [1, 1], to: 3, role: "case", label: "" },
+      { from: [1, 2], to: 4, role: "case", label: "" },
+      { from: [1, 3], to: 5, role: "case", label: "" },
+    ],
+  );
+  const p = plan(d, 24, all);
+  assert.deepEqual(
+    p.strips.map((s) => s.name),
+    ["Field", "datetime64[Y]", "Complex"],
+  );
+  assert.deepEqual(
+    p.strips[1]?.alike.map((a) => a.name),
+    ["datetime64[M]", "timedelta64[s]"],
+  );
+  // One funnel per strip, not one per case.
+  assert.deepEqual(p.strips[0]?.items[0]?.links, [
+    { strip: 1, reference: false },
+    { strip: 2, reference: false },
+  ]);
+  // A case hidden by the toggle is not counted among the ones a strip stands for.
+  const hidden = plan(d, 24, (b) => b !== 3);
+  assert.deepEqual(
+    hidden.strips[1]?.alike.map((a) => a.name),
+    ["timedelta64[s]"],
+  );
+});
+
 test("a choice at the root opens onto its cases, as a field's choice does", () => {
   // HDF5 chooses on its signature before anything else, and so do Mach-O,
   // Parquet and fifteen more. The root has no field to fold the choice into,

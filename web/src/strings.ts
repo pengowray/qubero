@@ -3310,6 +3310,13 @@ export const DIAGRAM = {
   /** Over an empty board while a new drawing is built and laid out, which
    *  takes seconds for a format of a few hundred types. */
   drawing: "Drawing the diagram…",
+  /** The title of a strip that stands for several types with the same
+   *  fields, such as NumPy's 26 datetime64 and timedelta64 units. The first
+   *  name leads, so a reader looking for it finds it; the hover lists all. */
+  alikeTitle: (names: readonly string[]): string =>
+    names.length === 2 ? `${names[0]} and ${names[1]}` : `${names[0]} and ${names.length - 1} more types`,
+  alikeHover: (names: readonly string[]): string =>
+    `These ${names.length} types have the same fields, so one strip shows ${names.length === 2 ? "both" : `all ${names.length}`}:\n${names.join(", ")}`,
   /**
    * Types the picture leaves out.
    *
