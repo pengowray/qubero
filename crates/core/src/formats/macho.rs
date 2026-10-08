@@ -112,6 +112,37 @@ const COMMAND: &[(i128, &str)] = &[
     (0x8000_0035, "file set entry"),
 ];
 
+/// What the header says about how the file was linked and how it may be
+/// loaded. `pie` and the two about execution are the ones that decide what a
+/// program withstands; the rest say how the linker put it together.
+const HEADER_FLAGS: &[(u32, &str)] = &[
+    (0, "noundefs"),
+    (1, "incrlink"),
+    (2, "dyldlink"),
+    (3, "bindatload"),
+    (4, "prebound"),
+    (5, "split segs"),
+    (7, "twolevel"),
+    (8, "force flat"),
+    (9, "nomultidefs"),
+    (10, "nofixprebinding"),
+    (11, "prebindable"),
+    (12, "allmodsbound"),
+    (13, "subsections via symbols"),
+    (14, "canonical"),
+    (15, "weak defines"),
+    (16, "binds to weak"),
+    (17, "allow stack execution"),
+    (18, "root safe"),
+    (19, "setuid safe"),
+    (20, "no reexported dylibs"),
+    (21, "pie"),
+    (22, "dead strippable dylib"),
+    (23, "has tlv descriptors"),
+    (24, "no heap execution"),
+    (25, "app extension safe"),
+];
+
 const PROTECTION: &[(u32, &str)] = &[(0, "read"), (1, "write"), (2, "execute")];
 
 /// A section's flags: the low byte is what kind of section it is, and the top
@@ -237,7 +268,7 @@ fn file(bits: u32, e: Endian) -> T {
         ("file_type", T::enumeration("FileType", T::u32(e), FILE_TYPE)),
         ("command_count", T::u32(e)),
         ("command_bytes", T::u32(e)),
-        ("flags", T::u32(e)),
+        ("flags", T::flags("HeaderFlags", T::u32(e), HEADER_FLAGS)),
     ];
     if bits == 64 {
         fields.push(("reserved", T::u32(e)));
@@ -519,6 +550,19 @@ mod tests {
         assert_eq!(slice.offset_bits, at as u64 * 8);
         let first = ev.node(&d, &[3, 0, 8, 0, 2, 9, 0, 12, 0, 0]).unwrap();
         assert_eq!(first.value, Value::Str("mov eax, 0x1".into()));
+    }
+
+    /// The header's flags read as the bits they are: `pie` is a word a reader
+    /// can find, where `0x200085` was a number to look up.
+    #[test]
+    fn the_header_flags_read_as_named_bits() {
+        let mut v = sample();
+        v[24..28].copy_from_slice(&0x0020_0085u32.to_le_bytes());
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(macho());
+        let Value::Flags { set, unnamed, .. } = ev.node(&d, &[6]).unwrap().value else { panic!("not flags") };
+        assert_eq!(set, ["noundefs", "dyldlink", "twolevel", "pie"]);
+        assert_eq!(unnamed, 0);
     }
 
     #[test]
