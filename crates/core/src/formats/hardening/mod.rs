@@ -22,6 +22,7 @@
 //! and what they are called on screen is the view's to say.
 
 mod elf;
+mod macho;
 mod pe;
 
 use crate::document::Document;
@@ -155,6 +156,7 @@ pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Harden
     let parts = match ev.template().name.as_str() {
         "elf" => ("elf", elf::read(ev, doc)?),
         "pe" => ("pe", pe::read(ev, doc)?),
+        "macho" => ("macho", macho::read(ev, doc)?),
         _ => return Ok(None),
     };
     Ok(Some(Hardening { format: parts.0, parts: parts.1 }))
@@ -254,6 +256,26 @@ fn read_at<S: Source>(doc: &Document<S>, at: u64, len: u64) -> R<Vec<u8>> {
     let missing = doc.read_bytes(at, &mut out);
     if !missing.is_empty() {
         return Err(EvalError::Pending(missing));
+    }
+    Ok(out)
+}
+
+/// Several runs of bytes, each as `read_at` reads one, with every chunk any
+/// of them is missing asked for at once: a hundred names scattered through a
+/// string table should cost one wait, not a hundred.
+fn read_many<S: Source>(doc: &Document<S>, runs: &[(u64, u64)]) -> R<Vec<Vec<u8>>> {
+    let mut out = Vec::new();
+    let mut missing: Vec<u64> = Vec::new();
+    for &(at, len) in runs {
+        let len = len.min(doc.len_bytes().saturating_sub(at));
+        let mut buf = vec![0u8; len as usize];
+        missing.extend(doc.read_bytes(at, &mut buf).into_iter().map(|m| m.chunk));
+        out.push(buf);
+    }
+    if !missing.is_empty() {
+        missing.sort_unstable();
+        missing.dedup();
+        return Err(EvalError::Pending(missing.into_iter().map(|chunk| Missing { chunk }).collect()));
     }
     Ok(out)
 }

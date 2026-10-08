@@ -258,6 +258,80 @@ fn the_windows_busyboxes_read_as_their_headers_say() {
     assert!(read_any, "{}", qubero_samples::missing());
 }
 
+/// The two macOS builds of ripgrep, against their load commands and symbol
+/// tables read by hand in Python. Both are position-independent executables
+/// with the stack not executable and the heap left executable, which is the
+/// linker's default. Only the x86-64 one calls the canary and two checked
+/// copies, from the C library it links; only the ARM64 one is signed, since
+/// macOS will not run an unsigned ARM64 program, and it is plain arm64, not
+/// the arm64e built for pointer authentication.
+#[test]
+fn the_macos_ripgreps_read_as_their_load_commands_say() {
+    let Some(dir) = qubero_samples::dir("macho") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let expected: &[(&str, &[(&str, &str)], (u64, u64), &[&str])] = &[
+        (
+            "ripgrep-aarch64",
+            &[
+                ("pie", "on"),
+                ("nx-heap", "off"),
+                ("nx-stack", "on"),
+                ("code-signature", "present"),
+                ("encrypted", "none"),
+                ("canary", "not-found"),
+                ("fortify", "no"),
+                ("arc", "not-found"),
+                ("restrict", "none"),
+                ("pac", "off"),
+                ("rpath", "none"),
+                ("needed", "set"),
+            ],
+            (0, 6),
+            &["/opt/homebrew/opt/pcre2/lib/libpcre2-8.0.dylib", "/usr/lib/libiconv.2.dylib", "/usr/lib/libSystem.B.dylib"],
+        ),
+        (
+            "ripgrep-x86_64",
+            &[
+                ("pie", "on"),
+                ("nx-heap", "off"),
+                ("nx-stack", "on"),
+                ("code-signature", "none"),
+                ("encrypted", "none"),
+                ("canary", "found"),
+                ("fortify", "yes"),
+                ("arc", "not-found"),
+                ("restrict", "none"),
+                ("pac", "n/a"),
+                ("rpath", "none"),
+                ("needed", "set"),
+            ],
+            (2, 8),
+            &["/usr/lib/libiconv.2.dylib", "/usr/lib/libSystem.B.dylib"],
+        ),
+    ];
+    let mut read_any = false;
+    for &(name, states, (fortified, fortifiable), libraries) in expected {
+        let path = dir.join(name);
+        if !path.exists() {
+            continue;
+        }
+        read_any = true;
+        let (h, doc, mut ev) = read(&path, "macho");
+        assert_eq!(h.format, "macho");
+        assert_eq!(h.parts.len(), 1, "{name}");
+        let rows = &h.parts[0].rows;
+        let got: Vec<(&str, &str)> = rows.iter().map(|r| (r.key, r.state)).collect();
+        assert_eq!(got, states, "{name}");
+        let fortify = row(rows, "fortify");
+        assert_eq!((fortify.count, fortify.total), (Some(fortified), Some(fortifiable)), "{name}");
+        assert_eq!(row(rows, "needed").items, libraries, "{name}");
+        evidence_is_where_it_says(name, &h, &doc, &mut ev);
+    }
+    assert!(read_any, "{}", qubero_samples::missing());
+}
+
 /// The fortify columns of `checksec`, worked out from `readelf --dyn-syms`
 /// the way the script does it: names with their leading underscores and their
 /// version cut off, fortified when the name is one of libc's `_chk` functions
