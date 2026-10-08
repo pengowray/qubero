@@ -745,6 +745,110 @@
   }
 }
 
+/* A program's protections: one row each, the verdict beside the name so
+   the column of glyphs can be read down at a glance. The glyph's colour
+   repeats the word next to it and is never the only sign. Amber for a
+   protection that is partly on, dark enough to read as text at 4.5:1. */
+.rv-hardening {
+  --rv-partial: #8a5a00;
+}
+@media (prefers-color-scheme: dark) {
+  .rv-hardening {
+    --rv-partial: #e0a33a;
+  }
+}
+.rv-hv-lede {
+  margin: 4px 0 0;
+}
+.rv-hv-table th[scope="row"] {
+  color: var(--fg);
+  font-size: 13px;
+  white-space: normal;
+  min-width: 14em;
+  max-width: 30em;
+}
+.rv-hv-name {
+  font-weight: 600;
+}
+.rv-hv-desc,
+.rv-hv-detail {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.rv-hv-status {
+  min-width: 14em;
+  max-width: 34em;
+}
+.rv-hv-glyph {
+  display: inline-block;
+  width: 1.2em;
+  font-weight: 700;
+}
+.is-good > .rv-hv-status .rv-hv-glyph {
+  color: var(--good);
+}
+.is-partial > .rv-hv-status .rv-hv-glyph {
+  color: var(--rv-partial);
+}
+.is-bad > .rv-hv-status .rv-hv-glyph,
+.rv-hv-loading .is-bad .rv-hv-glyph {
+  color: var(--warn);
+}
+.is-unknown > .rv-hv-status .rv-hv-glyph,
+.is-na > .rv-hv-status .rv-hv-glyph {
+  color: var(--muted);
+}
+.rv-hv-row.is-na .rv-hv-name,
+.rv-hv-row.is-na .rv-hv-word,
+.rv-hv-row.is-info .rv-hv-word {
+  color: var(--muted);
+  font-weight: 400;
+}
+.rv-hv-detail {
+  margin-left: 1.2em;
+}
+.rv-hv-loading .rv-hv-detail {
+  margin-left: 0;
+}
+.rv-hv-ev {
+  display: inline-block;
+  margin-right: 12px;
+  font-family: var(--sans);
+}
+.rv-hv-ev code {
+  font-size: 1em;
+}
+.rv-hv-off {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--addr);
+}
+.rv-hv-names {
+  margin: 2px 0 0 1.2em;
+  font-size: 12px;
+}
+.rv-hv-names summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.rv-hv-list {
+  overflow-wrap: anywhere;
+}
+.rv-hv-loading {
+  margin-top: 14px;
+}
+.rv-hv-loading caption {
+  text-align: left;
+  font-weight: 600;
+  font-size: 14px;
+  padding-bottom: 4px;
+}
+.rv-hv-loading td .rv-hv-names {
+  display: inline-block;
+  margin-left: 0;
+}
+
 /* A narrow column: each row of a table is two lines. The first holds what the
    row is (a field's name and value, a part's name); the second holds the
    numbers, each after its column's name, since the headings are gone. Data
@@ -785,7 +889,8 @@
     font: 11px var(--sans);
   }
   .rv-stack td.rv-cell-name,
-  .rv-stack td[colspan] {
+  .rv-stack td[colspan],
+  .rv-stack.rv-hv-table th[scope="row"] {
     flex: 1 0 100%;
     overflow-wrap: anywhere;
   }

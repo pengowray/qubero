@@ -185,3 +185,54 @@ export type TextInNumbers = {
 
 /** The stepped answers, which share one walk in the core. */
 export type ReportStep = "format_profile_step" | "byte_ledger_step" | "extent_audit_step" | "directories_step" | "text_in_numbers_step";
+
+/** Bytes a protection's verdict rests on. */
+export type HardeningEvidence = {
+  /** Empty where no field covers the bytes, such as a word read out of a PE
+   *  load configuration the template does not read. */
+  readonly path: readonly number[];
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  /** `segment` | `section` | `header` | `dynamic` | `symbol` | `string` |
+   *  `note` | `directory` | `command` | `bytes` */
+  readonly what: string;
+  /** The name as the file writes it: `GNU_STACK`, `BIND_NOW`,
+   *  `__stack_chk_fail`, `.symtab`, `dll_characteristics`. */
+  readonly name: string;
+};
+
+export type HardeningVerdict = "good" | "partial" | "bad" | "info" | "unknown" | "n/a";
+
+/** One protection, or one fact about how the program loads. `key` and
+ *  `state` are the interface: `report/hardeningtext.ts` writes the words for
+ *  each. */
+export type HardeningRow = {
+  readonly key: string;
+  readonly state: string;
+  readonly verdict: HardeningVerdict;
+  readonly count: number | null;
+  readonly total: number | null;
+  /** What `key` lists: the directories of an RPATH, the libraries needed,
+   *  the checked functions a program calls. */
+  readonly items: readonly string[];
+  /** A second list: the functions with a checked version called unchecked. */
+  readonly more: readonly string[];
+  /** Most direct first. */
+  readonly evidence: readonly HardeningEvidence[];
+};
+
+/** One program: the file, or one slice of a universal Mach-O. */
+export type HardeningPart = {
+  /** Empty for a file that holds one program; the processor's name for a
+   *  slice of a universal binary. */
+  readonly name: string;
+  readonly path: readonly number[];
+  readonly rows: readonly HardeningRow[];
+};
+
+/** What an executable was built to protect itself with, as `checksec` reads
+ *  it. See `Editor.hardening`. */
+export type Hardening = {
+  readonly format: "elf" | "pe" | "macho";
+  readonly parts: readonly HardeningPart[];
+};

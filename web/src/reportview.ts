@@ -25,6 +25,7 @@ import { titleSection } from "./report/title.ts";
 import { aboutSection } from "./report/about.ts";
 import { briefSection } from "./report/brief.ts";
 import { findingsSection } from "./report/findings.ts";
+import { hardeningSection } from "./report/hardening.ts";
 import { contentSection } from "./report/content.ts";
 import { bytesSection } from "./report/bytes.ts";
 import { directoriesSection } from "./report/directories.ts";
@@ -42,6 +43,7 @@ const SECTIONS: readonly Section[] = [
   aboutSection, // 2
   briefSection, // 3
   findingsSection, // 4
+  hardeningSection, // after 4: a program's protections, drawn only for a program
   contentSection, // 5
   bytesSection, // 6
   directoriesSection, // 7, a stub until the core says where directories point

@@ -5,7 +5,7 @@ import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "
 import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
-import type { Profile, ReportStep } from "./report/coredata.ts";
+import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
@@ -3037,6 +3037,13 @@ export class Doc {
    *  decoder read for it and the 64 coefficients in rows. */
   jpegBlock(path: readonly number[], index: number): TemplateReply<JpegBlock | null> {
     return this.handleReply<JpegBlock | null>(this.editor.jpeg_block(this.space, Uint32Array.from(path), index));
+  }
+
+  /** What the program in this file was built to protect itself with: RELRO,
+   *  a stack canary, NX, PIE and the rest, each with the bytes that say so.
+   *  Null for a file that is not an ELF, PE or Mach-O program. */
+  hardening(): TemplateReply<Hardening | null> {
+    return this.handleReply<Hardening | null>(this.editor.hardening(this.space));
   }
 
   runCells(path: readonly number[], fromBit: number, toBit: number, max: number): TemplateReply<Cell[]> {
