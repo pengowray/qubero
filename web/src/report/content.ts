@@ -92,7 +92,8 @@ export const contentSection: Section = {
       if (r.text.length > TEXT_CHARS || r.truncated) {
         const p = document.createElement("p");
         p.className = "rv-note";
-        p.textContent = RV.textCut(TEXT_CHARS, r.text.length);
+        // A text cut short before it reached here has no total in characters.
+        p.textContent = r.truncated ? RV.textCutUnknownTotal(TEXT_CHARS) : RV.textCut(TEXT_CHARS, r.text.length);
         sec.append(p);
       }
       return sec;

@@ -211,6 +211,9 @@ export const RV = {
   openTable: "Open as a table",
   textHeading: (name: string, bytes: number): string => `The text of ${name}: ${bytesText(bytes)}`,
   textCut: (shown: number, total: number): string => `The first ${shown.toLocaleString()} of ${total.toLocaleString()} characters.`,
+  /** For text longer than was read, whose length in characters is not known.
+   *  The heading above already gives its length in bytes. */
+  textCutUnknownTotal: (shown: number): string => `The first ${shown.toLocaleString()} characters.`,
   plainTextHeading: (bytes: number): string => `The file as text: ${bytesText(bytes)}`,
   /** A container's entries, from its outline's own title and count. */
   outlineHeading: (title: string, summary: string): string => `${title}: ${summary}`,
@@ -381,6 +384,11 @@ export const RV = {
   profileHeading: (used: number, declared: number): string =>
     `This file uses ${used.toLocaleString()} of the ${counted(declared, "kind")} of value declared in the template`,
   profileHeadingFile: (used: number): string => `This file holds ${counted(used, "kind")} of value`,
+  /** Some kinds are built from the file's own description of its data, or
+   *  come from a decoder, so the template does not declare them. */
+  profileHeadingUndeclared: (used: number, declared: number, undeclared: number): string =>
+    `This file uses ${counted(used + undeclared, "kind")} of value: ${used.toLocaleString()} of the ${counted(declared, "kind")} declared in the template, and ${counted(undeclared, "kind")} not declared in the template`,
+  notDeclared: "not declared",
   profileKind: "Kind",
   profileFields: "Fields in this file",
   profileBytes: "Bytes",

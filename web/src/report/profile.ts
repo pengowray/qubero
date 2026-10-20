@@ -43,10 +43,20 @@ export const profileSection: Section = {
     const sec = document.createElement("section");
     sec.className = "rv-section rv-profile";
     const h = document.createElement("h2");
-    const valueKinds = (p: "file" | "template"): number => joined.filter((j) => VALUE_CATEGORIES.has(j.row.category) && (j[p]?.fields ?? 0) > 0).length;
-    const used = valueKinds("file");
-    const declared = valueKinds("template");
-    h.textContent = template === null || declared === 0 ? RV.profileHeadingFile(used) : RV.profileHeading(used, declared);
+    const values = joined.filter((j) => VALUE_CATEGORIES.has(j.row.category));
+    const used = values.filter((j) => (j.file?.fields ?? 0) > 0);
+    const declared = values.filter((j) => (j.template?.fields ?? 0) > 0).length;
+    // A kind built from the file's own description of its data (an ASDF tree,
+    // a ROOT StreamerInfo), or read by a decoder, is used without being
+    // declared, and counting it among the declared ones would say 15 of 14.
+    const usedDeclared = used.filter((j) => (j.template?.fields ?? 0) > 0).length;
+    const undeclared = used.length - usedDeclared;
+    h.textContent =
+      template === null || declared === 0
+        ? RV.profileHeadingFile(used.length)
+        : undeclared > 0
+          ? RV.profileHeadingUndeclared(usedDeclared, declared, undeclared)
+          : RV.profileHeading(used.length, declared);
     sec.append(h);
     const sentences = readingWriting(file);
     if (sentences.length > 0) {
@@ -135,7 +145,10 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
         cell(inFile === 0 ? RV.notInFile : inFile.toLocaleString(), "rv-num", RV.profileFields),
         cell(j.file === null || j.file.bits === 0 ? "" : bitsText(j.file.bits).replace(/ bytes?$/, ""), "rv-num", RV.profileBytes),
       );
-      if (withTemplate) tr.append(cell(j.template === null ? "" : j.template.fields.toLocaleString(), "rv-num", RV.profileDeclared));
+      if (withTemplate) {
+        const declaredText = j.template === null ? (inFile > 0 ? RV.notDeclared : "") : j.template.fields.toLocaleString();
+        tr.append(cell(declaredText, "rv-num", RV.profileDeclared));
+      }
       body.append(tr);
     }
   }
