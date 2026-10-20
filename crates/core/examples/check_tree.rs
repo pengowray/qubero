@@ -115,8 +115,12 @@ fn walk(
             return;
         }
     };
+    // Only the ends of a long list, unless CHECK_TREE_ALL is set: a card in
+    // the middle of a FITS header is where a whole-list walk found the last
+    // bug this missed.
     let count = node.child_count as usize;
-    let ends: Vec<usize> = if count > 8 { (0..4).chain(count - 4..count).collect() } else { (0..count).collect() };
+    let all = std::env::var_os("CHECK_TREE_ALL").is_some();
+    let ends: Vec<usize> = if count > 8 && !all { (0..4).chain(count - 4..count).collect() } else { (0..count).collect() };
     for i in ends {
         let mut child = path.to_vec();
         child.push(i);

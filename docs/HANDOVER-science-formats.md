@@ -19,7 +19,8 @@ cargo build --release -p qubero-core --example check_tree --example spans_probe 
 
 `check_tree` walks only the first four and last four children of any long
 list, so a problem in the middle of a list, or one that only shows when every
-element is evaluated, does not show up there. `spans_probe` evaluates the whole
+element is evaluated, does not show up there. Set `CHECK_TREE_ALL=1` to walk
+every child (2026-10-21; that is how the FITS column-80 string bug showed). `spans_probe` evaluates the whole
 file the way the Listing does and prints `file, template, spans, bytes named`.
 Treat "bytes named" as rough: it counts `bytes[]` leaves as named, it can
 double count (the structured NPY sample names more bytes than the file has),
