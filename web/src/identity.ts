@@ -147,6 +147,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   netcdf: ["nc", "cdf"],
   cdf: ["cdf"],
   fits: ["fits", "fit", "fts"],
+  asdf: ["asdf"],
   root: ["root"],
   gwf: ["gwf"],
   grib: ["grib", "grb", "grib2"],

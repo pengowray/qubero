@@ -89,6 +89,8 @@ static ABOUT: &[(&str, About)] = &[
         "HDF5 stores large scientific datasets in one file, as a tree of groups and datasets, like folders and files. Datasets can be split into chunks and compressed, and B-trees index the chunks and the groups.")),
     ("fits", a("FITS", Some("FITS"),
         "FITS stores astronomical images and tables. Each part starts with a header of 80-character text lines, each giving a keyword and its value, and continues with binary data. Headers and data both come in blocks of 2,880 bytes.")),
+    ("asdf", a("ASDF", Some("Advanced Scientific Data Format"),
+        "ASDF stores astronomical data, and is what the Roman Space Telescope writes its images in. A YAML text tree describes the data, and binary blocks after it hold the arrays, often compressed.")),
     ("npy", a("NPY", Some("NumPy"),
         "NPY stores one NumPy array: a short header, written as a Python dictionary, that gives the element type, the shape, and the order, followed by the array's raw data.")),
     ("parquet", a("Parquet", Some("Apache Parquet"),

@@ -37,6 +37,8 @@ mod ar;
 mod arrow;
 mod arrow_schema;
 mod arrow_walk;
+mod asdf;
+mod asdf_tree;
 mod aseprite;
 mod assimp;
 pub(crate) mod bam;
@@ -213,6 +215,7 @@ pub use adios::{adios_bp3, adios_bp4_data, adios_bp4_index, adios_bp4_metadata, 
 pub use aiff::aiff;
 pub use ar::{ar, deb};
 pub use arrow::{arrow, arrow_stream};
+pub use asdf::asdf;
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
@@ -445,6 +448,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("grib", |_| grib()),
     ("bufr", |_| bufr()),
     ("npy", |_| npy()),
+    ("asdf", |_| asdf()),
     ("ogg", |_| ogg()),
     ("fits", |_| fits()),
     ("grubenv", |_| grubenv()),

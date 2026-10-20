@@ -65,6 +65,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     // an envelope in front of these letters and is a probe instead.
     (b"BUFR", "bufr"),
     (npy::MAGIC, "npy"),
+    (asdf::MAGIC, "asdf"),
     // A columnar table. The same four bytes close the file, and the eight
     // before those are what finds everything in it.
     (parquet::MAGIC, "parquet"),
