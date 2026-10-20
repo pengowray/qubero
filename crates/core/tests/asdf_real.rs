@@ -7,11 +7,12 @@
 //! names, and has to be the same number.
 //!
 //! The sample collection's `asdf` folder has the small files, written by
-//! `tools/make_asdf_samples.py` there, and the WCS file of a simulated Roman
-//! exposure. The 205 MB calibrated image of the same exposure is too large for
-//! the collection and is checked where `qubero2-extras/roman` sits beside the
-//! checkout or an ancestor of it, or where `QUBERO_ROMAN` points. Without them
-//! the tests say so and pass.
+//! `tools/make_asdf_samples.py` there. One simulated Roman WFI exposure is
+//! checked from `qubero2-extras/roman` beside the checkout or an ancestor of
+//! it, or wherever `QUBERO_ROMAN` points: its Level 1 file (1.07 GB, stored
+//! blocks), its calibrated Level 2 image (205 MB, lz4) and its WCS file. They
+//! are too large for the collection, and no licence for them is stated.
+//! Without either folder the tests say so and pass.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -157,7 +158,7 @@ fn the_samples_read_as_the_asdf_library_reads_them() {
 }
 
 #[test]
-fn a_roman_calibrated_image_reads_as_the_asdf_library_reads_it() {
+fn a_roman_exposure_reads_as_the_asdf_library_reads_it() {
     let Some(dir) = roman() else {
         eprintln!("no qubero2-extras/roman beside the checkout, and QUBERO_ROMAN is not set");
         return;
