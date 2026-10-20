@@ -339,18 +339,13 @@ impl Evaluator {
                         }
                     }
                 }
-                // As many bits as an earlier field says. `Little` is refused
-                // here rather than placed wrongly: a field packed from the
-                // bottom of its byte has to be placed before it is read, and
-                // where it goes depends on a width only reading gives.
-                Ty::UIntExpr { bits, endian } => {
-                    let (bits, endian) = (bits.clone(), *endian);
-                    let n = self.eval_expr(doc, path, &bits)?;
+                // As many bits as an earlier field says. One packed from the
+                // bottom of its byte is placed at the count like every other
+                // field, so its width can wait until it is read.
+                Ty::UIntExpr { bits, .. } => {
+                    let n = self.eval_expr(doc, path, &bits.clone())?;
                     if !(0..=128).contains(&n) {
                         return fail(format!("a number {n} bits wide is not one this can read"));
-                    }
-                    if endian == crate::template::Endian::Little && (n % 8 != 0 || r.offset % 8 != 0) {
-                        return fail("a number packed low-bit-first has to have a width the template knows");
                     }
                     n as u64
                 }

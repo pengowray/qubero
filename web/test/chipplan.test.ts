@@ -36,6 +36,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     name: "field",
     trail: ["header"],
     type: "u8",
+    lsb_first: false,
     value: "1",
     kind: "int",
     gap: false,

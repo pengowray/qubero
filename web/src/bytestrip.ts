@@ -38,6 +38,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
  *  bytes. */
 function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: number } {
   const whole = span.offset_bits % 8 === 0 && span.size_bits % 8 === 0;
+  if (!whole && span.size_bits <= BYTES_SHOWN * 8 && span.lsb_first) {
+    // Read low bit first: the number's bits, written high bit first as a
+    // number is, gathered from the bottom of each byte up.
+    const first = Math.floor(span.offset_bits / 8);
+    const skip = span.offset_bits % 8;
+    const { bytes, complete } = doc.read(first, Math.ceil((skip + span.size_bits) / 8));
+    if (!complete) return { text: "", rest: 0 };
+    let bits = "";
+    for (let i = 0; i < span.size_bits; i++) bits = (((bytes[(skip + i) >> 3] ?? 0) >> ((skip + i) % 8)) & 1 ? "1" : "0") + bits;
+    return { text: bits, rest: 0 };
+  }
   if (!whole && span.size_bits <= BYTES_SHOWN * 8) {
     const { bytes, complete } = doc.readBits(span.offset_bits, span.size_bits);
     if (!complete) return { text: "", rest: 0 };

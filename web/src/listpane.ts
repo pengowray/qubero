@@ -14,6 +14,7 @@
 // like one anybody can.
 
 import { formatOffset } from "./doc.ts";
+import { fieldStart } from "./hexcell.ts";
 import type { Doc, FieldPick, TemplateNode } from "./doc.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.ts";
@@ -196,7 +197,7 @@ export class ListPane {
   private drawRow(index: number, node: TemplateNode): HTMLElement {
     const row = el("div", "lp-row");
     if (this.isSelected(node.offset_bits, node.size_bits)) row.classList.add("is-on");
-    row.append(el("span", "lp-at", formatOffset(node.offset_bits)));
+    row.append(el("span", "lp-at", formatOffset(fieldStart(node.offset_bits, node.lsb_first))));
     row.append(el("span", `lp-name ${fieldClass(node.kind)}`, node.name));
     row.append(el("span", "lp-value", node.composite ? countText(node.child_count, childWord(node)) : node.value));
     row.append(el("span", "lp-size", bitSizeText(node.size_bits)));

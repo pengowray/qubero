@@ -319,7 +319,7 @@ impl Evaluator {
         // and was never meant to be.
         let Some(decl) = self.case_declared(&decl, &r.ty) else { return Ok(None) };
         let Some(m) = find_measure(&self.template, &decl, Some(&name), 0) else { return Ok(None) };
-        let stated = match self.eval_expr_at(doc, path, &unclamped(&m.expr), Some((r.cursor, pr_limit))) {
+        let stated = match self.eval_expr_at(doc, path, &unclamped(&m.expr), Some((r.offset, pr_limit))) {
             Ok(v) => u64::try_from(v).ok(),
             Err(e) if e.interrupted() => return Err(e),
             Err(_) => None,
@@ -396,7 +396,7 @@ impl Evaluator {
             let mut g = child.to_vec();
             g.push(k);
             match self.resolve(doc, &g).and_then(|()| self.size_of(doc, &g)) {
-                Ok(size) => from = self.memo[&g].cursor + size,
+                Ok(size) => from = self.memo[&g].offset + size,
                 Err(e) if e.interrupted() => return Err(e),
                 Err(EvalError::Failed(w)) => return self.diagnose(doc, child, k, from, &w, depth + 1),
                 Err(e) => return Err(e),

@@ -44,6 +44,42 @@ export type Run = { from: number; to: number };
 /** A run of bits, `[startBit, endBit)`. */
 export type Bits = { readonly startBit: number; readonly endBit: number };
 
+/**
+ * The bits a field covers, as runs numbered from the top of each byte, which
+ * is how the hex view numbers them.
+ *
+ * Most fields are one run already. A field whose offset counts each byte's
+ * bits from the bottom (a node with `lsb_first`) is turned round byte by byte.
+ * It fills its first byte from the lowest bit still free upwards, and carries
+ * on from the lowest bit of the next byte. Drawn high bit first, as the hex
+ * view draws a byte, it covers the high bits of the byte it starts in and the
+ * low bits of the byte it ends in, with any whole bytes between them as one
+ * run.
+ */
+export function fieldBits(offsetBits: number, sizeBits: number, lsbFirst: boolean): Bits[] {
+  const end = offsetBits + sizeBits;
+  if (!lsbFirst || sizeBits === 0 || (offsetBits % 8 === 0 && sizeBits % 8 === 0)) return [{ startBit: offsetBits, endBit: end }];
+  const out: { startBit: number; endBit: number }[] = [];
+  for (let at = offsetBits; at < end; ) {
+    const byte = Math.floor(at / 8);
+    const low = at % 8;
+    const high = Math.min(8, low + (end - at));
+    const run = { startBit: byte * 8 + (8 - high), endBit: byte * 8 + (8 - low) };
+    const last = out[out.length - 1];
+    if (last !== undefined && last.endBit === run.startBit) last.endBit = run.endBit;
+    else out.push(run);
+    at = byte * 8 + high;
+  }
+  return out;
+}
+
+/** Where a cursor put on a field lands: its first bit in the order the field
+ *  is read, which for one counted from the bottom of each byte is the lowest
+ *  of its bits in the byte it starts in. */
+export function fieldStart(offsetBits: number, lsbFirst: boolean): number {
+  return lsbFirst ? offsetBits ^ 7 : offsetBits;
+}
+
 /** Whether the runs together cover every bit from `from` to `to`. */
 export function covers(runs: readonly Run[], from: number, to: number): boolean {
   let at = from;

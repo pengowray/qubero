@@ -43,7 +43,7 @@ import {
   UNICODE_ENCODINGS,
 } from "./encodings.ts";
 import { rememberChoice, storedChoice, storedNumber, storedText } from "./stored.ts";
-import { ASCII_GLYPHS } from "./hexcell.ts";
+import { ASCII_GLYPHS, fieldBits, fieldStart } from "./hexcell.ts";
 import { gearIcon } from "./icons.ts";
 import { SettingsDialog, type ExtraTemplate } from "./settingsdialog.ts";
 import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
@@ -579,9 +579,7 @@ function buildDocument(tab: Tab): Page {
     followWhenLoaded = null;
     if (at.status !== "ok") return;
     const n = doc.templateNode(at.node);
-    if (n.status === "ok") {
-      view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
-    }
+    if (n.status === "ok") view.setHighlight(fieldBits(n.node.offset_bits, n.node.size_bits, n.node.lsb_first));
     linkPath = at.node;
     refreshLinks();
     // Inside the part the graph was drawn for, the cursor only marks a node.
@@ -608,9 +606,13 @@ function buildDocument(tab: Tab): Page {
     const n = doc.templateNode(path);
     if (n.status !== "ok") return;
     const end = n.node.offset_bits + n.node.size_bits;
-    view.setHighlight({ startBit: n.node.offset_bits, endBit: Math.max(end, throughBit ?? end) });
+    view.setHighlight(
+      throughBit === undefined || throughBit <= end
+        ? fieldBits(n.node.offset_bits, n.node.size_bits, n.node.lsb_first)
+        : { startBit: n.node.offset_bits, endBit: throughBit },
+    );
     picking = true;
-    view.setBitCursor(atBit ?? n.node.offset_bits, { pane: "hex" });
+    view.setBitCursor(atBit ?? fieldStart(n.node.offset_bits, n.node.lsb_first), { pane: "hex" });
     picking = false;
     inspector.setPath(path);
     linkPath = path;
@@ -626,14 +628,24 @@ function buildDocument(tab: Tab): Page {
     return n.status !== "ok" || n.node.space === 0;
   };
 
+  /** The bits a pick names, as the hex view numbers them, and where the
+   *  cursor goes. A pick of a whole field counted from the bottom of each byte
+   *  is turned round byte by byte; any other stretch is taken as it is. */
+  const picked = (path: readonly number[], startBit: number, endBit: number): { bits: BitRange[]; cursor: number } => {
+    const n = doc.templateNode(path);
+    const whole = n.status === "ok" && n.node.lsb_first && n.node.offset_bits === startBit && n.node.offset_bits + n.node.size_bits === endBit;
+    return whole ? { bits: fieldBits(startBit, endBit - startBit, true), cursor: fieldStart(startBit, true) } : { bits: [{ startBit, endBit }], cursor: startBit };
+  };
+
   structure.onPick = ({ path, startBit, endBit }) => {
     // The inspector always follows: it can say what a decoded field holds and
     // which stream it came out of. The hex view and the overview cannot, and
     // are left where they are rather than sent somewhere wrong.
     if (inFile(path)) {
-      view.setHighlight({ startBit, endBit });
+      const { bits, cursor } = picked(path, startBit, endBit);
+      view.setHighlight(bits);
       picking = true;
-      view.setBitCursor(startBit, { pane: "hex" });
+      view.setBitCursor(cursor, { pane: "hex" });
       picking = false;
       overview.reveal(path);
       linkPath = path;
@@ -2095,9 +2107,10 @@ function buildDocument(tab: Tab): Page {
   // Picking a part moves the cursor everywhere, the same as picking a row in
   // the listing, and brings the listing to it: a part is usually off screen.
   overview.onPick = ({ path, startBit, endBit }) => {
-    view.setHighlight({ startBit, endBit });
+    const { bits, cursor } = picked(path, startBit, endBit);
+    view.setHighlight(bits);
     picking = true;
-    view.setBitCursor(startBit, { pane: "hex" });
+    view.setBitCursor(cursor, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
     structure.reveal(path);

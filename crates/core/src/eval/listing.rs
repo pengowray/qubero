@@ -10,6 +10,9 @@ pub struct Span {
     pub path: Vec<usize>,
     pub offset_bits: u64,
     pub size_bits: u64,
+    /// Whether the two numbers above count each byte's bits from the bottom.
+    /// See `NodeInfo::lsb_first`.
+    pub lsb_first: bool,
     pub name: String,
     /// What it sits inside, outermost first.
     pub trail: Vec<String>,
@@ -1081,6 +1084,7 @@ impl Evaluator {
             path: path.to_vec(),
             offset_bits: info.offset_bits,
             size_bits: info.size_bits,
+            lsb_first: info.lsb_first,
             name: info.name.clone(),
             trail,
             type_name: info.type_name.clone(),
@@ -1392,6 +1396,8 @@ impl Evaluator {
         // The trace counts bits from the front of the run, and the cursor
         // counts them from the front of the file.
         let (base, trace) = self.trace_for(path)?;
+        // A stream that fills its bytes from the low bit is counted that way.
+        let bit = if trace.lsb_first() { mirror_in_byte(bit) } else { bit };
         let want = bit.checked_sub(base)?;
         match part {
             P::Blocks => {
@@ -1445,6 +1451,13 @@ impl Evaluator {
         // without putting a single other element in memory.
         if let Some(each) = self.stride(doc, path, &r.ty)? {
             if each > 0 {
+                // Elements read low bit first are counted from the bottom of
+                // each byte, and so is the bit that finds one.
+                let bottom = (r.offset % 8 != 0 || each % 8 != 0) && crate::decode::packs_low_bit_first(&r.ty, 1);
+                let bit = if bottom { mirror_in_byte(bit) } else { bit };
+                if bit < r.offset {
+                    return Ok(None);
+                }
                 let i = (bit - r.offset) / each;
                 return Ok(if i < n { Some(i as usize) } else { None });
             }
@@ -1563,6 +1576,14 @@ impl Evaluator {
             };
         }
         let mut elsewhere = false;
+        // Where the child is, and whether it counts each byte's bits from the
+        // bottom, in which case the bit is turned round to be compared.
+        let placed_at = |ev: &mut Self, p: &[usize]| {
+            ev.size_of(doc, p).map(|size| {
+                let r = &ev.memo[p];
+                (r.offset, size, from_bottom(r, size))
+            })
+        };
         let placed = match self.resolve(doc, p) {
             Ok(()) => match self.memo[p.as_slice()].ty {
                 // The field covers nothing where it is declared; what it
@@ -1571,18 +1592,18 @@ impl Evaluator {
                     elsewhere = true;
                     p.push(0);
                     let inner = match self.resolve(doc, p) {
-                        Ok(()) => self.size_of(doc, p).map(|size| (self.memo[p.as_slice()].offset, size)),
+                        Ok(()) => placed_at(self, p),
                         Err(e) => Err(e),
                     };
                     p.pop();
                     inner
                 }
-                _ => self.size_of(doc, p).map(|size| (self.memo[p.as_slice()].offset, size)),
+                _ => placed_at(self, p),
             },
             Err(e) => Err(e),
         };
         p.pop();
-        let (off, size) = match placed {
+        let (off, size, bottom) = match placed {
             Ok(v) => v,
             Err(e) if scattered && !e.interrupted() => return Ok(Cover::No),
             Err(e) => return Err(e),
@@ -1594,6 +1615,7 @@ impl Evaluator {
         // object's symbol table is one, placed past the section data that
         // is declared after it, and stopping there left every section's
         // bytes reading as a gap.
+        let bit = if bottom { mirror_in_byte(bit) } else { bit };
         if bit < off && !scattered && !elsewhere {
             return Ok(Cover::Past);
         }

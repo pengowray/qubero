@@ -570,7 +570,7 @@ impl Evaluator {
         let Some(at) = (n.at as u64).checked_add(into) else { return Ok((None, CellAt::Nowhere)) };
         let offset = base + at * 8;
         let size = width * 8;
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+        let one = Resolved { offset, lsb: false, limit: offset + size, size: Some(size), ..r.clone() };
         let read = self.primitive_value(doc, &[], &one, ty, size)?;
         Ok((Some(read), CellAt::Bytes { space: r.space, offset_bits: offset, size_bits: size }))
     }
@@ -605,7 +605,7 @@ impl Evaluator {
         }
         let run = Document::new(crate::source::ArcSource(held));
         let r = self.memo[&path].clone();
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), space: 0, ..r };
+        let one = Resolved { offset, lsb: false, limit: offset + size, size: Some(size), space: 0, ..r };
         let read = self.primitive_value(&run, &[], &one, ty, size)?;
         Ok((Some(read), CellAt::Bytes { space: id, offset_bits: offset, size_bits: size }))
     }

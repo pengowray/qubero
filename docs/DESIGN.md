@@ -2852,27 +2852,61 @@ upwards. The two answers agree at whole-byte widths already, since taking a
 number's bits from the bottom of each byte in turn is little-endian, so nothing
 that was being read correctly changed.
 
-What that costs is one thing, and it is the thing worth writing down. A field's
-offset is a count of the bits laid down before it, and for an MSB-first field
-that count is also an address. LSB-first stacks the other way, so the count has
-to be turned around inside the byte to say where the bits are: two fields of
-three and five bits are at bit 5 and bit 0 of the byte they share, in that
-order, which is `0bBBBBBAAA` written out. `Resolved` therefore keeps both
-numbers — `offset`, where the bits are, and `cursor`, where the count reached —
-and the walk that places the next field adds its size to the second. Everything
-else in the app reads the first and so is unchanged: the value, the write, the
-gutter, the listing, all of it takes those bits as it takes any other field's.
+What that cost, and how it was settled. A field's offset is a count of the
+bits laid down before it, and for an MSB-first field that count is also an
+address. At first an LSB-first field was turned round inside its byte, so that
+its count became an address numbered from the top like every other field's.
+That works only for a field that fits in one byte, and a field crossing a byte
+boundary was refused. JPEG XL's headers cross bytes from their third field on,
+and so do about forty ImHex bitfields and Kaitai's `bit-endian: le`, so the
+refusal had to go.
 
-Two consequences follow and both are deliberate. A structure that packs bits
-from the bottom has fields that are not in the order they sit in, so `child_at`
-treats one as scattered, the same as a structure holding a field that points
-elsewhere: the search for what covers a bit cannot stop at the first field
-starting past it. And a field that would straddle a byte boundary is refused
-rather than placed. Twelve bits from the bottom of one byte are all of that
-byte and the low nibble of the next, and a bit address numbered from the top of
-each byte has no single range meaning those bits; a field that cannot be given
-an honest place says so instead of being given a dishonest one. That is the one
-shape this does not cover, and DEFLATE's header does not need it.
+Every field read low bit first is now placed at the count, and its offset is
+read as an address whose bits are numbered from the bottom of each byte. In
+that numbering every such field is one run, however many bytes it touches:
+twelve bits from the bottom of one byte are bits 0 to 11, which is the whole of
+that byte and the low nibble of the next. `Resolved` keeps one number again,
+`offset`, and a flag, `lsb`, that says which way it is numbered.
+`NodeInfo::lsb_first` and `Span::lsb_first` carry the flag out to the app.
+Whole bytes are the same in both numberings, so the flag matters only in the
+bytes a field covers part of.
+
+Each place that deals in single bits uses the flag:
+
+* **Reading.** `decode::gather_lsb` takes the bits from the bottom of each byte
+  up and lays them out the way the type's own decoder reads a number, so
+  integers, signed ones, floats and fixed point all go through the code they
+  always did. `decode::low_bit_first` decides which fields are read this way:
+  a `Little` integer or float that is not whole bytes on a byte boundary, and
+  every `Little` `UIntExpr`, which can now be placed before its width is known.
+  JPEG XL needs both, for its f16 fields and for skipping its extensions.
+* **The cursor.** The hex view numbers a byte's bits from the top, and
+  `decode::mirror_in_byte` turns a bit asked from there round before it is
+  compared with a node numbered from the bottom. A structure holding such
+  fields is numbered from the bottom too wherever its ends are not on byte
+  boundaries (`decode::packs_low_bit_first`), and the list walk and the lookup
+  for same-sized elements ask the same question.
+* **Writing.** A field that fits in a byte is turned round with
+  `decode::lsb_offset` and written as before. One that crosses a byte is read
+  and shown but not written: `editable` is false and `prepare_write` refuses
+  it. Writing one would mean writing two runs of bits, and nothing asks for
+  that yet.
+* **The hex view.** `fieldBits` in `hexcell.ts` turns a node numbered from the
+  bottom into the runs of bits the view draws, one for each byte it covers
+  part of, so a field crossing a byte has a bar under the high bits of the
+  byte it starts in and the low bits of the byte it ends in. The listing and
+  the inspector give its position as `fieldStart`, its first bit in the view's
+  own numbering, and the inspector's shift-and-mask formula is the
+  low-bit-first one (`bitFormulaLow`).
+
+A deflate trace was already placed this way, with `Trace::lsb_first` saying
+so. Its codes carry the flag now, so their bars are drawn where their bits are
+rather than mirrored in the bytes they cover part of.
+
+A structure that packs bits from the bottom is still searched as scattered by
+`child_at`, as it was when its fields were out of order inside a byte. They are
+in order now; the search was left as it was so that this change does not
+depend on a second one.
 
 `Expr::Peek` answers the same way for the same reason, since a peek of three
 bits is a field of three bits that takes no space. `Ty::u8()` moved from
@@ -3766,10 +3800,6 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
-An LSB-first field that straddles a byte boundary is refused rather than
-placed, since the bit address space has no single range that means its bits.
-See "Bits from the bottom of the byte" for why, and for what is built.
-
 MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
 which the IR cannot describe, so a NAL unit stops at its header bits. What is
 left for an H.264 Annex B stream is a template for one; the measure it needs is

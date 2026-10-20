@@ -45,7 +45,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `android_dto` | archive | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `android_img` | archive | CC0-1.0 | yes | 0 | 8 bytes |  |
 | `android_nanoapp_header` | executable | Apache-2.0 | yes | 0 | no magic |  |
-| `android_super` | filesystem | CC0-1.0 | yes | 3 | no magic | three bit fields, all of them reserved padding, are read most-significant-bit first instead of least |
+| `android_super` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
 | `apm_partition_table` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
 | `asn1_der` | serialization | CC0-1.0 | yes | 0 | no magic |  |
 | `avantes_roh60` | scientific | CC0-1.0 | yes | 0 | no magic |  |
@@ -67,7 +67,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `dicom` | image | MIT | yes | 3 | no magic | two tag numbers and one transfer-syntax test are instances; every data element is placed |
 | `dime_message` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `dns_packet` | network | CC0-1.0 | yes | 0 | no magic |  |
-| `dos_datetime` | common | CC0-1.0 | yes | 8 | no magic | the packed date and time read most-significant-bit first instead of least, and six instances only zero-pad the parts for display |
+| `dos_datetime` | common | CC0-1.0 | yes | 6 | no magic | the six gaps are instances that only zero-pad the date and time parts for display |
 | `ds_store` | macos | MIT | yes | 3 | no magic | three instances of the B-tree's bookkeeping; every record is placed |
 | `dune_2_pak` | game | CC0-1.0 | yes | 1 | no magic | one instance measures the last entry against the length of the file, which the IR has no expression for |
 | `edid` | hardware | CC0-1.0 | yes | 18 | 8 bytes | every gap is an instance: nine are floating-point colour coordinates, eight reassemble a ten-bit number, one spells the manufacturer |
@@ -136,7 +136,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `uefi_te` | executable | CC0-1.0 | yes | 1 | no magic | one instance measures a field the IR does not let it measure |
 | `uimage` | firmware | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `utf8_string` | common | CC0-1.0 | yes | 1 | no magic | the one instance that assembles a code point needs a bitwise or |
-| `vfat` | filesystem | CC0-1.0 | yes | 8 | no magic | the packed date and time read most-significant-bit first instead of least, and six instances only zero-pad the parts for display |
+| `vfat` | filesystem | CC0-1.0 | yes | 6 | no magic | the six gaps are instances that only zero-pad the date and time parts for display |
 | `vlq_base128_be` | common | CC0-1.0 | yes | 0 | no magic |  |
 | `vlq_base128_le` | common | CC0-1.0 | yes | 0 | no magic |  |
 | `vmware_vmdk` | filesystem | CC0-1.0 | yes | 0 | no magic |  |

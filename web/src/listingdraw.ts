@@ -9,6 +9,7 @@
 // `DrawContext`, read fresh for each paint.
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { fieldStart } from "./hexcell.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import { address } from "./dom.ts";
 import { DUMP_MIN_BYTES, isComputed, pathKey, PAGE } from "./flatten.ts";
@@ -252,7 +253,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // the sign is the part that changes meaning, so the sign is what answers for
   // it. This column has no room for a second line saying so, which is why the
   // hover is the only place that fact can live here.
-  if (written) at.append(...address(formatAddress(n.offset_bits, n.space), n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE));
+  if (written) at.append(...address(formatAddress(fieldStart(n.offset_bits, n.lsb_first), n.space), n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE));
   row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.

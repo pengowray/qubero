@@ -66,6 +66,7 @@ function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
     decoded: false,
     space_root: false,
     joined: false,
+    lsb_first: false,
     absent: false,
     line: null,
     ...o,

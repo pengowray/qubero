@@ -7,7 +7,7 @@
 
 use crate::bits::bytes_for;
 use crate::codec::Refusal;
-use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, ibm32_to_f64, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
+use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, gather_lsb, ibm32_to_f64, low_bit_first, lsb_offset, lsb_packed, mirror_in_byte, narrow_bf16, narrow_f16, narrow_f32, read_int, read_sign_magnitude, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::json;
@@ -311,6 +311,14 @@ pub struct NodeInfo {
     pub type_name: String,
     pub offset_bits: u64,
     pub size_bits: u64,
+    /// True when `offset_bits` and `size_bits` count each byte's bits from
+    /// the bottom rather than the top: a number read low bit first, a node
+    /// holding them that starts or ends partway through a byte, or a code a
+    /// decoder read from a stream that fills its bytes from the low bit. Whole
+    /// bytes are the same either way; in a byte the field covers part of, its
+    /// bits are that many from the bottom, so a field running into the next
+    /// byte covers the top of one byte and the bottom of the next.
+    pub lsb_first: bool,
     pub value: Value,
     pub child_count: u64,
     /// True for structs, arrays and repeats.
@@ -643,18 +651,26 @@ impl Name {
     }
 }
 
+/// Whether the node `r`, `size` bits long, counts each byte's bits from the
+/// bottom: a number read low bit first, or a node holding them whose ends are
+/// not on byte boundaries. A bit asked about from the top of its byte, as the
+/// cursor is, is turned round with [`mirror_in_byte`] before it is compared
+/// with such a node's offset.
+fn from_bottom(r: &Resolved, size: u64) -> bool {
+    r.lsb || ((r.offset % 8 != 0 || (r.offset + size) % 8 != 0) && crate::decode::packs_low_bit_first(&r.ty, 3))
+}
+
 #[derive(Debug, Clone)]
 struct Resolved {
     name: Name,
     /// Effective type after unwrapping `Sized` and `Switch`.
     ty: Ty,
+    /// Where the field starts, as the count of bits laid down before it.
     offset: u64,
-    /// Where the count of bits laid down had reached when this field was
-    /// placed, which is `offset` for every field but an LSB-first one: that
-    /// one sits at the other end of its byte from where the count reached, so
-    /// the next field after it goes at `cursor + size` and not at
-    /// `offset + size`. See [`crate::decode::lsb_offset`].
-    cursor: u64,
+    /// Whether this is a number read low bit first, whose `offset` and size
+    /// count each byte's bits from the bottom. See
+    /// [`crate::decode::low_bit_first`].
+    lsb: bool,
     /// Exclusive bit limit this node may not read past.
     limit: u64,
     /// Size fixed by an enclosing `Sized`, if any.
@@ -1231,7 +1247,11 @@ impl Evaluator {
             // stored as it sits in the file, which is a stretch of the file
             // under another address.
             editable: (r.space == 0 || self.joined_write(&r, size).is_ok())
-                && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
+                && !composite
+                && encode::editable(&r.ty, size)
+                && (!r.lsb || lsb_offset(size as u32, r.offset).is_some())
+                && self.padding_is_clean(doc, &r, size)?
+                && !reading.1,
             edit_text: match &r.ty {
                 Ty::Json(json::Shape::Number, _) => {
                     let (at, bits) = reading.0;
@@ -1248,6 +1268,7 @@ impl Evaluator {
             unit: self.unit_of(path, &r.ty).map(str::to_string),
             offset_bits: r.offset,
             size_bits: size,
+            lsb_first: from_bottom(&r, size) || (self.is_trace_field(path) && self.trace_for(path).is_some_and(|(_, t)| t.lsb_first())),
             value,
             child_count,
             composite,
@@ -1549,6 +1570,16 @@ impl Evaluator {
         // has bytes the format owns on either side, and an edit that took the
         // field's whole run would write over them.
         let (at, n_bits) = r.payload.unwrap_or((r.offset, size));
+        // A number read low bit first is written as a run of bits numbered
+        // from the top of its byte, which only one that stays inside a byte
+        // is. `editable` already says no to the rest.
+        let at = match r.lsb {
+            true => match lsb_offset(n_bits as u32, at) {
+                Some(at) => at,
+                None => return fail(encode::NOT_EDITABLE_MSG),
+            },
+            false => at,
+        };
         // A JSON scalar is written as the literal it is, which is as long as
         // the value needs rather than as long as the old one was.
         if let Ty::Json(shape, _) = &r.ty {
@@ -1834,7 +1865,7 @@ impl Evaluator {
                         name,
                         ty: Ty::Bytes(Expr::Lit(0)),
                         offset: pr.offset,
-                        cursor: pr.offset,
+                        lsb: false,
                         limit: pr.offset,
                         declared_size: Some(0),
                         // An entry pointing at nothing covers no bytes, and
@@ -2393,7 +2424,7 @@ impl Evaluator {
                         name,
                         ty: Ty::When { cond, inner },
                         offset,
-                        cursor: offset,
+                        lsb: false,
                         limit: offset,
                         declared_size: Some(0),
                         sized_how: Some(shape::Sizing::Nothing),
@@ -2428,24 +2459,12 @@ impl Evaluator {
                     ty = built.ty.clone();
                 }
                 other => {
-                    // An LSB-first field is at the other end of its byte from
-                    // where the cursor counted to, and this is the one place
-                    // that knows both the type and where the count reached.
-                    // See `decode::lsb_offset`.
-                    let placed = match packed_int(&other) {
-                        Some((bits, endian)) if lsb_packed(bits, endian, offset) => match lsb_offset(bits, offset) {
-                            Some(at) => at,
-                            None => return fail(format!(
-                                "{bits} bits packed low-bit-first would cross a byte boundary, which has no single range of bits"
-                            )),
-                        },
-                        _ => offset,
-                    };
+                    let lsb = low_bit_first(&other, offset);
                     return Ok(Resolved {
                         name,
                         ty: other,
-                        offset: placed,
-                        cursor: offset,
+                        offset,
+                        lsb,
                         limit,
                         declared_size,
                         sized_how,

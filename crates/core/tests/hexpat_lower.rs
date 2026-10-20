@@ -215,13 +215,14 @@ fn a_bitfield_holds_signed_fields_and_named_ones() {
 	assert_eq!(read(&out, &[0b1111_10_1_0], &["b", "f"]), "true");
 }
 
-/// The one thing the IR cannot say about a bitfield: a field packed from the
-/// bottom of its byte that runs into the next one is not a single range of bits
-/// in an address space numbered from the top of each byte.
+/// A field packed from the low bit up runs on into the next byte from that
+/// byte's low bit. Over `0x2d 0xd5` a four-bit field is 13 and the ten bits
+/// after it are 0x152, which is 338.
 #[test]
-fn a_low_bit_first_field_crossing_a_byte_is_a_gap() {
-	let out = convert("bitfield B { a : 4; b : 10; padding : 2; };\nB b @ 0x00;\n");
-	assert!(gap_reasons(&out).contains("crosses into the next byte"), "{}", gap_reasons(&out));
+fn a_low_bit_first_field_crossing_a_byte_reads_as_one_number() {
+	let out = clean("bitfield B { a : 4; b : 10; padding : 2; };\nB b @ 0x00;\n");
+	assert_eq!(read(&out, &[0x2d, 0xd5], &["b", "a"]), "13");
+	assert_eq!(read(&out, &[0x2d, 0xd5], &["b", "b"]), "338");
 }
 
 #[test]

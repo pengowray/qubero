@@ -62,7 +62,6 @@ const IMPORT_ONLY = new Map([
 // a leaf value, never on the path through the file.
 const WHY_WITH_GAPS = {
   android_bootldr_asus: "one instance naming a file inside the image is text, and the IR's expressions are integers",
-  android_super: "three bit fields, all of them reserved padding, are read most-significant-bit first instead of least",
   bson: "the one instance that unpacks a three-byte integer needs a bitwise or; every element is placed",
   compressed_resource: "one instance reads inside another field's stream; the header and the compressed run are placed",
   creative_voice_file: "three sample-rate instances are floating point; every block is placed",
@@ -70,7 +69,7 @@ const WHY_WITH_GAPS = {
   dcmp_1: "two instances of the decompressor's own bookkeeping; the compressed run is placed",
   dcmp_variable_length_integer: "the one instance that reassembles the integer needs a bitwise or",
   dicom: "two tag numbers and one transfer-syntax test are instances; every data element is placed",
-  dos_datetime: "the packed date and time read most-significant-bit first instead of least, and six instances only zero-pad the parts for display",
+  dos_datetime: "the six gaps are instances that only zero-pad the date and time parts for display",
   ds_store: "three instances of the B-tree's bookkeeping; every record is placed",
   dune_2_pak: "one instance measures the last entry against the length of the file, which the IR has no expression for",
   edid: "every gap is an instance: nine are floating-point colour coordinates, eight reassemble a ten-bit number, one spells the manufacturer",
@@ -91,7 +90,7 @@ const WHY_WITH_GAPS = {
   ttf: "three instances reading a sub-table through its parent's stream; every table is placed",
   uefi_te: "one instance measures a field the IR does not let it measure",
   utf8_string: "the one instance that assembles a code point needs a bitwise or",
-  vfat: "the packed date and time read most-significant-bit first instead of least, and six instances only zero-pad the parts for display",
+  vfat: "the six gaps are instances that only zero-pad the date and time parts for display",
   zisofs: "one instance with no `pos`, which has no place in the file the IR can name",
 };
 

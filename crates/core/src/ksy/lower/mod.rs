@@ -715,24 +715,7 @@ impl<'a> Lower<'a> {
 			// Kaitai's `bit-endian: be` packs from the most significant bit and
 			// `le` from the least, so the two words mean the same thing and the
 			// mapping is the identity. `meta/endian` has no say in it.
-			TypeRef::Bits { width, endian } => {
-				// The IR reads low-bit-first fields out of one byte: a field
-				// packed from the bottom that runs into the next byte is not a
-				// single range of bits and it refuses to place one. Kaitai's
-				// `bit-endian: le` does read such a field, so this is a gap
-				// rather than something to guess at.
-				if *endian == Endian::Little && self.bit_offset % 8 + *width > 8 {
-					return Err(Gap {
-						reason: format!(
-							"a {width}-bit low-bit-first field starting {} bits into a byte crosses into the next byte, which a template cannot read as one number",
-							self.bit_offset % 8
-						),
-						fallback: Some(Ty::UInt { bits: *width, endian: Endian::Big }),
-						placeable: true,
-					});
-				}
-				Ok(Ty::UInt { bits: *width, endian: *endian })
-			}
+			TypeRef::Bits { width, endian } => Ok(Ty::UInt { bits: *width, endian: *endian }),
 			TypeRef::Str { zero_terminated, encoding, source } => {
 				self.lower_str(ctx, attr, *zero_terminated, encoding, source)
 			}

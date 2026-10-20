@@ -583,7 +583,7 @@ impl Evaluator {
             // where a computed field's value is kept once it is worked out.
             ty: Ty::ComputedText(E::lit(0)),
             offset: pr.offset,
-            cursor: pr.offset,
+            lsb: false,
             limit: pr.limit,
             declared_size: None,
             sized_how: None,
@@ -608,7 +608,7 @@ impl Evaluator {
             name,
             ty: Ty::Pickle(shape),
             offset,
-            cursor: offset,
+            lsb: false,
             limit: offset + size,
             declared_size: None,
             sized_how: None,

@@ -79,7 +79,21 @@ impl Evaluator {
         if at.checked_add(n).is_none_or(|end| end > r.limit) {
             return fail("field extends beyond its parent");
         }
+        if r.lsb {
+            return self.read_low_bit_first(doc, r.space, at, n);
+        }
         self.read_in(doc, r.space, at, n)
+    }
+
+    /// The bits of a number read low bit first, laid out for the decoder of
+    /// its type: see [`crate::decode::gather_lsb`]. `at` counts each byte's
+    /// bits from the bottom, so the bytes read are the ones the count touches.
+    #[cold]
+    #[inline(never)]
+    fn read_low_bit_first<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> R<Vec<u8>> {
+        let skip = at % 8;
+        let raw = self.read_in(doc, space, at - skip, (skip + n).div_ceil(8) * 8)?;
+        Ok(gather_lsb(&raw, skip as u32, n as u32))
     }
 
     /// Bytes of whichever space `space` names, with no node to bound them.

@@ -432,20 +432,10 @@ impl Evaluator {
                 if offset + u64::from(*bits) > limit {
                     return fail("field extends beyond its parent");
                 }
-                // A peek narrower than a byte is placed the same way a field
-                // of the same width would be: see `decode::lsb_offset`.
-                let offset = match lsb_packed(*bits, *endian, offset) {
-                    true => match lsb_offset(*bits, offset) {
-                        Some(at) => at,
-                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
-                    },
-                    false => offset,
-                };
                 // In whatever space this field is being read in. A switch
                 // peeking at the byte it is about to read, inside a decoded
                 // stream, must look at that stream and not at the file.
-                let buf = self.read_in(doc, self.space_at(at), offset, u64::from(*bits))?;
-                read_uint(&buf, *bits, *endian) as i128
+                return self.peek_bits(doc, self.space_at(at), offset, *bits, *endian);
             }
             // The same, further on: what a record whose shape is settled by a
             // byte after the fields it settles has to ask.
@@ -466,15 +456,7 @@ impl Evaluator {
                 if from + u64::from(*bits) > limit {
                     return fail("field extends beyond its parent");
                 }
-                let from = match lsb_packed(*bits, *endian, from) {
-                    true => match lsb_offset(*bits, from) {
-                        Some(at) => at,
-                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
-                    },
-                    false => from,
-                };
-                let buf = self.read_in(doc, self.space_at(at), from, u64::from(*bits))?;
-                read_uint(&buf, *bits, *endian) as i128
+                return self.peek_bits(doc, self.space_at(at), from, *bits, *endian);
             }
             // A peek at an address rather than at a distance. Held to the
             // space and not to the container the field sits in: an address is
@@ -1068,15 +1050,22 @@ impl Evaluator {
         if from.checked_add(u64::from(bits)).is_none_or(|end| end > self.space_len(doc, at)) {
             return fail("looks past the end of the file");
         }
-        let from = match lsb_packed(bits, endian, from) {
-            true => match lsb_offset(bits, from) {
-                Some(at) => at,
-                None => return fail("a peek packed low-bit-first would cross a byte boundary"),
-            },
-            false => from,
-        };
-        let buf = self.read_in(doc, self.space_at(at), from, u64::from(bits))?;
-        Ok(read_uint(&buf, bits, endian) as i128)
+        self.peek_bits(doc, self.space_at(at), from, bits, endian)
+    }
+
+    /// `bits` bits at `from` in `space`, read as the number a field of that
+    /// width and order there would be, without taking them. A peek packed
+    /// from the bottom of a byte is counted the way such a field is, so it
+    /// may run on into the next byte: see [`crate::decode::low_bit_first`].
+    #[inline(never)]
+    fn peek_bits<S: Source>(&self, doc: &Document<S>, space: u32, from: u64, bits: u32, endian: crate::template::Endian) -> R<i128> {
+        if !lsb_packed(bits, endian, from) {
+            let buf = self.read_in(doc, space, from, u64::from(bits))?;
+            return Ok(read_uint(&buf, bits, endian) as i128);
+        }
+        let skip = from % 8;
+        let raw = self.read_in(doc, space, from - skip, (skip + u64::from(bits)).div_ceil(8) * 8)?;
+        Ok(read_uint(&gather_lsb(&raw, skip as u32, bits), bits, endian) as i128)
     }
 
     /// How many bits the space the field at `at` is read in holds: the file at

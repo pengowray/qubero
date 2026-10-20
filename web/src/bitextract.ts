@@ -2,7 +2,8 @@
 // the shift-and-mask that lifts them out. Both the value panel's own section
 // and a weight inside a quantised block show this, so it is written once here.
 
-import { bitFormula, formatLength, formatOffset } from "./doc.ts";
+import { bitFormula, bitFormulaLow, formatLength, formatOffset } from "./doc.ts";
+import { fieldStart } from "./hexcell.ts";
 import { BYTE_NOTE } from "./strings.ts";
 
 /** Where a run of bits starts and how far it runs, both in the editor's own
@@ -20,13 +21,13 @@ export function whereLine(bit: number, width: number): HTMLElement {
 /** The place and the expression together, in that order: what is being read
  *  before how to read it. `label` names the field the bits are in, for a value
  *  made of runs from more than one. */
-export function extraction(bit: number, width: number, label?: string): DocumentFragment {
+export function extraction(bit: number, width: number, label?: string, lsbFirst = false): DocumentFragment {
   const frag = document.createDocumentFragment();
   const code = document.createElement("code");
   code.className = "insp-formula-code";
-  code.textContent = bitFormula(bit, width);
+  code.textContent = lsbFirst ? bitFormulaLow(bit, width) : bitFormula(bit, width);
   code.title = BYTE_NOTE;
-  const where = whereLine(bit, width);
+  const where = whereLine(fieldStart(bit, lsbFirst), width);
   if (label !== undefined) where.prepend(labelOf(label));
   frag.append(where, code);
   return frag;

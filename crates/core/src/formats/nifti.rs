@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!((space.type_name.as_str(), space.value.as_int()), ("NiftiSpaceUnit", Some(2)));
         let time = named(&mut ev, &d, &["header", "xyzt_units", "time"]);
         assert_eq!(time.value.as_int(), Some(1));
-        assert_eq!(time.offset_bits, 123 * 8 + 2, "bits 3 to 5, counted from the top of the byte");
+        assert_eq!((time.offset_bits, time.lsb_first), (123 * 8 + 3, true), "bits 3 to 5, counted from the bottom of the byte");
     }
 
     /// A NIfTI-2 `.nii` in either byte order: 540 bytes of header, no

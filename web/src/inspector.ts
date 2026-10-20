@@ -6,6 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { ADDRESS_MARK, formatAddress, formatBytes, formatOffset, offsetDigits } from "./doc.ts";
+import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { bitOrderFigure, type BitPart } from "./bitorder.ts";
 
@@ -1066,7 +1067,7 @@ export class Inspector {
     this.detail.hidden = false;
     const at = document.createElement("span");
     at.className = "addr";
-    at.append(...address(formatAddress(n.offset_bits, n.space), plusTitle(n)));
+    at.append(...address(formatAddress(fieldStart(n.offset_bits, n.lsb_first), n.space), plusTitle(n)));
     // A field read out of a compressed stream is at an address of that
     // stream, not of the file, and the two look the same written down. The
     // trail above already says which stream; this says which space the number
@@ -1084,7 +1085,7 @@ export class Inspector {
     this.docLine.hidden = n.doc === undefined;
     // The formula reads bytes of the file by address. There is no address of
     // the file for these bytes, so there is no formula to write.
-    if (n.space === 0) this.showFormula(n.offset_bits, n.size_bits, false);
+    if (n.space === 0) this.showFormula(n.offset_bits, n.size_bits, false, n.lsb_first);
     else {
       this.formula.hidden = true;
       this.formula.replaceChildren();
@@ -1739,7 +1740,7 @@ export class Inspector {
    * `perByte` is for the raw readings, which run for as many bytes as the type
    * takes: one byte is worked, and the rest follow it.
    */
-  private showFormula(bitOffset: number, widthBits: number, perByte: boolean): void {
+  private showFormula(bitOffset: number, widthBits: number, perByte: boolean, lsbFirst = false): void {
     const unaligned = bitOffset % 8 !== 0;
     const partial = widthBits % 8 !== 0;
     // Wider than a machine word: a term per byte would run off the panel, and
@@ -1751,7 +1752,7 @@ export class Inspector {
       return;
     }
     const width = perByte || wide ? 8 : widthBits;
-    const parts: Node[] = [subhead("Bit extraction"), extraction(bitOffset, width)];
+    const parts: Node[] = [subhead("Bit extraction"), extraction(bitOffset, width, undefined, lsbFirst)];
     // Where the reading runs on past one byte, the expression is for the first
     // of them and the rest follow it. Where it is a whole field, its value is
     // already in the editor above and needs no second telling.
@@ -1948,7 +1949,7 @@ export class Inspector {
     // have an answer for every field; the rest of the rows appear only when
     // there is something to put on them.
     if (!terse || said_(["position"])) {
-      const value = formatAddress(n.offset_bits, n.space);
+      const value = formatAddress(fieldStart(n.offset_bits, n.lsb_first), n.space);
       const clause = this.placedHow(path, shape, from);
       const detail = this.working(["position"], from, how, value, clause);
       if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream), ...this.joinedRows(path, n));

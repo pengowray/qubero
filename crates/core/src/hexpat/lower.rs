@@ -1951,11 +1951,6 @@ impl<'a> Lower<'a> {
 						continue;
 					}
 					let source = format!("{name} : {bits}");
-					if let Err(gap) = self.bits_fit(bits, *offset, endian) {
-						self.report.gap(self.at(*pos), source, gap.reason);
-						*offset += bits;
-						continue;
-					}
 					let ty = match sign {
 						BitSign::Signed => Ty::Int { bits, endian },
 						_ => Ty::UInt { bits, endian },
@@ -1986,7 +1981,7 @@ impl<'a> Lower<'a> {
 					let width = field.width.as_ref().and_then(|w| self.constant(w)).and_then(|n| u32::try_from(n).ok());
 					let source = field_source(field);
 					let pos = field.pos;
-					let lowered = self.bit_typed(field, ns, endian, types, width, *offset);
+					let lowered = self.bit_typed(field, ns, endian, types, width);
 					match lowered {
 						Ok((ty, bits)) => {
 							let name = field.name().to_string();
@@ -2040,13 +2035,11 @@ impl<'a> Lower<'a> {
 		endian: Endian,
 		types: &HashMap<String, TypeRef>,
 		width: Option<u32>,
-		offset: u32,
 	) -> R<(Ty, u32)> {
 		if let Some(bits) = width {
 			if bits == 0 || bits > 128 {
 				return Err(Gap::new("a width of no bits, or more than a number holds"));
 			}
-			self.bits_fit(bits, offset, endian)?;
 			let inner = Ty::UInt { bits, endian };
 			let ty = match &field.ty.kind {
 				TypeKind::Builtin(ValueType::Bool) => boolean(inner),
@@ -2077,30 +2070,6 @@ impl<'a> Lower<'a> {
 			}
 			Some(_) => Err(Gap::new("an array inside a bitfield with no fixed length")),
 		}
-	}
-
-	/// Whether a field of `bits` bits at `offset` bits into a bitfield is a
-	/// single stretch the IR can place.
-	///
-	/// Under `big` every width works: the IR's own packing is most significant
-	/// bit first, which is what `big` means. Under `little` a field is packed
-	/// from the bottom of its byte, and a field with a byte boundary inside it
-	/// is the whole of one byte and part of the next, which is not one range of
-	/// bits in an address space numbered from the top of each byte.
-	fn bits_fit(&self, bits: u32, offset: u32, endian: Endian) -> Result<(), Gap> {
-		if endian == Endian::Big {
-			return Ok(());
-		}
-		if offset % 8 == 0 && bits % 8 == 0 {
-			return Ok(());
-		}
-		if offset % 8 + bits <= 8 {
-			return Ok(());
-		}
-		Err(Gap::new(format!(
-			"a {bits}-bit field {} bits into a byte, packed from the low bit up, crosses into the next byte, which the IR cannot read as one number",
-			offset % 8
-		)))
 	}
 
 	/// An enumeration read from a narrower field than it was declared over.

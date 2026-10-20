@@ -484,12 +484,12 @@ impl Evaluator {
         // The cell covers the whole element, which for a complex number is
         // both halves of the pair.
         let cell = CellAt::Bytes { space: r.space, offset_bits: offset, size_bits: width * 8 };
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+        let one = Resolved { offset, lsb: false, limit: offset + size, size: Some(size), ..r.clone() };
         let real = self.primitive_value(doc, &[], &one, ty, size)?;
         if !tensor.dtype.complex() {
             return Ok(FrameCell::at(Some(real), cell));
         }
-        let next = Resolved { offset: offset + size, cursor: offset + size, limit: offset + size * 2, size: Some(size), ..r.clone() };
+        let next = Resolved { offset: offset + size, lsb: false, limit: offset + size * 2, size: Some(size), ..r.clone() };
         let imaginary = self.primitive_value(doc, &[], &next, ty, size)?;
         Ok(FrameCell::at(Some(Value::Str(complex_said(&real, &imaginary))), cell))
     }

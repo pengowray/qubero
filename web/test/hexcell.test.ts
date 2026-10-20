@@ -8,6 +8,8 @@ import {
   ASCII_GLYPHS,
   cellDraw,
   covers,
+  fieldBits,
+  fieldStart,
   glyphOf,
   highlightBits,
   markBits,
@@ -189,4 +191,24 @@ test("a set with a character for every byte leaves no cell standing in", () => {
   const ascii = cellDraw(cell({ byte: 0xb0 }));
   assert.equal(ascii.asciiText, "\u00b7");
   assert.equal(classes(ascii.ascii).includes("hv-np"), true);
+});
+
+test("a field counted from the bottom of each byte is drawn as one run per byte", () => {
+  // Three bits at the bottom of byte 0: drawn as its last three bits.
+  assert.deepEqual(fieldBits(0, 3, true), [{ startBit: 5, endBit: 8 }]);
+  // Ten bits from bit 6: the top two of byte 0 and all of byte 1.
+  assert.deepEqual(fieldBits(6, 10, true), [{ startBit: 0, endBit: 2 }, { startBit: 8, endBit: 16 }]);
+  // Twelve bits from bit 3: the top five of byte 0, the bottom seven of byte 1.
+  assert.deepEqual(fieldBits(3, 12, true), [{ startBit: 0, endBit: 5 }, { startBit: 9, endBit: 16 }]);
+  // Sixteen bits from bit 4: the top four of byte 0, all of byte 1, the bottom four of byte 2.
+  assert.deepEqual(fieldBits(4, 16, true), [{ startBit: 0, endBit: 4 }, { startBit: 8, endBit: 16 }, { startBit: 20, endBit: 24 }]);
+  // Twenty bits from bit 4: bytes 1 and 2 are whole, so they are one run.
+  assert.deepEqual(fieldBits(4, 20, true), [{ startBit: 0, endBit: 4 }, { startBit: 8, endBit: 24 }]);
+  // Whole bytes on a byte boundary, and any field counted from the top, are as given.
+  assert.deepEqual(fieldBits(8, 16, true), [{ startBit: 8, endBit: 24 }]);
+  assert.deepEqual(fieldBits(6, 10, false), [{ startBit: 6, endBit: 16 }]);
+  // The cursor goes to the field's first bit as it is read.
+  assert.equal(fieldStart(6, true), 1);
+  assert.equal(fieldStart(8, true), 15);
+  assert.equal(fieldStart(6, false), 6);
 });

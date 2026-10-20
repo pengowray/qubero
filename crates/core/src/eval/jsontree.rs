@@ -81,7 +81,7 @@ impl Evaluator {
             name: Name::Field(name.into()),
             ty: Ty::Json(child.kind.shape(), schema),
             offset: outer,
-            cursor: outer,
+            lsb: false,
             limit: next,
             declared_size: None,
             sized_how: None,

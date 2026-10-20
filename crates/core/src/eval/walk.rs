@@ -48,7 +48,7 @@ impl Evaluator {
             self.resolve_upto(doc, parent, idx)?;
             let mut prev = parent.to_vec();
             prev.push(idx - 1);
-            return Ok(self.memo[&prev].cursor + self.size_of(doc, &prev)?);
+            return Ok(self.memo[&prev].offset + self.size_of(doc, &prev)?);
         }
         // Start from the nearest known offset at or before the target and walk
         // forward. `j` is the element that `at` is the start of.
@@ -180,7 +180,7 @@ impl Evaluator {
                 }
                 Err(e) => return Err(e),
             };
-            let end = self.memo[p.as_slice()].cursor + size;
+            let end = self.memo[p.as_slice()].offset + size;
             if size == 0 {
                 return super::size::zero_size_element(r);
             }
@@ -246,7 +246,7 @@ impl Evaluator {
         let sized = self.resolve(doc, elem).and_then(|()| self.size_of(doc, elem));
         match sized {
             Ok(size) => {
-                let end = self.memo[elem].cursor + size;
+                let end = self.memo[elem].offset + size;
                 // Whatever was sized from the old room is sized again from
                 // the new one: this run, and everything it is inside.
                 for j in 0..=path.len() {
@@ -364,14 +364,14 @@ impl Evaluator {
             // The element may already be here, from the walk that sized the
             // list or from the caller looking at it. Only placing one is
             // charged: see `scan_from` for why stepping over one is not.
-            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| r.cursor + s));
+            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| r.offset + s));
             let end = match known {
                 Some(end) => end,
                 None => {
                     self.spend(*at)?;
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
-                    self.memo[p.as_slice()].cursor + size
+                    self.memo[p.as_slice()].offset + size
                 }
             };
             p.pop();
@@ -485,10 +485,10 @@ impl Evaluator {
         while (*j as u64) < n {
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
-            // Where the element covers bytes, and where the count after it
-            // resumes: the same for every element but an LSB-first one.
-            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, r.cursor, s)));
-            let (start, cursor, size) = match known {
+            // Where the element is, and whether it counts each byte's bits
+            // from the bottom, so that the bit is turned round to be compared.
+            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, s, from_bottom(r, s))));
+            let (start, size, bottom) = match known {
                 // Stepping over an element already placed is a lookup, and it
                 // is not charged. The allowance is there so a go that has real
                 // reading to do hands the screen back part way, and a go only
@@ -506,10 +506,11 @@ impl Evaluator {
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
                     let r = &self.memo[p.as_slice()];
-                    (r.offset, r.cursor, size)
+                    (r.offset, size, from_bottom(r, size))
                 }
             };
             p.pop();
+            let bit = if bottom { mirror_in_byte(bit) } else { bit };
             // Before the first element, or in the slack between two of them.
             if bit < start {
                 self.close_step(before);
@@ -527,7 +528,7 @@ impl Evaluator {
                 return Ok(None);
             }
             *j += 1;
-            *at = cursor + size;
+            *at = start + size;
             self.list_mut(&parent).walk_at = Some((*j, *at));
             if *j % CHECKPOINT == 0 {
                 self.checkpoint(&parent, *j, *at);

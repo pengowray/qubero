@@ -278,6 +278,10 @@ struct NodeDto {
     /// True for a field read inside a stream joined from several runs, which
     /// is not unpacked from one and has no document of its own to open.
     joined: bool,
+    /// True when `offset_bits` and `size_bits` count each byte's bits from
+    /// the bottom: a number read low bit first. See
+    /// `qubero_core::eval::NodeInfo::lsb_first`.
+    lsb_first: bool,
     /// True when the file did not write this field: the condition on an
     /// optional one came to nothing. Told apart from a size of zero, which
     /// several kinds of field that are there also have.
@@ -2841,6 +2845,8 @@ struct SpanDto {
     type_name: String,
     offset_bits: f64,
     size_bits: f64,
+    /// Whether the two numbers above count each byte's bits from the bottom.
+    lsb_first: bool,
     value: String,
     kind: &'static str,
     /// No field covers these bits.
@@ -2958,6 +2964,7 @@ fn span_dto(s: Span) -> SpanDto {
         type_name: s.type_name,
         offset_bits: s.offset_bits as f64,
         size_bits: s.size_bits as f64,
+        lsb_first: s.lsb_first,
         value,
         kind,
         gap: s.gap,
@@ -3078,6 +3085,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         decoded: n.decoded,
         space_root: n.space_root,
         joined: n.joined,
+        lsb_first: n.lsb_first,
         absent: n.absent,
         doc: n.doc,
         line: n.line,

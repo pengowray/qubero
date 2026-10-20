@@ -176,7 +176,7 @@ impl Evaluator {
             let mut g = root.to_vec();
             g.push(k);
             match self.resolve(doc, &g).and_then(|()| self.size_of(doc, &g)) {
-                Ok(size) => at = self.memo[&g].cursor + size,
+                Ok(size) => at = self.memo[&g].offset + size,
                 Err(e) if e.interrupted() => return Err(e),
                 Err(EvalError::Failed(w)) => return self.diagnose(doc, root, k, at, &w, 0),
                 Err(e) => return Err(e),

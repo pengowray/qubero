@@ -26,10 +26,11 @@ pub use crate::formats::pickle::familiar::Shape as PickleShape;
 /// that way, and before this `endian` on such a field was read and ignored.
 ///
 /// The two answers are the same answer at whole-byte widths, since taking a
-/// number's bits from the bottom of each byte in turn is little-endian. It is
-/// only the fields with a byte boundary inside them that the two orders
-/// disagree about, and see [`crate::decode::lsb_offset`] for what happens
-/// there.
+/// number's bits from the bottom of each byte in turn is little-endian. A
+/// `Little` field that is not whole bytes on a byte boundary is placed at the
+/// count of bits before it, with each byte's bits numbered from the bottom, so
+/// it may run on into the next byte from that byte's lowest bit: see
+/// [`crate::decode::low_bit_first`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
     Little,
@@ -2624,10 +2625,11 @@ pub enum Ty {
     /// `eval::size::uniform`), so a grid of a million values is placed without
     /// walking it.
     ///
-    /// `Little` is refused for a width that is not whole bytes, or at an
-    /// offset that is not on one: a field packed from the bottom of its byte
-    /// has to be placed before it is read, and how wide it is, is not known
-    /// until it is. Every format that writes these packs them MSB-first.
+    /// `Little` reads the number low bit first, the way [`Endian`] says for a
+    /// field narrower than a byte or off a byte boundary, at any width: a
+    /// JPEG XL extension is skipped as a run of bits as wide as the header
+    /// before it says. At whole bytes on a byte boundary that is the ordinary
+    /// little-endian number.
     UIntExpr { bits: Box<Expr>, endian: Endian },
     /// A number with a value that means "nobody filled this in".
     ///

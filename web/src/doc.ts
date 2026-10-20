@@ -292,6 +292,11 @@ export type TemplateNode = {
    *  from the front of the joined stream, which is no document of its own and
    *  cannot be opened as one; `partOf` says which run a field starts in. */
   readonly joined: boolean;
+  /** True when `offset_bits` and `size_bits` count each byte's bits from the
+   *  bottom: a number read low bit first, or a node holding them that starts or
+   *  ends partway through a byte. `fieldBits` in `hexcell.ts` turns such a
+   *  range into the runs the hex view draws. */
+  readonly lsb_first: boolean;
   /** True when the file did not write this field at all: the condition on an
    *  optional one came to nothing. Not the same as a size of zero, which a
    *  field the file did write can also have. */
@@ -421,6 +426,9 @@ export type Span = {
   readonly type: string;
   readonly offset_bits: number;
   readonly size_bits: number;
+  /** Whether the two numbers above count each byte's bits from the bottom, as
+   *  `TemplateNode.lsb_first` does. */
+  readonly lsb_first: boolean;
   readonly value: string;
   readonly kind: string;
   readonly gap: boolean;
@@ -2266,6 +2274,38 @@ export function bitFormula(bitOffset: number, width: number): string {
       const mask = ` & 0x${(0xff >> skip).toString(16).padStart(2, "0")}`;
       // Brackets only where something else would bind tighter than the mask.
       term = bytes === 1 && shift === 0 ? term + mask : `(${term}${mask})`;
+    }
+    if (shift > 0) term = `${term} << ${shift}`;
+    else if (shift < 0) term = `${term} >> ${-shift}`;
+    terms.push(term);
+  }
+  return terms.join(" | ");
+}
+
+/**
+ * The same for a number read low bit first, whose `bitOffset` counts each
+ * byte's bits from the bottom: its first bits are the high end of the first
+ * byte, shifted down, and each byte after it goes above the last. The final
+ * term is masked where the field ends partway through its byte.
+ */
+export function bitFormulaLow(bitOffset: number, width: number): string {
+  const first = Math.floor(bitOffset / 8);
+  const skip = bitOffset % 8;
+  const bytes = Math.ceil((skip + width) / 8);
+  const used = (skip + width) % 8;
+  const terms: string[] = [];
+  for (let i = 0; i < bytes; i++) {
+    let term = `b[0x${(first + i).toString(16)}]`;
+    const shift = i === 0 ? -skip : 8 * i - skip;
+    // The last byte keeps only the bits the field reaches. Where the field
+    // starts and ends in one byte, the mask applies after the shift.
+    if (i === bytes - 1 && used !== 0) {
+      if (i === 0) {
+        const mask = `0x${((1 << width) - 1).toString(16)}`;
+        terms.push(skip > 0 ? `(${term} >> ${skip}) & ${mask}` : `${term} & ${mask}`);
+        break;
+      }
+      term = `(${term} & 0x${((1 << used) - 1).toString(16).padStart(2, "0")})`;
     }
     if (shift > 0) term = `${term} << ${shift}`;
     else if (shift < 0) term = `${term} >> ${-shift}`;

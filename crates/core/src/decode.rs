@@ -23,29 +23,103 @@ pub fn lsb_packed(bits: u32, endian: Endian, offset: u64) -> bool {
     endian == Endian::Little && (bits % 8 != 0 || offset % 8 != 0)
 }
 
-/// Where an LSB-first field's bits actually sit.
+/// Whether a field of type `ty` placed at bit `offset` is read low bit first.
 ///
-/// A field's offset is a count of the bits laid down before it, and for an
-/// MSB-first field that count is also an address: bit 0 of a byte is its top
-/// bit, so the first field in a byte is at the top. LSB-first stacks the other
-/// way, so the first field in a byte is at the bottom and the count has to be
-/// turned around inside the byte to say where the bits are. Two fields of
-/// three and five bits in one byte are at bit 5 and bit 0 of it, in that
-/// order, which is `0bBBBBBAAA` written out.
+/// Every integer [`packed_int`] answers for, and the floats as well, since a
+/// format that packs from the bottom of a byte writes those the same way: a
+/// JPEG XL header holds an f16 as sixteen bits read low bit first, from
+/// wherever the bits before it ended. A [`Ty::UIntExpr`] says `Little` before
+/// its width is known, so it is always read this way; at whole bytes on a byte
+/// boundary that comes to the ordinary little-endian number.
+pub fn low_bit_first(ty: &Ty, offset: u64) -> bool {
+    match ty {
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => low_bit_first(inner, offset),
+        Ty::UIntExpr { endian, .. } => *endian == Endian::Little,
+        Ty::F16(e) | Ty::BF16(e) => lsb_packed(16, *e, offset),
+        Ty::F32(e) => lsb_packed(32, *e, offset),
+        Ty::F64(e) => lsb_packed(64, *e, offset),
+        _ => packed_int(ty).is_some_and(|(bits, endian)| lsb_packed(bits, endian, offset)),
+    }
+}
+
+/// The bit at the other end of its byte: bit 1 from the top is bit 1 from the
+/// bottom.
 ///
-/// Turned around, the bits are contiguous and in MSB order, so everything
-/// downstream — reading, writing, highlighting, the gutter — takes them as it
-/// takes any other field, and only the address changed.
+/// A field read low bit first is placed by the count of bits laid down before
+/// it, with each byte's bits counted from the bottom: the first field in a
+/// byte is at its lowest bit, and a twelve-bit field starting there is that
+/// whole byte and the low nibble of the next. That is the order the format
+/// counts in, and in it every such field is one run, however many bytes it
+/// touches. The hex view and a cursor number bits from the top of each byte,
+/// so a bit asked about from there is turned round with this before it is
+/// compared with one of these fields; at whole bytes the two orders agree.
+pub fn mirror_in_byte(bit: u64) -> u64 {
+    bit ^ 7
+}
+
+/// Whether a type holds numbers read low bit first, so that a node of it
+/// starting or ending partway through a byte counts that byte's bits from the
+/// bottom, as the numbers inside it do. Looked for in a structure's own
+/// fields, a list's elements, and through the wrappers that only choose or
+/// bound what is inside, `depth` levels down; a named type is not followed.
 ///
-/// `None` for a field that would straddle a byte boundary, because that one
-/// cannot be turned around: a twelve-bit LSB-first field is the whole of one
-/// byte and the low nibble of the next, and a bit address space numbered from
-/// the top of each byte has no single range that means those bits. Such a
-/// field is refused rather than placed somewhere it is not.
+/// A node whose ends are both on byte boundaries counts the same in either
+/// order, so this is only asked of one that is not.
+pub fn packs_low_bit_first(ty: &Ty, depth: u32) -> bool {
+    let leaf = |t: &Ty| match t.without_sentinel() {
+        Ty::UIntExpr { endian, .. } => *endian == Endian::Little,
+        t => packed_int(t).is_some_and(|(bits, endian)| endian == Endian::Little && bits % 8 != 0),
+    };
+    let inner = |t: &Ty| leaf(t) || (depth > 0 && packs_low_bit_first(t, depth - 1));
+    match ty {
+        Ty::Struct(s) => s.fields.iter().any(|f| inner(&f.ty)),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => inner(elem),
+        Ty::When { inner: t, .. } | Ty::Sized { inner: t, .. } | Ty::SizedBits { inner: t, .. } => inner(t),
+        Ty::Switch { cases, default, .. } => cases.iter().any(|(_, t)| inner(t)) || inner(default),
+        _ => false,
+    }
+}
+
+/// Where an LSB-first field that fits in one byte sits when the bits are
+/// numbered from the top of the byte, which is where a write puts it.
+///
+/// Two fields of three and five bits in one byte are at count 0 and 3, and
+/// from the top they are at bit 5 and bit 0, which is `0bBBBBBAAA` written
+/// out. Turned round like this the field is a run of bits high bit first, the
+/// way every other field is written.
+///
+/// `None` for a field that crosses a byte boundary, which has no single run
+/// numbered from the top: a twelve-bit field from the bottom of a byte is all
+/// of that byte and the low nibble of the next. Such a field is read and shown
+/// but not written; see [`low_bit_first`].
 pub fn lsb_offset(bits: u32, offset: u64) -> Option<u64> {
     let start = offset % 8;
     let bits = bits as u64;
     (start + bits <= 8).then(|| offset - start + (8 - start - bits))
+}
+
+/// `bits` bits taken low bit first, starting `skip` bits from the bottom of
+/// `raw[0]`, laid out the way the field's own decoder reads a number: whole
+/// bytes as little-endian bytes, anything narrower as a run of bits high bit
+/// first. [`read_uint`] with `Little` then gives the number the format wrote,
+/// and so does every reading built on it: signed, floats, fixed point.
+///
+/// The first bit taken is the number's lowest, which is what packing from the
+/// bottom of a byte means, so a field crossing into the next byte carries on
+/// from that byte's lowest bit.
+pub(crate) fn gather_lsb(raw: &[u8], skip: u32, bits: u32) -> Vec<u8> {
+    let mut v: u128 = 0;
+    for i in 0..bits.min(128) {
+        let at = (skip + i) as usize;
+        let bit = (raw[at / 8] >> (at % 8)) & 1;
+        v |= (bit as u128) << i;
+    }
+    let n = bytes_for(bits as u64);
+    if bits % 8 == 0 {
+        v.to_le_bytes()[..n].to_vec()
+    } else {
+        (v << (n as u32 * 8 - bits)).to_be_bytes()[16 - n..].to_vec()
+    }
 }
 
 /// The width and byte order of an integer field, looked through the wrappers
@@ -57,9 +131,8 @@ pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
         | Ty::SignMagnitude { bits, endian }
         | Ty::Fixed { bits, endian, .. } => Some((*bits, *endian)),
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => packed_int(inner),
-        // How wide it is, is not known until it is read, and where it goes has
-        // to be settled before that. `read_size` refuses the one packing that
-        // would need this answer; see [`Ty::UIntExpr`].
+        // How wide it is, is not known until it is read. Nothing that places
+        // a field needs to know: see [`low_bit_first`].
         Ty::UIntExpr { .. } => None,
         _ => None,
     }
@@ -69,12 +142,11 @@ pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
 pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
         Ty::UInt { bits, .. } | Ty::Int { bits, .. } | Ty::SignMagnitude { bits, .. } => *bits as u64,
-        // Never fixed, not even for a width written as a number. This answer
-        // is what places a field, and a field whose width is an expression is
-        // placed without that width being known: saying a literal one is fixed
-        // would let it past the check that refuses the one packing this cannot
-        // place. A literal width still costs nothing to read, because `stride`
-        // asks for it once for the whole run.
+        // Never fixed, not even for a width written as a number: a field whose
+        // width is an expression is placed without that width being known,
+        // and one rule for all of them is simpler than two. A literal width
+        // still costs nothing to read, because `stride` asks for it once for
+        // the whole run.
         Ty::UIntExpr { .. } => return None,
         Ty::Nullable { inner, .. } => fixed_bits(inner)?,
         Ty::F16(_) | Ty::BF16(_) => 16,
