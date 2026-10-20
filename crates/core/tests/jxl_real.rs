@@ -1,8 +1,10 @@
 //! Real JPEG XL files, read box by box.
 //!
-//! Five codestreams written by libjxl 0.7 through ffmpeg, and two containers
-//! put together around two of them by `tools/make_jxl_samples.py` in the
-//! sample collection. The containers are checked against the codestreams
+//! Four codestreams written by libjxl 0.7 through ffmpeg and one by
+//! ImageMagick, and two containers put together around two of them by
+//! `tools/make_jxl_samples.py` in the sample collection. Each codestream's
+//! headers, TOC and sections are checked against what a reference decoder
+//! written from the specification reads. The containers are checked against the codestreams
 //! they were made from: the one in `jxlc` and the three `jxlp` parts joined
 //! are each the bytes of the bare file, and the Exif and XMP read the same
 //! whether they are stored or Brotli-compressed in a `brob` box.
@@ -72,24 +74,54 @@ impl Reading {
     }
 }
 
+/// Each codestream's size and TOC, as a reference decoder written from the
+/// specification reads them: `tools/check_jxl_headers.py` in the sample
+/// collection. Every TOC adds up to the end of its file.
+const CODESTREAMS: &[(&str, (i128, i128), &[i128])] = &[
+    ("magick-rgba-8x8.jxl", (8, 8), &[107]),
+    ("ffmpeg-vardct-96x64.jxl", (96, 64), &[1003]),
+    ("ffmpeg-modular-lossless-96x64.jxl", (96, 64), &[2331]),
+    ("ffmpeg-vardct-640x480.jxl", (640, 480), &[392, 7604, 622, 1257, 1055, 388, 1589, 541, 323]),
+    ("ffmpeg-modular-lossless-300x260.jxl", (300, 260), &[1102, 0, 0, 13663, 2862, 912, 181]),
+];
+
 #[test]
-fn every_bare_codestream_is_its_signature_and_its_bytes() {
-    for name in [
-        "magick-rgba-8x8.jxl",
-        "ffmpeg-vardct-96x64.jxl",
-        "ffmpeg-modular-lossless-96x64.jxl",
-        "ffmpeg-vardct-640x480.jxl",
-        "ffmpeg-modular-lossless-300x260.jxl",
-    ] {
+fn every_codestream_reads_as_its_headers_toc_and_sections() {
+    for (name, (width, height), toc) in CODESTREAMS {
         let Some(mut r) = Reading::open(name) else {
             eprintln!("skipped: {}", qubero_samples::missing());
             return;
         };
         assert_eq!(r.at(&[]).type_name, "Codestream", "{name}");
-        assert!(matches!(r.at(&["signature"]).value, Value::Magic { ok: true, .. }), "{name}");
-        let data = r.at(&["data"]);
-        assert_eq!(data.offset_bits + data.size_bits, r.bytes.len() as u64 * 8, "{name}");
+        let size = |r: &mut Reading, side| r.at(&["image_header", "size", side]).value.as_int();
+        assert_eq!((size(&mut r, "width"), size(&mut r, "height")), (Some(*width), Some(*height)), "{name}");
+        assert_eq!(r.at(&["frames"]).child_count, 1, "{name}");
+        let n = r.at(&["frames", "0", "toc", "entries"]).child_count as usize;
+        let read: Vec<i128> = (0..n).map(|i| r.at(&["frames", "0", "toc", "entries", &i.to_string(), "value"]).value.as_int().unwrap()).collect();
+        assert_eq!(&read, toc, "{name}");
+        // The sections end where the file does, with nothing after them.
+        let sections = r.at(&["frames", "0", "sections"]);
+        assert_eq!(sections.offset_bits + sections.size_bits, r.bytes.len() as u64 * 8, "{name}");
+        assert_eq!(r.at(&["trailer"]).size_bits, 0, "{name}");
     }
+}
+
+/// Where a frame has more than one group, each section is its own byte range:
+/// the 640 by 480 picture is six groups in one pass, and its last PassGroup
+/// ends the file.
+#[test]
+fn a_frame_of_six_groups_places_each_section() {
+    let Some(mut r) = Reading::open("ffmpeg-vardct-640x480.jxl") else {
+        eprintln!("skipped: {}", qubero_samples::missing());
+        return;
+    };
+    let s = |steps: &[&'static str]| [&["frames", "0", "sections"], steps].concat();
+    assert_eq!(r.at(&s(&["LfGlobal"])).size_bits, 392 * 8);
+    assert_eq!(r.at(&s(&["LfGroup"])).child_count, 1);
+    assert_eq!(r.at(&s(&["HfGlobal"])).size_bits, 622 * 8);
+    assert_eq!(r.at(&s(&["PassGroup"])).child_count, 6);
+    let last = r.at(&s(&["PassGroup", "5"]));
+    assert_eq!((last.size_bits, last.offset_bits + last.size_bits), (323 * 8, r.bytes.len() as u64 * 8));
 }
 
 #[test]
