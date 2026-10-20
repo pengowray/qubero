@@ -154,7 +154,12 @@ impl Evaluator {
         // separators a scanned field stepped over, on top of any byte-order
         // mark.
         let mut skipped = 0u64;
+        // Only the first 4 KB is read, which is all anything shows or edits.
+        // A field longer than that still says how long its value is: a
+        // 50 KB ASDF tree is 50 KB, not 4 KB.
+        let more = n > cap;
         let (text_len, dirty) = match len {
+            StrLen::Fixed(_) if more => (n - bom, false),
             StrLen::Fixed(_) => (rest, false),
             // The field is the separators, the value and the byte that ends
             // it. The sizing pass measured all three when the field measured
@@ -189,6 +194,14 @@ impl Evaluator {
                 let term = text::unit_bytes(settled, *end);
                 match find_unit(body, &term) {
                     Some(i) => (i as u64, false),
+                    // Past what was read. The sizing pass ended the field at
+                    // its terminator or at the end of its room, so the last
+                    // unit says which.
+                    None if more => {
+                        let u = term.len() as u64;
+                        let last = self.read(doc, r, r.offset + (n - u) * 8, u * 8)?;
+                        (if last == term { n - bom - u } else { n - bom }, true)
+                    }
                     // No terminator to write back, so this one is read-only.
                     None => (rest, true),
                 }

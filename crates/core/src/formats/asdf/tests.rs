@@ -112,3 +112,15 @@ fn a_streamed_block_runs_to_the_end_of_the_file() {
     let v = ev.node(&d, &[rows.as_slice(), &[2, 1]].concat()).unwrap();
     assert_eq!(v.value, Value::UInt(6));
 }
+
+#[test]
+fn a_tree_longer_than_the_text_shown_still_says_how_long_it_is() {
+    // A Roman tree is 50 KB, and only the first 4 KB of a text field is read.
+    let tree = format!("%YAML 1.1\n---\nnote: '{}'\n...\n", "x".repeat(20_000));
+    let mut b = b"#ASDF 1.0.0\n".to_vec();
+    b.extend_from_slice(tree.as_bytes());
+    let (d, mut ev) = eval(b);
+    let n = ev.node(&d, &[2]).unwrap();
+    assert_eq!(n.size_bits / 8, tree.len() as u64);
+    assert_eq!(n.value_bytes, tree.len() as u64);
+}
