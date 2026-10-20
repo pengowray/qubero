@@ -115,6 +115,8 @@ mod iff;
 mod ilbm;
 mod iso9660;
 mod journal;
+mod isobox;
+mod jxl;
 mod jxr;
 mod jpeg;
 mod jpeg2000;
@@ -264,6 +266,7 @@ pub use iso9660::iso9660;
 pub use jpeg::jpeg;
 pub use jpeg2000::jpeg2000;
 pub use journal::journal;
+pub use jxl::jxl;
 pub use jxr::jxr;
 pub use ico::ico;
 pub use lha::lha;
@@ -525,6 +528,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("jpeg", |_| jpeg()),
     // A JPEG 2000 codestream, or the JP2 file one is kept in.
     ("jpeg2000", |_| jpeg2000()),
+    // A JPEG XL codestream, or the container one is kept in.
+    ("jxl", |_| jxl()),
     ("journal", |_| journal()),
     ("pdb", |_| pdb()),
     ("pdb2", |_| pdb2()),

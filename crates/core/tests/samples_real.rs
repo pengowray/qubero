@@ -69,7 +69,6 @@ const KNOWN_FAILURES: &[&str] = &[
     "font/qubero-fixture.woff",
     "font/qubero-fixture.woff2",
     "hdr/magick-rgbe.hdr",
-    "jxl/magick-rgba-8x8.jxl",
     "nrrd/volume-int16-gzip.nrrd",
     "nrrd/volume-int16-raw.nrrd",
     "wavpack/ffmpeg-lossless-mono.wv",

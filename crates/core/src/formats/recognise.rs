@@ -133,6 +133,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     // that mangles line endings.
     (b"\xff\x4f\xff\x51", "jpeg2000"),
     (b"\x00\x00\x00\x0cjP  \x0d\x0a\x87\x0a", "jpeg2000"),
+    // A JPEG XL codestream has two bytes of signature and then bit fields,
+    // so two bytes are all there is to match. The container opens with a
+    // signature box shaped like JP2's, with its own letters.
+    (b"\xff\x0a", "jxl"),
+    (b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a", "jxl"),
     (b"II*\x00", "tiff"),
     // `II` and then the byte where a TIFF writes 42: a JPEG XR is a TIFF
     // directory the whole way down and says so three bytes in.
@@ -2609,6 +2614,11 @@ mod tests {
         assert_eq!(sniffed(b"\x00\x00\x00\x0cjP  \x0d\x0a\x87\x0a\x00\x00\x00\x14ftypjp2 "), Some("jpeg2000"));
         // The signature box with its line-ending bytes mangled is not one.
         assert_ne!(sniffed(b"\x00\x00\x00\x0cjP  \x0d\x0a\x87\x0d\x0a"), Some("jpeg2000"));
+        // JPEG XL: a bare codestream, and a container's signature box, which
+        // differs from JP2's in its letters only.
+        assert_eq!(sniffed(b"\xff\x0a\x41\xc0\x4e\x01"), Some("jxl"));
+        assert_eq!(sniffed(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a\x00\x00\x00\x14ftypjxl "), Some("jxl"));
+        assert_ne!(sniffed(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0d\x0a"), Some("jxl"));
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
         assert_eq!(sniffed(b"FORM\0\0\0\x108SVX"), None);

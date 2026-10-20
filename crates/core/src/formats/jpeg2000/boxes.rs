@@ -1,12 +1,6 @@
 //! The JP2 file format, ISO/IEC 15444-1 Annex I: the boxes a codestream is
-//! kept in.
-//!
-//! A box is `LBox`, the length of the whole box, `TBox`, four letters saying
-//! what it is, and its contents, `DBox`. A length of 1 means the real length
-//! is the eight bytes after the letters, `XLBox`, for a box past four
-//! gigabytes; a length of 0 means the box runs to the end of the file, which
-//! only the last one may say. That is the ISO base media file format's box,
-//! and an MP4 is read the same way.
+//! kept in. How a box is laid out is in [`crate::formats::isobox`], which
+//! JPEG XL shares; what is here is what each JP2 box holds.
 //!
 //! A JP2 file is the signature box, `ftyp`, the `jp2h` header, and the
 //! codestream in `jp2c`, with anything else a writer wants to add in between
@@ -16,13 +10,8 @@
 //! and a box this does not know keeps its length and its bytes.
 
 use super::{codestream, depth};
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Ty as T, Until};
-
-/// A four-character box type as the big-endian number a switch compares it
-/// against.
-fn cc(s: &[u8; 4]) -> i128 {
-    s.iter().fold(0i128, |acc, b| (acc << 8) | *b as i128)
-}
+use crate::formats::isobox::{boxed, boxes, cc};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Ty as T};
 
 /// The colour spaces a JP2 `colr` box may name, from I.5.3.3. JPX names a
 /// score more, which show as their numbers.
@@ -30,41 +19,18 @@ const ENUM_CS: &[(i128, &str)] = &[(16, "sRGB"), (17, "greyscale"), (18, "sYCC")
 
 /// A whole JP2 file: boxes until the end.
 pub(super) fn file() -> T {
-    T::repeat(T::Named("Box".into()), Until::End)
+    boxes()
 }
 
 /// One box, named `Box` in the template so that a superbox can hold more of
 /// them.
-///
-/// How long the contents are is a choice of three, and it is written as the
-/// choice rather than folded into arithmetic: `LBox` less its eight bytes,
-/// `XLBox` less its sixteen, or everything left. A length too short to hold
-/// the box's own header is a file gone wrong, and the contents are then
-/// empty, so a run of boxes still moves on.
 pub(super) fn jp2_box() -> T {
-    let lbox = E::field("LBox");
-    let len = E::cond(
-        lbox.clone().equal_to(E::lit(1)),
-        E::field("XLBox").sub(E::lit(16)),
-        E::cond(lbox.clone().equal_to(E::lit(0)), E::Remaining, lbox.sub(E::lit(8))),
-    );
-    T::structure_named(
-        "Box",
-        "TBox",
-        "DBox",
-        vec![
-            ("LBox", T::u32(Big)),
-            ("TBox", T::utf8(E::lit(4))),
-            ("XLBox", T::when(E::field("LBox").equal_to(E::lit(1)), T::u64(Big))),
-            ("DBox", T::sized(len.at_least(E::lit(0)).at_most(E::Remaining), contents())),
-        ],
-    )
-    .counted_as("box")
+    boxed(contents())
 }
 
 /// What is inside a box, by its type.
 fn contents() -> T {
-    let superbox = || T::repeat(T::Named("Box".into()), Until::End);
+    let superbox = boxes;
     T::switch(
         E::field("TBox"),
         vec![
