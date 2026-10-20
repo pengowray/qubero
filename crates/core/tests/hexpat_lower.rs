@@ -195,6 +195,56 @@ fn a_bitfield_packs_from_the_low_bit_up_by_default() {
 	assert_eq!(read(&out, &[0x49], &["b", "b"]), "2");
 }
 
+/// `[[no_unique_address]]` takes no room in a bitfield either: the reference
+/// starts the next entry at the same bit. `bink_container.hexpat` reads a
+/// keyframe flag out of the low bit of a 32-bit frame address this way, so
+/// the bitfield is 4 bytes long, not 5.
+#[test]
+fn a_no_unique_address_bitfield_entry_leaves_the_next_one_at_the_same_bit() {
+	let out = clean("bitfield B { bool k : 1 [[no_unique_address]]; v : 8; padding : 7; };\nB b @ 0x00;\n");
+	assert_eq!(read(&out, &[0x81, 0x00], &["b", "k"]), "true");
+	assert_eq!(read(&out, &[0x81, 0x00], &["b", "v"]), "129");
+	assert!(render(&out.template).contains("sizedbits(16)"), "{}", render(&out.template));
+
+	let big = clean("#pragma endian big\nbitfield B { bool k : 1 [[no_unique_address]]; v : 8; padding : 7; };\nB b @ 0x00;\n");
+	assert_eq!(read(&big, &[0x81, 0x00], &["b", "k"]), "true");
+	assert_eq!(read(&big, &[0x81, 0x00], &["b", "v"]), "129");
+
+	let bink = clean("bitfield F { bool key : 1 [[no_unique_address]]; address : 32; };\nF f @ 0x00;\n");
+	assert!(render(&bink.template).contains("sizedbits(32)"), "{}", render(&bink.template));
+	assert_eq!(read(&bink, &[0x01, 0x02, 0x00, 0x00], &["f", "address"]), "513");
+}
+
+/// The same for an entry further in, as long as it starts on a byte boundary
+/// of the bitfield.
+#[test]
+fn a_no_unique_address_bitfield_entry_on_a_byte_boundary_is_read_there() {
+	let out = clean("bitfield B { a : 8; m : 4 [[no_unique_address]]; n : 8; };\nB b @ 0x00;\n");
+	assert_eq!(read(&out, &[0x12, 0x34], &["b", "a"]), "18");
+	assert_eq!(read(&out, &[0x12, 0x34], &["b", "m"]), "4");
+	assert_eq!(read(&out, &[0x12, 0x34], &["b", "n"]), "52");
+}
+
+/// An `At` counts whole bytes, so an entry that starts partway through a byte
+/// cannot be put back where it stands. It is a gap, and the entries after it
+/// still start where the reference starts them.
+#[test]
+fn a_no_unique_address_bitfield_entry_partway_through_a_byte_is_a_gap() {
+	let out = convert("bitfield B { a : 3; m : 2 [[no_unique_address]]; n : 5; };\nB b @ 0x00;\n");
+	assert_eq!(out.report.gaps.len(), 1, "{}", gap_reasons(&out));
+	assert!(gap_reasons(&out).contains("m : 2 a [[no_unique_address]] field at bit offset 3"), "{}", gap_reasons(&out));
+	assert_eq!(read(&out, &[0b10101_000], &["b", "n"]), "21");
+}
+
+/// The reference sizes a bitfield by where its last entry ends, so an entry
+/// that takes no room and runs past every entry after it reads bits outside
+/// the bitfield, which the IR has no way to hold.
+#[test]
+fn a_no_unique_address_bitfield_entry_past_the_end_is_a_gap() {
+	let out = convert("bitfield B { m : 12 [[no_unique_address]]; n : 4; };\nB b @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("field m is 12 bits wide and extends past the end"), "{}", gap_reasons(&out));
+}
+
 /// And from the high bit down under `big`, which is what the reference's own
 /// `TestPatternBitfields` reads out of `0x49`.
 #[test]

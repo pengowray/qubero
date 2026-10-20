@@ -1228,7 +1228,7 @@ impl<'a> Lower<'a> {
 			match lowered {
 				Ok(ty) => {
 					self.report.became(path.clone(), source.clone(), ty.display_name());
-					let mut out = named_field(&display, ty, takes_no_address(field));
+					let mut out = named_field(&display, ty, takes_no_address(&field.attrs));
 					out.doc = self.doc_of(field);
 					if is_machinery(field) {
 						machinery.push(out.name.clone());
@@ -1529,7 +1529,7 @@ impl<'a> Lower<'a> {
 		if let Some(placement) = &field.placement {
 			let address = self.expr(placement)?;
 			ty = Ty::at(address, ty);
-		} else if takes_no_address(field) {
+		} else if takes_no_address(&field.attrs) {
 			// `[[no_unique_address]]`: the field is read where it stands and
 			// the field after it starts in the same place. An `At` at the
 			// current position says exactly that, since a field whose contents
@@ -1873,7 +1873,8 @@ impl<'a> Lower<'a> {
 		let mut fields: Vec<Field> = Vec::new();
 		let mut machinery: Vec<Arc<str>> = Vec::new();
 		let mut offset: u32 = 0;
-		self.bit_entries(&def.entries, ns, endian, &types, &mut fields, &mut machinery, &mut offset);
+		let mut no_room: Vec<(String, u32, u32)> = Vec::new();
+		self.bit_entries(&def.entries, ns, endian, &types, &mut fields, &mut machinery, &mut offset, &mut no_room);
 		self.stack.pop();
 
 		let mut out = empty_struct(ir_name);
@@ -1881,7 +1882,16 @@ impl<'a> Lower<'a> {
 		out.fields = fields;
 		out.machinery = machinery;
 		out.inline = true;
+		// The reference sizes a bitfield by where the cursor is after its last
+		// entry, so an entry that takes no room and is wider than all the
+		// entries after it ends past the end of the bitfield. A field in the
+		// IR has to lie inside its parent, so that bitfield is a gap.
 		let bits = offset.div_ceil(8) * 8;
+		if let Some((name, _, width)) = no_room.iter().find(|(_, start, width)| start + width > bits) {
+			return Err(Gap::new(format!(
+				"[[no_unique_address]] field {name} is {width} bits wide and extends past the end of the bitfield"
+			)));
+		}
 		let ty = Ty::SizedBits { bits: Expr::lit(i128::from(bits)), inner: Box::new(Ty::Struct(Arc::new(out))) };
 		self.apply_attributes(&def.attrs, ty, def.pos, &def.name)
 	}
@@ -1938,10 +1948,12 @@ impl<'a> Lower<'a> {
 		fields: &mut Vec<Field>,
 		machinery: &mut Vec<Arc<str>>,
 		offset: &mut u32,
+		no_room_entries: &mut Vec<(String, u32, u32)>,
 	) {
 		for entry in entries {
 			match entry {
 				BitEntry::Bits { name, sign, width, pos, attrs, doc } => {
+					let no_room = takes_no_address(attrs);
 					let Some(bits) = self.constant(width).and_then(|n| u32::try_from(n).ok()) else {
 						self.report.gap(self.at(*pos), format!("{name} : {width}"), "a width the converter cannot read as a number");
 						continue;
@@ -1955,11 +1967,14 @@ impl<'a> Lower<'a> {
 						BitSign::Signed => Ty::Int { bits, endian },
 						_ => Ty::UInt { bits, endian },
 					};
-					let ty = match self.apply_attributes(attrs, ty, *pos, name) {
+					let placed = self
+						.apply_attributes(attrs, ty, *pos, name)
+						.and_then(|ty| take_no_room(ty, no_room, *offset));
+					let ty = match placed {
 						Ok(ty) => ty,
 						Err(gap) => {
 							self.report.gap(self.at(*pos), source, gap.reason);
-							*offset += bits;
+							pass_bits(offset, bits, no_room);
 							continue;
 						}
 					};
@@ -1971,37 +1986,54 @@ impl<'a> Lower<'a> {
 					if matches!(sign, BitSign::Padding) || attrs.iter().any(|a| a.path == "hidden") {
 						machinery.push(Arc::from(field_name.as_str()));
 					}
-					let mut out = named_field(&field_name, ty, false);
+					let mut out = named_field(&field_name, ty, no_room);
 					out.doc = doc.as_deref().map(Arc::from);
 					self.stack.last_mut().expect("a frame").names.push(name.clone());
 					fields.push(out);
-					*offset += bits;
+					if no_room {
+						no_room_entries.push((name.clone(), *offset, bits));
+					}
+					pass_bits(offset, bits, no_room);
 				}
 				BitEntry::Typed(field) => {
+					let no_room = takes_no_address(&field.attrs);
 					let width = field.width.as_ref().and_then(|w| self.constant(w)).and_then(|n| u32::try_from(n).ok());
 					let source = field_source(field);
 					let pos = field.pos;
-					let lowered = self.bit_typed(field, ns, endian, types, width);
-					match lowered {
-						Ok((ty, bits)) => {
-							let name = field.name().to_string();
-							self.report.became(self.at(pos), source, format!("{bits} bits"));
-							if field.attrs.iter().any(|a| a.path == "hidden") {
-								machinery.push(Arc::from(name.as_str()));
-							}
-							let mut out = named_field(&name, ty, false);
-							out.doc = self.doc_of(field);
-							self.stack.last_mut().expect("a frame").names.push(field.name().to_string());
-							fields.push(out);
-							*offset += bits;
-						}
+					let (ty, bits) = match self.bit_typed(field, ns, endian, types, width) {
+						Ok(lowered) => lowered,
 						Err(gap) => {
 							self.report.gap(self.at(pos), source, gap.reason);
 							if let Some(bits) = width {
-								*offset += bits;
+								pass_bits(offset, bits, no_room);
 							}
+							continue;
 						}
+					};
+					let placed = self
+						.apply_attributes(&field.attrs, ty, pos, field.name())
+						.and_then(|ty| take_no_room(ty, no_room, *offset));
+					let ty = match placed {
+						Ok(ty) => ty,
+						Err(gap) => {
+							self.report.gap(self.at(pos), source, gap.reason);
+							pass_bits(offset, bits, no_room);
+							continue;
+						}
+					};
+					let name = field.name().to_string();
+					self.report.became(self.at(pos), source, format!("{bits} bits"));
+					if field.attrs.iter().any(|a| a.path == "hidden") {
+						machinery.push(Arc::from(name.as_str()));
 					}
+					let mut out = named_field(&name, ty, no_room);
+					out.doc = self.doc_of(field);
+					self.stack.last_mut().expect("a frame").names.push(name.clone());
+					fields.push(out);
+					if no_room {
+						no_room_entries.push((name, *offset, bits));
+					}
+					pass_bits(offset, bits, no_room);
 				}
 				BitEntry::If { cond, pos, .. } => self.report.gap(
 					self.at(*pos),
@@ -3053,8 +3085,33 @@ fn kind_name(kind: StatementKind) -> &'static str {
 
 /// `[[no_unique_address]]`: the field is read where it stands and takes no room
 /// of its own, so the field after it starts in the same place.
-fn takes_no_address(field: &AField) -> bool {
-	field.attrs.iter().any(|a| a.path == "no_unique_address")
+fn takes_no_address(attrs: &[Attribute]) -> bool {
+	attrs.iter().any(|a| a.path == "no_unique_address")
+}
+
+/// A bitfield entry marked `[[no_unique_address]]`, which the reference reads
+/// where it stands before starting the next entry at the same bit. An `At` at
+/// the entry's own position says that, as it does for a structure's field, but
+/// an `At` counts whole bytes, so only an entry starting on a byte boundary of
+/// the bitfield can be put back where it stands.
+fn take_no_room(ty: Ty, no_room: bool, offset: u32) -> R<Ty> {
+	if !no_room {
+		return Ok(ty);
+	}
+	if offset % 8 != 0 {
+		return Err(Gap::new(format!(
+			"a [[no_unique_address]] field at bit offset {offset} in the bitfield, not at a byte boundary"
+		)));
+	}
+	Ok(Ty::at_in_window(Expr::Pos, ty))
+}
+
+/// Move past a bitfield entry of `bits` bits. One that takes no room leaves the
+/// next entry starting at the same bit.
+fn pass_bits(offset: &mut u32, bits: u32, no_room: bool) {
+	if !no_room {
+		*offset += bits;
+	}
 }
 
 /// Whether a field is the structure's own machinery: a count, a length, a

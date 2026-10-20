@@ -602,6 +602,15 @@ the field contributes nothing at all. `bmp.hexpat` is why it matters -- its
 `data` field is the whole file read at offset zero -- and with the union
 lowering every placement after it ran past the end.
 
+The same `At` holds a `[[no_unique_address]]` entry of a bitfield (2026-10-20),
+and the bit offset stays where it was, so the next entry starts at the same bit,
+as the reference's `applyVariableAttributes` does for a `PatternBitfieldField`.
+`At` counts whole bytes from the start of the bitfield, so an entry that starts
+partway through a byte is a gap, and so is a bitfield whose no-room entry runs
+past its last bit. The one use in the corpus is `bink_container.hexpat`'s
+`FrameAddressData`, where the keyframe flag is bit 0 of the frame address: the
+bitfield is 4 bytes, not the 5 it was before.
+
 Four more, found by working through the gap reasons on 2026-09-17:
 
 * **An assignment does not always leave the next field where it was.** The old
