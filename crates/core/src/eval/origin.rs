@@ -889,6 +889,9 @@ impl Evaluator {
             // went, so the row a reader wants is the one naming it, not a
             // number with nowhere to go.
             Expr::StartOf(a) => self.from_expr(doc, at, a, role, out)?,
+            // The field whose bytes were compared, which is the row to go and
+            // look at to see why the answer came out as it did.
+            Expr::BytesEq { field, .. } => self.from_expr(doc, at, field, role, out)?,
             // The fields of the record that placed this element, read from
             // where that record's offset was: a heap array's length is the
             // `count` of its own descriptor, which is a field a reader can go

@@ -58,18 +58,18 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `chrome_pak` | serialization | CC0-1.0 | yes | 0 | no magic |  |
 | `compressed_resource` | macos | MIT | yes | 1 | 4 bytes | one instance reads inside another field's stream; the header and the compressed run are placed |
 | `cramfs` | filesystem | MIT | yes | 0 | no magic |  |
-| `creative_voice_file` | media | CC0-1.0 | yes | 3 | 20 bytes | three sample-rate instances are floating point; every block is placed |
-| `dcmp_0` | macos | MIT | yes | 2 | no magic | two instances of the decompressor's own bookkeeping; the compressed run is placed |
-| `dcmp_1` | macos | MIT | yes | 2 | no magic | two instances of the decompressor's own bookkeeping; the compressed run is placed |
-| `dcmp_2` | macos | MIT | import | 2 | no magic | a root type with 2 parameters: nothing can open a file as it, and it is here to be imported |
+| `creative_voice_file` | media | CC0-1.0 | yes | 4 | 20 bytes | three sample-rate instances are floating point, and one duration instance divides by a sample rate; every block is placed |
+| `dcmp_0` | macos | MIT | yes | 3 | no magic | three instances: the lookup table (a list), the value a chunk looks up in it, and one that needs a bitwise or; the compressed run is placed |
+| `dcmp_1` | macos | MIT | yes | 3 | no magic | three instances: the lookup table (a list), the value a chunk looks up in it, and one that needs a bitwise or; the compressed run is placed |
+| `dcmp_2` | macos | MIT | import | 5 | no magic | a root type with 2 parameters: nothing can open a file as it, and it is here to be imported |
 | `dcmp_variable_length_integer` | macos | MIT | yes | 1 | no magic | the one instance that reassembles the integer needs a bitwise or |
 | `dex` | executable | Apache-2.0 | yes | 0 | 4 bytes |  |
-| `dicom` | image | MIT | yes | 3 | no magic | two tag numbers and one transfer-syntax test are instances; every data element is placed |
+| `dicom` | image | MIT | yes | 2 | no magic | two instances combine a tag's group and element with a bitwise or; every data element is placed |
 | `dime_message` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `dns_packet` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `dos_datetime` | common | CC0-1.0 | yes | 6 | no magic | the six gaps are instances that only zero-pad the date and time parts for display |
 | `ds_store` | macos | MIT | yes | 3 | no magic | three instances of the B-tree's bookkeeping; every record is placed |
-| `dune_2_pak` | game | CC0-1.0 | yes | 1 | no magic | one instance measures the last entry against the length of the file, which the IR has no expression for |
+| `dune_2_pak` | game | CC0-1.0 | yes | 2 | no magic | no entry's body is placed: where a body ends is worked out from the length of the file, which the IR has no expression for |
 | `edid` | hardware | CC0-1.0 | yes | 18 | 8 bytes | every gap is an instance: nine are floating-point colour coordinates, eight reassemble a ten-bit number, one spells the manufacturer |
 | `efivar_signature_list` | security | CC0-1.0 | yes | 0 | no magic |  |
 | `ethernet_frame` | network | CC0-1.0 | yes | 0 | no magic |  |
@@ -98,9 +98,9 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `mac_os_resource_snd` | macos | MIT | yes | 2 | no magic | two sample-rate instances are floating point |
 | `magicavoxel_vox` | media | MIT | yes | 0 | 4 bytes |  |
 | `mbr_partition_table` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
-| `mcap` | log | Apache-2.0 | yes | 2 | 8 bytes | two instances, one measuring the file and one reading a value worked out later; every record is placed |
+| `mcap` | log | Apache-2.0 | yes | 3 | 8 bytes | three instances: one measures the file, and the footer and its offset each need the other; every record is placed |
 | `microsoft_network_monitor_v2` | network | CC0-1.0 | yes | 0 | 4 bytes |  |
-| `mifare_classic` | hardware | BSD-2-Clause | yes | 7 | no magic | seven instances: access-condition arithmetic and the value-block checks, all of which need bitwise operators |
+| `mifare_classic` | hardware | BSD-2-Clause | yes | 10 | no magic | ten instances: two read inside another field's stream, five need bitwise operators, and three more depend on those |
 | `minecraft_nbt` | game | CC0-1.0 | yes | 0 | no magic |  |
 | `mozilla_mar` | archive | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `msgpack` | serialization | CC0-1.0 | yes | 0 | no magic |  |
@@ -110,8 +110,8 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `pcf_font` | font | CC0-1.0 | yes | 3 | 4 bytes | three instances reading the string table as its own stream; every table is placed |
 | `pcx` | image | CC0-1.0 | import | 0 | no magic | imported by pcx_dcx; Qubero reads a PCX with its own template |
 | `pcx_dcx` | image | CC0-1.0 | yes | 0 | 4 bytes |  |
-| `phar_without_stub` | archive | CC0-1.0 | yes | 4 | no magic | four instances read a decimal count out of text; the manifest and every entry are placed |
-| `php_serialized_value` | serialization | CC0-1.0 | import | 4 | no magic | imported by phar_without_stub; on its own, every string's length is a decimal count read out of text, which a template does only where the field is declared as digits |
+| `phar_without_stub` | archive | CC0-1.0 | yes | 9 | no magic | metadata is read up to its first string, array or object, and the rest is bytes, because their lengths are decimal counts in text; the manifest and every entry are placed |
+| `php_serialized_value` | serialization | CC0-1.0 | import | 9 | no magic | imported by phar_without_stub; on its own, every string's length is a decimal count read out of text, which a template does only where the field is declared as digits |
 | `protocol_body` | network | CC0-1.0 | import | 0 | no magic | a root type with 1 parameter: nothing can open a file as it, and it is here to be imported |
 | `psx_tim` | image | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `python_pyc_27` | executable | CC0-1.0 | yes | 0 | no magic |  |

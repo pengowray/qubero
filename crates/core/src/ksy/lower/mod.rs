@@ -70,6 +70,7 @@ pub fn convert(text: &str, imports: &dyn Imports) -> Result<Converted, KsyError>
 		parents: HashMap::new(),
 		bit_offset: 0,
 		pending: Vec::new(),
+		dropped: Vec::new(),
 		root_name: if root_named { root_name.clone() } else { String::new() },
 		root_wanted: false,
 		in_valid: false,
@@ -205,6 +206,10 @@ struct Lower<'a> {
 	/// Instances of the type being lowered that have not been written out yet.
 	/// A field naming one of these is reading forwards, which the IR cannot do.
 	pending: Vec<String>,
+	/// Instances of the type being lowered that could not be converted. A
+	/// field naming one of these would name a field the template does not
+	/// have, and fail on every file rather than in the report.
+	dropped: Vec<String>,
 	/// The `meta/id` of the file being converted, which is also the name of its
 	/// root type. Empty when a declared type has that name already.
 	root_name: String,
@@ -386,6 +391,7 @@ impl<'a> Lower<'a> {
 		let plan = instance_order(here);
 		let outer_pending = std::mem::take(&mut self.pending);
 		self.pending = here.instances.iter().map(|(n, _)| n.clone()).collect();
+		let outer_dropped = std::mem::take(&mut self.dropped);
 
 		let mut placeable = true;
 		// Kaitai reads bits with a bit position of its own and throws away
@@ -455,6 +461,7 @@ impl<'a> Lower<'a> {
 		self.emit_instances(ctx, here, &plan, here.seq.len(), &mut names, &mut tys, &mut docs);
 
 		self.pending = outer_pending;
+		self.dropped = outer_dropped;
 		let fields: Vec<(&str, Ty)> =
 			names.iter().map(String::as_str).zip(tys.into_iter()).collect();
 		let mut ty = Ty::structure(&struct_name(ir_name, here), fields);
@@ -513,6 +520,7 @@ impl<'a> Lower<'a> {
 						instance_source(instance),
 						format!("{} (the instance is dropped)", gap.reason),
 					);
+					self.dropped.push(name.clone());
 				}
 			}
 		}
@@ -1500,6 +1508,23 @@ impl<'a> Lower<'a> {
 			);
 			Ok(Expr::Lit(be_int(bytes)))
 		};
+		// Past sixteen bytes there is no number to compare, so the field's
+		// own bytes are compared instead.
+		if matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+			let long = |e: &KExpr| match e {
+				KExpr::List(items) => byte_list(items).filter(|b| b.len() > 16),
+				_ => None,
+			};
+			let found = match (long(left), long(right)) {
+				(Some(bytes), None) => Some((bytes, right)),
+				(None, Some(bytes)) => Some((bytes, left)),
+				_ => None,
+			};
+			if let Some((bytes, side)) = found {
+				let same = self.lower_bytes_eq(ctx, path, side, &bytes)?;
+				return Ok(if op == CmpOp::Eq { same } else { same.negate() });
+			}
+		}
 		let l = match literal_bytes(left) {
 			Some(bytes) => note_bytes(self, &bytes, left.to_string())?,
 			None => self.lower_expr(ctx, path, left)?,
@@ -1516,6 +1541,30 @@ impl<'a> Lower<'a> {
 			CmpOp::Gt => l.greater_than(r),
 			CmpOp::GtE => l.greater_or_equal(r),
 		})
+	}
+
+	/// `side == [...]` for a byte array too long to read as a number: the
+	/// field's bytes compared whole. Only for a field whose value is its
+	/// bytes as they stand, since that is what Kaitai compares, and a
+	/// `terminator`, a `pad-right` or a `process` makes the value something
+	/// else.
+	fn lower_bytes_eq(&mut self, ctx: &Ctx<'a>, path: &str, side: &KExpr, bytes: &[u8]) -> Result<Expr, String> {
+		let plain = self.landing(ctx, side, 0).0.is_some_and(|attr| {
+			matches!(attr.ty, TypeRef::Bytes { source: ByteSource::Limit(_) | ByteSource::Eos })
+				&& attr.terminator.is_none()
+				&& attr.pad_right.is_none()
+				&& attr.process.is_none()
+		});
+		let field = if plain { Some(self.lower_expr(ctx, path, side)?) } else { None };
+		match field {
+			Some(field @ (Expr::Ref(_) | Expr::Within(_) | Expr::Elem { .. } | Expr::ElemWithin { .. })) => {
+				Ok(Expr::bytes_eq(field, bytes))
+			}
+			_ => Err(format!(
+				"`{side}` is compared with {} bytes; past 16, only a field of plain bytes can be compared (no `terminator`, `pad-right` or `process`)",
+				bytes.len()
+			)),
+		}
 	}
 
 	/// A method call. Kaitai's expression language has no functions of its own,
@@ -2160,6 +2209,58 @@ types:
 			reasons.iter().any(|r| r.contains("`doubled` is worked out after this field")),
 			"{reasons:?}"
 		);
+	}
+
+	#[test]
+	fn a_byte_array_longer_than_a_number_is_compared_byte_for_byte() {
+		// DICOM's shape: twenty bytes naming a transfer syntax, an instance
+		// comparing them, a second instance naming the first, and a repeat
+		// that is there only when the two say so.
+		let uid = "[49, 46, 50, 46, 56, 52, 48, 46, 49, 48, 48, 48, 56, 46, 49, 46, 50, 46, 49, 0]";
+		let text = format(&format!(
+			"seq:\n  - id: len\n    type: u1\n  - id: uid\n    size: len\n  - id: rest\n    type: u1\n    repeat: eos\n    if: is_explicit\ninstances:\n  p_is_explicit:\n    value: uid == {uid}\n  is_explicit:\n    value: p_is_explicit\n  is_other:\n    value: uid != {uid}\n"
+		));
+		assert!(gaps(&text).is_empty(), "{:?}", gaps(&text));
+		let out = root_of(&text);
+		assert!(out.contains("p_is_explicit: computed uid is \"1.2.840.10008.1.2.1\\0\""), "{out}");
+		assert!(out.contains("is_explicit: computed p_is_explicit"), "{out}");
+		assert!(out.contains("is_other: computed not (uid is \"1.2.840.10008.1.2.1\\0\")"), "{out}");
+
+		// The repeat is read when all twenty bytes match, and not when one
+		// byte differs or the field is one byte short.
+		let read = |bytes: &[u8]| -> (i128, u64) {
+			let template = convert_text(&text).template;
+			let doc = crate::document::Document::new(crate::source::MemSource(bytes.to_vec()));
+			let mut ev = crate::eval::Evaluator::new(template);
+			let count = ev.node(&doc, &[]).unwrap().child_count as usize;
+			let named = |ev: &mut crate::eval::Evaluator, name: &str| {
+				(0..count).map(|i| ev.node(&doc, &[i]).unwrap()).find(|n| n.name == name).unwrap()
+			};
+			(named(&mut ev, "is_explicit").value.as_int().unwrap(), named(&mut ev, "rest").child_count)
+		};
+		let with = |uid: &[u8]| [&[uid.len() as u8], uid, &[7, 8]].concat();
+		assert_eq!(read(&with(b"1.2.840.10008.1.2.1\0")), (1, 2));
+		assert_eq!(read(&with(b"1.2.840.10008.1.2.2\0")), (0, 0));
+		assert_eq!(read(&with(b"1.2.840.10008.1.2.1")), (0, 0));
+
+		// Bytes with padding stripped off are not the bytes in the file, so
+		// they are not compared as if they were.
+		let padded = format(&format!(
+			"seq:\n  - id: uid\n    size: 24\n    pad-right: 0\ninstances:\n  same:\n    value: uid == {uid}\n"
+		));
+		let reasons = gaps(&padded);
+		assert!(reasons.iter().any(|r| r.contains("only a field of plain bytes")), "{reasons:?}");
+	}
+
+	#[test]
+	fn an_instance_that_reads_a_dropped_one_is_dropped_too() {
+		// Left in, `after` would name a field the template does not have,
+		// and every file would fail on it instead of the report saying so.
+		let text = format("seq:\n  - id: a\n    type: u1\ninstances:\n  half:\n    value: 1.5\n  after:\n    value: half + a\n");
+		let reasons = gaps(&text);
+		assert!(reasons.iter().any(|r| r.contains("uses `half`, which could not be converted")), "{reasons:?}");
+		let out = root_of(&text);
+		assert!(!out.contains("half"), "{out}");
 	}
 
 	#[test]

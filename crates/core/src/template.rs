@@ -354,6 +354,23 @@ pub enum Expr {
     /// byte counts five and not eight, and the padding a format leaves at the
     /// end of the last byte cannot inflate the answer.
     PopCount(Arc<str>),
+    /// Whether the field the inner expression lands on holds exactly these
+    /// bytes, length and all: 1 when it does and 0 when it does not.
+    ///
+    /// A field of up to sixteen bytes already reads as one big-endian number,
+    /// and comparing it with a number says the same thing. Past sixteen there
+    /// is no number to compare. A DICOM file says which transfer syntax the
+    /// rest of it is in by writing `1.2.840.10008.1.2.1` and a nought, twenty
+    /// bytes, and how every element after it is read turns on those bytes
+    /// being that.
+    ///
+    /// A field the file did not write holds none of these bytes, so the answer
+    /// there is 0 rather than a failure: a DICOM element with its value left
+    /// out is not the one naming the transfer syntax.
+    ///
+    /// The inner expression lands on a field the way [`Expr::StartOf`]'s does:
+    /// a name, a path, an element of a list, or a search.
+    BytesEq { field: Box<Expr>, bytes: Vec<u8> },
     /// An answer worked out by running the container, for the one shape no
     /// other expression here reaches: a field whose type is decided by
     /// something the format only says by being executed.
@@ -975,6 +992,11 @@ impl Expr {
     /// [`Expr::PopCount`].
     pub fn pop_count(name: &str) -> Expr {
         Expr::PopCount(name.into())
+    }
+    /// Whether the field `field` lands on holds exactly `bytes`. See
+    /// [`Expr::BytesEq`].
+    pub fn bytes_eq(field: Expr, bytes: &[u8]) -> Expr {
+        Expr::BytesEq { field: Box::new(field), bytes: bytes.to_vec() }
     }
     /// How many elements the earlier list field `name` holds. See
     /// [`Expr::LenOf`].

@@ -45,15 +45,12 @@ const KNOWN_FAILURES: &[&str] = &[
     "xls/sheetjs-biff2-single-sheet.xls",
     "xls/sheetjs-biff3-single-sheet.xls",
     "xls/sheetjs-biff4-single-sheet.xls",
-    // A bundled Kaitai template exists for each of these, and does not read
-    // the sample even when chosen by hand, so naming it by extension would
-    // only swap "no template" for an error. `ksy:dicom` stops at the root,
-    // because the converter leaves `p_is_transfer_syntax_change_explicit`
-    // unresolved. `ksy:openpgp_message` has no case for an old-format packet
-    // of indeterminate length, which is what gpg writes for compressed data.
-    // Once either reads, it belongs in `KAITAI_BY_EXTENSION` in
-    // `formats/recognise.rs`: DICOM has `DICM` 128 bytes in to check.
-    "dicom/synthetic-secondary-capture-gray8.dcm",
+    // A bundled Kaitai template exists for this, and does not read the sample
+    // even when chosen by hand, so naming it by extension would only swap "no
+    // template" for an error. `ksy:openpgp_message` has no case for an
+    // old-format packet of indeterminate length, which is what gpg writes for
+    // compressed data. Once it reads, it belongs in `KAITAI_BY_EXTENSION` in
+    // `formats/recognise.rs`.
     "openpgp/gpg-literal-store.gpg",
     // Packet captures. The Kaitai `pcap` was left out of the bundle, because
     // it picks the byte order of the whole file from the magic and the IR has

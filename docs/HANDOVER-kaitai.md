@@ -178,7 +178,7 @@ bit ops 50 / 297, `and`/`or`/`not` 52 / 237, ternary 64 / 234, enum labels
 | `"abcd"` compared with a fixed-size str/bytes field | the bytes as a big-endian literal, with a report note |
 | float, string concatenation, `.to_s`, `.substring`, `.reverse`, f-strings | gap |
 | enum labels `e::l` | the int |
-| byte array literal `[0x00, 0x01]` in a comparison | big-endian int (<= 16 bytes) |
+| byte array literal `[0x00, 0x01]` in a comparison | big-endian int (<= 16 bytes); longer, `==` and `!=` with a plain bytes field become `BytesEq` |
 
 ### IR additions
 

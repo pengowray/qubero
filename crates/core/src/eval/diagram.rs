@@ -742,6 +742,7 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         | Expr::Not(inner)
         | Expr::BitNot(inner)
         | Expr::StartOf(inner)
+        | Expr::BytesEq { field: inner, .. }
         | Expr::RealText(inner)
         | Expr::Words { value: inner, .. }
         | Expr::Pow2(inner)

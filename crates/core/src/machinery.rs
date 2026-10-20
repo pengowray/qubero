@@ -305,6 +305,9 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         // the same way, and a field something is placed from is plumbing the
         // same as one something is sized from.
         Expr::StartOf(a) => expr_refs(a, out),
+        // A field whose bytes are compared whole, which settles what it
+        // settles the way a comparison with a number does.
+        Expr::BytesEq { field, .. } => expr_refs(field, out),
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
         Expr::PeekIn { at, .. } => expr_refs(at, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
