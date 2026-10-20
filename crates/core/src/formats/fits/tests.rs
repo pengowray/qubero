@@ -925,3 +925,82 @@ fn a_six_letter_keyword_takes_two_digits() {
         assert_eq!(worked_out("ZTILE", n), keynum(name), "{name}");
     }
 }
+
+#[test]
+fn a_string_that_closes_in_column_80_reads_to_its_quote() {
+    // Rubin's table headers write column descriptions this long, with the
+    // closing quote in the last column of the card and nothing after it.
+    let full = "TDOC1   = 'Archive ID of the persistable object that owns the records pointed &'";
+    assert_eq!(full.len(), 80);
+    let escaped = "OBJECT  = 'a quote at the very end of a card, written twice as the rule says '''";
+    assert_eq!(escaped.len(), 80);
+    let b = header(&[
+        "SIMPLE  =                    T",
+        "BITPIX  =                    8",
+        "NAXIS   =                    0",
+        full,
+        "TDOC2   = 'one that closes in column 79 with nothing after it, not even a blank'",
+        escaped,
+        "END",
+    ]);
+    let (d, mut ev) = eval(b);
+    let first = text(&ev.node(&d, &[0, 0, 0, 3, 2, 1, 1, 0, 0]).unwrap().value);
+    assert_eq!(first, "Archive ID of the persistable object that owns the records pointed &");
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 3, 2, 2]).unwrap().value), "");
+    assert!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 1, 1, 0, 0]).unwrap().value).ends_with("not even a blank"));
+    // A `''` that ends the card is still an escaped quote, and the string has
+    // no closing quote of its own: the part after it is empty.
+    let parts = ev.node(&d, &[0, 0, 0, 5, 2, 1, 1]).unwrap();
+    assert!(parts.child_count >= 1);
+    assert!(text(&ev.node(&d, &[0, 0, 0, 5, 2, 1, 1, 0, 0]).unwrap().value).ends_with("as the rule says"));
+}
+
+#[test]
+fn a_hierarch_card_reads_as_its_long_keyword_and_its_value() {
+    let b = header(&[
+        "SIMPLE  =                    T",
+        "BITPIX  =                    8",
+        "NAXIS   =                    0",
+        "HIERARCH ARCHIVE_ID_PSF = 3",
+        "HIERARCH STUTTER ROWS =      0 / The number of row shifts per stutter",
+        "HIERARCH LSST CALIB RUN BIAS= 'LSSTCam/calib/DM-53619/biasGen.20&'",
+        "HIERARCH ASTRO METADATA FIX DATE = '2026/01/23' / a slash in the value",
+        "HIERARCH with no equals sign is only text",
+        "END",
+    ]);
+    let (d, mut ev) = eval(b);
+    let card = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 0, 0, i]).unwrap().name.trim_end().to_string();
+    assert_eq!(card(&mut ev, 3), "[3] ARCHIVE_ID_PSF");
+    assert_eq!(card(&mut ev, 4), "[4] STUTTER ROWS");
+    assert_eq!(card(&mut ev, 5), "[5] LSST CALIB RUN BIAS");
+    // The word HIERARCH is still the key a lookup by keyword compares.
+    assert_eq!(ev.node(&d, &[0, 0, 0, 3, 1]).unwrap().value, Value::Str("HIERARCH".into()));
+    // space, name, mark, value, comment
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 3, 2, 3]).unwrap().value), "3");
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 3]).unwrap().value), "0");
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 4]).unwrap().value), "/ The number of row shifts per stutter");
+    // A quoted value has the blanks before its quote as a field of their own.
+    let bias = text(&ev.node(&d, &[0, 0, 0, 5, 2, 4, 1, 0, 0]).unwrap().value);
+    assert_eq!(bias, "LSSTCam/calib/DM-53619/biasGen.20&");
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 6, 2, 4, 1, 0, 0]).unwrap().value), "2026/01/23");
+    assert!(text(&ev.node(&d, &[0, 0, 0, 6, 2, 5]).unwrap().value).starts_with("/ a slash"));
+    // With no `=`, there is no keyword to find and the card is its key.
+    assert_eq!(card(&mut ev, 7), "[7] HIERARCH");
+}
+
+#[test]
+fn a_unit_is_labelled_with_its_extname() {
+    let mut b = primary();
+    b.extend(header(&[
+        "XTENSION= 'IMAGE   '",
+        "BITPIX  =                    8",
+        "NAXIS   =                    0",
+        "PCOUNT  =                    0",
+        "GCOUNT  =                    1",
+        "EXTNAME = 'MASK    '           / plane names are in MP_ cards",
+        "END",
+    ]));
+    let (d, mut ev) = eval(b);
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().name, "[0]");
+    assert_eq!(ev.node(&d, &[0, 1]).unwrap().name.trim_end(), "[1] MASK");
+}

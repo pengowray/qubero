@@ -770,9 +770,15 @@ fn hdu() -> T {
                 ),
             ),
             ("data_pad", T::bytes(E::size_of("data").pad_to(BLOCK).at_most(E::Remaining))),
+            // What the unit is labelled with, so a file of sixteen of them
+            // reads `[1] IMAGE`, `[2] MASK`, `[3] VARIANCE` rather than as
+            // numbers. The primary unit has none as a rule and keeps its
+            // bare index. Last, so that no path to the fields above moves.
+            ("extname", T::computed_text(card_at("EXTNAME", &["body", "value", "parts", "0", "text"]))),
         ],
     )
-    .machinery(&["header_pad", "data_pad"])
+    .machinery(&["header_pad", "data_pad", "extname"])
+    .named_by("extname")
     .counted_as("HDU")
 }
 

@@ -75,9 +75,11 @@ pub(super) fn card() -> T {
 
 /// A card with this body: the keyword, the keyword as a number, and the rest.
 fn card_of(body: T) -> T {
+    // A `HIERARCH` card is named by the keyword after that word, which is
+    // the one in its body; no other body has a `name`.
     T::structure_named(
         "Card",
-        "key",
+        "body.name | key",
         "body",
         vec![
             // The keyword as one number, so that a lookup may work out the
@@ -101,6 +103,7 @@ fn named_body() -> T {
     cases.extend(REAL.iter().map(|k| ((*k).to_string(), real_body())));
     cases.extend(LOGICAL.iter().map(|k| ((*k).to_string(), logical_body())));
     cases.push(("CONTINUE".to_string(), continue_body()));
+    cases.push(("HIERARCH".to_string(), hierarch_body()));
     T::Match { on: E::field("key"), cases: cases.into(), default: std::sync::Arc::new(text_body()) }
 }
 
@@ -243,6 +246,43 @@ fn continue_body() -> T {
     T::switch(E::to_bytes(b"'").less_than(E::Remaining), vec![(1, quoted)], text_body())
 }
 
+/// A `HIERARCH` card: a keyword too long for eight columns, or with spaces in
+/// it, written after the word `HIERARCH` and ended by an `=`.
+///
+/// `HIERARCH ESO DET CHIP1 ID = 'ccd60'` is ESO's convention, which CFITSIO
+/// and astropy both write when a keyword does not fit. Rubin's files hold
+/// dozens, `HIERARCH ARCHIVE_ID_PSF` and `HIERARCH LSST CALIB RUN BIAS` among
+/// them. The keyword runs from after the space to the `=`, and the value and
+/// comment follow it the way they follow the `= ` of any card, except that
+/// the value starts wherever the `=` is rather than in column 11.
+///
+/// A quoted value is told from a plain one by whether a quote comes before
+/// any `/`, since the comment of a number may hold a quote but cannot come
+/// first. A `HIERARCH` card with no `=` in it is left as the text it is.
+fn hierarch_body() -> T {
+    let start = || {
+        vec![
+            ("space", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
+            // Up to the `=`, with the blanks before it: a keyword may have
+            // spaces inside it, so the first blank is not where it ends.
+            ("name", T::text(StrLen::Fixed(E::to_bytes(b"=")), Encoding::Ascii)),
+            ("mark", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
+        ]
+    };
+    let comment = || ("comment", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii));
+    let mut quoted = start();
+    quoted.push(("lead", T::text(StrLen::Fixed(E::to_bytes(b"'")), Encoding::Ascii)));
+    quoted.push(("value", quoted_value()));
+    quoted.push(comment());
+    let quoted = T::structure("Hierarch", quoted).machinery(&["space", "mark", "lead"]).payload(&["value"]);
+    let mut plain = start();
+    plain.push(("value", text_value()));
+    plain.push(comment());
+    let plain = T::structure("Hierarch", plain).machinery(&["space", "mark"]).payload(&["value"]);
+    let valued = T::switch(E::to_bytes(b"'").less_than(E::to_bytes(b"/")), vec![(1, quoted)], plain);
+    T::switch(E::to_bytes(b"=").less_than(E::Remaining), vec![(1, valued)], text_body())
+}
+
 /// The text of a value, up to the comment that may follow it.
 fn text_value() -> T {
     T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)
@@ -273,7 +313,10 @@ fn quoted_value() -> T {
 /// `ended` is the answer to whether this part closed the string, which is what
 /// the list repeats until.
 fn quoted_part() -> T {
-    let escape = T::switch(E::peek(8, Big), vec![(0x27, T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii))], T::bytes(E::lit(0)));
+    // A string whose closing quote is in column 80 has no byte after it to
+    // look at, and a peek there would read past the card.
+    let pair = T::switch(E::peek(8, Big), vec![(0x27, T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii))], T::bytes(E::lit(0)));
+    let escape = T::switch(E::Remaining.less_than(E::lit(1)), vec![(1, T::bytes(E::lit(0)))], pair);
     T::inline_structure(
         "Part",
         vec![
