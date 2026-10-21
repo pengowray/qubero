@@ -1435,6 +1435,10 @@ mod tests {
         let id = e.open_space(&d, 0, &[1]).unwrap().expect("opens a part at a time");
         let space = e.space(id).unwrap();
         let SpaceSource::Joined(_) = space.source() else { panic!("held whole") };
+        // The first block is past the cap a part may be decoded whole at, so
+        // it is read through an index of its run.
+        let first = &space.runs()[0];
+        assert!(e.spaces.indexed((first.run_space, first.run_offset_bits, first.run_bits), crate::codec::Codec::Deflate).is_some());
         let mut got = vec![0u8; text.len()];
         assert!(space.source().read(0, &mut got));
         assert_eq!(got, text);

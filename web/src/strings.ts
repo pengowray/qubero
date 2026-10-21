@@ -33,6 +33,9 @@ export const DECODED_INSIDE = "in the unpacked stream";
 /** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
 export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   "too-large": "too large to unpack (over 64 MiB)",
+  /** A deflate, zlib or gzip run, which is read a piece at a time and so may
+   *  unpack to more than 64 MiB, up to this. */
+  "too-large-lazy": "too large to unpack (over 1 GiB)",
   failed: "unpacking failed",
   unaligned: "not on a byte boundary",
   /**
@@ -454,13 +457,14 @@ export const JOINED = {
    *  packed. The hover is `UNPACKED.openTitle`, which is true of both. */
   open: "Open joined stream",
   /**
-   * Where that button would be, for a joined stream longer than a tab may
-   * hold. It still reads a part at a time where it is declared, so this is
-   * not a reason on its node the way `DECODED_REFUSED` is. The same shape as
-   * `DECODED_REFUSED`'s `too-large`, without `unpack`, and capitalised because
-   * it stands on its own line rather than after a ` · `.
+   * In the status bar, when Open joined stream was pressed and the core
+   * refused because the stream's parts take up more than 64 MiB of the file:
+   * the tab keeps a copy of every part as the file has it, packed or not.
+   * The stream still reads a part at a time where it is declared, so this is
+   * not a reason on its node the way `DECODED_REFUSED` is. `tab` is the title
+   * the tab would have had, as in `failed`.
    */
-  tooLarge: "Too large to open as a document of its own (over 64 MiB)",
+  tooLarge: (tab: string): string => `Couldn't open ${tab}: its parts take up over 64 MiB in the file.`,
   /**
    * In the status bar, when Open joined stream was pressed and joining the
    * whole stream failed: a part would not read, would not unpack, or unpacked

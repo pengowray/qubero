@@ -106,25 +106,16 @@ struct Sheet {
 impl Sheet {
     /// A reading of one of the core's spaces.
     ///
-    /// The bytes are all here already, so the store keeps every chunk: a space
-    /// has no file behind it to fetch a missing one back from. The template is
-    /// the one the core settled on, which is the stream's own or, where that
-    /// said only bytes, whatever the unpacked bytes were recognised as. Only
-    /// the second is read here; the first is read in the file's reading.
+    /// The store reads the space's own source, so nothing is missing and
+    /// nothing is copied: a space has no file behind it to fetch a missing
+    /// chunk back from, and a stream too large to hold whole is decoded a
+    /// piece at a time as it is read. The template is the one the core
+    /// settled on, which is the stream's own or, where that said only bytes,
+    /// whatever the unpacked bytes were recognised as. Only the second is read
+    /// here; the first is read in the file's reading.
     fn from_space(space: &qubero_core::eval::Space, home: usize, origin: Vec<usize>) -> Sheet {
         let template = space.read_as().clone();
-        let bytes = space.bytes();
-        let n = bytes.len() as u64;
-        let chunks = (n / SPACE_CHUNK + 1) as usize;
-        let mut store = ChunkStore::new(n, SPACE_CHUNK, chunks);
-        for c in 0..chunks as u64 {
-            let from = (c * SPACE_CHUNK) as usize;
-            if from >= bytes.len() {
-                break;
-            }
-            let to = bytes.len().min(from + SPACE_CHUNK as usize);
-            store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
-        }
+        let store = ChunkStore::behind(Box::new(space.source().clone()), SPACE_CHUNK);
         let mut sheet = Sheet::new(store, origin);
         sheet.home = home;
         sheet.core_space = space.id;
@@ -3604,9 +3595,9 @@ fn hex_trouble(text: &str) -> &'static str {
 /// last go left off rather than starting over.
 const WORK_SLICE: u64 = 5_000;
 
-/// Chunk size of a space's store. The bytes are already in memory, so this only
-/// decides how they are cut up; it matches the file's so the host's chunk
-/// arithmetic is the same on both sides.
+/// Chunk size of a space's store. Nothing is fetched in chunks for a space, so
+/// this only decides what a chunk number means; it matches the file's so the
+/// host's chunk arithmetic is the same on both sides.
 const SPACE_CHUNK: u64 = 64 * 1024;
 
 /// What `open_space` came to: the space, or why it would not open.
@@ -4078,19 +4069,23 @@ impl Editor {
         // Which step, and whether this is a codec with symbols at all. Both
         // come off the trace, so a question with no answer is answered before
         // any of the run is read.
-        let (index, want_bytes) = {
+        // The trace that names the bit: the whole run's, or for a run too
+        // large to hold whole, the span's that read it. Kept across the read
+        // of the run below, since a span's trace is made when asked for.
+        let (trace, index, want_bytes) = {
             let Some(e) = &self.sheets[home].eval else { return none() };
             let Some(sp) = e.space(core) else { return none() };
             if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
                 return none();
             }
-            let trace = sp.trace();
+            let Some(trace) = sp.trace_at_bit(bit as u64) else { return none() };
             let Some(index) = trace.index_in(bit as u64) else { return none() };
             let Some(step) = trace.step(index) else { return none() };
             // As much of the run as the step reaches, and no more. Bit
             // positions count from the front of the run, so a prefix ending
             // after the step is all the walk can touch.
-            (index, step.in_bits.end.div_ceil(8))
+            let want = step.in_bits.end.div_ceil(8);
+            (trace, index, want)
         };
         // The compressed bytes, which the space does not hold: what it holds is
         // what came out. They are a field of the reading that opened the
@@ -4104,9 +4099,7 @@ impl Editor {
             Ok((bytes, _)) => bytes,
             Err(err) => return reply::<Option<DecodedStepDto>>(Err(err)),
         };
-        let Some(e) = &self.sheets[home].eval else { return none() };
-        let Some(sp) = e.space(core) else { return none() };
-        reply(Ok(inflate::decode_step(&run, sp.trace(), index).map(decoded_step_dto)))
+        reply(Ok(inflate::decode_step(&run, &trace, index).map(decoded_step_dto)))
     }
 
     /// The `Decoded` node a space was unpacked from, as a path in the reading

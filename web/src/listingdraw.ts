@@ -26,7 +26,6 @@ import { tablePlan } from "./tableplan.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { JOINED_WHOLE_CAP_BITS } from "./joinedpart.ts";
 import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
@@ -540,11 +539,6 @@ function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: Template
     return;
   }
   if (!n.space_root || item.path.length === 0) return;
-  // A stream joined from several runs is held whole to be a document of its
-  // own, which the core does up to the cap an unpacked run has and refuses
-  // past it. The listing still reads a longer one a part at a time, so only
-  // the button goes.
-  if (n.joined && n.size_bits > JOINED_WHOLE_CAP_BITS) return;
   const stream = item.path.slice(0, -1);
   if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name, n.joined));
 }

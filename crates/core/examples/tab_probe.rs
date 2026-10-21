@@ -104,7 +104,9 @@ fn sweep() {
             let got = match (fresh, space.view().cloned()) {
                 (false, Some(View { reading: 0, root })) => read_tab(&mut Tab::new(&mut ev, &doc, root)),
                 _ => {
-                    let tab_doc = Document::new(MemSource(space.bytes().to_vec()));
+                    let mut held = vec![0u8; space.len_bytes() as usize];
+                    space.source().read(0, &mut held);
+                    let tab_doc = Document::new(MemSource(held));
                     let mut tab = Evaluator::new(space.read_as().clone());
                     read_tab(&mut Tab::new(&mut tab, &tab_doc, Vec::new()))
                 }
@@ -154,8 +156,7 @@ fn read_tab<S: Source>(tab: &mut Tab<'_, S>) -> Result<(), (bool, EvalError)> {
 }
 
 /// Every stream under `path` that the listing offers to open, as the path of
-/// the stream and the name of the row the offer hangs on. A joined stream too
-/// long to hold whole is not offered, as the listing does not offer it.
+/// the stream and the name of the row the offer hangs on.
 fn find_streams(
     ev: &mut Evaluator,
     doc: &Document<MemSource>,
@@ -169,7 +170,7 @@ fn find_streams(
     }
     *budget -= 1;
     let Ok(node) = ev.node(doc, path) else { return };
-    if node.space_root && !path.is_empty() && !(node.joined && node.size_bits > qubero_core::codec::CAP_BYTES as u64 * 8) {
+    if node.space_root && !path.is_empty() {
         out.push((path[..path.len() - 1].to_vec(), node.name.clone()));
     }
     let count = node.child_count as usize;

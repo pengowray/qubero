@@ -71,6 +71,11 @@ struct Cached {
 
 /// Fixed-size chunk cache fed from outside (the JS host reads the File/Blob and
 /// pushes chunks in). Beyond `capacity`, the chunk read longest ago goes.
+///
+/// Or, for a store with a source behind it, nothing is fed in and nothing is
+/// missing: a read goes to that source. What the interface opens an unpacked
+/// stream's tab over, so the stream's bytes are not copied into a second
+/// buffer, and a stream read a piece at a time is read a piece at a time.
 pub struct ChunkStore {
     len: u64,
     chunk_size: u64,
@@ -78,20 +83,32 @@ pub struct ChunkStore {
     chunks: HashMap<u64, Cached>,
     /// Counts reads, so "longest ago" has something to compare.
     clock: Cell<u64>,
+    behind: Option<Box<dyn Source>>,
 }
 
 impl ChunkStore {
     pub fn new(len: u64, chunk_size: u64, capacity: usize) -> Self {
         assert!(chunk_size > 0);
-        Self { len, chunk_size, capacity, chunks: HashMap::new(), clock: Cell::new(0) }
+        Self { len, chunk_size, capacity, chunks: HashMap::new(), clock: Cell::new(0), behind: None }
+    }
+
+    /// A store that reads everything from `source`, and so never says a chunk
+    /// is missing. `chunk_size` is only what a caller counting in chunks
+    /// counts in.
+    pub fn behind(source: Box<dyn Source>, chunk_size: u64) -> Self {
+        let mut store = ChunkStore::new(source.len_bytes(), chunk_size, 0);
+        store.behind = Some(source);
+        store
     }
 
     pub fn chunk_size(&self) -> u64 {
         self.chunk_size
     }
 
+    /// Whether a read of `chunk` would find it. Always, for a store with a
+    /// source behind it.
     pub fn has(&self, chunk: u64) -> bool {
-        self.chunks.contains_key(&chunk)
+        self.behind.is_some() || self.chunks.contains_key(&chunk)
     }
 
     pub fn insert(&mut self, chunk: u64, data: Box<[u8]>) {
@@ -118,6 +135,9 @@ impl Source for ChunkStore {
     }
 
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        if let Some(source) = &self.behind {
+            return source.read_bytes(offset, out);
+        }
         let mut missing = Vec::new();
         let mut pos = 0usize;
         let end = offset + out.len() as u64;

@@ -4,6 +4,11 @@ Written 2026-10-21. How a compressed run whose output is larger than
 `codec::CAP_BYTES` (64 MiB) opens, with only the part being read decoded.
 Deflate, zlib and gzip first; the other codecs are covered at the end.
 
+**State, 2026-10-21:** built as described below, on branch
+`nonhuman/sweet-solomon-104c5d`, in `codec/lazy.rs`, `eval/space.rs`,
+`eval/stitch.rs` and the wasm crate. "Still to do" at the end lists what is
+left.
+
 ## The problem
 
 Every codec in `codec.rs` decodes a run whole into one `Vec<u8>` and refuses
@@ -113,21 +118,34 @@ the decision is made during the decode, in one walk:
    `Vec` is about 3% of the work).
 2. If the stream ends at or under 64 MiB: drop the checkpoints and return the
    bytes and the trace, exactly what `decode_traced` returns today.
-3. If the output passes 64 MiB: keep the checkpoints, drop the `Vec` except its
-   last 32 KiB, turn the trace off, and carry on with a sliding 64 KiB window,
-   recording checkpoints. CRC-32 and Adler-32 of the output are computed as it
-   leaves the window.
+3. If the output passes 64 MiB, the decoder refuses as it does today. Keep the
+   checkpoints, take the CRC-32 and Adler-32 of the output up to the last
+   checkpoint, drop the `Vec` and the trace, and decode again from the last
+   checkpoint with the trace off, keeping only the last 32 KiB of output and
+   recording checkpoints. The checksums are brought up to date as output
+   leaves the window. Starting again costs at most one spacing of output
+   decoded twice.
 4. At the end, check the gzip or zlib trailer as today, and return an index:
    the compressed run, the checkpoints, the output length, both checksums, and
    where the deflate data starts and ends inside the run.
+
+The peak memory of the pass is the first decode's: up to 64 MiB of output
+and its trace, which is what decoding a run at the cap costs today.
 
 Past `LAZY_CAP_BYTES` the walk stops and the run is refused with a new
 refusal, `Refusal::TooLargeLazy` (tag `too-large-lazy`), so the interface can
 say "over 1 GiB" instead of "over 64 MiB".
 
 When the checkpoint count passes `MAX_CHECKPOINTS`, every second checkpoint is
-dropped and the spacing doubles. A 75 MB run keeps 72 checkpoints at 1 MiB
-(2.3 MiB of windows); a 1 GiB run keeps 256 at 4 MiB.
+dropped and the spacing doubles. A 75 MB run keeps about 72 checkpoints at
+1 MiB (2.3 MiB of windows); a 1 GiB run keeps 256 at 4 MiB.
+
+Measured in a release build, native:
+
+| Run | Packed | Unpacked | Index pass | Spans | Windows | Notes |
+|---|---|---|---|---|---|---|
+| The Rubin raw | 94,940 B | 75,677,760 B | 0.38 s | 73 | 2.3 MiB | |
+| Generated CSV-like text | 18.3 MB | 500 MB | 2.1 s | 239 | 7.8 MiB | 50 random 64 KiB reads: 0.2 s. Reading all 500 MB in 1 MiB reads: 0.97 s. Peak RSS 117 MB. |
 
 `inflate_len`, which sizes a gzip member's deflate run in the listing, stays
 at 64 MiB. Past that the template's fallback (everything before the trailer)
@@ -224,6 +242,8 @@ cache, `read(at, out)`, `map_out(byte)`, `map_in(bit)`, `trace_near(bit)`,
 rest.
 
 **`Spaces` (`eval/space.rs`).** A third backing, `Backing::Lazy(Arc<Seekable>)`.
+`Spaces::set_lazy_limits` (tests only) makes the limits small, as
+`set_whole_cap` does for joined streams.
 `len_bits` answers from the index; `buf` and `trace` answer `None`; a new
 `lazy(space)` hands out the `Seekable`. `Evaluator::read_in` gets a third arm
 beside the stitched one. Indexes are also kept in a small registry keyed by
@@ -241,9 +261,9 @@ reads through the registry's `Seekable` for that part's run instead of
 `unpacked_part`.
 
 `join_whole`, for a stream past `whole_cap`, builds a joined document read a
-piece at a time, when everything it reads from fits in 64 MiB of memory: each
-stored part's bytes and each packed part's compressed run are read once and
-kept. A packed part under 64 MiB is decoded whole on first read and kept in a
+piece at a time, when everything it reads from fits under `whole_cap` too
+(64 MiB): each stored part's bytes and each packed part's compressed run are
+read once and kept. A packed part under 64 MiB is decoded whole on first read and kept in a
 cache bounded like `PartCache`; a larger one is read through its `Seekable`.
 Past that input limit the joined stream is refused as a document as it is
 today, and still reads a part at a time in the listing. A BAM larger than
@@ -253,11 +273,15 @@ to 1 GiB is not.
 **`Space` (the document of its own).** Its document becomes
 `Document<SpaceSource>`, where `SpaceSource` is an enum of `Whole(Arc<Vec<u8>>)`,
 `Lazy(Arc<Seekable>)` and `Joined(Arc<Joined>)`, all implementing `Source`
-and never reporting a missing chunk. `Space::bytes() -> &[u8]` is replaced by
-`Space::source()` and `Space::read(at, out)`. `template_for` sniffs the first
+and never reporting a missing chunk. `Space::source()` gives it, and
+`Space::held()` gives the buffer of a space held whole. `Space::bytes()`
+stays, for tests and callers that know the space is held whole, and panics
+otherwise; no code outside tests calls it. `template_for` sniffs the first
 36 KiB through `read`. `map_out` and `map_in` go to the `Seekable` or the
-joined parts when there is no whole trace, and a new `trace_near(bit)` gives
-`decode_step` the trace that holds a bit: the whole trace, or a span's.
+joined parts when there is no whole trace, and `Space::trace_at_bit(bit)`
+gives the wasm crate's `decode_step` the trace that holds a bit: the whole
+trace, or a span's. A joined document's codec is `Stored`, so `decode_step`
+answers nothing for one, as before.
 
 **`ChunkStore` (`source.rs`).** Gains an optional source behind it. A chunk it
 does not hold is read from that source instead of reported missing, and
@@ -280,12 +304,20 @@ past 64 MiB except a PyTorch storage, which `pickletorch.rs` reads through
 `buf`; each caller gets either a `read` through `read_in` or a refusal that
 names the size, never "this stream is no longer open".
 
+**The web interface.** The listing and the inspector used to offer Open
+joined stream only for a joined stream under 64 MiB (`JOINED_WHOLE_CAP_BITS`
+in `joinedpart.ts`, and the same test in the `tab_probe` example). Whether
+one opens now depends on how much of the file its parts take up, which only
+the core knows, so every joined stream is offered and a refusal is said in the
+status bar when the button is pressed. `DECODED_REFUSED` has a string for
+`too-large-lazy`.
+
 ## The browser
 
 The index pass runs inside `open_space`, which the wasm crate runs with no
-work slice (`open_in`), on the main thread. Measured native: the test file in
-about 0.2 s; 60 MB of text-like data in 0.8 s. A 400 MB text-like stream would
-block for several seconds, longer in wasm.
+work slice (`open_in`), on the main thread. Measured native (see the table
+above): the test file in 0.38 s, 500 MB of text-like data in 2.1 s, longer in
+wasm.
 
 The compressed run is still read into memory whole, and in the browser the
 file's chunk cache holds 512 chunks of 64 KiB (`CHUNK_CAPACITY` in `doc.ts`),
@@ -309,6 +341,17 @@ the tab. That is v2.
 | bzip2 | Blocks are independent and at most 900 kB of output, but start at any bit, found by the 48-bit block magic. | Restartable in principle. `bzip2-rs` decodes a whole stream only, so it needs a block decoder of our own or a way to hand the crate one block. |
 | LZ4 frame | Independent blocks when the descriptor says so; linked blocks need 64 KiB of history. | Same shape as deflate with a 64 KiB window, and our own decoder. Later. |
 | LZMA, lzip, RAR 5, LHA, Brotli, the rest | The dictionary or the context model is the state, and it is large or not exposed. | Stay whole. |
+
+## Still to do
+
+- Run the index pass in slices with progress on the tab (see "The browser").
+- A `blocks` listing for a run read a piece at a time, from block positions
+  the index pass could record.
+- The other codecs, in the order of the table above.
+- A test of a joined stream mixing stored and packed parts past the cap: the
+  stored parts' path in `Joined` (`JoinedBytes::Held`) has no test of its own.
+- A joined stream with a part past 1 GiB is refused as failed rather than as
+  too large, since the part's own refusal is not carried through.
 
 ## Tests
 
