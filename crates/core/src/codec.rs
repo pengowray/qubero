@@ -11,8 +11,10 @@
 //! fields declared over it count from its own start. See
 //! [`Ty::Decoded`](crate::template::Ty::Decoded).
 //!
-//! Every decoder here is pure Rust and builds for wasm32. Nothing streams: a
-//! stream is opened whole or not at all, which is why there is a cap.
+//! Every decoder here is pure Rust and builds for wasm32. A stream is opened
+//! whole or not at all, which is why there is a cap, with one exception:
+//! deflate, zlib and gzip past the cap are indexed and read a piece at a
+//! time, up to a larger limit. See [`lazy`].
 
 pub mod bzip2;
 pub mod cfb;

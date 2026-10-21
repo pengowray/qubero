@@ -15,7 +15,9 @@
 //! Opening one is refused rather than attempted when the run is past the cap
 //! or does not start on a byte, and refused after the fact when the decoder
 //! will not read it. All three read as the bytes that are there, with the node
-//! saying which happened; see [`crate::codec::Refusal`].
+//! saying which happened; see [`crate::codec::Refusal`]. A deflate, zlib or
+//! gzip run whose output is past the cap is the exception: it is indexed
+//! instead, up to a larger limit.
 //!
 //! A [`Ty::Stitched`](crate::template::Ty::Stitched) field opens a space too,
 //! and that one is not a buffer: it is a table of the parts it is joined from,
@@ -74,13 +76,15 @@ pub(crate) enum Opened {
 /// bytes were recognised, a gzip of a tar, is read by a template that needs
 /// nothing outside it, and has a reading of its own. See [`View`].
 ///
-/// A stream joined from several runs opens as one of these too, when it is
-/// small enough to hold whole. Its trace is every part's laid end to end, with
+/// A stream joined from several runs opens as one of these too. When it is
+/// small enough to hold whole, its trace is every part's laid end to end, with
 /// each part's bits counted along an axis of the trace's own rather than at
 /// any place in a file, since the runs are scattered and a PDB's run 3 can be
 /// before its run 1. `runs` says where each part's run really is, and the two
 /// maps answer through it: a step is given in bits of its own part's run, as a
-/// step of a stream unpacked from one run is.
+/// step of a stream unpacked from one run is. Too large to hold whole, it is
+/// read a part at a time through a [`Joined`], which keeps no trace laid end
+/// to end and asks each part for its own steps.
 pub struct Space {
     /// This space's own number, which is what everything outside calls it by.
     pub id: SpaceId,
