@@ -129,10 +129,11 @@ When the checkpoint count passes `MAX_CHECKPOINTS`, every second checkpoint is
 dropped and the spacing doubles. A 75 MB run keeps 72 checkpoints at 1 MiB
 (2.3 MiB of windows); a 1 GiB run keeps 256 at 4 MiB.
 
-`inflate_len`, which only needs to know where the stream stops, uses the same
-walk with the window sink and no checkpoints, up to `LAZY_CAP_BYTES`. For the
-test file it then finds the real end of the stream instead of refusing and
-falling back.
+`inflate_len`, which sizes a gzip member's deflate run in the listing, stays
+at 64 MiB. Past that the template's fallback (everything before the trailer)
+is right for a file of one member, which the test file is. Raising it would
+make a hostile file cost the full 1 GiB walk once to size the member and again
+to index it.
 
 ### One decoder
 
@@ -187,15 +188,23 @@ span when asked, and keeps the most recent one:
 - Span 0 of a gzip or zlib run starts with the wrapper header step, and the
   last span ends with the padding and the wrapper trailer step, as
   `inflate::zlib` and `inflate::gzip` push them today.
-- Positions in a span trace count from the byte of the run the span starts in
-  and from the span's first output byte. `Space::map_out` and `Space::map_in`
-  add the span's offsets back, the way `in_run` already shifts a joined
-  stream's steps. `decode_step` is handed the run from that byte onwards, so
-  it works unchanged.
+- Positions in a span trace are the same as in a whole trace: bits from the
+  start of the run and bytes from the start of the output. Both fit the `u32`
+  a `RawStep` keeps, since the run is at most 64 MiB (2^29 bits) and the
+  output at most 1 GiB. So `map_out`, `map_in` and `decode_step` need no
+  shifting. `Trace` gains the bit and byte its first step starts at (zero for
+  a whole trace), and `check_tiles` counts from there.
 
 A bit of the compressed run belongs to the span whose checkpoint bit range
-holds it. A bit inside the header of a block that a later checkpoint is in is
-answered by the earlier span, whose trace names it.
+holds it, `[checkpoint k, checkpoint k+1)`, and never to a span whose trace
+only reaches back over it to read a block header. So a bit inside the header
+or the gap step of span k's first block is answered by span k-1, whose trace
+names it as a code.
+
+Checkpoint 0 is the start of the deflate data, with an empty window, and is
+never dropped when the checkpoints are thinned. Checkpoints are taken only at
+the start of a block and between two codes of a Huffman-coded block, never
+inside a block header, its tables or a stored block.
 
 The `blocks` child that `traced.rs` lays over a compressed run needs the whole
 trace and is not offered for these runs. A list of blocks without their codes
@@ -218,9 +227,10 @@ rest.
 `len_bits` answers from the index; `buf` and `trace` answer `None`; a new
 `lazy(space)` hands out the `Seekable`. `Evaluator::read_in` gets a third arm
 beside the stitched one. Indexes are also kept in a small registry keyed by
-where the run is (space, bit offset, bits, codec), holding the four most
-recently used, so the member's `Decoded` node, the stitched part over the same
-run and the tab all share one index.
+where the run is (space, bit offset, bits, codec), so the member's `Decoded`
+node, the stitched part over the same run and the tab all share one index. The
+registry holds at most 64 MiB of compressed runs in total and drops the index
+used longest ago to make room.
 
 **`open_space_at`.** Calls `decode_or_index`; a `Seekable` becomes
 `Backing::Lazy` instead of a refusal.
@@ -277,7 +287,13 @@ work slice (`open_in`), on the main thread. Measured native: the test file in
 about 0.2 s; 60 MB of text-like data in 0.8 s. A 400 MB text-like stream would
 block for several seconds, longer in wasm.
 
-v1 accepts that. The fix is cheap on the codec side because the walk can
+The compressed run is still read into memory whole, and in the browser the
+file's chunk cache holds 512 chunks of 64 KiB (`CHUNK_CAPACITY` in `doc.ts`),
+so a run larger than 32 MiB compressed cannot be read in one go there even
+under `CAP_BYTES`. Reading the compressed side a piece at a time as well is
+separate work.
+
+v1 accepts the blocking. The fix is cheap on the codec side because the walk can
 restart from its last checkpoint: an index pass can stop at any checkpoint and
 carry on later. What is left is the plumbing: keep the half-built index in
 `Spaces`, charge the walk to the evaluator's work budget so it returns
