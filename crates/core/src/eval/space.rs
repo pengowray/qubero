@@ -30,9 +30,9 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::codec::lazy::{Limits, Seekable};
-use crate::codec::{Codec, Refusal, Step, Trace};
+use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
-use crate::source::ArcSource;
+use crate::source::{Missing, Source};
 use crate::template::Template;
 
 /// Which address space something is a bit of. 0 is the file.
@@ -99,9 +99,12 @@ pub struct Space {
     /// than from what the stream's own template declared. A gzip of a tar
     /// opens as a tar, and this is what says so.
     pub recognised: bool,
-    doc: Document<ArcSource>,
+    doc: Document<SpaceSource>,
     reading: Reading,
-    trace: Trace,
+    /// The trace of the whole decoding, for a stream held whole. Empty for
+    /// one read a piece at a time, whose traces are made a span at a time:
+    /// see [`Space::trace_at_bit`].
+    trace: Arc<Trace>,
     /// For a joined stream, where each part's run is, in the order the parts
     /// go. Empty for a stream unpacked from one run.
     runs: Vec<JoinedRun>,
@@ -181,7 +184,7 @@ impl Space {
         parent: SpaceId,
         path: Vec<usize>,
         codec: Codec,
-        bytes: Arc<Vec<u8>>,
+        source: SpaceSource,
         trace: Trace,
         runs: Vec<JoinedRun>,
         run: Option<SingleRun>,
@@ -195,28 +198,63 @@ impl Space {
             codec,
             template: template.name.clone(),
             recognised: view.is_none(),
-            doc: Document::new(ArcSource(bytes)),
+            doc: Document::new(source),
             reading: match view {
                 None => Reading::Own(Box::new(super::Evaluator::new(template))),
                 Some(view) => Reading::Declared { template, view },
             },
-            trace,
+            trace: Arc::new(trace),
             runs,
             run,
         }
     }
 
-    /// The bytes this space holds.
+    /// What this space's bytes are read from: a buffer, or a run read a
+    /// piece at a time. Cloning it is cheap, and a clone reads the same
+    /// bytes through the same caches.
+    pub fn source(&self) -> &SpaceSource {
+        self.doc.source()
+    }
+
+    /// The bytes this space holds, when it holds them all. Nothing for a
+    /// stream read a piece at a time: see [`Space::source`].
+    pub fn held(&self) -> Option<&[u8]> {
+        match self.doc.source() {
+            SpaceSource::Whole(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The bytes this space holds, for a space known to be held whole.
+    ///
+    /// # Panics
+    ///
+    /// For a stream read a piece at a time. Code that does not know which it
+    /// has asks [`Space::held`] or reads through [`Space::source`].
     pub fn bytes(&self) -> &[u8] {
-        &self.doc.source().0
+        self.held().expect("a space held whole")
     }
 
     pub fn len_bytes(&self) -> u64 {
         self.doc.len_bytes()
     }
 
+    /// The trace of the whole decoding. Empty for a stream read a piece at a
+    /// time, which keeps none: see [`Space::trace_at_bit`].
     pub fn trace(&self) -> &Trace {
         &self.trace
+    }
+
+    /// The trace that names bit `bit` of the run this space was unpacked
+    /// from, counted from the run's start: the whole trace for a stream held
+    /// whole, and for one read a piece at a time, the trace of the span that
+    /// read that bit. Its steps count from the run's start either way, so
+    /// [`crate::codec::inflate::decode_step`] reads them against the run.
+    pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
+        match self.doc.source() {
+            SpaceSource::Lazy(index) => index.trace_at_bit(bit),
+            _ => Some(self.trace.clone()),
+        }
     }
 
     /// Which step of the decoding produced a byte of this space, with its bits
@@ -230,6 +268,11 @@ impl Space {
     /// says where the block's deflate is. A byte of a stored part is the one
     /// step over that part's bytes.
     pub fn map_out(&self, byte: u64) -> Option<Step> {
+        match self.doc.source() {
+            SpaceSource::Lazy(index) => return index.map_out(byte),
+            SpaceSource::Joined(joined) => return joined.map_out(byte),
+            SpaceSource::Whole(_) => {}
+        }
         let step = self.trace.map_out(byte)?;
         if self.runs.is_empty() {
             return Some(step);
@@ -254,9 +297,16 @@ impl Space {
         if self.runs.is_empty() {
             let run = self.run?;
             let in_run = bit.checked_sub(run.run_offset_bits).filter(|&at| at < run.run_bits)?;
-            return self.trace.map_in(in_run);
+            return match self.doc.source() {
+                SpaceSource::Lazy(index) => index.map_in(in_run),
+                _ => self.trace.map_in(in_run),
+            };
         }
         let run = self.run_holding(bit)?;
+        if let SpaceSource::Joined(joined) = self.doc.source() {
+            let i = self.runs.iter().position(|r| std::ptr::eq(r, run))?;
+            return joined.map_in(i, bit - run.run_offset_bits);
+        }
         Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
     }
 
@@ -295,7 +345,7 @@ impl Space {
     /// one is no use without the other. Nothing for a stream read where it was
     /// declared, which has none: see [`Space::view`] and
     /// [`Evaluator::tab_node`](super::Evaluator::tab_node).
-    pub fn reading(&mut self) -> Option<(&mut super::Evaluator, &Document<ArcSource>)> {
+    pub fn reading(&mut self) -> Option<(&mut super::Evaluator, &Document<SpaceSource>)> {
         match &mut self.reading {
             Reading::Own(ev) => Some((ev, &self.doc)),
             Reading::Declared { .. } => None,
@@ -319,6 +369,195 @@ impl Space {
             Reading::Own(ev) => ev.template(),
             Reading::Declared { template, .. } => template,
         }
+    }
+}
+
+/// What the document of a space opened as a tab of its own reads its bytes
+/// from.
+///
+/// Never reports a chunk missing: every byte is either held or decoded when
+/// it is read. A read the decoder fails on, which a run that indexed cleanly
+/// should never give, reads as zeroes.
+#[derive(Clone)]
+pub enum SpaceSource {
+    /// Every byte, held.
+    Whole(Arc<Vec<u8>>),
+    /// One run too large to hold whole, read through its index.
+    Lazy(Arc<Seekable>),
+    /// A stream joined from parts and too large to hold whole, read a part at
+    /// a time.
+    Joined(Arc<Joined>),
+}
+
+impl SpaceSource {
+    /// Bytes `at..at + out.len()`. False when they could not be read, which
+    /// leaves `out` as zeroes.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> bool {
+        let ok = match self {
+            SpaceSource::Whole(bytes) => match bytes.get(at as usize..at as usize + out.len()) {
+                Some(have) => {
+                    out.copy_from_slice(have);
+                    true
+                }
+                None => false,
+            },
+            SpaceSource::Lazy(index) => index.read(at, out).is_ok(),
+            SpaceSource::Joined(joined) => joined.read(at, out).is_ok(),
+        };
+        if !ok {
+            out.fill(0);
+        }
+        ok
+    }
+}
+
+impl Source for SpaceSource {
+    fn len_bytes(&self) -> u64 {
+        match self {
+            SpaceSource::Whole(bytes) => bytes.len() as u64,
+            SpaceSource::Lazy(index) => index.len(),
+            SpaceSource::Joined(joined) => joined.len,
+        }
+    }
+
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        self.read(offset, out);
+        Vec::new()
+    }
+}
+
+/// A stream joined from parts, too large to hold whole, read a part at a
+/// time. What [`SpaceSource::Joined`] reads.
+///
+/// Everything it is read from is held here, so it needs nothing of the file
+/// once it is made: the bytes of each stored part, and the compressed run of
+/// each packed one. A packed part small enough to decode whole is decoded when
+/// it is read and kept in a cache like a stitched space's; a larger one is
+/// read through its index.
+pub struct Joined {
+    parts: Vec<(std::ops::Range<u64>, JoinedBytes)>,
+    len: u64,
+    cache: std::sync::Mutex<PartCache>,
+    /// The trace of the packed part asked about most recently, which is
+    /// decoded again to make it.
+    traced: std::sync::Mutex<Option<(usize, Arc<Trace>)>>,
+}
+
+/// Where one part of a [`Joined`] stream's bytes come from.
+pub(super) enum JoinedBytes {
+    /// A part stored as it is, copied out of the file.
+    Held(Arc<Vec<u8>>),
+    /// A part small enough to decode whole: its compressed run.
+    Packed { run: Arc<Vec<u8>>, codec: Codec },
+    /// A part too large to decode whole.
+    Indexed(Arc<Seekable>),
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Joined {
+    pub(super) fn new(parts: Vec<(std::ops::Range<u64>, JoinedBytes)>, len: u64, cache: usize) -> Joined {
+        Joined { parts, len, cache: std::sync::Mutex::new(PartCache::new(cache)), traced: std::sync::Mutex::new(None) }
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn part_at(&self, byte: u64) -> Option<usize> {
+        let i = self.parts.partition_point(|p| p.0.end <= byte);
+        self.parts.get(i).filter(|p| p.0.contains(&byte)).map(|_| i)
+    }
+
+    /// Bytes `at..at + out.len()`, from as many parts as they cover.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), Refusal> {
+        let end = at + out.len() as u64;
+        let mut pos = at;
+        while pos < end {
+            let i = self.part_at(pos).ok_or(Refusal::Failed)?;
+            let range = self.parts[i].0.clone();
+            let take = (range.end.min(end) - pos) as usize;
+            let from = pos - range.start;
+            let to = (pos - at) as usize;
+            match &self.parts[i].1 {
+                JoinedBytes::Held(bytes) => out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]),
+                JoinedBytes::Indexed(index) => index.read(from, &mut out[to..to + take])?,
+                JoinedBytes::Packed { run, codec } => {
+                    let cached = lock(&self.cache).get(i);
+                    let bytes = match cached {
+                        Some(bytes) => bytes,
+                        None => {
+                            let bytes = Arc::new(crate::codec::decode(*codec, run)?);
+                            if bytes.len() as u64 != range.end - range.start {
+                                return Err(Refusal::Failed);
+                            }
+                            lock(&self.cache).put(i, bytes.clone());
+                            bytes
+                        }
+                    };
+                    out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]);
+                }
+            }
+            pos += take as u64;
+        }
+        Ok(())
+    }
+
+    /// The trace of packed part `i`, decoded again with its trace on.
+    fn part_trace(&self, i: usize, run: &[u8], codec: Codec) -> Option<Arc<Trace>> {
+        if let Some((held, t)) = lock(&self.traced).as_ref() {
+            if *held == i {
+                return Some(t.clone());
+            }
+        }
+        let (_, t) = crate::codec::decode_traced(codec, run).ok()?;
+        let t = Arc::new(t);
+        *lock(&self.traced) = Some((i, t.clone()));
+        Some(t)
+    }
+
+    /// A step of part `i` with its output moved to where the part is in the
+    /// joined stream. Its bits stay counted from the start of the part's own
+    /// run, as a joined stream held whole gives them.
+    fn shifted(&self, i: usize, step: Step) -> Step {
+        let start = self.parts[i].0.start;
+        Step { out_bytes: step.out_bytes.start + start..step.out_bytes.end + start, ..step }
+    }
+
+    /// Which step of which part produced byte `byte`, as
+    /// [`Space::map_out`] gives it for a joined stream held whole.
+    pub fn map_out(&self, byte: u64) -> Option<Step> {
+        let i = self.part_at(byte)?;
+        let (range, bytes) = &self.parts[i];
+        let at = byte - range.start;
+        let step = match bytes {
+            JoinedBytes::Held(_) => {
+                Step { in_bits: 0..(range.end - range.start) * 8, out_bytes: 0..range.end - range.start, kind: StepKind::Stored }
+            }
+            JoinedBytes::Indexed(index) => index.map_out(at)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_out(at)?,
+        };
+        Some(self.shifted(i, step))
+    }
+
+    /// Which step of part `i` read bit `bit` of that part's run.
+    pub fn map_in(&self, i: usize, bit: u64) -> Option<Step> {
+        let (range, bytes) = self.parts.get(i)?;
+        let step = match bytes {
+            JoinedBytes::Held(_) => {
+                let bits = (range.end - range.start) * 8;
+                (bit < bits).then(|| Step { in_bits: 0..bits, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })?
+            }
+            JoinedBytes::Indexed(index) => index.map_in(bit)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_in(bit)?,
+        };
+        Some(self.shifted(i, step))
     }
 }
 

@@ -78,7 +78,7 @@ pub use census::{BoxCount, Census, CensusState, CensusWalk, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
-pub use space::{JoinedRun, SingleRun, Space, SpaceId, View};
+pub use space::{Joined, JoinedRun, SingleRun, Space, SpaceId, SpaceSource, View};
 pub use tab::Tab;
 pub use jpegscan::{JpegBitTotals, JpegBlockCost, JpegBlockTrace, JpegChannel, JpegCode, JpegScanMap};
 pub use stitch::PartHit;
@@ -172,7 +172,7 @@ fn padding_doc(ty: &Ty, size_bits: u64) -> Option<String> {
 /// they hold, and where the run it came from is: each run, for a stream joined
 /// from several, or the one.
 struct Unpacked {
-    bytes: std::sync::Arc<Vec<u8>>,
+    source: space::SpaceSource,
     trace: crate::codec::Trace,
     codec: crate::codec::Codec,
     inner: Ty,
@@ -2712,8 +2712,8 @@ impl Evaluator {
                 got?
             }
         };
-        let Some(Unpacked { bytes, trace, codec, inner, runs, run }) = unpacked else { return Ok(None) };
-        let (template, recognised) = self.template_for(&inner, &bytes);
+        let Some(Unpacked { source, trace, codec, inner, runs, run }) = unpacked else { return Ok(None) };
+        let (template, recognised) = self.template_for(&inner, &source);
         // A template the stream declared reads the stream where it was
         // declared, under the node that holds what the stream opened to. One
         // that came from looking at the bytes needs nothing outside them.
@@ -2724,7 +2724,7 @@ impl Evaluator {
             space,
             path.to_vec(),
             codec,
-            bytes,
+            source,
             trace,
             runs,
             run,
@@ -2741,17 +2741,27 @@ impl Evaluator {
         self.resolve(doc, path)?;
         // A stream joined from parts is read a part at a time where it is
         // declared, and held whole only here, when it is to be a document of
-        // its own. Past the cap a decoded stream has, it is refused as one of
-        // those is, and it still reads a part at a time in the listing, so the
-        // refusal is kept apart from the stream's own opening.
+        // its own. Past the cap a decoded stream has, it is read a part at a
+        // time here too, from copies of what its parts are read from, and
+        // refused when those are past the cap. It still reads a part at a
+        // time in the listing either way, so the refusal is kept apart from
+        // the stream's own opening.
         if let Ty::Stitched { inner, .. } = self.memo[path].ty.clone() {
             return Ok(match self.join_whole(doc, path)? {
-                Ok(whole) => Some(Unpacked {
-                    bytes: std::sync::Arc::new(whole.bytes),
+                Ok(stitch::Joining::Whole(whole)) => Some(Unpacked {
+                    source: space::SpaceSource::Whole(std::sync::Arc::new(whole.bytes)),
                     trace: whole.trace,
                     codec: crate::codec::Codec::Stored,
                     inner: *inner,
                     runs: whole.runs,
+                    run: None,
+                }),
+                Ok(stitch::Joining::Lazy { joined, runs }) => Some(Unpacked {
+                    source: space::SpaceSource::Joined(joined),
+                    trace: crate::codec::Trace::default(),
+                    codec: crate::codec::Codec::Stored,
+                    inner: *inner,
+                    runs,
                     run: None,
                 }),
                 Err(why) => {
@@ -2773,11 +2783,23 @@ impl Evaluator {
         let run_bits = self.size_of(doc, path)?;
         let placed = &self.memo[path];
         let run = space::SingleRun { run_space: placed.space, run_offset_bits: placed.offset, run_bits };
+        // A run too large to hold whole keeps no trace of its own; the space
+        // makes one a span at a time.
+        if let Some(index) = self.spaces.lazy(id) {
+            return Ok(Some(Unpacked {
+                source: space::SpaceSource::Lazy(index.clone()),
+                trace: crate::codec::Trace::default(),
+                codec,
+                inner: (*inner).clone(),
+                runs: Vec::new(),
+                run: Some(run),
+            }));
+        }
         let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
             return fail("this stream is no longer open");
         };
         Ok(Some(Unpacked {
-            bytes: bytes.clone(),
+            source: space::SpaceSource::Whole(bytes.clone()),
             trace: trace.clone(),
             codec,
             inner: (*inner).clone(),
@@ -2806,10 +2828,12 @@ impl Evaluator {
     /// This is what makes a gzip of a tar open as a tar. A template that says
     /// something more than "bytes" is believed: a ROOT record's object is an
     /// object whatever a sniffer would make of the first four bytes of it.
-    fn template_for(&self, inner: &Ty, bytes: &[u8]) -> (Template, bool) {
+    fn template_for(&self, inner: &Ty, source: &space::SpaceSource) -> (Template, bool) {
         if says_only_bytes(inner) {
-            let head = &bytes[..bytes.len().min(0x9000)];
-            if let Some(found) = crate::formats::sniff(head, bytes.len() as u64) {
+            let len = source.len_bytes();
+            let mut head = vec![0u8; len.min(0x9000) as usize];
+            source.read(0, &mut head);
+            if let Some(found) = crate::formats::sniff(&head, len) {
                 if let Some(t) = crate::formats::template(found) {
                     return (t, true);
                 }
