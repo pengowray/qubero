@@ -23,6 +23,7 @@ pub mod fastlz;
 pub mod frames;
 pub mod inflate;
 pub mod jpeg;
+pub mod lazy;
 pub mod lha;
 pub mod lzma;
 pub mod lz4;
@@ -293,6 +294,10 @@ impl Codec {
 pub enum Refusal {
     /// The run, or what it would come to, is past [`CAP_BYTES`].
     TooLarge,
+    /// What the run would come to is past [`lazy::LAZY_CAP_BYTES`], the
+    /// limit for a run read a piece at a time, which is larger than
+    /// [`CAP_BYTES`]. Only a codec [`lazy`] can index says this.
+    TooLargeLazy,
     /// The decoder would not read it.
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
@@ -354,6 +359,7 @@ impl Refusal {
     pub fn as_str(self) -> &'static str {
         match self {
             Refusal::TooLarge => "too-large",
+            Refusal::TooLargeLazy => "too-large-lazy",
             Refusal::Failed => "failed",
             Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
@@ -1088,14 +1094,6 @@ impl TraceBuilder {
     /// [`crate::codec::lazy`].
     pub(crate) fn off() -> TraceBuilder {
         TraceBuilder { off: true, ..TraceBuilder::default() }
-    }
-
-    /// Stop recording, and drop what was recorded. For a decode that finds
-    /// part-way through that its output is too large to keep a trace of.
-    pub(crate) fn turn_off(&mut self) {
-        self.off = true;
-        self.block_start = None;
-        self.trace = Trace { lsb_first: self.trace.lsb_first, ..Trace::default() };
     }
 
     /// Say that the first step will start at bit `in_bits` of the run and

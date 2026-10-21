@@ -181,30 +181,132 @@ fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusa
     Ok((out, b.done()))
 }
 
+/// What is wrapped round the deflate data of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wrapper {
+    /// Nothing: the run is the deflate data.
+    Raw,
+    /// RFC 1950: two bytes of header, and an Adler-32 after.
+    Zlib,
+    /// RFC 1952: a header of ten bytes or more, and a CRC-32 and the length
+    /// after.
+    Gzip,
+}
+
+/// Where the deflate data inside a run is, as bits of the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Framing {
+    pub(crate) wrapper: Wrapper,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+}
+
+/// Where the deflate data inside a run wrapped as `wrapper` is, from the
+/// wrapper's header. Refused when the header is not one.
+pub(crate) fn framing(wrapper: Wrapper, data: &[u8]) -> Result<Framing, Refusal> {
+    match wrapper {
+        Wrapper::Raw => Ok(Framing { wrapper, start: 0, end: data.len() as u64 * 8 }),
+        Wrapper::Zlib => {
+            if data.len() < 6 {
+                return Err(Refusal::Failed);
+            }
+            let (cmf, flg) = (data[0], data[1]);
+            if cmf & 0x0f != 8 || (cmf as u16 * 256 + flg as u16) % 31 != 0 || flg & 0x20 != 0 {
+                return Err(Refusal::Failed);
+            }
+            Ok(Framing { wrapper, start: 16, end: (data.len() as u64 - 4) * 8 })
+        }
+        Wrapper::Gzip => {
+            // The two magic bytes, the method, the flags, four of time, one of
+            // how hard the packer tried and one of what wrote it.
+            const FIXED: usize = 10;
+            if data.len() < FIXED + GZIP_TRAILER || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
+                return Err(Refusal::Failed);
+            }
+            let flags = data[3];
+            // The top three flag bits are reserved and a decoder is told to
+            // refuse a member that sets one.
+            if flags & 0xe0 != 0 {
+                return Err(Refusal::Failed);
+            }
+            let mut at = FIXED;
+            if flags & 0x04 != 0 {
+                // Extra fields, as a length and then that many bytes.
+                let len = u16::from_le_bytes([byte(data, at)?, byte(data, at + 1)?]) as usize;
+                at = at.checked_add(2 + len).ok_or(Refusal::Failed)?;
+            }
+            if flags & 0x08 != 0 {
+                at = past_nul(data, at)?; // the name the file had before it was packed
+            }
+            if flags & 0x10 != 0 {
+                at = past_nul(data, at)?; // a comment, which almost nothing writes
+            }
+            if flags & 0x02 != 0 {
+                // Two bytes of CRC over the header. Not checked: nothing
+                // writes one, and refusing a member for a sum this does not
+                // compute would be refusing it for the wrong reason.
+                at = at.checked_add(2).ok_or(Refusal::Failed)?;
+            }
+            if at + GZIP_TRAILER > data.len() {
+                return Err(Refusal::Failed);
+            }
+            Ok(Framing { wrapper, start: at as u64 * 8, end: (data.len() - GZIP_TRAILER) as u64 * 8 })
+        }
+    }
+}
+
+/// The CRC-32 of what came out and how long it was, both little-endian,
+/// unlike zlib's big-endian Adler.
+const GZIP_TRAILER: usize = 8;
+
+/// Whether the wrapper's trailer agrees with what came out: `len` bytes whose
+/// sums `crc32` and `adler32` give. Only the sum the wrapper keeps is asked
+/// for. A raw run has no trailer and always agrees.
+pub(crate) fn trailer_agrees(
+    f: &Framing,
+    data: &[u8],
+    len: u64,
+    crc32: impl FnOnce() -> u32,
+    adler32: impl FnOnce() -> u32,
+) -> bool {
+    match f.wrapper {
+        Wrapper::Raw => true,
+        Wrapper::Zlib => {
+            let n = data.len();
+            u32::from_be_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]) == adler32()
+        }
+        Wrapper::Gzip => {
+            let tail = &data[data.len() - GZIP_TRAILER..];
+            let crc = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+            let size = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
+            crc == crc32() && size == len as u32
+        }
+    }
+}
+
+/// A zlib or gzip run decoded whole, with the wrapper's own bytes as steps so
+/// the trace tiles the run the template named rather than only the middle of
+/// it.
+fn wrapped(wrapper: Wrapper, data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    let f = framing(wrapper, data)?;
+    let mut b = TraceBuilder::default();
+    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
+    let mut out = Vec::new();
+    run(data, f.start, f.end, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
+    if !trailer_agrees(&f, data, out.len() as u64, || crate::checksum::crc32(&out), || crate::checksum::adler32(&out)) {
+        return Err(Refusal::Failed);
+    }
+    b.push(f.end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
+    b.finish_at(data.len() as u64 * 8, out.len() as u64);
+    Ok((out, b.done()))
+}
+
 /// A zlib stream, RFC 1950: two bytes of header, deflate, and an Adler-32.
 ///
 /// The wrapper's own bytes are steps too, so the trace tiles the run the
 /// template named rather than only the middle of it.
 pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    if data.len() < 6 {
-        return Err(Refusal::Failed);
-    }
-    let (cmf, flg) = (data[0], data[1]);
-    if cmf & 0x0f != 8 || (cmf as u16 * 256 + flg as u16) % 31 != 0 || flg & 0x20 != 0 {
-        return Err(Refusal::Failed);
-    }
-    let mut b = TraceBuilder::default();
-    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
-    let end = (data.len() as u64 - 4) * 8;
-    let mut out = Vec::new();
-    run(data, 16, end, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
-    let adler = u32::from_be_bytes([data[data.len() - 4], data[data.len() - 3], data[data.len() - 2], data[data.len() - 1]]);
-    if adler != crate::checksum::adler32(&out) {
-        return Err(Refusal::Failed);
-    }
-    b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
-    b.finish_at(data.len() as u64 * 8, out.len() as u64);
-    Ok((out, b.done()))
+    wrapped(Wrapper::Zlib, data)
 }
 
 /// A whole gzip member, RFC 1952: the header and its optional name and
@@ -221,56 +323,7 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// run holding two is refused rather than half-read: the trailer this looks at
 /// is the last eight bytes, which belong to the member this did not decode.
 pub fn gzip(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    // The two magic bytes, the method, the flags, four of time, one of how
-    // hard the packer tried and one of what wrote it.
-    const FIXED: usize = 10;
-    // The CRC-32 of what came out and how long it was, both little-endian,
-    // unlike zlib's big-endian Adler.
-    const TRAILER: usize = 8;
-    if data.len() < FIXED + TRAILER || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
-        return Err(Refusal::Failed);
-    }
-    let flags = data[3];
-    // The top three flag bits are reserved and a decoder is told to refuse a
-    // member that sets one.
-    if flags & 0xe0 != 0 {
-        return Err(Refusal::Failed);
-    }
-    let mut at = FIXED;
-    if flags & 0x04 != 0 {
-        // Extra fields, as a length and then that many bytes.
-        let len = u16::from_le_bytes([byte(data, at)?, byte(data, at + 1)?]) as usize;
-        at = at.checked_add(2 + len).ok_or(Refusal::Failed)?;
-    }
-    if flags & 0x08 != 0 {
-        at = past_nul(data, at)?; // the name the file had before it was packed
-    }
-    if flags & 0x10 != 0 {
-        at = past_nul(data, at)?; // a comment, which almost nothing writes
-    }
-    if flags & 0x02 != 0 {
-        // Two bytes of CRC over the header. Not checked: nothing writes one,
-        // and refusing a member for a sum this does not compute would be
-        // refusing it for the wrong reason.
-        at = at.checked_add(2).ok_or(Refusal::Failed)?;
-    }
-    if at + TRAILER > data.len() {
-        return Err(Refusal::Failed);
-    }
-    let mut b = TraceBuilder::default();
-    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
-    let end = (data.len() - TRAILER) as u64 * 8;
-    let mut out = Vec::new();
-    run(data, at as u64 * 8, end, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
-    let tail = &data[data.len() - TRAILER..];
-    let crc = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
-    let size = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
-    if crc != crate::checksum::crc32(&out) || size != out.len() as u32 {
-        return Err(Refusal::Failed);
-    }
-    b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
-    b.finish_at(data.len() as u64 * 8, out.len() as u64);
-    Ok((out, b.done()))
+    wrapped(Wrapper::Gzip, data)
 }
 
 fn byte(data: &[u8], at: usize) -> Result<u8, Refusal> {
