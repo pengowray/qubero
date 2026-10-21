@@ -36,7 +36,7 @@ heap descriptors, `GZIP_2` masks. Every Rubin FITS sample reads with no
 errors in any node (`CHECK_TREE_ALL=1 check_tree ../qubero2-extras/rubin - 7`),
 except the gzipped LATISS raw (see the unpack cap below).
 
-## Piece 1: Avro, and Rubin alerts (recommended first)
+## Piece 1: Avro, and Rubin alerts
 
 Avro is a general format Qubero lacks, and alerts are the Rubin files anyone
 can get.
@@ -86,13 +86,13 @@ real sample each cutout is union branch `02`, a varint length of 34560, then
   extension-gated entries in `recognise.rs` (`table.iter().find(...)` near
   line 480).
 
-**Decision needed: where a framed alert's schema comes from.** The file names
-a schema by number only. Rubin's schemas are in `lsst/alert_packet`, which is
-GPL-3.0; Qubero is MIT. Options: bundle them (a licence question for the
-owner), fetch them when needed from GitHub or Rubin's schema registry, let the
-user drop the `.avsc` beside the alert, or read only the 5-byte header and the
-rest as bytes. Object container files carry their own schema and need none of
-this.
+**Decided 2026-10-21: bundle the schemas.** The file names a schema by number
+only. Rubin's schemas are in `lsst/alert_packet` (GPL-3.0; Qubero is MIT), and
+the owner chose to ship them inside Qubero, versions 3.0 to 11.1, picked by
+the ID in the header. Pin the alert_packet commit they came from, keep them
+byte for byte as published, and give them an entry in
+`tools/notices-extra.md` saying what they are and under which licence. Object
+container files carry their own schema and need none of this.
 
 **Reference values.** No venv has `fastavro` yet. Add it to
 `~/.venvs/qubero-samples` and write `tools/avro_reference.py` in the shape of
@@ -170,8 +170,8 @@ pixels, then empty `REB_COND` and `CONFIG_COND` tables. These read already.
 The obs_lsst test copies are gzipped behind a `.fits` name and open through
 the gzip template.
 
-**Decision needed: the 64 MiB unpack cap.** A real raw is 16 × 576 × 2048 × 4
-bytes, about 75 MB, past `codec::CAP_BYTES`. So a gzipped raw does not open
+**The 64 MiB unpack cap.** A real raw is 16 × 576 × 2048 × 4 bytes, about
+75 MB, past `codec::CAP_BYTES`. So a gzipped raw does not open
 (`3018092000065-det000.fits`). The cap is a deliberate guard against zip
-bombs. Either leave it (gunzip first), raise it, or make large decoded spaces
-lazy, which is its own project.
+bombs. Decided 2026-10-21: leave the cap, and make large decoded spaces lazy
+later (unpack only the part being viewed), as a project of its own.
