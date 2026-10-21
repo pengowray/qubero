@@ -11,7 +11,9 @@ with `Refusal::TooLarge` once the output passes 64 MiB. The cap guards against
 zip bombs, and it also refuses ordinary large files. The test case is a
 gzipped Rubin LATISS raw, `qubero2-extras/rubin/3018092000065-det000.fits`:
 94,940 bytes of gzip that inflate to 75,677,760 bytes (a ratio of 797 to 1),
-which hold a FITS file with 16 tile-compressed image HDUs.
+which hold a FITS file: a primary HDU, 16 image HDUs named `Segment00` to
+`Segment07` and `Segment10` to `Segment17` (576 × 2048 32-bit integers each, not tile-compressed) and two
+binary tables.
 
 The gzip template reads that file through three paths, and all three hit the
 cap:
@@ -301,7 +303,7 @@ the tab. That is v2.
   `map_in` agree with the whole trace of the same stream decoded under the
   normal cap, and `decode_step` gives the same answer through both.
 - The test file: the gzip template reads 16 HDUs out of `decoded` in the
-  listing, and Open unpacked on `decoded` gives a FITS tab whose HDUs are
-  `RICE_1` tile-compressed images. Skipped when `qubero2-extras` is absent.
+  listing, and Open unpacked on `decoded` gives a FITS tab with 16 image HDUs
+  named `Segment..`. Skipped when `qubero2-extras` is absent.
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
