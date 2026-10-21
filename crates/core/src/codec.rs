@@ -1126,6 +1126,9 @@ impl TraceBuilder {
         // so far reads bits at all, so this is a guard against a future caller
         // rather than a case that arises.
         debug_assert_eq!(t.lsb_first, self.trace.lsb_first, "traces that count bits differently cannot be stitched");
+        // A trace of part of a run counts from where that part is, and this
+        // shifts from zero.
+        debug_assert_eq!(t.start(), (0, 0), "only the trace of a whole run can be stitched");
         let base = self.trace.steps.len() as u32;
         self.trace.steps.extend(t.steps.iter().map(|raw| RawStep {
             in_start: (in_bits + u64::from(raw.in_start)) as u32,

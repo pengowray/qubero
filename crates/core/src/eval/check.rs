@@ -208,6 +208,22 @@ impl Evaluator {
             (None, Some(u)) => {
                 let (at, member) = (u.at.clone(), u.member.clone());
                 match self.open_space_at(doc, &at)? {
+                    // A stream too large to hold whole was summed by the pass
+                    // that indexed it, with the two sums gzip and zlib keep.
+                    // Any other sum, or a sum over one member, would need the
+                    // whole output, which is what was too large to hold.
+                    space::Opened::Space(id) if self.spaces.lazy(id).is_some() => {
+                        let index = self.spaces.lazy(id).expect("just asked").clone();
+                        let value = match (c.algorithm, member) {
+                            (crate::checksum::Checksum::Crc32, None) => index.crc32(),
+                            (crate::checksum::Checksum::Adler32, None) => index.adler32(),
+                            (_, None) => return fail(too_large(index.len())),
+                            (_, Some(_)) => return fail(UNMAPPED_MEMBER.to_string()),
+                        };
+                        let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
+                        let computed = c.algorithm.stored(u128::from(value));
+                        return Ok(Some(Verdict { ok: computed == stored, computed, stored }));
+                    }
                     space::Opened::Space(id) => {
                         let Some(bytes) = self.spaces.buf(id) else { return fail("this stream is no longer open") };
                         match member {

@@ -21,11 +21,15 @@
 //! and that one is not a buffer: it is a table of the parts it is joined from,
 //! read a part at a time, with the parts that have to be unpacked kept in a
 //! small cache rather than all at once. See [`Backing`] and `stitch.rs`.
+//!
+//! A deflate run whose output is past the cap is not a buffer either: it is an
+//! index of checkpoints, read a span at a time. See [`crate::codec::lazy`].
 
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
+use crate::codec::lazy::{Limits, Seekable};
 use crate::codec::{Codec, Refusal, Step, Trace};
 use crate::document::Document;
 use crate::source::ArcSource;
@@ -336,7 +340,50 @@ fn in_run(step: Step, run: &JoinedRun) -> Step {
 pub(super) enum Backing {
     Whole { bytes: Arc<Vec<u8>>, trace: Trace },
     Stitched(Box<Stitch>),
+    /// A run too large to hold whole, read through its checkpoints.
+    Lazy(Arc<Seekable>),
 }
+
+/// Where a compressed run is: the space it is a field of, the bit it starts
+/// at there and how many bits it is. What an index is kept by, so that every
+/// node reading the same run reads it through the same index.
+pub(super) type RunKey = (u32, u64, u64);
+
+/// The indexes of runs too large to hold whole, by where each run is, so a
+/// run is indexed once however many things read it: the `Decoded` node over
+/// it, a stitched stream with it as a part, and the tab.
+///
+/// Each index holds its compressed run, so the total of those is capped, and
+/// the index used longest ago goes first.
+#[derive(Default)]
+pub(super) struct Indexes {
+    entries: Vec<(RunKey, Codec, Arc<Seekable>, u64)>,
+    clock: u64,
+}
+
+impl Indexes {
+    fn get(&mut self, key: RunKey, codec: Codec) -> Option<Arc<Seekable>> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.entries.iter_mut().find(|e| e.0 == key && e.1 == codec)?;
+        e.3 = clock;
+        Some(e.2.clone())
+    }
+
+    fn put(&mut self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
+        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.packed().len()).sum::<usize>();
+        while !self.entries.is_empty() && held(&self.entries) + index.packed().len() > INDEXED_RUN_BYTES {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
+            self.entries.swap_remove(oldest);
+        }
+        self.clock += 1;
+        self.entries.push((key, codec, index, self.clock));
+    }
+}
+
+/// The most compressed bytes the indexes hold between them. The same as the
+/// most one run may be.
+const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
@@ -480,6 +527,11 @@ pub(super) struct Spaces {
     whole_refused: FxHashMap<Vec<usize>, Refusal>,
     /// The most a stitched stream may come to and still be held whole.
     whole_cap: usize,
+    /// The limits a run too large to hold whole is indexed under.
+    lazy_limits: Limits,
+    /// Every index made so far that is still kept. Asked for while reading,
+    /// which borrows the spaces shared, so it is a cell.
+    indexes: std::cell::RefCell<Indexes>,
 }
 
 impl Default for Spaces {
@@ -490,6 +542,8 @@ impl Default for Spaces {
             cache_cap: STITCH_CACHE_BYTES,
             whole_refused: FxHashMap::default(),
             whole_cap: crate::codec::CAP_BYTES,
+            lazy_limits: Limits::default(),
+            indexes: Default::default(),
         }
     }
 }
@@ -505,6 +559,47 @@ impl Spaces {
         let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id
+    }
+
+    /// Keep the index of a run too large to hold whole, and hand back the
+    /// space it became.
+    pub(super) fn add_lazy(&mut self, path: &[usize], index: Arc<Seekable>) -> u32 {
+        self.backings.push(Backing::Lazy(index));
+        let id = self.backings.len() as u32;
+        self.opened.insert(path.to_vec(), Opened::Space(id));
+        id
+    }
+
+    /// The index of the run at `key`, packed with `codec`, if one was made
+    /// and is still kept.
+    pub(super) fn indexed(&self, key: RunKey, codec: Codec) -> Option<Arc<Seekable>> {
+        self.indexes.borrow_mut().get(key, codec)
+    }
+
+    /// Keep an index of the run at `key`.
+    pub(super) fn keep_index(&self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
+        self.indexes.borrow_mut().put(key, codec, index);
+    }
+
+    /// The limits a run too large to hold whole is indexed under.
+    pub(super) fn lazy_limits(&self) -> Limits {
+        self.lazy_limits
+    }
+
+    /// Those limits made small, so that a test reaches them with a few
+    /// hundred kilobytes rather than sixty-four megabytes.
+    #[cfg(test)]
+    pub(super) fn set_lazy_limits(&mut self, limits: Limits) {
+        self.lazy_limits = limits;
+    }
+
+    /// The index behind a space read a piece at a time. Nothing for any
+    /// other space.
+    pub(super) fn lazy(&self, space: u32) -> Option<&Arc<Seekable>> {
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Lazy(index) => Some(index),
+            _ => None,
+        }
     }
 
     /// Keep the part table of a stitched space, and hand back the space it
@@ -552,7 +647,7 @@ impl Spaces {
     pub(super) fn trace(&self, space: u32) -> Option<&Trace> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Whole { trace, .. } => Some(trace),
-            Backing::Stitched(_) => None,
+            Backing::Stitched(_) | Backing::Lazy(_) => None,
         }
     }
 
@@ -566,7 +661,7 @@ impl Spaces {
     pub(super) fn buf(&self, space: u32) -> Option<&Arc<Vec<u8>>> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Whole { bytes, .. } => Some(bytes),
-            Backing::Stitched(_) => None,
+            Backing::Stitched(_) | Backing::Lazy(_) => None,
         }
     }
 
@@ -574,7 +669,7 @@ impl Spaces {
     pub(super) fn stitch(&self, space: u32) -> Option<&Stitch> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Stitched(s) => Some(s),
-            Backing::Whole { .. } => None,
+            Backing::Whole { .. } | Backing::Lazy(_) => None,
         }
     }
 
@@ -583,6 +678,7 @@ impl Spaces {
         match space.checked_sub(1).and_then(|i| self.backings.get(i as usize)) {
             Some(Backing::Whole { bytes, .. }) => bytes.len() as u64 * 8,
             Some(Backing::Stitched(s)) => s.len_bytes * 8,
+            Some(Backing::Lazy(index)) => index.len() * 8,
             None => 0,
         }
     }
@@ -600,6 +696,8 @@ impl Spaces {
         self.backings.clear();
         self.opened.clear();
         self.whole_refused.clear();
+        // Kept by where a run is, and an edit can change what is there.
+        self.indexes.borrow_mut().entries.clear();
     }
 }
 
@@ -782,6 +880,39 @@ mod tests {
     /// the stream's field is: two bytes into a zlib file, after the header. So
     /// the bit of the file that leads back to a step is the run's place plus
     /// the step's bits, and the header's bits lead nowhere.
+    /// A stream whose output is past the cap is indexed rather than refused:
+    /// its fields read, a read anywhere in it decodes only the span it is in,
+    /// and the Adler-32 after it is checked against the sum the indexing pass
+    /// took. The limits are made small, so a few megabytes are past them.
+    #[test]
+    fn a_stream_past_the_cap_reads_a_piece_at_a_time() {
+        use crate::codec::lazy::Limits;
+        use crate::eval::space::Opened;
+        let text: Vec<u8> = (0..60_000).flat_map(|i| format!("line {i} of a stream too large to hold\n").into_bytes()).collect();
+        let d = zlib_over(&text);
+        let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        e.spaces.set_lazy_limits(Limits { whole: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Limits::default() });
+        let inner = e.node(&d, &[6, 0]).unwrap();
+        assert_eq!(inner.size_bits, text.len() as u64 * 8);
+        let Some(Opened::Space(id)) = e.spaces.get(RUN) else { panic!("the stream did not open") };
+        let index = e.spaces.lazy(id).expect("indexed, not held whole").clone();
+        assert!(index.spans() > 10);
+        for at in [0usize, 1000, 777_777, text.len() - 100] {
+            let got = e.read_in(&d, id, at as u64 * 8, 800).unwrap();
+            assert_eq!(got, &text[at..at + 100], "100 bytes at {at}");
+        }
+        // Four reads far apart, and what the index holds is its checkpoints
+        // and a few spans.
+        assert!(index.held_bytes() < 2 << 20, "{} bytes held", index.held_bytes());
+        let verdict = e.run_check(&d, &[7]).unwrap().expect("the Adler-32 is a check");
+        assert!(verdict.ok, "{verdict:?}");
+        // The blocks a trace lays out need the trace of the whole run, which
+        // a stream this size does not keep.
+        assert_eq!(e.node(&d, RUN).unwrap().child_count, 1);
+        // A second node over the same run is read through the same index.
+        assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
+    }
+
     #[test]
     fn the_map_runs_both_ways() {
         let text = "map me both ways. ".repeat(50).into_bytes();

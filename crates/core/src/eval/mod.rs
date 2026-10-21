@@ -2525,6 +2525,28 @@ impl Evaluator {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
+        // Deflate, zlib and gzip are decoded whole when they fit and indexed
+        // when they do not, in one pass, and an index is shared by every node
+        // over the same run. See `codec::lazy`.
+        if crate::codec::lazy::can_index(codec) {
+            let key = (r.space, r.offset, size);
+            if let Some(index) = self.spaces.indexed(key, codec) {
+                return Ok(space::Opened::Space(self.spaces.add_lazy(path, index)));
+            }
+            let packed = std::sync::Arc::new(self.read(doc, &r, r.offset, size)?);
+            return Ok(match crate::codec::lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits()) {
+                Ok(crate::codec::lazy::Decoded::Whole(bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
+                Ok(crate::codec::lazy::Decoded::Indexed(index)) => {
+                    let index = std::sync::Arc::new(index);
+                    self.spaces.keep_index(key, codec, index.clone());
+                    space::Opened::Space(self.spaces.add_lazy(path, index))
+                }
+                Err(why) => {
+                    self.spaces.refuse(path, why);
+                    space::Opened::Refused(why)
+                }
+            });
+        }
         let packed = self.read(doc, &r, r.offset, size)?;
         let Some(settings) = self.settings_at(doc, path, &r)? else {
             self.spaces.refuse(path, Refusal::Settings);
