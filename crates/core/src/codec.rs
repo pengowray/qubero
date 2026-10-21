@@ -763,11 +763,19 @@ pub struct Member {
 /// ranges end where step `i + 1`'s begin, the first begins at zero, and the
 /// last ends at the run's own length. That is asserted rather than assumed,
 /// by [`Trace::check_tiles`].
+///
+/// A trace of part of a run, which is what a run too large to decode whole
+/// keeps (see [`crate::codec::lazy`]), counts its bits and bytes the same way
+/// as a whole trace, from the front of the run and of the output, and starts
+/// where that part does rather than at zero: see [`Trace::start`].
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     steps: Vec<RawStep>,
     blocks: Vec<Block>,
     members: Vec<Member>,
+    /// Where the first step starts: zero for a whole run's trace.
+    start_in_bits: u64,
+    start_out_bytes: u64,
     end_in_bits: u64,
     end_out_bytes: u64,
     /// Whether the trace gave up naming every symbol; see [`MAX_STEPS`].
@@ -868,6 +876,12 @@ impl Trace {
         self.end_in_bits
     }
 
+    /// The bit and the byte the first step starts at. Zero for the trace of a
+    /// whole run; for the trace of a part of one, where that part starts.
+    pub fn start(&self) -> (u64, u64) {
+        (self.start_in_bits, self.start_out_bytes)
+    }
+
     pub fn out_bytes(&self) -> u64 {
         self.end_out_bytes
     }
@@ -896,7 +910,7 @@ impl Trace {
     /// tiles. Steps that produced nothing are skipped, since a byte belongs to
     /// the step that made it and not to the header before it.
     pub fn index_out(&self, byte: u64) -> Option<usize> {
-        if byte >= self.end_out_bytes || u32::try_from(byte).is_err() {
+        if byte < self.start_out_bytes || byte >= self.end_out_bytes || u32::try_from(byte).is_err() {
             return None;
         }
         let byte = byte as u32;
@@ -927,7 +941,7 @@ impl Trace {
 
     /// Which step read a bit of the input, as an index.
     pub fn index_in(&self, bit: u64) -> Option<usize> {
-        if bit >= self.end_in_bits || u32::try_from(bit).is_err() {
+        if bit < self.start_in_bits || bit >= self.end_in_bits || u32::try_from(bit).is_err() {
             return None;
         }
         let bit = bit as u32;
@@ -956,8 +970,8 @@ impl Trace {
     /// nothing skipped and nothing counted twice. Says what is wrong rather
     /// than panicking, so a test can name the file.
     pub fn check_tiles(&self) -> Result<(), String> {
-        let mut at_in = 0u64;
-        let mut at_out = 0u64;
+        let mut at_in = self.start_in_bits;
+        let mut at_out = self.start_out_bytes;
         for (i, raw) in self.steps.iter().enumerate() {
             if raw.in_start as u64 != at_in {
                 return Err(format!("step {i} reads from bit {} where bit {at_in} was next", raw.in_start));
@@ -983,7 +997,7 @@ impl Trace {
         // and they need not tile it. A check is taken over one of these, so a
         // member reaching past what the decoder produced, or overlapping the
         // one before it, is a slice of somebody else's bytes.
-        let mut after = 0u64;
+        let mut after = self.start_out_bytes;
         for (i, m) in self.members.iter().enumerate() {
             if m.out_bytes.start < after || m.out_bytes.end < m.out_bytes.start {
                 return Err(format!("member {i} writes {:?} after byte {after}", m.out_bytes));
@@ -1032,13 +1046,20 @@ pub(crate) struct TraceBuilder {
     /// the path that gives up naming symbols is the one path that can leave a
     /// trace not tiling.
     budget: Option<usize>,
+    /// Record nothing at all, for a decode that only wants the bytes. See
+    /// [`TraceBuilder::off`].
+    off: bool,
 }
 
 impl TraceBuilder {
     /// Record a step read from `in_bits` and producing `out_bytes`, both
     /// absolute. The ends are taken from the next step, so they are only
     /// checked here.
+    #[inline]
     pub(crate) fn push(&mut self, in_start: u64, out_start: u64, kind: StepKind) {
+        if self.off {
+            return;
+        }
         self.trace.steps.push(pack(in_start, out_start, kind));
     }
 
@@ -1054,11 +1075,36 @@ impl TraceBuilder {
     }
 
     pub(crate) fn over_budget(&self) -> bool {
-        self.trace.steps.len() >= self.budget.unwrap_or(MAX_STEPS)
+        !self.off && self.trace.steps.len() >= self.budget.unwrap_or(MAX_STEPS)
     }
 
     pub(crate) fn with_budget(budget: usize) -> TraceBuilder {
         TraceBuilder { budget: Some(budget), ..TraceBuilder::default() }
+    }
+
+    /// A builder that records nothing: no steps, no blocks, nothing coarse.
+    /// What a decode that wants only the bytes runs with, so that the bytes
+    /// still come out of the one decoder that traces them. See
+    /// [`crate::codec::lazy`].
+    pub(crate) fn off() -> TraceBuilder {
+        TraceBuilder { off: true, ..TraceBuilder::default() }
+    }
+
+    /// Stop recording, and drop what was recorded. For a decode that finds
+    /// part-way through that its output is too large to keep a trace of.
+    pub(crate) fn turn_off(&mut self) {
+        self.off = true;
+        self.block_start = None;
+        self.trace = Trace { lsb_first: self.trace.lsb_first, ..Trace::default() };
+    }
+
+    /// Say that the first step will start at bit `in_bits` of the run and
+    /// byte `out_bytes` of the output, for the trace of part of a run. See
+    /// [`Trace::start`].
+    pub(crate) fn starting_at(mut self, in_bits: u64, out_bytes: u64) -> TraceBuilder {
+        self.trace.start_in_bits = in_bits;
+        self.trace.start_out_bytes = out_bytes;
+        self
     }
 
     /// Take a trace of part of this run into this one, shifted to where that
@@ -1160,6 +1206,9 @@ impl TraceBuilder {
     }
 
     pub(crate) fn open_block(&mut self, in_bits: u64, out_bytes: u64) {
+        if self.off {
+            return;
+        }
         self.block_start = Some((in_bits, out_bytes, self.trace.steps.len() as u32));
     }
 
