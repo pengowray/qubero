@@ -38,70 +38,84 @@ except the gzipped LATISS raw (see the unpack cap below).
 
 ## Piece 1: Avro, and Rubin alerts
 
-Avro is a general format Qubero lacks, and alerts are the Rubin files anyone
-can get.
+**Done 2026-10-23**, on branch `nonhuman/busy-roentgen-b3d838`: a new `avro`
+template (`avro.rs`, `avro_schema.rs`, `avro_alerts.rs`). Both Rubin alert
+samples and six generated container files read with every value matching
+fastavro 1.13.1 (1,952 values, `crates/core/tests/avro_real.rs`), and the
+cutouts open as FITS.
 
 **Two shapes on disk.**
 
 - **Object container file.** `Obj\x01`, a metadata map (`avro.schema` as JSON,
   `avro.codec`), a 16-byte sync marker, then blocks: a count and a byte size
-  (both zigzag varint longs), the block's data, the sync marker again. Codecs:
-  `null`, `deflate` (raw RFC 1951), `snappy` (each block is followed by a
-  4-byte big-endian CRC-32 of the uncompressed data), `zstandard`, `bzip2`,
-  `xz`. Rubin's pipeline writes `null`; old 2020 public samples were snappy.
+  (both zigzag varint longs), the block's data, the sync marker again.
 - **Confluent wire format.** One byte `0x00`, a big-endian int32 schema ID,
   then one Avro record with no schema in the file. This is what is on the
   Kafka stream and in the alert archive (gzipped there, as
   `v2/alerts/{first 6 digits}/{id}.avro.gz`). Schema ID is
   major × 100 + minor, so 0x384 = 900 = schema 9.0, 1101 = 11.1.
 
-**Record layout (11.1).** `diaSourceId` (long), `observation_reason` and
-`target_name` (`[null, string]`), `diaSource`, then nullable `prvDiaSources`,
-`prvDiaForcedSources`, `diaObject`, `ssSource`, `mpc_orbits`, then
-`cutoutDifference`, `cutoutScience`, `cutoutTemplate`, each `["null","bytes"]`.
+**What reads.**
 
-**Cutouts are plain FITS** (not gzipped), written by astropy `CCDData`:
-primary float32 image in nJy with a local WCS, `UNCERT` (variance),
-`MASKPLANE` (since 2026-10-02), `PSFIMAGE`. 30 to 102 pixels square. In the
-real sample each cutout is union branch `02`, a varint length of 34560, then
-`SIMPLE`.
+- The header's map, with `avro.schema` read as JSON and `avro.codec` as text.
+  Each block's data is a `Ty::Schema` of kind `avro block`, built from the
+  codec entry: null, deflate, snappy (with the CRC-32 after each block taken as
+  a check over what it unpacks to), zstandard, bzip2, xz. A codec Qubero has no
+  decoder for leaves the block as bytes with the codec named.
+- Every block's sync marker is checked against the header's (a `Valid::Expr`
+  comparing the two 16-byte runs eight bytes at a time with `PeekIn`, since a
+  run of bytes is not a number in an expression).
+- Records through the schema. Every named type (record, enum, fixed) is a
+  `Ty::Schema` keyed by its full name, wherever it is used, so a type that
+  names itself reads like any other. Namespaces resolve as the specification
+  says, falling back to the bare name. Records carry the schema's `doc`
+  strings as field docs; a long with a timestamp logical type gets
+  `Time::unix_millis/micros/nanos`. Other logical types read as the type
+  underneath, as the specification says a reader that does not know them
+  should.
+- Arrays and maps in blocks, negative counts with their byte size included,
+  ending at the zero block. A union is a structure of `branch` (an enum of the
+  branch types) and `value`, typed `null or string` and so on; null is an
+  absent field.
+- Every non-empty `bytes` value is a `Codec::Stored` run, so it opens as
+  whatever it sniffs as. A Rubin cutout opens as FITS this way.
+- A framed record's schema comes from the bundled alert schemas: all 93
+  `.avsc` files of versions 3.0 to 11.1, byte for byte from `lsst/alert_packet`
+  at `1362a8d7f1db4014cbd419390580a707141c683a`, in
+  `crates/core/formats-avro/alert_packet` with its `LICENSE` and `COPYRIGHT`.
+  `node tools/alert_schemas.mjs` fetches them and writes the table; change its
+  `COMMIT` to update. A version is resolved the way `Schema.from_file` does it:
+  the `.alert.avsc` file, then the file named after each type it uses and does
+  not define. An ID with no bundled schema reads the header and leaves the
+  record as bytes, saying which versions Qubero has. The notices entry is in
+  `tools/notices-extra.md`, with the GPL-3.0 text.
+- Recognition: container files by `Obj\x01`. A framed alert only when the file
+  is named `.avro` and the ID after the zero byte is a bundled one
+  (`BY_EXTENSION` in `recognise.rs`); the web passes the name already.
+- `about.rs`, `web/src/filetype.ts` and `web/src/identity.ts` have Avro.
 
-**How it maps onto what exists.**
+**Reference values.** `tools/avro_reference.py` (fastavro, cramjam and
+backports.zstd in `~/.venvs/qubero-samples`) writes every value of every
+record at its path, with logical types switched off. The collection's
+`avro/` folder has the two Rubin alerts, six files from its
+`tools/make_avro_samples.py` (every Avro type, one codec each, four blocks),
+and `reference.tsv`. The two Ampel files in extras also read without errors;
+they are not in the collection (not Rubin production data, licence unclear).
 
-- The block framing is a template like any other. Zigzag varints exist
-  (`varintbits.rs`, used by Thrift and Parquet).
-- The records are a `Ty::Schema` built from the schema JSON, the way
-  `asdf_tree.rs` builds one from the ASDF YAML tree and `arrow_schema.rs` from
-  an Arrow schema. Avro types: null, boolean, int/long (zigzag varint), float,
-  double (little-endian), bytes/string (long length then bytes), record,
-  enum (varint index), array and map (blocks of count then items, a negative
-  count followed by a byte size, ending at a zero count), union (varint branch
-  index then the value), fixed. Named types can be referred to by name later
-  in the schema.
-- A cutout opens as FITS the way a GRIB PNG-packed section opens as a PNG:
-  `T::decoded(E::Remaining, Codec::Stored, ...)` in
-  `grib.rs::png_packed_data`.
-- A framed alert has no magic worth sniffing (one zero byte), so it needs the
-  `.avro` extension and the Confluent header to check out, like the
-  extension-gated entries in `recognise.rs` (`table.iter().find(...)` near
-  line 480).
+**Left.**
 
-**Decided 2026-10-21: bundle the schemas.** The file names a schema by number
-only. Rubin's schemas are in `lsst/alert_packet` (GPL-3.0; Qubero is MIT), and
-the owner chose to ship them inside Qubero, versions 3.0 to 11.1, picked by
-the ID in the header. Pin the alert_packet commit they came from, keep them
-byte for byte as published, and give them an entry in
-`tools/notices-extra.md` saying what they are and under which licence. Object
-container files carry their own schema and need none of this.
-
-**Reference values.** No venv has `fastavro` yet. Add it to
-`~/.venvs/qubero-samples` and write `tools/avro_reference.py` in the shape of
-`tools/asdf_reference.py`.
-
-**Samples.** `7912941781254298.avro` (MIT, real, framed, schema 9.0, three
-cutouts) and `fakeAlert.avro` (GPL-3.0, container file, schema 11.1, no
-cutouts) can go in the collection. The two Ampel files are not Rubin
-production data.
+- An alert from the archive is `.avro.gz`. The gzip opens, but its contents
+  are sniffed by their bytes alone, and a framed alert has no magic, so it
+  opens as text. Recognising it needs the name inside the gzip header, or the
+  outer name minus `.gz`, to reach `template_for` in `eval/mod.rs`.
+- Array and map items are under their block: `prvDiaSources` item 3 is
+  `value / [0] / items / [3]`. One flat list across blocks would need a gather
+  over every block's items.
+- A union is one level deeper than its value in the field tree. The linear
+  views fold it (`contents` is `value`), the tree does not.
+- A bytes value holding a decimal is a stored run like any other bytes, and
+  the decimal is not worked out.
+- No Butler-written Parquet catalog yet, so Piece 3 still waits.
 
 ## Piece 2: the afw layout inside FITS (images)
 

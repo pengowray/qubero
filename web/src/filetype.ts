@@ -109,6 +109,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   gwf: "LIGO/Virgo GWF frame",
   fits: "FITS",
   asdf: "ASDF",
+  avro: "Avro",
   npy: "NumPy array",
   netcdf: "NetCDF classic",
   grib: "GRIB weather data",

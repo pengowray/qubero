@@ -148,6 +148,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   cdf: ["cdf"],
   fits: ["fits", "fit", "fts"],
   asdf: ["asdf"],
+  avro: ["avro"],
   root: ["root"],
   gwf: ["gwf"],
   grib: ["grib", "grb", "grib2"],
