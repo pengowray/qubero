@@ -169,10 +169,9 @@ fn real_value() -> T {
         vec![
             ("exp", T::computed(exp)),
             ("int", digits(&[b' ', b'/', b'.', b'E', b'e', b'D', b'd'])),
-            // Nothing to peek at when the digits and the byte that ended them
-            // fill the value, which is the case for every whole number written
-            // the standard way, `BSCALE  =    1 / comment`: one blank, then
-            // the comment.
+            // The digits and the blank after them can fill the whole value, as
+            // they do in `BSCALE  =    1 / comment` written in the fixed
+            // format, and then there is no byte after them to check.
             ("frac", T::present_if(E::cond(E::lit(0).less_than(E::Remaining), digit_peek(0), E::lit(0)), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
         ],
     );
@@ -293,8 +292,9 @@ fn hierarch_body() -> T {
 
 /// The value of a `HIERARCH` card that is not quoted: a number when the first
 /// byte after the blanks is a digit, a sign or a point, and text up to the
-/// comment when it is anything else. A keyword whose value is a number is not
-/// one this can list, since the keyword is whatever the writer chose.
+/// comment when it is anything else. The value is checked, rather than the
+/// keyword as [`NUMERIC`] does, because a `HIERARCH` keyword is whatever the
+/// writer chose.
 fn hierarch_value() -> T {
     let blanks = E::run(b" ");
     let first = E::peek_at(blanks.clone().mul(E::lit(8)), 8, Big);

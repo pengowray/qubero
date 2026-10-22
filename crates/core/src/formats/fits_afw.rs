@@ -31,10 +31,10 @@
 //! with a card a part: `HIERARCH ARCHIVE_ID_PSF = 417` says object 417 is the
 //! PSF. Older files write `PSF_ID = 1` instead, with "archive ID" in the
 //! comment, and files in between write both. The index has a row for every
-//! piece of every object, and its first column is the object's ID, so the
-//! template asks each row for [`ARCHIVE`], and the builder reads the primary's
-//! cards once and makes a number that is one of those IDs read as the name of
-//! the part.
+//! piece of every object, and its first column is the object's ID. Each row
+//! has a field of the kind [`ARCHIVE`], whose builder reads the primary's
+//! cards once and makes an enum of the IDs they name: the row whose ID is 417
+//! reads `PSF`.
 //!
 //! What is not read:
 //!
@@ -44,10 +44,11 @@
 //!   top bit is then the opposite of the stored one. Naming the bits of what a
 //!   pixel is worth needs flags over a worked-out number, which the IR cannot
 //!   say: a flag is a bit of the bytes it covers.
-//! - Two FITS files read in one reading, at the same place in spaces of the
-//!   same size, with headers that differ. A build is kept by its key, and the
-//!   key is where the cards start and how long the space is, since nothing an
-//!   expression can say tells two spaces apart.
+//! - Two FITS files inside one container, of the same length and with their
+//!   headers in the same places, can get each other's mask planes or
+//!   components. A build is kept by its key, which is where the header's
+//!   cards start and how long the space is, and no expression tells two
+//!   spaces apart.
 
 use crate::eval::{Descriptions, R};
 use crate::template::{Built, Endian::Big, Expr as E, KeyValue, SchemaBuilder, Ty as T};

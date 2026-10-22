@@ -528,10 +528,9 @@ fn plain_table() -> T {
 /// `ARCHIVE_ID_PSF = 417` says object 417 is the image's PSF, and each row
 /// whose object is one of those says so in `component`.
 ///
-/// What a row does not do is lead to the rows it is about. They are in the
-/// unit `cat.archive` units after this one, and an expression can reach a unit
-/// before the one asking but not one after it: placing it is what is asking.
-/// See the Rubin handover for what it would take.
+/// A row does not link to the rows it describes, which are in the unit
+/// `cat.archive` units after this one. See the Rubin handover
+/// (`docs/HANDOVER-rubin.md`, piece 2) for what that link would take.
 fn archive_index() -> T {
     T::structure("Archive index", table_fields(archive_entry(), "entry", Bytes::Opened))
 }
@@ -665,8 +664,8 @@ fn heap_array(bytes: Bytes) -> T {
 /// so a run of bytes that is all printable text, tabs and line ends reads as
 /// text. Anything else stays bytes.
 ///
-/// Whether it is all text is a scan of the array, which stops at the first
-/// byte that is not, so bytes of anything else pay for a byte or two.
+/// The check for text scans the array and stops at the first byte that is
+/// not text, so an array of anything else is scanned for a byte or two.
 fn blob() -> T {
     let bytes = T::array(T::UInt { bits: 8, endian: Big }, E::Remaining);
     let pickle = E::cond(
