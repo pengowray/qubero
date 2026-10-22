@@ -91,6 +91,8 @@ static ABOUT: &[(&str, About)] = &[
         "FITS stores astronomical images and tables. Each part starts with a header of 80-character text lines, each giving a keyword and its value, and continues with binary data. Headers and data both come in blocks of 2,880 bytes.")),
     ("asdf", a("ASDF", Some("Advanced Scientific Data Format"),
         "ASDF stores astronomical data, and is what the Roman Space Telescope writes its images in. A YAML text tree describes the data, and binary blocks after it hold the arrays, often compressed.")),
+    ("avro", a("Avro", Some("Apache Avro"),
+        "Avro stores records described by a schema written in JSON. The records hold only values, with no field names or types, so a reader needs the schema to read them. A container file has the schema in its header, then blocks of records, each block optionally compressed. A single record sent over Kafka has a schema ID in front of it instead, and the Vera C. Rubin Observatory sends its alerts this way.")),
     ("npy", a("NPY", Some("NumPy"),
         "NPY stores one NumPy array: a short header, written as a Python dictionary, that gives the element type, the shape, and the order, followed by the array's raw data.")),
     ("parquet", a("Parquet", Some("Apache Parquet"),

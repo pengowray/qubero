@@ -39,6 +39,9 @@ mod arrow_schema;
 mod arrow_walk;
 mod asdf;
 mod asdf_tree;
+mod avro;
+mod avro_alerts;
+mod avro_schema;
 mod aseprite;
 mod assimp;
 pub(crate) mod bam;
@@ -216,6 +219,7 @@ pub use aiff::aiff;
 pub use ar::{ar, deb};
 pub use arrow::{arrow, arrow_stream};
 pub use asdf::asdf;
+pub use avro::avro;
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
@@ -449,6 +453,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("bufr", |_| bufr()),
     ("npy", |_| npy()),
     ("asdf", |_| asdf()),
+    ("avro", |_| avro()),
     ("ogg", |_| ogg()),
     ("fits", |_| fits()),
     ("grubenv", |_| grubenv()),

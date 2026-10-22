@@ -66,6 +66,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"BUFR", "bufr"),
     (npy::MAGIC, "npy"),
     (asdf::MAGIC, "asdf"),
+    (avro::MAGIC, "avro"),
     // A columnar table. The same four bytes close the file, and the eight
     // before those are what finds everything in it.
     (parquet::MAGIC, "parquet"),
@@ -490,7 +491,14 @@ pub fn sniff_named(head: &[u8], len: u64, name: &str) -> Option<&'static str> {
 /// believed. The test is what keeps this from being a lookup of extensions: a
 /// `.exp` is also what a linker calls its export file, and that one is a COFF
 /// object which fails it.
-const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", is_melco_exp), ("tga", "tga", is_tga)];
+const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
+    // A Rubin alert as the Kafka stream and the alert archive hold it: a zero
+    // byte and a schema ID, then the record. Believed only when the ID is one
+    // of the alert schemas Qubero has.
+    ("avro", "avro", avro::is_alert),
+    ("exp", "exp", is_melco_exp),
+    ("tga", "tga", is_tga),
+];
 
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the
 /// rule in `docs/HANDOVER-kaitai.md` the bytes alone never offer one of these,
