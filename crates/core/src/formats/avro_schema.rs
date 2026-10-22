@@ -419,7 +419,7 @@ fn block_data(codec: &str) -> Option<T> {
         // Each block is one raw Snappy block and then the CRC-32 of what it
         // unpacks to, big-endian.
         "snappy" => T::structure_named(
-            "snappy",
+            "SnappyBlock",
             "",
             "data",
             vec![("data", T::decoded(E::Remaining.sub(E::lit(4)), Codec::Snappy, records)), ("crc32", T::u32(Endian::Big))],

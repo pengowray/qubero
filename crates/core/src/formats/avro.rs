@@ -66,6 +66,14 @@ fn meta() -> T {
 /// What a block whose sync marker is not the header's is told.
 const SYNC_DIFFERS: &str = "Sync marker differs from the one in the header";
 
+/// Whether a block's sync marker is the header's: sixteen bytes, which an
+/// expression reads as two halves of eight.
+fn same_sync() -> E {
+    let half = |field: E, n: i128| E::PeekIn { at: Box::new(E::start_of(field).mul(E::lit(8)).add(E::lit(n * 64))), bits: 64, endian: Big };
+    let same = |n| half(E::field("sync"), n).equal_to(half(E::within(&["header", "sync"]), n));
+    same(0).both(same(1))
+}
+
 fn block() -> T {
     T::structure(
         "Block",
@@ -76,7 +84,7 @@ fn block() -> T {
             ("sync", T::bytes(E::lit(16))),
         ],
     )
-    .field_valid("sync", Valid::Expr { expr: E::field("sync").equal_to(E::within(&["header", "sync"])), msg: Some(SYNC_DIFFERS.into()) })
+    .field_valid("sync", Valid::Expr { expr: same_sync(), msg: Some(SYNC_DIFFERS.into()) })
     .contents("data")
     .counted_as("block")
 }

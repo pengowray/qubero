@@ -4,7 +4,9 @@
 //! The files are in `crates/core/formats-avro/alert_packet`, byte for byte as
 //! published, under GPL-3.0 (see the LICENSE there and THIRD-PARTY-NOTICES.md).
 
-/// The alert_packet commit the files were copied from.
+/// The alert_packet commit the files were copied from. Only a test reads it,
+/// to check it is the commit the script names.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) const COMMIT: &str = "1362a8d7f1db4014cbd419390580a707141c683a";
 
 /// Each file: the schema ID of the version it belongs to, its name, and its
