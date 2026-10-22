@@ -975,9 +975,10 @@ fn a_hierarch_card_reads_as_its_long_keyword_and_its_value() {
     assert_eq!(card(&mut ev, 5), "[5] LSST CALIB RUN BIAS");
     // The word HIERARCH is still the key a lookup by keyword compares.
     assert_eq!(ev.node(&d, &[0, 0, 0, 3, 1]).unwrap().value, Value::Str("HIERARCH".into()));
-    // space, name, mark, value, comment
-    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 3, 2, 3]).unwrap().value), "3");
-    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 3]).unwrap().value), "0");
+    // space, name, mark, value, comment. A number reads as the text it is
+    // written as, and as the digits of a real, as `BZERO`'s value does.
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 3, 2, 3, 0]).unwrap().value), "3");
+    assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 3, 0]).unwrap().value), "0");
     assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 4]).unwrap().value), "/ The number of row shifts per stutter");
     // A quoted value has the blanks before its quote as a field of their own.
     let bias = text(&ev.node(&d, &[0, 0, 0, 5, 2, 4, 1, 0, 0]).unwrap().value);
@@ -1003,4 +1004,46 @@ fn a_unit_is_labelled_with_its_extname() {
     let (d, mut ev) = eval(b);
     assert_eq!(ev.node(&d, &[0, 0]).unwrap().name, "[0]");
     assert_eq!(ev.node(&d, &[0, 1]).unwrap().name.trim_end(), "[1] MASK");
+}
+
+/// The cards of one header and, after them, a field per keyword asked for,
+/// each the whole number that keyword's card holds.
+fn looked_up(cards: &[&str], names: &[&str]) -> (Document<MemSource>, Evaluator) {
+    let mut fields = vec![("cards", T::repeat(super::super::fits_cards::card(), Until::FieldBytes { field: "key".into(), bytes: keyword("END") }))];
+    let names: Vec<&'static str> = names.iter().map(|n| &*Box::leak(n.to_string().into_boxed_str())).collect();
+    for n in &names {
+        let short = n.len() <= 8 && !n.contains(' ');
+        let at: &[&str] = if short { &["body", "value"] } else { &["body", "value", "parts", "int"] };
+        fields.push((n, T::computed(card_at(n, at))));
+    }
+    let t = Template::new("cards", T::structure("Header", fields));
+    (Document::new(MemSource(header(cards))), Evaluator::new(t))
+}
+
+#[test]
+fn a_long_keyword_is_found_by_the_name_after_hierarch() {
+    let (d, mut ev) = looked_up(
+        &[
+            "BITPIX  =                    8",
+            "HIERARCH FILTER_ID =         1 / archive ID for generic component 'FILTER'",
+            "HIERARCH ARCHIVE_ID_PSF =  417 / archive ID for generic component 'PSF'",
+            "HIERARCH ARCHIVE_ID_SKYWCS = 416",
+            "HIERARCH LSST CALIB RUN BIAS= 'LSSTCam/calib'",
+            "HIERARCH NEGATIVE_ONE = -3",
+            "END",
+        ],
+        &["BITPIX", "ARCHIVE_ID_PSF", "ARCHIVE_ID_SKYWCS", "FILTER_ID", "NEGATIVE_ONE", "ARCHIVE_ID_NOTHING"],
+    );
+    let value = |ev: &mut Evaluator, i: usize| ev.node(&d, &[i]).unwrap().value;
+    assert_eq!(value(&mut ev, 1), Value::Int(8));
+    // One blank before the `=` and none: both are the keyword asked for.
+    assert_eq!(value(&mut ev, 2), Value::Int(417));
+    assert_eq!(value(&mut ev, 3), Value::Int(416));
+    assert_eq!(value(&mut ev, 4), Value::Int(1));
+    assert_eq!(value(&mut ev, 5), Value::Int(-3));
+    assert_eq!(value(&mut ev, 6), Value::Int(0));
+    // A number still reads as the text it is written as, and a quoted value
+    // as its string.
+    assert_eq!(text(&ev.node(&d, &[0, 2, 2, 3, 0]).unwrap().value), "417");
+    assert_eq!(text(&ev.node(&d, &[0, 4, 2, 4, 1, 0, 0]).unwrap().value), "LSSTCam/calib");
 }

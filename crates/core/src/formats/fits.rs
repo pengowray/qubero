@@ -178,7 +178,19 @@ pub(super) fn keynum(name: &str) -> i128 {
 
 /// Somewhere inside the card whose keyword is `name`. Zero, or nothing at
 /// all for text, when no card has that keyword or the card has no such part.
-fn card_at(name: &str, field: &[&str]) -> E {
+///
+/// A keyword longer than eight letters, or with a blank in it, can only be
+/// written as a `HIERARCH` card, whose `key` is the word `HIERARCH` and whose
+/// keyword is the `name` in its body. That name ends wherever the writer put
+/// the `=`, so it is found by the text it reads as rather than by its bytes.
+/// Which of the two searches a lookup is, is settled here, once, by the name
+/// asked for. A lookup by a keyword of eight letters or fewer is the same
+/// search it always was, and the evaluator keeps its index of the names in
+/// `HIERARCH` cards apart from its index of the keywords.
+pub(super) fn card_at(name: &str, field: &[&str]) -> E {
+    if name.len() > 8 || name.contains(' ') {
+        return E::tagged_text("cards", &["body", "name"], name, field);
+    }
     E::tagged_bytes("cards", &["key"], &keyword(name), field)
 }
 
