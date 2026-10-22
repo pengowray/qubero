@@ -371,12 +371,12 @@ impl Reach {
         if name.is_empty() {
             return match &schema.top {
                 Some(top) => Ok(self.ty(top)),
-                None => Err(EvalError::Failed("the schema is empty".into())),
+                None => Err(EvalError::Failed("The schema is empty.".into())),
             };
         }
         match schema.def(name) {
             Some(def) => Ok(self.def(name, def)),
-            None => Err(EvalError::Failed(format!("the schema does not define {name}"))),
+            None => Err(EvalError::Failed(format!("The schema refers to the type \"{name}\" but never defines it."))),
         }
     }
 }
@@ -476,15 +476,17 @@ impl SchemaBuilder for FileTypes {
     fn build(&self, key: &[KeyValue], table: &mut dyn Descriptions) -> R<Built> {
         let [KeyValue::Text(name)] = key else { return Err(EvalError::Failed("not an Avro type".into())) };
         let Some((record, value)) = find_entry(table, "avro.schema")? else {
-            return Err(EvalError::Failed("the header has no avro.schema".into()));
+            return Err(EvalError::Failed("The file header has no \"avro.schema\" entry.".into()));
         };
-        let Some(json) = table.find(&value, &["json"])? else { return Err(EvalError::Failed("the schema is not text".into())) };
+        let Some(json) = table.find(&value, &["json"])? else {
+            return Err(EvalError::Failed("The \"avro.schema\" entry in the file header is not text.".into()));
+        };
         let node = table.node(&json)?;
         let text = table.bytes(node.offset_bits / 8, node.size_bits / 8)?;
         let schema = self.schema(text);
         let schema = match schema.as_ref() {
             Ok(s) => s,
-            Err(why) => return Err(EvalError::Failed(format!("the schema will not parse: {why}"))),
+            Err(why) => return Err(EvalError::Failed(format!("The \"avro.schema\" entry in the file header is not a valid schema: {why}"))),
         };
         Ok(Built { ty: Reach::file().build(schema, name)?, from: Some(record), members_from: Vec::new() })
     }
@@ -508,13 +510,13 @@ impl SchemaBuilder for Blocks {
         let (codec, from) = match find_entry(table, "avro.codec")? {
             Some((record, value)) => match table.find(&value, &["text"])? {
                 Some(text) => (table.text(&text)?, Some(record)),
-                None => return Err(EvalError::Failed("the codec is not text".into())),
+                None => return Err(EvalError::Failed("The \"avro.codec\" entry in the file header is not text.".into())),
             },
             None => ("null".to_string(), None),
         };
         match block_data(&codec) {
             Some(ty) => Ok(Built { ty, from, members_from: Vec::new() }),
-            None => Err(EvalError::Failed(format!("the blocks are compressed with {codec}, which Qubero cannot unpack"))),
+            None => Err(EvalError::Failed(format!("Shown as compressed bytes: Qubero cannot decompress the {codec} codec named in the file header."))),
         }
     }
 
@@ -534,7 +536,12 @@ pub(super) fn is_alert_id(id: i128) -> bool {
 pub(super) fn alert_schema(id: i128) -> Result<Schema, String> {
     let files: Vec<(&str, &str)> = SCHEMAS.iter().filter(|(i, _, _)| *i == id).map(|(_, n, t)| (*n, *t)).collect();
     let Some((_, root)) = files.iter().find(|(n, _)| n.ends_with(".alert.avsc")) else {
-        return Err(format!("Qubero has Rubin's alert schemas {} and not {}.{}", alert_versions(), id / 100, id % 100));
+        return Err(format!(
+            "Shown as bytes: this record is written with Rubin alert schema {}.{}, and Qubero includes only schemas {}.",
+            id / 100,
+            id % 100,
+            alert_versions()
+        ));
     };
     let mut schema = Schema::default();
     schema.add(root.as_bytes())?;
@@ -628,6 +635,6 @@ mod tests {
     #[test]
     fn an_id_that_is_not_bundled_says_which_are() {
         let e = alert_schema(1205).unwrap_err();
-        assert_eq!(e, "Qubero has Rubin's alert schemas 3.0 to 11.1 and not 12.5");
+        assert_eq!(e, "Shown as bytes: this record is written with Rubin alert schema 12.5, and Qubero includes only schemas 3.0 to 11.1.");
     }
 }

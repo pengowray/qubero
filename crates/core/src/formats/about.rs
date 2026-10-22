@@ -92,7 +92,7 @@ static ABOUT: &[(&str, About)] = &[
     ("asdf", a("ASDF", Some("Advanced Scientific Data Format"),
         "ASDF stores astronomical data, and is what the Roman Space Telescope writes its images in. A YAML text tree describes the data, and binary blocks after it hold the arrays, often compressed.")),
     ("avro", a("Avro", Some("Apache Avro"),
-        "Avro stores records described by a schema written in JSON. The records hold only values, with no field names or types, so a reader needs the schema to read them. A container file has the schema in its header, then blocks of records, each block optionally compressed. A single record sent over Kafka has a schema ID in front of it instead, and the Vera C. Rubin Observatory sends its alerts this way.")),
+        "Avro stores records whose field names and types are in a separate schema written in JSON, so the record bytes are values only. An object container file starts with the magic bytes \"Obj\" and 0x01, then a header with the schema and the codec name, then blocks of records, each block optionally compressed with deflate, snappy, zstandard, bzip2 or xz and followed by a 16-byte sync marker. The Confluent wire format, which Kafka messages use, is a zero byte, a 4-byte schema ID, then a single record; the schema is in a schema registry, not in the file. The Vera C. Rubin Observatory sends its alerts in the Confluent wire format, and Qubero includes Rubin's alert schemas 3.0 to 11.1, so it reads those alerts in full.")),
     ("npy", a("NPY", Some("NumPy"),
         "NPY stores one NumPy array: a short header, written as a Python dictionary, that gives the element type, the shape, and the order, followed by the array's raw data.")),
     ("parquet", a("Parquet", Some("Apache Parquet"),

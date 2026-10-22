@@ -64,7 +64,7 @@ fn meta() -> T {
 }
 
 /// What a block whose sync marker is not the header's is told.
-const SYNC_DIFFERS: &str = "Sync marker differs from the one in the header";
+const SYNC_DIFFERS: &str = "Differs from the sync marker in the file header";
 
 /// Whether a block's sync marker is the header's: sixteen bytes, which an
 /// expression reads as two halves of eight.
@@ -116,7 +116,10 @@ fn framed() -> T {
             ("record", record),
         ],
     )
-    .field_doc("schema_id", "Which schema the record is written in, as the schema registry numbers it. Rubin's alert schemas are numbered major × 100 + minor.")
+    .field_doc(
+        "schema_id",
+        "ID of the schema this record was written with, as numbered by the schema registry. Rubin numbers its alert schemas as major × 100 + minor: ID 900 is schema 9.0 and ID 1101 is schema 11.1. The major and minor fields beside this one show the two parts.",
+    )
 }
 
 pub fn avro() -> Template {
