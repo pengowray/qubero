@@ -81,6 +81,7 @@ pub mod elf_disasm;
 mod eps;
 mod fits;
 mod fits_cards;
+mod fits_afw;
 pub mod fits_tile;
 mod ggml;
 pub mod ggml_quant;

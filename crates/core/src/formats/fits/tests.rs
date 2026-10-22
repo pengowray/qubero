@@ -1073,3 +1073,158 @@ fn a_scale_written_with_one_blank_before_its_comment_reads() {
     let worth = ev.node(&d, &[0, 1, 3, 0, 1]).unwrap();
     assert_eq!(worth.value, Value::Int(1));
 }
+
+#[test]
+fn a_mask_pixels_bits_are_named_by_its_mp_cards() {
+    let mut b = primary();
+    b.extend(header(&[
+        "XTENSION= 'IMAGE   '",
+        "BITPIX  =                   32",
+        "NAXIS   =                    1",
+        "NAXIS1  =                    3",
+        "PCOUNT  =                    0",
+        "GCOUNT  =                    1",
+        "EXTTYPE = 'MASK    '",
+        "MP_BAD  =                    0",
+        "HIERARCH MP_DETECTED_NEGATIVE = 6",
+        "MP_SAT  =                    1",
+        "MP_INTRP=                    2",
+        "END",
+    ]));
+    let mut data = Vec::new();
+    for v in [0i32, 0b100_0011, 0b1000_0100] {
+        data.extend_from_slice(&v.to_be_bytes());
+    }
+    b.extend(padded(data));
+    let (d, mut ev) = eval(b);
+    let pixels = ev.node(&d, &[0, 1, 3]).unwrap();
+    assert_eq!((pixels.type_name.as_str(), pixels.child_count), ("Mask planes[]", 3));
+    let pixel = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 1, 3, i]).unwrap().value;
+    assert_eq!(pixel(&mut ev, 0), Value::Flags { raw: 0, set: vec![], unnamed: 0 });
+    let named = |set: &[&str], unnamed| (set.iter().map(|s| s.to_string()).collect::<Vec<_>>(), unnamed);
+    let set = |v: Value| match v {
+        Value::Flags { set, unnamed, .. } => (set, unnamed),
+        other => panic!("not flags: {other:?}"),
+    };
+    // Bits 0, 1 and 6, the last of them named in a HIERARCH card.
+    assert_eq!(set(pixel(&mut ev, 1)), named(&["BAD", "SAT", "DETECTED_NEGATIVE"], 0));
+    // Bit 7 is set and no card names it.
+    assert_eq!(set(pixel(&mut ev, 2)), named(&["INTRP"], 1));
+}
+
+#[test]
+fn an_image_that_is_not_a_mask_keeps_its_numbers() {
+    let mut b = primary();
+    b.extend(header(&[
+        "XTENSION= 'IMAGE   '",
+        "BITPIX  =                   32",
+        "NAXIS   =                    1",
+        "NAXIS1  =                    1",
+        "PCOUNT  =                    0",
+        "GCOUNT  =                    1",
+        "EXTTYPE = 'IMAGE   '",
+        "MP_BAD  =                    0",
+        "END",
+    ]));
+    b.extend(padded(5i32.to_be_bytes().to_vec()));
+    let (d, mut ev) = eval(b);
+    assert_eq!(ev.node(&d, &[0, 1, 3, 0]).unwrap().value, Value::Int(5));
+}
+
+/// A primary header that says which saved object is which part, an archive
+/// index of three rows, and the table those rows are about, whose one column
+/// holds a pickle, some text and some bytes.
+fn archive() -> Vec<u8> {
+    let mut b = header(&[
+        "SIMPLE  =                    T",
+        "BITPIX  =                    8",
+        "NAXIS   =                    0",
+        "AR_HDU  =                    2 / HDU (1-indexed) containing the archive",
+        "PSF_ID  =                    7 / archive ID for the main Psf",
+        "HIERARCH ARCHIVE_ID_PSF = 7 / archive ID for generic component 'PSF'",
+        "HIERARCH ARCHIVE_ID_SKYWCS = 8 / archive ID for generic component 'SKYWCS'",
+        "EXPID   =                    9 / not an archive ID",
+        "END",
+    ]);
+    let row = |id: i32, row0: i32, name: &str| {
+        let mut r = Vec::new();
+        for v in [id, 1, 0, row0, 1] {
+            r.extend_from_slice(&v.to_be_bytes());
+        }
+        let mut text = name.as_bytes().to_vec();
+        text.resize(8, b' ');
+        r.extend(text);
+        r
+    };
+    let mut cards = vec!["TFIELDS =                    6".to_string()];
+    for (i, (name, form)) in [("id", "1J"), ("cat.archive", "1J"), ("cat.persistable", "1J"), ("row0", "1J"), ("nrows", "1J"), ("name", "8A")].iter().enumerate() {
+        cards.push(format!("TTYPE{}  = '{name}'", i + 1));
+        cards.push(format!("TFORM{}  = '{form:<8}'", i + 1));
+    }
+    cards.push("EXTTYPE = 'ARCHIVE_INDEX'".into());
+    let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+    b.extend(table_header(&refs, 3, 28, 0));
+    let mut data = row(7, 0, "Psf");
+    data.extend(row(8, 1, "SkyWcs"));
+    data.extend(row(9, 2, "Other"));
+    b.extend(padded(data));
+    let pickle = b"\x80\x04\x95\x05\x00\x00\x00\x00\x00\x00\x00K\x07.".to_vec();
+    let text = b"1 SkyWcs 1  Begin FrameSet\n End FrameSet\n".to_vec();
+    let bytes = vec![0u8, 1, 2, 3];
+    let heap = [pickle.clone(), text.clone(), bytes.clone()].concat();
+    b.extend(table_header(&["TFIELDS =                    1", "TTYPE1  = 'bytes   '", "TFORM1  = '1QB     '", "AR_NAME = 'SkyWcs  '"], 3, 16, heap.len()));
+    let mut data = Vec::new();
+    let mut at = 0u64;
+    for blob in [&pickle, &text, &bytes] {
+        data.extend_from_slice(&(blob.len() as u64).to_be_bytes());
+        data.extend_from_slice(&at.to_be_bytes());
+        at += blob.len() as u64;
+    }
+    data.extend(heap);
+    b.extend(padded(data));
+    b
+}
+
+#[test]
+fn an_archive_index_row_is_named_by_its_class_and_says_which_part_it_is() {
+    let (d, mut ev) = eval(archive());
+    assert_eq!(ev.node(&d, &[0, 1, 3]).unwrap().type_name, "Archive index");
+    let row = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 1, 3, 1, i]).unwrap().name.trim_end().to_string();
+    assert_eq!(row(&mut ev, 0), "[0] Psf");
+    assert_eq!(row(&mut ev, 1), "[1] SkyWcs");
+    let part = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 1, 3, 1, i, 1]).unwrap().value;
+    let named = |raw, name: &str| Value::Enum { raw, name: Some(name.into()), hex: false };
+    // The old and the new card both say 7 is the PSF; 9 is no part.
+    assert_eq!(part(&mut ev, 0), named(7, "PSF"));
+    assert_eq!(part(&mut ev, 1), named(8, "SKYWCS"));
+    assert_eq!(ev.node(&d, &[0, 1, 3, 1, 2, 1]).unwrap().child_count, 0);
+    // The table after it has no EXTNAME and is named by its AR_NAME.
+    assert_eq!(ev.node(&d, &[0, 2]).unwrap().name.trim_end(), "[2] SkyWcs");
+}
+
+#[test]
+fn bytes_in_an_archive_table_open_as_a_pickle_or_read_as_text() {
+    let (d, mut ev) = eval(archive());
+    let heap = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 2, 3, 2, i]).unwrap();
+    let pickle = heap(&mut ev, 0);
+    assert_eq!(pickle.type_name, "stored");
+    let id = ev.open_space(&d, 0, &[0, 2, 3, 2, 0]).unwrap().unwrap();
+    assert_eq!(ev.space(id).unwrap().template, "pickle");
+    let text = heap(&mut ev, 1);
+    assert_eq!(text.type_name, "utf8[]");
+    assert_eq!(text.value, Value::Str("1 SkyWcs 1  Begin FrameSet\n End FrameSet\n".into()));
+    let bytes = heap(&mut ev, 2);
+    assert_eq!((bytes.type_name.as_str(), bytes.child_count), ("u8[]", 4));
+}
+
+#[test]
+fn a_compressed_images_tiles_stay_bytes() {
+    // Tiles whose bytes happen to be printable are still a tile's bytes, which
+    // the panel undoes, and not text.
+    let mut b = compressed("T");
+    let heap = b.len() - 2880 + 3 * 8;
+    b[heap..heap + 9].copy_from_slice(b"ABCDEFGHI");
+    let (d, mut ev) = eval(b);
+    let tile = ev.node(&d, &[0, 1, 3, 5, 0]).unwrap();
+    assert_eq!((tile.type_name.as_str(), tile.child_count), ("u8[]", 4));
+}

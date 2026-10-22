@@ -137,17 +137,26 @@ impl Cards {
     /// value is the text inside its quotes, with a doubled quote read as one
     /// and the blanks it is padded with taken off; any other value is the text
     /// before a `/`, trimmed. A card with no value is left out.
+    ///
+    /// A `HIERARCH` card's keyword is the one after that word, up to its `=`,
+    /// and its value is whatever follows the `=`: `HIERARCH MP_NO_DATA = 8` is
+    /// `MP_NO_DATA` and 8.
     pub fn parse(bytes: &[u8]) -> Cards {
         let mut out = Vec::new();
         for card in bytes.chunks_exact(80) {
-            let key = String::from_utf8_lossy(&card[..8]).trim_end().to_string();
+            let mut key = String::from_utf8_lossy(&card[..8]).trim_end().to_string();
             if key == "END" {
                 break;
             }
-            if &card[8..10] != b"= " {
-                continue;
-            }
-            let rest = String::from_utf8_lossy(&card[10..]).to_string();
+            let value_at = match card.iter().position(|b| *b == b'=') {
+                Some(eq) if key == "HIERARCH" && card[8] == b' ' => {
+                    key = String::from_utf8_lossy(&card[9..eq]).trim().to_string();
+                    eq + 1
+                }
+                _ if &card[8..10] == b"= " => 10,
+                _ => continue,
+            };
+            let rest = String::from_utf8_lossy(&card[value_at..]).to_string();
             let value = rest.trim_start();
             let text = if let Some(inside) = value.strip_prefix('\'') {
                 let mut s = String::new();
@@ -185,6 +194,23 @@ impl Cards {
     /// The same, read as a real. FITS allows a `D` for the exponent.
     pub fn real(&self, key: &str) -> Option<f64> {
         self.text(key)?.replace(['D', 'd'], "E").parse().ok()
+    }
+
+    /// What the bits of a mask's pixels are called, for a header that says
+    /// the image is a mask with `EXTTYPE = 'MASK'`, from its `MP_<NAME> = bit`
+    /// cards, in order of bit. Nothing for any other header. See
+    /// [`fits_afw`](super::fits_afw), which names them in the template.
+    pub fn mask_planes(&self) -> Vec<(u32, String)> {
+        if self.text("EXTTYPE") != Some("MASK") {
+            return Vec::new();
+        }
+        let mut out: Vec<(u32, String)> = self
+            .0
+            .iter()
+            .filter_map(|(k, v)| Some((v.parse().ok().filter(|b: &u32| *b < 64)?, k.strip_prefix("MP_")?.to_string())))
+            .collect();
+        out.sort();
+        out
     }
 }
 
@@ -255,6 +281,9 @@ pub struct Image {
     pub rows: u64,
     /// Where the heap starts, counted from the start of the data.
     pub heap_start: u64,
+    /// What each bit of a pixel is called, for a mask. See
+    /// [`Cards::mask_planes`].
+    pub planes: Vec<(u32, String)>,
 }
 
 impl Image {
@@ -325,6 +354,7 @@ impl Image {
             row_bytes,
             rows,
             heap_start,
+            planes: cards.mask_planes(),
         })
     }
 
@@ -538,6 +568,8 @@ pub struct Tile {
     pub element_type: String,
     /// Why fewer pixels than the tile has came out, or none.
     pub problem: Option<String>,
+    /// What each bit of a pixel is called, for a mask.
+    pub planes: Vec<(u32, String)>,
 }
 
 impl Tile {
@@ -547,10 +579,27 @@ impl Tile {
         product(&self.shape)
     }
 
-    /// One pixel as a panel writes it.
+    /// One pixel as a panel writes it. A mask's pixel says which of its bits
+    /// are set, the way the template writes a field of named bits: `34
+    /// (SAT|DETECTED)`, and a set bit nobody named counted after them.
     pub fn text(&self, i: usize) -> String {
         let v = self.pixels[i];
         match self.kind {
+            Kind::Int if !self.planes.is_empty() && v as i64 != 0 => {
+                let raw = v as i64 as u64;
+                let mut set: Vec<String> = Vec::new();
+                let mut unnamed = 0;
+                for bit in (0..64).filter(|b| raw >> b & 1 == 1) {
+                    match self.planes.iter().find(|(b, _)| *b == bit) {
+                        Some((_, name)) => set.push(name.clone()),
+                        None => unnamed += 1,
+                    }
+                }
+                if unnamed > 0 {
+                    set.push(format!("{unnamed} more"));
+                }
+                format!("{} ({})", v as i64, set.join("|"))
+            }
             Kind::Int => format!("{}", v as i64),
             Kind::F32 => format!("{}", v as f32),
             Kind::F64 => format!("{v}"),
@@ -652,6 +701,7 @@ pub fn unread(image: &Image, index: u64, row: &Row, packed_bytes: usize, problem
         pixels: Vec::new(),
         element_type: element_type.to_string(),
         problem: image.invalid().or(problem),
+        planes: image.planes.clone(),
     }
 }
 
@@ -672,6 +722,7 @@ pub fn unreadable(problem: String) -> Tile {
         pixels: Vec::new(),
         element_type: String::new(),
         problem: Some(problem),
+        planes: Vec::new(),
     }
 }
 

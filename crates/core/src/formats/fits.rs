@@ -91,6 +91,22 @@
 //! what a `Match` reading its `on` as text from anywhere an expression reaches
 //! is for.
 //!
+//! The LSST Science Pipelines (afw, which writes Rubin's images) put more in a
+//! file than the standard says, and say what in cards of their own:
+//!
+//! - An image whose header says `EXTTYPE = 'MASK'` is a mask, and its pixels'
+//!   bits are named by its `MP_<NAME> = <bit>` cards: a pixel of 34 reads as
+//!   `SAT|DETECTED`. The names are in the file, so the pixels' type is built
+//!   from the cards by [`fits_afw`](super::fits_afw).
+//! - A table whose header says `EXTTYPE = 'ARCHIVE_INDEX'` lists the objects
+//!   saved with the image, a row a piece of one, and each row is named by its
+//!   class and says which part of the image its object is, from the primary
+//!   header's `ARCHIVE_ID_*` cards. See [`archive_index`].
+//! - A cell of bytes in a plain table, a `PB` or `QB` column's, opens as a
+//!   pickle when it is one and reads as text when it is all text: afw keeps a
+//!   PSF as a pickle, a WCS as AST's text and its summary statistics as YAML.
+//!   See [`blob`].
+//!
 //! What is not read here:
 //!
 //! - A table of more than 999 columns, which no keyword could describe: a
@@ -147,7 +163,7 @@
 //!   size is a search by the text of another card.
 
 use super::fits_cards::card;
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, Step, StrLen, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, Template, Ty as T, Until};
 
 /// The block every part of a FITS file is padded out to.
 const BLOCK: u32 = 2880;
@@ -343,7 +359,11 @@ fn element_count() -> E {
 /// The data, read as the type BITPIX names. The switch is over the whole
 /// array rather than over one element, so the row says `i16 be[]` rather than
 /// leaving the reader with `switch[]`.
-fn data_array() -> T {
+///
+/// `mask` says the header calls this image a mask, and then a pixel the cards
+/// do not scale has its bits named by the header's `MP_` cards. See
+/// [`mask_pixels`].
+fn data_array(mask: bool) -> T {
     let of = |ty: T| T::array(ty, placed_count());
     // What the header says a pixel is worth: `BZERO + BSCALE * stored`, the
     // same reading a table's columns get from `TZEROn` and `TSCALn`. The
@@ -375,7 +395,7 @@ fn data_array() -> T {
         E::lit(0),
     );
     let scaled = |ty: T| {
-        let plain = of(ty.clone());
+        let plain = if mask { mask_pixels(ty.clone()) } else { of(ty.clone()) };
         let with = T::array(worth_of(ty.clone(), scale.clone(), real("BZERO", "int"), true), placed_count());
         let whole = T::switch(real("BSCALE", "frac"), vec![(0, with)], reals(ty.clone()));
         let both = T::switch(real("BZERO", "frac"), vec![(0, whole)], reals(ty.clone()));
@@ -400,6 +420,37 @@ fn data_array() -> T {
     )
 }
 
+/// The pixels of a mask, each an integer of the width `ty` is whose bits are
+/// named by the header's `MP_` cards: `MP_SAT = 1` says bit 1 is `SAT`.
+///
+/// The names are in the file, so the type is built from the cards when the
+/// image is first read, and kept by where the cards start. A pixel is still
+/// as wide as `ty`, so the image is placed by arithmetic as any other. See
+/// [`fits_afw`](super::fits_afw).
+fn mask_pixels(ty: T) -> T {
+    let (bits, signed) = match ty {
+        T::Int { bits, .. } => (bits, 1),
+        T::UInt { bits, .. } => (bits, 0),
+        other => return T::array(other, placed_count()),
+    };
+    let key = vec![
+        KeyPart::Int(E::start_of(E::field("cards"))),
+        KeyPart::Int(E::SpaceSize),
+        KeyPart::Int(E::lit(bits)),
+        KeyPart::Int(E::lit(signed)),
+    ];
+    T::schema(super::fits_afw::MASK, vec![Step::field("cards"), Step::each()], key)
+}
+
+/// An image's data: its pixels, whose bits are named when the header says the
+/// image is a mask with `EXTTYPE = 'MASK'`, as the LSST Science Pipelines
+/// write one. A string's blanks at the end are not part of it, and a writer
+/// may leave them out, so both spellings are a mask.
+fn image() -> T {
+    let exttype = card_at("EXTTYPE", &["body", "value", "parts", "0", "text"]);
+    T::matches(exttype, vec![("MASK", data_array(true)), ("MASK    ", data_array(true))], data_array(false))
+}
+
 /// Which of the three shapes a data unit has, read from the cards that
 /// describe it rather than from `XTENSION`: a table's kind is a value written
 /// in text, and nothing in the IR picks a type by text found by keyword.
@@ -417,12 +468,22 @@ fn table_kind() -> E {
 /// variable-length arrays in. `PCOUNT` is how many bytes that heap is, and it
 /// is what is left of the data unit once the rows are placed.
 fn table(row: T) -> T {
-    T::structure("Table", table_fields(row, "row"))
+    T::structure("Table", table_fields(row, "row", Bytes::Opened))
+}
+
+/// What a heap array of bytes, a `PB` or `QB` column's, reads as.
+#[derive(Clone, Copy)]
+enum Bytes {
+    /// Bytes, and nothing more: a compressed image's tiles, which
+    /// [`fits_tile`](super::fits_tile) undoes beside the template.
+    Plain,
+    /// What they hold, where they say what that is. See [`blob`].
+    Opened,
 }
 
 /// The fields every binary table has, whatever it holds: what the header says
 /// of each column, the rows, each of them counted as a `unit`, and the heap.
-fn table_fields(row: T, unit: &str) -> Vec<(&'static str, T)> {
+fn table_fields(row: T, unit: &str, bytes: Bytes) -> Vec<(&'static str, T)> {
     let width = card_value("NAXIS1").at_least(E::lit(1));
     // A row of no width is no row at all: without the check, a table that
     // says so would lay a row over every byte of its heap.
@@ -434,14 +495,63 @@ fn table_fields(row: T, unit: &str) -> Vec<(&'static str, T)> {
         // [`columns`].
         ("columns", columns()),
         ("rows", T::array(T::sized(width, row).counted_as(unit), rows)),
-        ("heap", T::sized(E::Remaining, heap())),
+        ("heap", T::sized(E::Remaining, heap(bytes))),
     ]
 }
 
 /// A binary table, which is a compressed image when its header says
 /// `ZIMAGE = T` and a table like any other when it does not.
 fn binary_table() -> T {
-    T::matches(card_at("ZIMAGE", &["body", "value"]), vec![("T", compressed_image())], table(binary_row()))
+    T::matches(card_at("ZIMAGE", &["body", "value"]), vec![("T", compressed_image())], plain_table())
+}
+
+/// A binary table that is not a compressed image, which is the index of an
+/// archive when its header says `EXTTYPE = 'ARCHIVE_INDEX'`. See
+/// [`archive_index`].
+fn plain_table() -> T {
+    let exttype = card_at("EXTTYPE", &["body", "value", "parts", "0", "text"]);
+    T::matches(exttype, vec![("ARCHIVE_INDEX", archive_index())], table(binary_row()))
+}
+
+/// The index of the objects the LSST Science Pipelines saved with an image:
+/// its PSF, its WCS, the detector it was taken with, and the pieces those are
+/// made of. One row a piece, and each row named by the class it is a piece of,
+/// so the index reads `[247] PiffPsf` rather than as a run of numbers.
+///
+/// The columns are the pipelines' own and always these seven: the object's
+/// `id`, which of the tables after this one holds the piece (`cat.archive`,
+/// counted from 1 after this table), the piece's place among the object's
+/// pieces, the table's first row of it and how many rows, and the class's
+/// `name` and Python `module`. Older files write `cat_archive` and
+/// `cat_persistable`, and the same seven columns in the same order. The
+/// primary header says which object is which with `ARCHIVE_ID_*` cards:
+/// `ARCHIVE_ID_PSF = 417` says object 417 is the image's PSF, and each row
+/// whose object is one of those says so in `component`.
+///
+/// What a row does not do is lead to the rows it is about. They are in the
+/// unit `cat.archive` units after this one, and an expression can reach a unit
+/// before the one asking but not one after it: placing it is what is asking.
+/// See the Rubin handover for what it would take.
+fn archive_index() -> T {
+    T::structure("Archive index", table_fields(archive_entry(), "entry", Bytes::Opened))
+}
+
+/// One row of an archive index: its cells, named by the class in the sixth,
+/// and the part of the image the object it is a piece of is, where the
+/// primary header says. The part is read from the primary's cards, which are
+/// in the first unit of the file; nothing in this one says it. See
+/// [`fits_afw`](super::fits_afw).
+fn archive_entry() -> T {
+    let label = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
+    let primary = vec![Step::field("hdus"), Step::elements(&[0]), Step::field("cards"), Step::each()];
+    let key = vec![KeyPart::Int(E::start_of(E::field("cards"))), KeyPart::Int(E::SpaceSize)];
+    T::structure(
+        "Entry",
+        vec![("cells", T::array(binary_cell(), table_columns())), ("component", T::schema(super::fits_afw::ARCHIVE, primary, key))],
+    )
+    .payload(&["cells"])
+    .field_elem_named_from("cells", label)
+    .named_by("cells.5")
 }
 
 /// A tile-compressed image: a binary table with a row per tile, as FITS
@@ -475,7 +585,7 @@ fn compressed_image() -> T {
         ("image_shape", T::array(T::computed(along("ZNAXIS")), axes.clone())),
         ("tile_shape", T::array(T::computed(tile), axes)),
     ];
-    fields.extend(table_fields(tile_row(), "tile"));
+    fields.extend(table_fields(tile_row(), "tile", Bytes::Plain));
     T::structure("Compressed image", fields).packed_as(super::fits_tile::PACKING)
 }
 
@@ -492,7 +602,7 @@ fn compressed_image() -> T {
 /// What no array claims is a gap. A heap is often exactly the arrays in it,
 /// and a writer is free to leave room, or to have two descriptors share one
 /// array, which reads as two elements over the same bytes.
-fn heap() -> T {
+fn heap(bytes: Bytes) -> T {
     // Into every row, every cell of it, and every descriptor in a cell that
     // holds any. A cell that is not a variable-length column has no
     // `descriptors` field, and the walk goes no further down that way.
@@ -505,13 +615,13 @@ fn heap() -> T {
         Step::each(),
     ];
     let starts = card_value("THEAP").or(card_value("NAXIS1").mul(card_value("NAXIS2")));
-    T::gather(from, E::field("offset"), Anchor::Window, starts, heap_array())
+    T::gather(from, E::field("offset"), Anchor::Window, starts, heap_array(bytes))
 }
 
 /// One heap array: as many elements as its descriptor counts, of the type its
 /// column's `TFORMn` names after the `P`. Never more than the heap has room
 /// for, so a count that runs off the end of it shows what is there.
-fn heap_array() -> T {
+fn heap_array(bytes: Bytes) -> T {
     let count = E::placer(E::field("count"));
     let of = |ty: T, width: i128| T::array(ty, count.clone().at_most(E::Remaining.div(E::lit(width))));
     let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
@@ -521,7 +631,13 @@ fn heap_array() -> T {
         vec![
             ("L", text.clone()),
             ("X", T::bytes(count.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
-            ("B", of(T::UInt { bits: 8, endian: Big }, 1)),
+            (
+                "B",
+                match bytes {
+                    Bytes::Plain => of(T::UInt { bits: 8, endian: Big }, 1),
+                    Bytes::Opened => T::sized(count.clone().at_most(E::Remaining), blob()),
+                },
+            ),
             ("I", of(T::Int { bits: 16, endian: Big }, 2)),
             ("J", of(T::Int { bits: 32, endian: Big }, 4)),
             ("K", of(T::Int { bits: 64, endian: Big }, 8)),
@@ -536,6 +652,50 @@ fn heap_array() -> T {
         T::bytes(E::lit(0)),
     )
 }
+
+/// The bytes a table keeps an object in, read as the object where they say
+/// what it is: a Python pickle, or text.
+///
+/// The LSST Science Pipelines write the objects an image carries with it, its
+/// PSF model, its WCS and its summary statistics, into the binary tables after
+/// the image, and many of them as one `QB` cell of bytes. What those bytes
+/// are is not in the table. A PSF from Piff is a pickle, which opens with
+/// `\x80` and the protocol number, and opens here as the pickle it is. A WCS
+/// is AST's own text, `Begin FrameSet` and so on, and the statistics are YAML,
+/// so a run of bytes that is all printable text, tabs and line ends reads as
+/// text. Anything else stays bytes.
+///
+/// Whether it is all text is a scan of the array, which stops at the first
+/// byte that is not, so bytes of anything else pay for a byte or two.
+fn blob() -> T {
+    let bytes = T::array(T::UInt { bits: 8, endian: Big }, E::Remaining);
+    let pickle = E::cond(
+        E::lit(1).less_than(E::Remaining),
+        E::lit(0x8001).less_than(E::peek(16, Big)).mul(E::peek(16, Big).less_than(E::lit(0x8006))),
+        E::lit(0),
+    );
+    let text = E::lit(0).less_than(E::Remaining).mul(E::run(&TEXT).equals(E::Remaining));
+    T::switch(
+        pickle,
+        vec![(1, T::decoded(E::Remaining, crate::codec::Codec::Stored, super::decoded_text()))],
+        T::switch(text, vec![(1, T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8))], bytes),
+    )
+}
+
+/// The bytes text is written in, as far as [`blob`] is concerned: printable
+/// ASCII, the tab and the two line ends.
+const TEXT: [u8; 98] = {
+    let mut out = [0u8; 98];
+    out[0] = b'\t';
+    out[1] = b'\n';
+    out[2] = b'\r';
+    let mut i = 0;
+    while i < 95 {
+        out[3 + i] = b' ' + i as u8;
+        i += 1;
+    }
+    out
+};
 
 /// One row of a binary table: a cell per column, laid out one after another,
 /// each of them an array of as many values as its `TFORMn` says.
@@ -759,7 +919,7 @@ fn ascii_row() -> T {
 /// How many elements to place: what the header says, and never more than the
 /// room the data unit has. A file cut off mid-transmission shows the elements
 /// it does have rather than refusing the header that described them.
-fn placed_count() -> E {
+pub(super) fn placed_count() -> E {
     element_count().at_most(E::Remaining.div(element_bytes().at_least(E::lit(1))))
 }
 
@@ -778,7 +938,7 @@ fn hdu() -> T {
                 "data",
                 T::sized(
                     element_bytes().mul(element_count()).at_most(E::Remaining),
-                    T::switch(table_kind(), vec![(1, table(ascii_row())), (2, binary_table())], data_array()),
+                    T::switch(table_kind(), vec![(1, table(ascii_row())), (2, binary_table())], image()),
                 ),
             ),
             ("data_pad", T::bytes(E::size_of("data").pad_to(BLOCK).at_most(E::Remaining))),
@@ -787,15 +947,21 @@ fn hdu() -> T {
             // numbers. The primary unit has none as a rule and keeps its
             // bare index. Last, so that no path to the fields above moves.
             ("extname", T::computed_text(card_at("EXTNAME", &["body", "value", "parts", "0", "text"]))),
+            // The class of the objects an archive table holds, which the LSST
+            // Science Pipelines write as `AR_NAME` and, in later files, as
+            // `EXTNAME` too: a unit with only the first reads `[5] SkyWcs`.
+            ("ar_name", T::computed_text(card_at("AR_NAME", &["body", "value", "parts", "0", "text"]))),
         ],
     )
-    .machinery(&["header_pad", "data_pad", "extname"])
-    .named_by("extname")
+    .machinery(&["header_pad", "data_pad", "extname", "ar_name"])
+    .named_by("extname | ar_name")
     .counted_as("HDU")
 }
 
 pub fn fits() -> Template {
     Template::new("fits", T::structure("FITS", vec![("hdus", T::repeat(hdu(), Until::End))]))
+        .with_schema(super::fits_afw::MASK, std::sync::Arc::new(super::fits_afw::Planes))
+        .with_schema(super::fits_afw::ARCHIVE, std::sync::Arc::new(super::fits_afw::Components))
 }
 
 #[cfg(test)]
