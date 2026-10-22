@@ -169,7 +169,11 @@ fn real_value() -> T {
         vec![
             ("exp", T::computed(exp)),
             ("int", digits(&[b' ', b'/', b'.', b'E', b'e', b'D', b'd'])),
-            ("frac", T::present_if(digit_peek(0), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
+            // Nothing to peek at when the digits and the byte that ended them
+            // fill the value, which is the case for every whole number written
+            // the standard way, `BSCALE  =    1 / comment`: one blank, then
+            // the comment.
+            ("frac", T::present_if(E::cond(E::lit(0).less_than(E::Remaining), digit_peek(0), E::lit(0)), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
         ],
     );
     T::sized(

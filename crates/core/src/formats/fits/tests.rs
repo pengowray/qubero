@@ -1047,3 +1047,29 @@ fn a_long_keyword_is_found_by_the_name_after_hierarch() {
     assert_eq!(text(&ev.node(&d, &[0, 2, 2, 3, 0]).unwrap().value), "417");
     assert_eq!(text(&ev.node(&d, &[0, 4, 2, 4, 1, 0, 0]).unwrap().value), "LSSTCam/calib");
 }
+
+#[test]
+fn a_scale_written_with_one_blank_before_its_comment_reads() {
+    // The fixed format puts a number's last digit in column 30 and leaves one
+    // blank before the `/`, so the digits and that blank fill the value. The
+    // unit after this one is still found.
+    let mut b = primary();
+    b.extend(header(&[
+        "XTENSION= 'IMAGE   '           / IMAGE extension",
+        "BITPIX  =                   16 / number of bits per data pixel",
+        "NAXIS   =                    1",
+        "NAXIS1  =                    1",
+        "PCOUNT  =                    0",
+        "GCOUNT  =                    1",
+        "BZERO   =                32768 / offset data range to that of unsigned short",
+        "BSCALE  =                    1 / default scaling factor",
+        "END",
+    ]));
+    b.extend(padded(vec![0x80, 0x01]));
+    b.extend(header(&["XTENSION= 'IMAGE   '", "BITPIX  =                    8", "NAXIS   =                    0", "PCOUNT  =                    0", "GCOUNT  =                    1", "END"]));
+    let (d, mut ev) = eval(b);
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 3);
+    // The stored -32767 is worth 1.
+    let worth = ev.node(&d, &[0, 1, 3, 0, 1]).unwrap();
+    assert_eq!(worth.value, Value::Int(1));
+}
