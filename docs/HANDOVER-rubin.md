@@ -140,6 +140,13 @@ the `HIERARCH` keywords. The first long-keyword lookup in a header takes
 5.0 ms if no lookup has read the header yet, and about 3 ms if a short
 lookup already has; each later one takes 0.03 ms.
 
+**Sweeps.** `CHECK_TREE_ALL=1 check_tree <dir> - 7`, release build, before
+and after this work: `qubero-samples/fits` reads all 14 files with no errors
+both times (1.9 s, then 1.35 s); `qubero2-extras/rubin` has the same one
+known error both times, the gzipped LATISS raw over the unpack cap (20.9 s,
+then 9.3 s). The visit image alone went from 5.1 s to 1.4 s, because each
+text byte array is now one node instead of one node per byte.
+
 **Fixed on the way: scaled images cut a file short.** Before this work, a
 `BSCALE` or `BZERO` card written in the standard fixed format, such as
 `BSCALE  =                    1 / default scaling factor`, failed to read.

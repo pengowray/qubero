@@ -579,9 +579,11 @@ impl Tile {
         product(&self.shape)
     }
 
-    /// One pixel as a panel writes it. A mask's pixel says which of its bits
-    /// are set, the way the template writes a field of named bits: `34
-    /// (SAT|DETECTED)`, and a set bit nobody named counted after them.
+    /// One pixel as a panel writes it. A mask's pixel is followed by the names
+    /// of its set bits, the way the template writes a field of named bits:
+    /// `34 (SAT|DETECTED)`, with set bits that no card names counted at the
+    /// end. A no-break space joins the number to the names, so a line of
+    /// pixels wraps between pixels and not inside one.
     pub fn text(&self, i: usize) -> String {
         let v = self.pixels[i];
         match self.kind {
@@ -598,7 +600,7 @@ impl Tile {
                 if unnamed > 0 {
                     set.push(format!("{unnamed} more"));
                 }
-                format!("{} ({})", v as i64, set.join("|"))
+                format!("{}\u{a0}({})", v as i64, set.join("|"))
             }
             Kind::Int => format!("{}", v as i64),
             Kind::F32 => format!("{}", v as f32),

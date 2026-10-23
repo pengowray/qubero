@@ -111,7 +111,7 @@ fn check_masks(dir: &Path, wrong: &mut Vec<String>) -> usize {
                             if unnamed > 0 {
                                 all.push(format!("{unnamed} more"));
                             }
-                            expect = format!("{want} ({})", all.join("|"));
+                            expect = format!("{want}\u{a0}({})", all.join("|"));
                         }
                         if text != expect {
                             wrong.push(format!("{file}: tile pixel ({}) is {text:?}, astropy says {expect:?}", f.at));

@@ -197,8 +197,8 @@ fn a_masks_planes_are_read_from_its_mp_cards_hierarch_ones_too() {
     let mut tile = unread(&image, 0, &row, 0, None);
     tile.pixels = vec![0.0, 34.0, 192.0];
     assert_eq!(tile.text(0), "0");
-    assert_eq!(tile.text(1), "34 (SAT|DETECTED)");
-    assert_eq!(tile.text(2), "192 (2 more)");
+    assert_eq!(tile.text(1), "34\u{a0}(SAT|DETECTED)");
+    assert_eq!(tile.text(2), "192\u{a0}(2 more)");
 }
 
 #[test]
