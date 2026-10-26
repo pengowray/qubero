@@ -153,9 +153,9 @@ export function rowLabel(r: ProfileRow): string {
     case "bit-field":
       return "fields narrower than a byte or off a byte boundary";
     case "enum":
-      return "numbers the template names";
+      return "enum";
     case "flags":
-      return "numbers whose bits the template names";
+      return "bit flags";
     case "magic":
       return "fixed bytes the format requires";
     case "computed":
@@ -239,22 +239,70 @@ export function landmarks(p: Profile): string[] {
   return out;
 }
 
+/** One fact about reading or writing the format: a short line, and what it
+ *  means for a program that reads or writes it, shown when the line is
+ *  opened. */
+export interface ReadWrite {
+  readonly summary: string;
+  readonly detail: string;
+}
+
 /**
- * What a reader and a writer of the format have to know, one fact to a
- * sentence, from the counts the core took over this file.
+ * What a reader and a writer of the format have to know, one fact to a line,
+ * from the counts the core took over this file.
  */
-export function readingWriting(p: Profile): string[] {
+export function readingWriting(p: Profile): ReadWrite[] {
   const f = p.facts;
-  const out: string[] = [];
-  if (f.every_field_follows === true) out.push("A reader can go from the start of the file to the end without going back.");
-  if (f.from_end > 0) out.push(`A reader has to start at the end: ${counted(f.from_end, "field")} ${f.from_end === 1 ? "is" : "are"} found from the end of the file.`);
-  if (f.backward > 0) {
-    out.push(`A reader has to go back: ${counted(f.backward, "offset")} ${f.backward === 1 ? "points" : "point"} to earlier bytes.`);
-    out.push(f.backward === 1 ? "A writer can write the part it points to first, then the offset." : "A writer can write the parts they point to first, then the offsets.");
+  const out: ReadWrite[] = [];
+  if (f.every_field_follows === true) {
+    out.push({ summary: "Readable in a single pass", detail: "A program that reads this format can read this file from start to end without seeking back." });
   }
-  if (f.forward > 0) out.push(`${sentence(counted(f.forward, "offset"))} ${f.forward === 1 ? "points" : "point"} ahead, so a writer has to know where those parts go before writing them, or come back to fill the offsets in.`);
-  if (f.lengths_before > 0) out.push(`${sentence(counted(f.lengths_before, "length"))} ${f.lengths_before === 1 ? "comes" : "come"} before what ${f.lengths_before === 1 ? "it sizes" : "they size"}, so a writer has to know each size before writing, or come back to fill it in.`);
-  if (f.lengths_after > 0) out.push(`${sentence(counted(f.lengths_after, "length"))} ${f.lengths_after === 1 ? "comes" : "come"} after what ${f.lengths_after === 1 ? "it sizes" : "they size"}.`);
+  if (f.from_end > 0) {
+    out.push({
+      summary: `${counted(f.from_end, "field")} whose position is worked out from the end of the file`,
+      detail: `A program that reads this format has to know the file's length, or read the end of the file, before it can find ${f.from_end === 1 ? "that field" : "those fields"}.`,
+    });
+  }
+  if (f.backward > 0) {
+    const one = f.backward === 1;
+    out.push({
+      summary: one ? "1 field that a backward offset points to" : `${counted(f.backward, "field")} that backward offsets point to`,
+      detail:
+        "A backward offset points to a position earlier in the file than where the offset is stored. " +
+        (one
+          ? "A program that reads this format has to seek back to read that field. A program that writes this format can write the field first and then the offset that points to it, because the field's position is already known when the program writes the offset."
+          : "A program that reads this format has to seek back to read those fields. A program that writes this format can write each of those fields first and then the offset that points to it, because the field's position is already known when the program writes the offset."),
+    });
+  }
+  if (f.forward > 0) {
+    const one = f.forward === 1;
+    out.push({
+      summary: one ? "1 field that a forward offset points to" : `${counted(f.forward, "field")} that forward offsets point to`,
+      detail:
+        "A forward offset points to a position later in the file than where the offset is stored. " +
+        (one
+          ? "A program that writes this format from start to end has to know the position of that field before it writes the offset, or write a placeholder offset and fill it in once the field has been written."
+          : "A program that writes this format from start to end has to know the position of each of those fields before it writes the offset, or write a placeholder offset and fill it in once the field has been written."),
+    });
+  }
+  if (f.lengths_before > 0) {
+    const one = f.lengths_before === 1;
+    out.push({
+      summary: one ? "1 field whose length or count is stored before it" : `${counted(f.lengths_before, "field")} whose length or count is stored before them`,
+      detail: one
+        ? "A program that writes this format from start to end has to know the field's length or count before it writes the field, or write a placeholder and fill in the length or count after writing the field."
+        : "A program that writes this format from start to end has to know the length or count of each of those fields before it writes the field, or write a placeholder and fill in the length or count after writing the field.",
+    });
+  }
+  if (f.lengths_after > 0) {
+    const one = f.lengths_after === 1;
+    out.push({
+      summary: one ? "1 field whose length or count is stored after it" : `${counted(f.lengths_after, "field")} whose length or count is stored after them`,
+      detail: one
+        ? "A program that reads this format has to read the length or count stored after the field first, then seek back to read the field. A program that writes this format can write the field first and then its length or count."
+        : "A program that reads this format has to read the length or count stored after each of those fields first, then seek back to read the field. A program that writes this format can write each field first and then its length or count.",
+    });
+  }
   return out;
 }
 

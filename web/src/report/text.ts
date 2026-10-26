@@ -228,7 +228,7 @@ export const RV = {
   entryMethod: "Method",
   entryRatio: "Ratio",
   entryWhat: "What it is",
-  plainTextCut: (shown: number): string => `The first ${shown.toLocaleString()} characters, read as UTF-8. The Text view shows all of it.`,
+  plainTextCut: (shown: number): string => `The first ${shown.toLocaleString()} characters of the file, read as UTF-8. The Text view shows the whole file.`,
 
   // ----- 6. where the bytes go -----
   bytesHeading: (n: number): string => `Where the ${n.toLocaleString()} bytes go`,
@@ -345,7 +345,7 @@ export const RV = {
   /** For a file whose only streams are joined ones. */
   joinsHeading: (n: number): string => sentenceCase(counted(n, "joined stream")),
   /** After a joined stream's name. */
-  joinLine: (size: string): string => `: ${size}, read as one stream from the data of the parts that carry it.`,
+  joinLine: (size: string): string => `: ${size} of data joined from one or more parts of the file and read as one stream.`,
   moreJoins: (n: number): string => `${counted(n, "more joined stream")} not shown.`,
   stepLiteral: (byte: string): string => `Literal ${byte}`,
   stepMatch: (len: number, dist: number): string => `Copy ${bytesText(len)} from ${dist.toLocaleString()} back`,
