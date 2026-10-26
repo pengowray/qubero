@@ -66,3 +66,45 @@ fn a_gzipped_rubin_raw_opens_as_fits() {
     assert_eq!(segments, want);
 }
 
+
+/// The member's compressed run lists its deflate blocks, read from where the
+/// index pass found them, and a block opens to its header, tables and codes.
+#[test]
+fn a_gzipped_rubin_raw_lists_its_blocks() {
+    let Some(file) = rubin() else {
+        eprintln!("no qubero2-extras/rubin beside the checkout");
+        return;
+    };
+    let bytes = std::fs::read(&file).unwrap();
+    let found = formats::sniff(&bytes, bytes.len() as u64).expect("sniffs");
+    let d = Document::new(MemSource(bytes));
+    let mut e = Evaluator::new(formats::template(found).unwrap());
+    let member = [0, 0];
+    let fields = e.children(&d, &member, 0, 20).unwrap();
+    let k = fields.iter().position(|f| f.name == "compressed").expect("a compressed field");
+    let run = [0, 0, k];
+    let started = std::time::Instant::now();
+    let stream = e.node(&d, &run).unwrap();
+    assert_eq!(stream.child_count, 2, "no blocks under members[0].compressed");
+    let blocks = e.node(&d, &[0, 0, k, 1]).unwrap();
+    assert_eq!(blocks.name, "blocks");
+    assert!(blocks.child_count > 1, "{} blocks", blocks.child_count);
+    let listed = e.children(&d, &blocks.path, 0, blocks.child_count).unwrap();
+    assert!(listed.last().unwrap().name.ends_with(", last"), "{}", listed.last().unwrap().name);
+    // Laid end to end, and covering the blocks row.
+    let mut at = blocks.offset_bits;
+    for b in &listed {
+        assert_eq!(b.offset_bits, at, "{} does not start where the block before it ends", b.name);
+        at += b.size_bits;
+    }
+    assert_eq!(at, blocks.offset_bits + blocks.size_bits);
+    // The middle block opens to its fields, the last of them its codes.
+    let mid = &listed[listed.len() / 2];
+    let fields = e.children(&d, &mid.path, 0, mid.child_count).unwrap();
+    assert_eq!(fields[0].name, "bfinal");
+    let codes = fields.last().unwrap();
+    assert_eq!((codes.name.as_str(), codes.unit.as_deref()), ("codes", Some("code")));
+    let some = e.children(&d, &codes.path, 0, 50.min(codes.child_count)).unwrap();
+    assert!(some.iter().any(|c| c.name.starts_with("match ")), "{:?}", some.iter().map(|c| &c.name).collect::<Vec<_>>());
+    eprintln!("{} blocks; listed and one opened in {:?}", listed.len(), started.elapsed());
+}

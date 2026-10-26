@@ -497,13 +497,13 @@ impl Evaluator {
     #[cold]
     #[inline(never)]
     fn code_bits_value<S: Source>(&self, doc: &Document<S>, at: &[usize], r: &Resolved, size: u64) -> R<Value> {
-        let (lsb_first, skipped) = match self.trace_for(at) {
-            Some((base, t)) => {
+        let (lsb_first, skipped) = match self.blocks_for(at) {
+            Some((base, b)) => {
                 let from = r.offset.saturating_sub(base);
-                let inside = t.stuffed();
+                let inside = b.whole().map_or(&[][..], |t| t.stuffed());
                 let lo = inside.partition_point(|&b| b < from);
                 let hi = inside.partition_point(|&b| b < from + size);
-                (t.lsb_first(), inside[lo..hi].iter().map(|&b| (b - from) as usize).collect::<Vec<_>>())
+                (b.lsb_first(), inside[lo..hi].iter().map(|&b| (b - from) as usize).collect::<Vec<_>>())
             }
             None => (false, Vec::new()),
         };

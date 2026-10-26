@@ -162,9 +162,10 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// output is counted, which is enough to refuse a match reaching back before
 /// the start and a stream past the cap.
 pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
-    let mut sink = CountSink { len: 0, cap: CAP_BYTES as u64, stop_at: None };
+    let mut sink = CountSink { len: 0, cap: CAP_BYTES as u64, stop_at: None, starts: None };
     match run(data, 0, data.len() as u64 * 8, &mut sink, &mut TraceBuilder::off(), None)? {
-        Ended::Stream(end) => Ok(end.div_ceil(8)),
+        // The padding after the last block runs to the next byte.
+        Ended::Stream(blocks_end) => Ok(blocks_end.div_ceil(8)),
         Ended::Stopped(_) => Err(Refusal::Failed),
     }
 }
@@ -464,15 +465,18 @@ impl Sink for VecSink<'_> {
 }
 
 /// Output counted and not kept, up to `cap`, for a decode that wants to know
-/// where the stream ends or what its trace is, and not what it came to. A
-/// deflate step says what it copied and from how far back, not what the bytes
-/// were, so neither needs the output. `len` starts at the output before where
-/// the decode starts, and `stop_at` stops it at the first boundary at or past
-/// that bit.
+/// where the stream ends, what its trace is or where its blocks start, and not
+/// what it came to. A deflate step says what it copied and from how far back,
+/// not what the bytes were, so none of those needs the output. `len` starts at
+/// the output before where the decode starts, and `stop_at` stops it at the
+/// first boundary at or past that bit.
 pub(crate) struct CountSink {
     pub(crate) len: u64,
     pub(crate) cap: u64,
     pub(crate) stop_at: Option<u64>,
+    /// Where each block starts, as the bit of the run and the byte of the
+    /// output, when asked for.
+    pub(crate) starts: Option<Vec<(u64, u64)>>,
 }
 
 impl Sink for CountSink {
@@ -511,11 +515,14 @@ impl Sink for CountSink {
     }
 
     #[inline]
-    fn boundary(&mut self, in_bit: u64, _: Option<u64>) -> ControlFlow<()> {
-        match self.stop_at.is_some_and(|stop| in_bit >= stop) {
-            true => ControlFlow::Break(()),
-            false => ControlFlow::Continue(()),
+    fn boundary(&mut self, in_bit: u64, block: Option<u64>) -> ControlFlow<()> {
+        if self.stop_at.is_some_and(|stop| in_bit >= stop) {
+            return ControlFlow::Break(());
         }
+        if let (None, Some(starts)) = (block, &mut self.starts) {
+            starts.push((in_bit, self.len));
+        }
+        ControlFlow::Continue(())
     }
 }
 
@@ -531,8 +538,9 @@ pub(crate) struct Resume {
 /// How a decode ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ended {
-    /// The block that said it was the last one ended, and the stream with the
-    /// padding after it ends at the bit this gives.
+    /// The block that said it was the last one ended, at the bit this gives:
+    /// before the padding out to the byte, which belongs to no block. The
+    /// stream with that padding ends at the next byte boundary.
     Stream(u64),
     /// The sink said to stop, at the bit this gives.
     Stopped(u64),
@@ -650,11 +658,11 @@ pub(crate) fn run<K: Sink>(
     // The bits between the last block and the byte boundary, which the format
     // does not use and a decoder reads past.
     let at = bits.pos();
+    let blocks_end = at;
     let skipped = bits.align();
     if skipped > 0 {
         b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
     }
-    let stream_end = bits.pos();
     // Anything after the stream inside the run the template named. A zlib
     // trailer arrives here as its own step; anything else is bytes nobody
     // claimed, and saying so is better than pretending the run ended early.
@@ -662,7 +670,7 @@ pub(crate) fn run<K: Sink>(
         b.push(bits.pos(), out.len(), StepKind::Opaque);
     }
     b.finish_at(end.max(bits.pos()), out.len());
-    Ok(Ended::Stream(stream_end))
+    Ok(Ended::Stream(blocks_end))
 }
 
 /// Start recording again once a block left open has had its tables read
