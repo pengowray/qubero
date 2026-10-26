@@ -250,8 +250,11 @@ fn index_zstd(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> 
     let mark = |at: usize, out: u64, marks: &mut Checkpoints| marks.offer(at as u64 * 8, out, || Start::Unit(0));
 
     // The pass that may come to a whole run, traced, with checkpoints taken
-    // in case it does not.
+    // in case it does not. A frame may come to as much as the whole run may
+    // here, and the frames this pass finished are held to the span limit
+    // only if the run turns out not to fit.
     let mut last = (0usize, 0u64);
+    let mut largest = 0u64;
     let mut over = false;
     let mut out = Vec::new();
     let mut b = TraceBuilder::default();
@@ -259,9 +262,10 @@ fn index_zstd(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> 
         data,
         0..data.len(),
         0,
-        frame_cap,
+        frame_cap.max(limits.whole as u64),
         &mut b,
         &mut |at, o| {
+            largest = largest.max(o - last.1);
             last = (at, o);
             mark(at, o, &mut marks);
         },
@@ -280,6 +284,9 @@ fn index_zstd(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> 
         Err(other) => return Err(other),
     }
     drop((out, b));
+    if largest > frame_cap {
+        return Err(Refusal::TooLarge);
+    }
 
     // Past the cap: on from the start of the frame the first pass stopped in,
     // counting the output and keeping none of it.

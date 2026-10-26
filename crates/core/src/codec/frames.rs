@@ -63,6 +63,15 @@ pub fn brotli(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     }
 }
 
+/// The largest window a zstd frame may ask for: 128 MiB, which is the most
+/// the `zstd` command line decodes without being told to use more memory.
+///
+/// The decoder keeps a frame's last window of output until the frame ends, and
+/// lets go of nothing before then, so the window is how much it may hold that
+/// nothing here has seen yet. A frame asking for more is refused as too large
+/// before any of it is decoded.
+const MAX_WINDOW: u64 = 128 << 20;
+
 /// A zstd run: the bytes, and a step per frame header and per block.
 ///
 /// Every frame of the run, not only the first: `pzstd` writes one frame per
@@ -103,8 +112,9 @@ pub(super) fn zstd_done(mut b: TraceBuilder, input: usize, output: u64) -> Trace
 /// every frame is announced to `on_frame` before it is decoded, with the byte
 /// it starts at and how much output comes before it. The skippable frames in
 /// front of a frame are counted as part of it. A frame that comes to more than
-/// `frame_cap` is [`Refusal::TooLarge`]. Returns how much output there is at
-/// the end of `span`.
+/// `frame_cap`, or asks for a window larger than [`MAX_WINDOW`], is
+/// [`Refusal::TooLarge`]. Returns how much output there is at the end of
+/// `span`.
 ///
 /// The decoder keeps the frame's window, the last bytes it may copy from, and
 /// lets go only of what has left it. So for the first window's worth of a
@@ -124,7 +134,6 @@ pub(super) fn zstd_walk(
 ) -> Result<u64, Refusal> {
     use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 
-    let mut dec = FrameDecoder::new();
     let mut at = span.start;
     while at < span.end {
         let starts = at;
@@ -141,8 +150,17 @@ pub(super) fn zstd_walk(
         let frame = &data[at..span.end];
         let checksum = frame_has_checksum(frame).ok_or(Refusal::Failed)?;
         let mut src = frame;
+        // A decoder of its own for every frame. `ruzstd` refuses a window
+        // over 100 MiB, and reserves the whole window, only when a decoder is
+        // used for a second frame, so one decoder for every frame would read
+        // the first of two `zstd --long` files joined end to end and refuse
+        // the second.
+        let mut dec = FrameDecoder::new();
         dec.init(&mut src).map_err(|_| Refusal::Failed)?;
         let window = window_size(frame, dec.content_size()).ok_or(Refusal::Failed)?;
+        if window > MAX_WINDOW {
+            return Err(Refusal::TooLarge);
+        }
         b.push(at as u64 * 8, out, StepKind::Header(StepField::FrameHeader, 0));
         let mut read = dec.bytes_read_from_source() as usize;
         // How much of the frame the decoder has let go of, and where the next
@@ -250,5 +268,39 @@ mod tests {
     fn nonsense_has_no_shape() {
         assert_eq!(zstd(b"not a zstd frame").err(), Some(Refusal::Failed));
         assert_eq!(crate::codec::decode_traced(Codec::Zstd, b"nope").err(), Some(Refusal::Failed));
+    }
+
+    /// A frame of one raw block whose header asks for a 128 MiB window, which
+    /// is what `zstd --long` writes when it does not know the input's size.
+    fn long_window_frame(content: &[u8]) -> Vec<u8> {
+        let mut f = vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, (27 - 10) << 3];
+        // The last block, raw, and how long it is.
+        let header = 1 | (content.len() as u32) << 3;
+        f.extend_from_slice(&header.to_le_bytes()[..3]);
+        f.extend_from_slice(content);
+        f
+    }
+
+    /// Every frame of a run is read, the second as well as the first, and
+    /// each has a step for its header. Two `zstd --long` files joined end to
+    /// end are the case that once lost its second frame.
+    #[test]
+    fn every_frame_of_a_run_is_read() {
+        let mut run = long_window_frame(b"first frame, ");
+        run.extend(long_window_frame(b"second frame"));
+        let (bytes, trace) = zstd(&run).expect("reads");
+        assert_eq!(bytes, b"first frame, second frame");
+        trace.check_tiles().expect("tiles");
+        let headers = trace.steps().filter(|s| s.kind == StepKind::Header(StepField::FrameHeader, 0)).count();
+        assert_eq!(headers, 2);
+    }
+
+    /// A frame asking for a window past 128 MiB is refused before any of it
+    /// is decoded, whatever it holds.
+    #[test]
+    fn a_frame_asking_for_too_large_a_window_is_refused() {
+        let mut huge = long_window_frame(b"tiny");
+        huge[5] = (40 - 10) << 3;
+        assert_eq!(zstd(&huge).err(), Some(Refusal::TooLarge));
     }
 }
