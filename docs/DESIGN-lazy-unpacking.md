@@ -405,7 +405,10 @@ the same step that the whole trace has at that position.
 read only the first frame of a run, so a file of two frames came back as the
 first frame's bytes. It also refused any run that starts with a skippable
 frame, which every `pzstd` file does. Now one walk reads every frame, for the
-bytes and for the trace, with a new `ruzstd` decoder for each frame. The walk
+bytes and for the trace, with a new `ruzstd` decoder for each frame. Bytes
+after the last frame that are neither a zstd frame nor a skippable frame now
+make the run fail to decode; the old decoder stopped after the first frame and
+never looked at them. Every zstd sample in the collection still reads. The walk
 also fixed the block trace. Until a frame ends, `ruzstd` holds back the last
 window's worth of output, and the old trace counted only the output that
 `ruzstd` had handed over, so it assigned each zstd block's output to a later

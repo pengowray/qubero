@@ -73,6 +73,14 @@ fn reads_back(codec: Codec, packed: &[u8], whole: &[u8], trace: &Trace) {
     s.read(0, &mut all).expect("reads");
     assert!(all == whole, "{codec:?}: the whole output differs");
 
+    // Every span's trace tiles its own bits and bytes, the empty last frame
+    // of the pzstd file included.
+    for k in 0..s.spans() {
+        let t = s.span_trace(k).expect("traces");
+        t.check_tiles().unwrap_or_else(|e| panic!("{codec:?} span {k}: {e}"));
+        assert_eq!((t.start().1, t.out_bytes()), (s.span_bytes(k).start, s.span_bytes(k).end), "{codec:?} span {k}");
+    }
+
     let bits = packed.len() as u64 * 8;
     let mut bytes: Vec<u64> = (0..500).map(|_| rand() % whole.len() as u64).collect();
     let mut ins: Vec<u64> = (0..500).map(|_| rand() % bits).collect();

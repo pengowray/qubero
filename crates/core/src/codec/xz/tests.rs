@@ -523,6 +523,19 @@ fn a_chain_with_a_filter_in_it_is_not_read_here() {
     assert!(!inner.starts_with(b"the quick"), "the LZMA2 under a delta filter is not the file");
 }
 
+/// Past the cap, a stream whose chain has a filter in it is refused as too
+/// large rather than indexed: the crate that runs the filter reads only whole
+/// streams. The limits are made small so that these few bytes are past them.
+#[test]
+fn a_chain_with_a_filter_in_it_is_not_read_a_block_at_a_time() {
+    use crate::codec::lazy::{decode_or_index_with, Limits};
+    let limits = Limits { whole: 1, ..Limits::default() };
+    for (name, stream) in [("delta", DELTA_LZMA2), ("x86 at 4096", X86_AT_4096)] {
+        let got = decode_or_index_with(Codec::Xz, std::sync::Arc::new(stream.to_vec()), limits);
+        assert_eq!(got.err(), Some(Refusal::TooLarge), "{name}");
+    }
+}
+
 /// A dictionary size code past what the encoding can spell, which is the one
 /// way to reach the fallback with bytes still at the end of it.
 ///
