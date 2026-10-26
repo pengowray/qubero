@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use crate::codec::lazy::{Limits, Seekable};
+use crate::codec::lazy::{self, Decoded, Limits, Seekable, Stepped};
 use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
 use crate::source::{Missing, Source};
@@ -628,6 +628,54 @@ impl Indexes {
 /// most one run may be.
 const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 
+/// Runs whose indexing pass has started and not finished, by where each run
+/// is, carried on a step at a time on each go until they are done. Kept apart
+/// from [`Indexes`], which holds only finished indexes: those are read with no
+/// evaluator behind them, by a tab's source, and a half-made one must never
+/// get there.
+///
+/// A pass that might still come to a run held whole holds up to the cap of
+/// output, so only a couple are kept, and the one stepped longest ago goes
+/// first. A reading stepping two runs by turns keeps both.
+#[derive(Default)]
+pub(super) struct Unfinished {
+    entries: Vec<(RunKey, Codec, lazy::Indexing, u64)>,
+    clock: u64,
+}
+
+/// How many unfinished passes are kept at once.
+const UNFINISHED_PASSES: usize = 2;
+
+impl Unfinished {
+    /// The pass over the run at `key`, taken out to be stepped.
+    fn take(&mut self, key: RunKey, codec: Codec) -> Option<lazy::Indexing> {
+        let i = self.entries.iter().position(|e| e.0 == key && e.1 == codec)?;
+        Some(self.entries.swap_remove(i).2)
+    }
+
+    /// Put a pass back to be carried on next go.
+    fn put(&mut self, key: RunKey, codec: Codec, pass: lazy::Indexing) {
+        while self.entries.len() >= UNFINISHED_PASSES {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
+            self.entries.swap_remove(oldest);
+        }
+        self.clock += 1;
+        self.entries.push((key, codec, pass, self.clock));
+    }
+
+    /// How far the pass stepped most recently has got.
+    fn latest(&self) -> Option<(RunKey, lazy::Progress)> {
+        self.entries.iter().max_by_key(|e| e.3).map(|e| (e.0, e.2.progress()))
+    }
+}
+
+/// How much output one step of an indexing pass decodes, and what it is
+/// charged against a go's allowance. 256 bytes an element: a go of 5,000
+/// elements, which is what the web app asks for, decodes about 1.2 MB, a few
+/// tens of milliseconds with the trace on.
+const INDEX_STEP_BYTES: u64 = 256 << 10;
+const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 256;
+
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
     /// The `Stitched` node that opened it, which is what knows the walk its
@@ -775,6 +823,8 @@ pub(super) struct Spaces {
     /// Every index made so far that is still kept. Asked for while reading,
     /// which borrows the spaces shared, so it is a cell.
     indexes: std::cell::RefCell<Indexes>,
+    /// Indexes still being made. A cell for the same reason.
+    unfinished: std::cell::RefCell<Unfinished>,
 }
 
 impl Default for Spaces {
@@ -787,6 +837,7 @@ impl Default for Spaces {
             whole_cap: crate::codec::CAP_BYTES,
             lazy_limits: Limits::default(),
             indexes: Default::default(),
+            unfinished: Default::default(),
         }
     }
 }
@@ -941,6 +992,52 @@ impl Spaces {
         self.whole_refused.clear();
         // Kept by where a run is, and an edit can change what is there.
         self.indexes.borrow_mut().entries.clear();
+        self.unfinished.borrow_mut().entries.clear();
+    }
+
+    /// The run being indexed most recently, and how far its pass has got,
+    /// while it has not finished.
+    pub(super) fn unpacking(&self) -> Option<(RunKey, lazy::Progress)> {
+        self.unfinished.borrow().latest()
+    }
+}
+
+impl super::Evaluator {
+    /// The run at `key`, packed with `codec`, decoded whole when it fits under
+    /// the cap and indexed when it does not: [`lazy::decode_or_index`], done
+    /// a step at a time. Each step is charged to this go's allowance, and a go
+    /// that runs out hands back `Busy` with the pass kept, to be carried on
+    /// from where it stopped the next time anything asks for the same run.
+    /// `Ok(Err)` is the run refusing, as it would refuse in one go.
+    ///
+    /// Takes the evaluator shared, since a read of a stitched stream reaches
+    /// here, and reads do.
+    pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec) -> super::R<Result<Decoded, Refusal>> {
+        let started = self.spaces.unfinished.borrow_mut().take(key, codec);
+        let mut pass = match started {
+            Some(pass) => pass,
+            None => {
+                if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
+                    return Ok(Err(Refusal::TooLarge));
+                }
+                let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
+                match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
+                    Ok(pass) => pass,
+                    Err(why) => return Ok(Err(why)),
+                }
+            }
+        };
+        loop {
+            if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
+                self.spaces.unfinished.borrow_mut().put(key, codec, pass);
+                return Err(busy);
+            }
+            match pass.step(INDEX_STEP_BYTES) {
+                Ok(Stepped::Working) => {}
+                Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
+                Err(why) => return Ok(Err(why)),
+            }
+        }
     }
 }
 
@@ -948,6 +1045,7 @@ impl Spaces {
 mod tests {
     use crate::codec::StepKind;
     use crate::document::Document;
+    use crate::eval::space::{Opened, SpaceSource};
     use crate::eval::{Evaluator, SingleRun, Value};
     use crate::formats;
     use crate::source::MemSource;
@@ -1154,6 +1252,94 @@ mod tests {
         assert_eq!(e.node(&d, RUN).unwrap().child_count, 1);
         // A second node over the same run is read through the same index.
         assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
+    }
+
+    /// Limits small enough that a few megabytes of text are past the cap and
+    /// take several goes to index.
+    fn small_limits() -> crate::codec::lazy::Limits {
+        crate::codec::lazy::Limits { whole: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Default::default() }
+    }
+
+    fn many_lines() -> Vec<u8> {
+        (0..60_000).flat_map(|i| format!("line {i} of a stream opened a go at a time\n").into_bytes()).collect()
+    }
+
+    /// Indexing a stream past the cap is charged to the work allowed for a
+    /// go like any other reading: a go that runs out hands back `Busy` and
+    /// says how far the pass has got, and the next go carries on from there.
+    /// What it comes to is the index one go makes.
+    #[test]
+    fn a_stream_past_the_cap_opens_a_go_at_a_time() {
+        use crate::eval::EvalError;
+        let text = many_lines();
+        let d = zlib_over(&text);
+        let mut one = Evaluator::new(formats::builtin("zlib").unwrap());
+        one.spaces.set_lazy_limits(small_limits());
+        let id = one.open_space(&d, 0, RUN).unwrap().expect("opens in one go");
+        let SpaceSource::Lazy(whole) = one.space(id).unwrap().source().clone() else { panic!("held whole") };
+
+        let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(2000));
+        let (mut goes, mut read) = (0, 0);
+        let id = loop {
+            e.begin_slice();
+            match e.open_space(&d, 0, RUN) {
+                Ok(Some(id)) => break id,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    let p = e.unpacking().expect("a pass is under way");
+                    assert_eq!((p.run_space, p.run_offset_bits), (0, 16));
+                    assert!(p.read_bits >= read && p.read_bits <= p.run_bits, "{read} then {p:?}");
+                    read = p.read_bits;
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(goes >= 3, "{goes} goes");
+        assert_eq!(e.unpacking(), None);
+        let SpaceSource::Lazy(index) = e.space(id).unwrap().source().clone() else { panic!("held whole") };
+        assert_eq!((index.len(), index.crc32(), index.spans()), (whole.len(), whole.crc32(), whole.spans()));
+        assert!((0..index.spans()).all(|k| index.span_bytes(k) == whole.span_bytes(k)));
+        let mut got = vec![0u8; text.len()];
+        assert!(index.read(0, &mut got).is_ok() && got == text);
+    }
+
+    /// The same for a gzip's joined stream, which is what the gzip template
+    /// reads its member through, and which the listing reaches by reading
+    /// the stream's first bytes rather than by opening it.
+    #[test]
+    fn a_gzip_past_the_cap_reads_a_go_at_a_time() {
+        use crate::eval::EvalError;
+        let text = many_lines();
+        let mut gzip = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        gzip.extend(miniz_oxide::deflate::compress_to_vec(&text, 6));
+        gzip.extend(crate::checksum::crc32(&text).to_le_bytes());
+        gzip.extend((text.len() as u32).to_le_bytes());
+        let d = Document::new(MemSource(gzip));
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(2000));
+        let mut goes = 0;
+        let node = loop {
+            e.begin_slice();
+            match e.node(&d, &[1, 0, 0]) {
+                Ok(node) => break node,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    assert!(e.unpacking().is_some());
+                    assert!(goes < 1000);
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        };
+        assert!(goes >= 3, "{goes} goes");
+        assert_eq!(node.size_bits, text.len() as u64 * 8);
+        let Some(Opened::Space(id)) = e.spaces.get(&[1]) else { panic!("the joined stream did not open") };
+        e.begin_slice();
+        for at in [0usize, 777_777, text.len() - 100] {
+            assert_eq!(e.read_in(&d, id, at as u64 * 8, 800).unwrap(), &text[at..at + 100], "100 bytes at {at}");
+        }
     }
 
     #[test]

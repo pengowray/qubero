@@ -137,6 +137,22 @@ impl EvalError {
 
 pub type R<T> = Result<T, EvalError>;
 
+/// How far the pass unpacking a deflate, zlib or gzip stream has got, for a
+/// stream large enough that the pass takes more than one go. The pass reads
+/// the compressed run once from front to back, so `read_bits` of `run_bits`
+/// is how much of it is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unpacking {
+    /// Where the compressed run is: the space it is a field of, 0 for the
+    /// file, and the bit it starts at there.
+    pub run_space: u32,
+    pub run_offset_bits: u64,
+    pub read_bits: u64,
+    pub run_bits: u64,
+    /// The bytes it has come to so far.
+    pub unpacked_bytes: u64,
+}
+
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
 }
@@ -2526,15 +2542,14 @@ impl Evaluator {
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
         // Deflate, zlib and gzip are decoded whole when they fit and indexed
-        // when they do not, in one pass, and an index is shared by every node
-        // over the same run. See `codec::lazy`.
+        // when they do not, in one pass done a step at a time, and an index is
+        // shared by every node over the same run. See `codec::lazy`.
         if crate::codec::lazy::can_index(codec) {
             let key = (r.space, r.offset, size);
             if let Some(index) = self.spaces.indexed(key, codec) {
                 return Ok(space::Opened::Space(self.spaces.add_lazy(path, index)));
             }
-            let packed = std::sync::Arc::new(self.read(doc, &r, r.offset, size)?);
-            return Ok(match crate::codec::lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits()) {
+            return Ok(match self.index_run(doc, key, codec)? {
                 Ok(crate::codec::lazy::Decoded::Whole(bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
                 Ok(crate::codec::lazy::Decoded::Indexed(index)) => {
                     let index = std::sync::Arc::new(index);
@@ -2806,6 +2821,15 @@ impl Evaluator {
             runs: Vec::new(),
             run: Some(run),
         }))
+    }
+
+    /// How far the pass unpacking a large compressed stream has got, while one
+    /// is under way: the stream asked for most recently, whose pass a go ran
+    /// out in the middle of. Nothing when no pass is unfinished. See
+    /// [`Unpacking`].
+    pub fn unpacking(&self) -> Option<Unpacking> {
+        let ((run_space, run_offset_bits, _), p) = self.spaces.unpacking()?;
+        Some(Unpacking { run_space, run_offset_bits, read_bits: p.read_bits, run_bits: p.run_bits, unpacked_bytes: p.unpacked })
     }
 
     /// Why the stream at `path` of the file did not open as a document of its

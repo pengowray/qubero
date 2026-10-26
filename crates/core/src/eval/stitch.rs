@@ -258,11 +258,7 @@ impl Evaluator {
         if let Some(index) = self.spaces.indexed(key, codec) {
             return Ok(Ok(index.len()));
         }
-        if size / 8 > crate::codec::CAP_BYTES as u64 {
-            return Ok(Err(Refusal::TooLarge));
-        }
-        let packed = Arc::new(self.read_in(doc, space, at, size)?);
-        Ok(match lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits()) {
+        Ok(match self.index_run(doc, key, codec)? {
             Ok(lazy::Decoded::Whole(bytes, _)) => Ok(bytes.len() as u64),
             Ok(lazy::Decoded::Indexed(index)) => {
                 let len = index.len();
@@ -296,11 +292,7 @@ impl Evaluator {
         let index = match open.or_else(|| self.spaces.indexed(key, *codec)) {
             Some(index) => index,
             None => {
-                if size_bits / 8 > crate::codec::CAP_BYTES as u64 {
-                    return Ok(Err(PartTrouble::Unpack));
-                }
-                let packed = Arc::new(self.read_in(doc, *space, *at_bits, *size_bits)?);
-                match lazy::decode_or_index_with(*codec, packed, limits) {
+                match self.index_run(doc, key, *codec)? {
                     Ok(lazy::Decoded::Indexed(index)) => {
                         let index = Arc::new(index);
                         self.spaces.keep_index(key, *codec, index.clone());
