@@ -21,7 +21,7 @@
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::checksum::{adler32, adler32_update, crc32, crc32_update};
+use crate::checksum::{adler32_update, crc32_update};
 use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
 use crate::codec::{Codec, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
@@ -69,6 +69,9 @@ pub struct Limits {
     pub span_cache: usize,
     /// [`SPAN_TRACE_STEPS`].
     pub span_steps: usize,
+    /// How many steps the trace of a run held whole may hold before it names
+    /// blocks rather than codes: [`crate::codec::MAX_STEPS`].
+    pub whole_steps: usize,
 }
 
 impl Default for Limits {
@@ -80,6 +83,7 @@ impl Default for Limits {
             checkpoints: MAX_CHECKPOINTS,
             span_cache: SPAN_CACHE_BYTES,
             span_steps: SPAN_TRACE_STEPS,
+            whole_steps: crate::codec::MAX_STEPS,
         }
     }
 }
@@ -119,76 +123,217 @@ pub fn decode_or_index(codec: Codec, packed: Arc<Vec<u8>>) -> Result<Decoded, Re
 
 /// [`decode_or_index`] under limits other than the default ones.
 pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> {
-    let Some(wrapper) = wrapper(codec) else {
+    if !can_index(codec) {
         return crate::codec::decode_traced(codec, &packed).map(|(bytes, trace)| Decoded::Whole(bytes, trace));
-    };
-    if packed.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
     }
-    let data = &packed[..];
-    let f = inflate::framing(wrapper, data)?;
-    let marks = Checkpoints::new(limits.spacing, limits.checkpoints);
-
-    // The pass that may come to a whole run, traced, with checkpoints taken
-    // in case it does not.
-    let mut b = TraceBuilder::default();
-    if wrapper != Wrapper::Raw {
-        b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
-    }
-    let mut whole = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
-    whole.marks = Some(marks);
-    match inflate::run(data, f.start, f.end, &mut whole, &mut b, None) {
-        Ok(_) => {
-            let out = whole.hist;
-            if !inflate::trailer_agrees(&f, data, out.len() as u64, || crc32(&out), || adler32(&out)) {
-                return Err(Refusal::Failed);
-            }
-            if wrapper != Wrapper::Raw {
-                b.push(f.end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
-                b.finish_at(data.len() as u64 * 8, out.len() as u64);
-            }
-            return Ok(Decoded::Whole(out, b.done()));
+    let mut pass = Indexing::new(codec, packed, limits)?;
+    loop {
+        if let Stepped::Done(decoded) = pass.step(u64::MAX)? {
+            return Ok(decoded);
         }
-        Err(Refusal::TooLarge) => {}
-        Err(other) => return Err(other),
     }
-    drop(b);
+}
 
-    // Past the cap: on from the last checkpoint, which is at most the spacing
-    // before where the first pass stopped, keeping the window and nothing
-    // more. The sums are taken over the output as it leaves the window.
-    let marks = whole.marks.take().expect("the first pass keeps checkpoints");
-    let last = marks.list.last().cloned().expect("checkpoint 0 is taken before any output");
-    let upto = &whole.hist[..last.out as usize];
-    let (crc, adler) = (crc32(upto), adler32(upto));
-    drop(whole);
-    let mut index = WindowSink::new(last.window.to_vec(), last.out - last.window.len() as u64, limits.lazy, true);
-    index.marks = Some(marks);
-    index.sums = Some(Sums { crc, adler, upto: last.out });
-    match inflate::run(data, f.start, f.end, &mut index, &mut TraceBuilder::off(), Some(last.resume())) {
-        Ok(_) => {}
-        Err(Refusal::TooLarge) => return Err(Refusal::TooLargeLazy),
-        Err(other) => return Err(other),
+/// The pass [`decode_or_index`] makes, done a slice at a time: each
+/// [`Indexing::step`] decodes about as much output as it is told to, stops at
+/// a place the decoder can carry on from, and the next step carries on from
+/// exactly there. A browser calls it between frames, so that indexing 500 MB
+/// of output does not stop the page for seconds.
+///
+/// Holds what the pass would hold if it ran in one go: up to the cap of output
+/// and its trace while the run might still come to a whole one, and after
+/// that the window, the checkpoints and the running sums.
+pub struct Indexing {
+    codec: Codec,
+    packed: Arc<Vec<u8>>,
+    framing: Framing,
+    limits: Limits,
+    phase: Phase,
+    /// The furthest bit of the run a step has stopped at. Kept apart from
+    /// where the next step starts, which goes back a little once the output
+    /// passes the cap. The same for the output, in `most`.
+    furthest: u64,
+    most: u64,
+}
+
+/// How far an [`Indexing`] has got.
+enum Phase {
+    /// Decoding as a run held whole is decoded, traced, with checkpoints
+    /// taken in case it comes to more than the cap. `from` is where the step
+    /// before stopped, which is always the start of a block: stopping between
+    /// two codes and carrying on would read the block's header and tables
+    /// into the trace a second time.
+    Whole { sink: WindowSink, trace: TraceBuilder, from: Option<Resume> },
+    /// Past the cap: the trace is off and only the window is kept, so a step
+    /// can stop between any two codes.
+    Index { sink: WindowSink, from: Resume },
+    /// Finished, or refused. A step asked of it is a caller's mistake.
+    Over,
+}
+
+/// What one [`Indexing::step`] came to.
+pub enum Stepped {
+    /// Not finished yet. Step again to carry on.
+    Working,
+    Done(Decoded),
+}
+
+impl Indexing {
+    /// Start indexing `packed`. `codec` is one [`can_index`] says yes to; any
+    /// other is refused as [`Refusal::Failed`]. Nothing is decoded until the
+    /// first step.
+    pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
+        let wrapper = wrapper(codec).ok_or(Refusal::Failed)?;
+        if packed.len() > CAP_BYTES {
+            return Err(Refusal::TooLarge);
+        }
+        let framing = inflate::framing(wrapper, &packed)?;
+        let mut trace = TraceBuilder::with_budget(limits.whole_steps);
+        if wrapper != Wrapper::Raw {
+            trace.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
+        }
+        let mut sink = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
+        sink.marks = Some(Checkpoints::new(limits.spacing, limits.checkpoints));
+        sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
+        Ok(Indexing { codec, packed, framing, limits, phase: Phase::Whole { sink, trace, from: None }, furthest: 0, most: 0 })
     }
-    let len = index.len();
-    index.sum_to(len);
-    let sums = index.sums.expect("set above");
-    if !inflate::trailer_agrees(&f, data, len, || sums.crc, || sums.adler) {
-        return Err(Refusal::Failed);
+
+    /// How far the pass has got: the bits of the run read and the bytes of
+    /// output written, at the furthest it has been, so that neither goes
+    /// back when the pass does.
+    pub fn progress(&self) -> Progress {
+        let run_bits = self.packed.len() as u64 * 8;
+        let unpacked = match &self.phase {
+            Phase::Whole { sink, .. } | Phase::Index { sink, .. } => sink.len(),
+            Phase::Over => 0,
+        };
+        Progress { read_bits: self.furthest, run_bits, unpacked: self.most.max(unpacked) }
     }
-    let checkpoints = index.marks.take().expect("set above").list;
-    Ok(Decoded::Indexed(Seekable {
-        codec,
-        packed,
-        framing: f,
-        len,
-        checkpoints,
-        crc32: sums.crc,
-        adler32: sums.adler,
-        limits,
-        spans: Mutex::new(SpanCache::new(limits.span_cache)),
-        traced: Mutex::new(None),
-    }))
+
+    /// Decode about `out_bytes` more output and stop, or finish.
+    ///
+    /// While the run might still come to a whole one, a step stops only at
+    /// the start of a block, so it can overrun by up to one block's output: a
+    /// few megabytes from an ordinary encoder, and as much as the cap from
+    /// one that wrote the whole run as one block. Past the cap it stops at
+    /// the first code past `out_bytes`.
+    pub fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+        let stepped = self.step_on(out_bytes);
+        let (at, out) = match &self.phase {
+            Phase::Whole { sink, from, .. } => (from.map_or(0, |r| r.in_bit), sink.len()),
+            Phase::Index { sink, from } => (from.in_bit, sink.len()),
+            Phase::Over => (self.packed.len() as u64 * 8, 0),
+        };
+        self.furthest = self.furthest.max(at);
+        self.most = self.most.max(out);
+        stepped
+    }
+
+    fn step_on(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+        let data = &self.packed[..];
+        let f = self.framing;
+        match std::mem::replace(&mut self.phase, Phase::Over) {
+            Phase::Whole { mut sink, mut trace, from } => {
+                sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
+                match inflate::run(data, f.start, f.end, &mut sink, &mut trace, from) {
+                    Ok(Ended::Stopped(_)) => {
+                        let from = sink.stopped.take();
+                        // Summed this far and no further: past the cap the
+                        // pass goes back to the last checkpoint, and the sums
+                        // have to go back with it.
+                        if let Some(at) = sink.marks.as_ref().and_then(|m| m.latest.as_ref()).map(|c| c.out) {
+                            sink.sum_to(at);
+                        }
+                        self.phase = Phase::Whole { sink, trace, from };
+                        Ok(Stepped::Working)
+                    }
+                    Ok(Ended::Stream) => {
+                        let sums = sink.sums.expect("set when the pass started");
+                        let out = sink.hist;
+                        let rest = &out[sums.upto as usize..];
+                        let crc = || crc32_update(sums.crc, rest);
+                        let adler = || adler32_update(sums.adler, rest);
+                        if !inflate::trailer_agrees(&f, data, out.len() as u64, crc, adler) {
+                            return Err(Refusal::Failed);
+                        }
+                        if f.wrapper != Wrapper::Raw {
+                            trace.push(f.end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
+                            trace.finish_at(data.len() as u64 * 8, out.len() as u64);
+                        }
+                        Ok(Stepped::Done(Decoded::Whole(out, trace.done())))
+                    }
+                    Err(Refusal::TooLarge) => {
+                        self.phase = self.past_the_cap(sink);
+                        Ok(Stepped::Working)
+                    }
+                    Err(other) => Err(other),
+                }
+            }
+            Phase::Index { mut sink, from } => {
+                sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
+                match inflate::run(data, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(from)) {
+                    Ok(Ended::Stopped(_)) => {
+                        let from = sink.stopped.take().expect("only a step's end stops this decode");
+                        self.phase = Phase::Index { sink, from };
+                        Ok(Stepped::Working)
+                    }
+                    Ok(Ended::Stream) => self.finish(sink).map(Stepped::Done),
+                    Err(Refusal::TooLarge) => Err(Refusal::TooLargeLazy),
+                    Err(other) => Err(other),
+                }
+            }
+            Phase::Over => Err(Refusal::Failed),
+        }
+    }
+
+    /// The output has passed the cap. Go back to the last checkpoint, which
+    /// is at most the spacing before where the decode stopped, and carry on
+    /// from there keeping the window and nothing more, with the sums taken
+    /// over the output as it leaves the window.
+    fn past_the_cap(&self, mut whole: WindowSink) -> Phase {
+        let marks = whole.marks.take().expect("the first pass keeps checkpoints");
+        let last = marks.latest.clone().expect("checkpoint 0 is taken before any output");
+        whole.sum_to(last.out);
+        let sums = whole.sums;
+        drop(whole);
+        let mut sink = WindowSink::new(last.window.to_vec(), last.out - last.window.len() as u64, self.limits.lazy, true);
+        sink.marks = Some(marks);
+        sink.sums = sums;
+        sink.mid_block = true;
+        Phase::Index { sink, from: last.resume() }
+    }
+
+    /// The index, once the decode has reached the end of the stream.
+    fn finish(&self, mut sink: WindowSink) -> Result<Decoded, Refusal> {
+        let len = sink.len();
+        sink.sum_to(len);
+        let sums = sink.sums.expect("set when the pass started");
+        if !inflate::trailer_agrees(&self.framing, &self.packed, len, || sums.crc, || sums.adler) {
+            return Err(Refusal::Failed);
+        }
+        let checkpoints = sink.marks.take().expect("set when the pass started").list;
+        Ok(Decoded::Indexed(Seekable {
+            codec: self.codec,
+            packed: self.packed.clone(),
+            framing: self.framing,
+            len,
+            checkpoints,
+            crc32: sums.crc,
+            adler32: sums.adler,
+            limits: self.limits,
+            spans: Mutex::new(SpanCache::new(self.limits.span_cache)),
+            traced: Mutex::new(None),
+        }))
+    }
+}
+
+/// How far an [`Indexing`] has got: `read_bits` of the run's `run_bits`, and
+/// `unpacked` bytes of output so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    pub read_bits: u64,
+    pub run_bits: u64,
+    pub unpacked: u64,
 }
 
 /// A place a decode can start again from. See [`Sink::boundary`].
@@ -214,6 +359,9 @@ impl Checkpoint {
 /// The checkpoints an index pass has taken, and where it takes the next.
 struct Checkpoints {
     list: Vec<Checkpoint>,
+    /// The checkpoint taken most recently, even when thinning dropped it from
+    /// `list`: where the pass goes back to once the output passes the cap.
+    latest: Option<Checkpoint>,
     spacing: u64,
     next: u64,
     max: usize,
@@ -221,7 +369,7 @@ struct Checkpoints {
 
 impl Checkpoints {
     fn new(spacing: u64, max: usize) -> Checkpoints {
-        Checkpoints { list: Vec::new(), spacing: spacing.max(1), next: 0, max: max.max(2) }
+        Checkpoints { list: Vec::new(), latest: None, spacing: spacing.max(1), next: 0, max: max.max(2) }
     }
 
     /// Keep a checkpoint at `out`, if one is due there. Past the most there
@@ -232,7 +380,9 @@ impl Checkpoints {
         if out < self.next {
             return;
         }
-        self.list.push(Checkpoint { in_bit, out, block, window: window.into() });
+        let taken = Checkpoint { in_bit, out, block, window: window.into() };
+        self.latest = Some(taken.clone());
+        self.list.push(taken);
         self.next = out + self.spacing;
         if self.list.len() > self.max {
             let mut i = 0;
@@ -270,11 +420,18 @@ struct WindowSink {
     sums: Option<Sums>,
     /// Stop at the first boundary at or past this bit.
     stop_at: Option<u64>,
+    /// Stop at the first boundary once the output has come to this, which is
+    /// where a step of an [`Indexing`] ends, and say where in `stopped`.
+    slice_end: u64,
+    /// Whether that may be between two codes of a block, or only at the start
+    /// of one.
+    mid_block: bool,
+    stopped: Option<Resume>,
 }
 
 impl WindowSink {
     fn new(hist: Vec<u8>, base: u64, cap: u64, slide: bool) -> WindowSink {
-        WindowSink { hist, base, cap, slide, marks: None, sums: None, stop_at: None }
+        WindowSink { hist, base, cap, slide, marks: None, sums: None, stop_at: None, slice_end: u64::MAX, mid_block: false, stopped: None }
     }
 
     /// Bring the sums up to `upto`, from what `hist` still holds.
@@ -353,6 +510,13 @@ impl Sink for WindowSink {
                 let keep = (WINDOW as u64).min(out) as usize;
                 marks.offer(in_bit, out, block, &self.hist[self.hist.len() - keep..]);
             }
+        }
+        // After the checkpoint, so that a step ending here takes the one a
+        // pass in one go would have taken, and the step after does not take
+        // it again.
+        if out >= self.slice_end && (block.is_none() || self.mid_block) {
+            self.stopped = Some(Resume { in_bit, block });
+            return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
     }
@@ -675,12 +839,13 @@ impl SpanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checksum::{adler32, crc32};
 
     /// Small enough that a few hundred kilobytes reach every limit: the run is
     /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
     /// than 12 of them, and the cache holds 40 KiB.
     fn small() -> Limits {
-        Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000 }
+        Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, whole_steps: crate::codec::MAX_STEPS }
     }
 
     fn rand_from(mut seed: u64) -> impl FnMut() -> u64 {
@@ -721,6 +886,37 @@ mod tests {
         out.extend_from_slice(&crc32(data).to_le_bytes());
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out
+    }
+
+    /// Raw deflate of `data` with a block ended every `chunk` bytes, by a
+    /// sync flush, which also writes an empty stored block. miniz writes 50 KB
+    /// as one block, and a pass under the cap only stops between blocks.
+    fn deflate_in_blocks(data: &[u8], chunk: usize) -> Vec<u8> {
+        use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus};
+        let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(6, -15, 0));
+        let mut buf = vec![0u8; 4 * chunk + 1024];
+        let mut out = Vec::new();
+        let pieces: Vec<&[u8]> = data.chunks(chunk).collect();
+        for (i, piece) in pieces.iter().enumerate() {
+            let flush = if i + 1 == pieces.len() { TDEFLFlush::Finish } else { TDEFLFlush::Sync };
+            let (status, read, written) = compress(&mut c, piece, &mut buf, flush);
+            assert!(read == piece.len() && matches!(status, TDEFLStatus::Okay | TDEFLStatus::Done), "{status:?}");
+            out.extend_from_slice(&buf[..written]);
+        }
+        out
+    }
+
+    /// `raw` with the zlib or gzip wrapper round it, `data` being what it
+    /// inflates to.
+    fn wrapped(codec: Codec, raw: &[u8], data: &[u8]) -> Vec<u8> {
+        match codec {
+            Codec::Zlib => [&[0x78, 0x9c][..], raw, &adler32(data).to_be_bytes()].concat(),
+            Codec::Gzip => {
+                let head = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+                [&head[..], raw, &crc32(data).to_le_bytes(), &(data.len() as u32).to_le_bytes()].concat()
+            }
+            _ => raw.to_vec(),
+        }
     }
 
     fn indexed(codec: Codec, packed: &[u8], limits: Limits) -> Seekable {
@@ -874,6 +1070,100 @@ mod tests {
             compared += a.is_some() as usize;
         }
         assert!(compared > 500, "only {compared} codes compared");
+    }
+
+    /// Run `pass` to the end in steps of `out_bytes`, checking on the way that
+    /// it only ever moves forward.
+    fn in_steps(mut pass: Indexing, out_bytes: u64) -> (Result<Decoded, Refusal>, usize) {
+        let mut steps = 0;
+        let mut was = pass.progress();
+        loop {
+            steps += 1;
+            let stepped = pass.step(out_bytes);
+            let now = pass.progress();
+            match stepped {
+                Ok(Stepped::Working) => {
+                    assert!(now.read_bits >= was.read_bits && now.read_bits <= now.run_bits, "{was:?} then {now:?}");
+                    was = now;
+                }
+                Ok(Stepped::Done(d)) => return (Ok(d), steps),
+                Err(why) => return (Err(why), steps),
+            }
+        }
+    }
+
+    /// The pass done in steps of every size, from smaller than one code's
+    /// output to larger than the run, comes to what the pass in one go comes
+    /// to: the same checkpoints and sums for a run past the cap, and for a run
+    /// under it the same bytes and the same trace, step for step. Under the
+    /// cap a step stops only at the start of a block, so a step smaller than a
+    /// block still makes headway.
+    #[test]
+    fn a_pass_in_steps_comes_to_what_one_pass_does() {
+        let large = mixed(300_000, 29);
+        let small_run = mixed(50_000, 31);
+        for data in [&large, &small_run] {
+            let raw = deflate_in_blocks(data, 3000);
+            for codec in [Codec::Deflate, Codec::Gzip, Codec::Zlib] {
+                let packed = Arc::new(wrapped(codec, &raw, data));
+                let one = decode_or_index_with(codec, packed.clone(), small()).expect("decodes");
+                for out_bytes in [100u64, 4096, 70_000, u64::MAX] {
+                    let (got, steps) = in_steps(Indexing::new(codec, packed.clone(), small()).expect("starts"), out_bytes);
+                    let at = format!("{codec:?}, {} bytes, steps of {out_bytes}", data.len());
+                    if out_bytes == 4096 {
+                        assert!(steps > 5, "{at}: {steps} steps");
+                    }
+                    match (&one, got.expect("decodes in steps")) {
+                        (Decoded::Whole(bytes, trace), Decoded::Whole(ours, t)) => {
+                            assert!(ours == *bytes, "{at}: the bytes differ");
+                            assert!(t.steps().eq(trace.steps()), "{at}: the steps differ");
+                            assert_eq!(t.blocks(), trace.blocks(), "{at}");
+                            assert_eq!((t.in_bits(), t.out_bytes()), (trace.in_bits(), trace.out_bytes()), "{at}");
+                        }
+                        (Decoded::Indexed(s), Decoded::Indexed(ours)) => {
+                            assert_eq!(ours.marks(), s.marks(), "{at}");
+                            assert_eq!((ours.len(), ours.crc32(), ours.adler32()), (s.len(), s.crc32(), s.adler32()), "{at}");
+                            let mut all = vec![0u8; data.len()];
+                            ours.read(0, &mut all).expect("reads");
+                            assert!(all == *data, "{at}: the output differs");
+                        }
+                        _ => panic!("{at}: one pass and the steps disagree about holding it whole"),
+                    }
+                }
+            }
+        }
+    }
+
+    /// A trace that has started naming blocks rather than codes carries on
+    /// that way in the next step, as it would in one pass.
+    #[test]
+    fn a_trace_that_names_blocks_still_does_after_a_step() {
+        let data = mixed(50_000, 37);
+        let packed = Arc::new(deflate_in_blocks(&data, 3000));
+        let limits = Limits { whole_steps: 2000, ..small() };
+        let Ok(Decoded::Whole(_, trace)) = decode_or_index_with(Codec::Deflate, packed.clone(), limits) else { panic!("not whole") };
+        assert!(trace.coarse());
+        assert!(trace.blocks().len() > 3, "{} blocks", trace.blocks().len());
+        let (got, _) = in_steps(Indexing::new(Codec::Deflate, packed, limits).expect("starts"), 100);
+        let Ok(Decoded::Whole(_, t)) = got else { panic!("not whole in steps") };
+        assert!(t.coarse());
+        assert!(t.steps().eq(trace.steps()), "the steps differ");
+        assert_eq!(t.blocks(), trace.blocks());
+    }
+
+    /// Refusals come out of the pass in steps as they do in one go.
+    #[test]
+    fn a_pass_in_steps_refuses_what_one_pass_does() {
+        let zeros = vec![0u8; 5 << 20];
+        let packed = Arc::new(miniz_oxide::deflate::compress_to_vec(&zeros, 9));
+        let limits = Limits { lazy: 4 << 20, ..small() };
+        let (got, _) = in_steps(Indexing::new(Codec::Deflate, packed, limits).expect("starts"), 64 << 10);
+        assert_eq!(got.err(), Some(Refusal::TooLargeLazy));
+        let mut gzip = gzip_of(&mixed(200_000, 41), 6);
+        let n = gzip.len();
+        gzip[n - 8] ^= 1;
+        let (got, _) = in_steps(Indexing::new(Codec::Gzip, Arc::new(gzip), small()).expect("starts"), 5000);
+        assert_eq!(got.err(), Some(Refusal::Failed));
     }
 
     /// Past the limit for a run read a piece at a time, a run is refused with

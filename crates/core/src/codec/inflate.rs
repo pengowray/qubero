@@ -529,7 +529,9 @@ pub(crate) fn run<K: Sink>(
             return Err(Refusal::Failed);
         }
     }
-    let mut coarse = false;
+    // Taken from the builder, so a decode carried on from where an earlier
+    // one stopped keeps naming blocks if that one had started to.
+    let mut coarse = b.is_coarse();
     loop {
         let block_in = bits.pos();
         let block_out = out.len();

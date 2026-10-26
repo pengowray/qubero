@@ -1193,6 +1193,10 @@ impl TraceBuilder {
         self.trace.coarse = true;
     }
 
+    pub(crate) fn is_coarse(&self) -> bool {
+        self.trace.coarse
+    }
+
     /// Say that this decoder's bit reader takes the low bit of a byte first,
     /// which the steps' `in_bits` are then counted in. Called once, before any
     /// step is pushed, by the codecs whose readers do: deflate, LZW and
