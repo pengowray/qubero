@@ -169,7 +169,10 @@ fn real_value() -> T {
         vec![
             ("exp", T::computed(exp)),
             ("int", digits(&[b' ', b'/', b'.', b'E', b'e', b'D', b'd'])),
-            ("frac", T::present_if(digit_peek(0), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
+            // The digits and the blank after them can fill the whole value, as
+            // they do in `BSCALE  =    1 / comment` written in the fixed
+            // format, and then there is no byte after them to check.
+            ("frac", T::present_if(E::cond(E::lit(0).less_than(E::Remaining), digit_peek(0), E::lit(0)), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
         ],
     );
     T::sized(
@@ -258,7 +261,11 @@ fn continue_body() -> T {
 ///
 /// A quoted value is told from a plain one by whether a quote comes before
 /// any `/`, since the comment of a number may hold a quote but cannot come
-/// first. A `HIERARCH` card with no `=` in it is left as the text it is.
+/// first. A plain value that opens with a digit, a sign or a point is a
+/// number, and reads the way a real does, so a template can ask for the whole
+/// number in `parts.int`: `HIERARCH ARCHIVE_ID_PSF = 417` is a number Rubin's
+/// files point at an object with. Any other plain value, such as a logical, is
+/// text. A `HIERARCH` card with no `=` in it is left as the text it is.
 fn hierarch_body() -> T {
     let start = || {
         vec![
@@ -276,11 +283,26 @@ fn hierarch_body() -> T {
     quoted.push(comment());
     let quoted = T::structure("Hierarch", quoted).machinery(&["space", "mark", "lead"]).payload(&["value"]);
     let mut plain = start();
-    plain.push(("value", text_value()));
+    plain.push(("value", hierarch_value()));
     plain.push(comment());
     let plain = T::structure("Hierarch", plain).machinery(&["space", "mark"]).payload(&["value"]);
     let valued = T::switch(E::to_bytes(b"'").less_than(E::to_bytes(b"/")), vec![(1, quoted)], plain);
     T::switch(E::to_bytes(b"=").less_than(E::Remaining), vec![(1, valued)], text_body())
+}
+
+/// The value of a `HIERARCH` card that is not quoted: a number when the first
+/// byte after the blanks is a digit, a sign or a point, and text up to the
+/// comment when it is anything else. The value is checked, rather than the
+/// keyword as [`NUMERIC`] does, because a `HIERARCH` keyword is whatever the
+/// writer chose.
+fn hierarch_value() -> T {
+    let blanks = E::run(b" ");
+    let first = E::peek_at(blanks.clone().mul(E::lit(8)), 8, Big);
+    let is = |c: u8| first.clone().equals(E::lit(i128::from(c)));
+    let digit = E::lit(i128::from(b'0') - 1).less_than(first.clone()).mul(first.clone().less_than(E::lit(i128::from(b'9') + 1)));
+    // A value of nothing but blanks has no first byte to look at.
+    let number = E::cond(blanks.less_than(E::Remaining), digit.or(is(b'-')).or(is(b'+')).or(is(b'.')), E::lit(0));
+    T::switch(number, vec![(1, real_value())], text_value())
 }
 
 /// The text of a value, up to the comment that may follow it.

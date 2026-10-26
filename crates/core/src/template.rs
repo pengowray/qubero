@@ -831,7 +831,15 @@ pub enum Tag {
     /// answers compared, and a template does not have to know how wide the key
     /// field of the format it is searching happens to be.
     ComputedText(Arc<Expr>),
-    /// A label already worked out, once a search is under way. See `tag_now`.
+    /// Text the template fixed, compared the way [`Tag::ComputedText`] is: as
+    /// the text the key field reads as, with the blanks at its end taken off.
+    /// Also what a computed text label becomes once it is worked out, at the
+    /// start of a search. See `tag_now`.
+    ///
+    /// `Bytes` cannot find a key that is not written at a fixed width. A FITS
+    /// `HIERARCH` card writes its keyword after that word and up to an `=`
+    /// wherever the writer put it, so `ARCHIVE_ID_PSF` is followed by one
+    /// blank in one card and by none in the next. See [`Expr::tagged_text`].
     Text(String),
 }
 
@@ -923,6 +931,12 @@ impl Expr {
     /// first element of `array` whose `key` holds exactly these bytes.
     pub fn tagged_bytes(array: &str, key: &[&str], tag: &[u8], field: &[&str]) -> Expr {
         Expr::tagged_by(Some(array), key, Tag::Bytes(tag.to_vec()), field)
+    }
+    /// The same, comparing the text `key` reads as rather than the bytes it
+    /// is written in: `field` of the first element of `array` whose `key`
+    /// reads as `tag`, blanks at the end aside. See [`Tag::Text`].
+    pub fn tagged_text(array: &str, key: &[&str], tag: &str, field: &[&str]) -> Expr {
+        Expr::tagged_by(Some(array), key, Tag::Text(tag.to_string()), field)
     }
     /// The same, for a label this record works out rather than one the format
     /// fixed: `field` of the first element of `array` whose `key` holds

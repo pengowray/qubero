@@ -176,3 +176,33 @@ fn an_algorithm_without_a_decoder_is_named() {
     assert!(t.pixels.is_empty());
     assert!(t.problem.unwrap().contains("SQUASH_9"));
 }
+
+#[test]
+fn a_masks_planes_are_read_from_its_mp_cards_hierarch_ones_too() {
+    let c = cards(&[
+        "ZBITPIX =                   32",
+        "ZNAXIS  =                    1",
+        "ZNAXIS1 =                    3",
+        "ZCMPTYPE= 'GZIP_2  '",
+        "EXTTYPE = 'MASK    '",
+        "MP_BAD  =                    0",
+        "HIERARCH MP_DETECTED =       5",
+        "MP_SAT  =                    1",
+        "END",
+    ]);
+    assert_eq!(c.int("MP_DETECTED"), Some(5));
+    let image = Image::from_cards(&c).unwrap();
+    assert_eq!(image.planes, vec![(0, "BAD".to_string()), (1, "SAT".to_string()), (5, "DETECTED".to_string())]);
+    let row = Row { place: None, has_data_column: true, zscale: None, zzero: None, zblank: None, quantized: false };
+    let mut tile = unread(&image, 0, &row, 0, None);
+    tile.pixels = vec![0.0, 34.0, 192.0];
+    assert_eq!(tile.text(0), "0");
+    assert_eq!(tile.text(1), "34\u{a0}(SAT|DETECTED)");
+    assert_eq!(tile.text(2), "192\u{a0}(2 more)");
+}
+
+#[test]
+fn an_image_that_is_not_a_mask_has_no_planes() {
+    let c = cards(&["ZBITPIX =                   32", "ZNAXIS  =                    1", "ZNAXIS1 =                    3", "MP_BAD  =                    0", "END"]);
+    assert!(Image::from_cards(&c).unwrap().planes.is_empty());
+}
