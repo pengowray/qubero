@@ -8,7 +8,7 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { formatAddress, formatBytes, formatOffset, percentText } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import { address } from "./dom.ts";
@@ -91,6 +91,14 @@ export function spaceOf(item: Item): number {
 
 /** How much of the file this is, for a part big enough for the answer to mean
  *  anything. Under a per cent, the number says less than the range does. */
+/** What a stretch of the listing still being read says: how far the core has
+ *  got unpacking a large stream, while it is unpacking one, since that is what
+ *  the fields under it wait on; and otherwise that bytes are on their way. */
+export function pendingText(doc: Doc): string {
+  const u = doc.unpacking();
+  return u === null ? REPORT.reading : REPORT.unpacking(percentText(u.read_bits, u.run_bits));
+}
+
 export function shareText(sizeBits: number, fileBits: number): string {
   if (fileBits <= 0) return "";
   const share = sizeBits / fileBits;
@@ -149,7 +157,7 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
     case "more":
       return drawMore(c, item);
     case "pending":
-      return el("div", "rp-item rp-block rp-pending", REPORT.reading);
+      return el("div", "rp-item rp-block rp-pending", pendingText(c.doc));
     case "card":
       return drawCard(c.doc, item, c.shown);
     case "switch":

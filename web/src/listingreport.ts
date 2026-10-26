@@ -23,7 +23,7 @@ import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
 import { jpegCardKind } from "./jpegcards.ts";
-import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, spaceOf } from "./listingdraw.ts";
+import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
@@ -624,6 +624,10 @@ export class ListingReport {
         if (item.kind !== "heading") setLevel(node, this.levels[i] ?? 0);
         this.mounted.set(item.key, node);
         this.canvas.append(node);
+      } else if (item.kind === "pending") {
+        // Kept standing between redraws, and what it says moves on while a
+        // large stream is unpacked a go at a time.
+        node.textContent = pendingText(this.doc);
       }
       node.style.top = `${this.tops[i] ?? 0}px`;
       if (item.key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);

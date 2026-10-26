@@ -2191,6 +2191,18 @@ export type DecodedCode = {
   readonly entry_child?: number;
 };
 
+/** How far the core has got unpacking a deflate, zlib or gzip stream large
+ *  enough to take more than one go. The compressed run is read once from front
+ *  to back, so `read_bits` of `run_bits` is the share done; `unpacked_bytes`
+ *  is what it has come to so far. The total is not known until the end. */
+export type Unpacking = {
+  readonly run_space: number;
+  readonly run_offset_bits: number;
+  readonly read_bits: number;
+  readonly run_bits: number;
+  readonly unpacked_bytes: number;
+};
+
 /** One step of a deflate stream taken apart: the one or two codes that carried
  *  it, and every bit they cost. */
 export type DecodedStep = {
@@ -2484,12 +2496,18 @@ export class Doc {
    * compressed run that word is already on the node, so the caller need not
    * say it again; a stream joined from several runs is found to be too long,
    * or to have a part that will not read, only here, when it is joined whole.
-   * Null when there was no answer.
+   *
+   * A large deflate stream is unpacked over several calls, a go at a time, so
+   * that the page keeps drawing. Until it is done this comes back as how far
+   * it has got, and the caller asks again. Null when there was no answer.
    */
-  openSpace(path: readonly number[]): Doc | { readonly refused: string } | null {
+  openSpace(
+    path: readonly number[],
+  ): Doc | { readonly refused: string } | { readonly working: true; readonly unpacking: Unpacking | null } | null {
     const r = this.handleReply<{ space: number; template: string; refused?: string; joined: boolean; stored: boolean }>(
       this.editor.open_space(this.space, Uint32Array.from(path)),
     );
+    if (r.status === "working") return { working: true, unpacking: this.unpacking() };
     if (r.status !== "ok") return null;
     if (r.node.space === 0) return r.node.refused === undefined ? null : { refused: r.node.refused };
     const opened = new Doc(this.editor, this.blob, this.name, r.node.space, [...path], r.node.joined, r.node.stored);
@@ -2533,6 +2551,15 @@ export class Doc {
     if (r.status !== "ok" || r.node === null) return null;
     const out = this.handleReply<MapStep | null>(this.editor.map_in(space, bit));
     return { step: r.node, out: out.status === "ok" ? out.node : null };
+  }
+
+  /** How far the core has got unpacking a large stream for this document's
+   *  reading, or null when nothing is being unpacked. Worth asking after a
+   *  reply said "working": the unpacking is carried on by whichever call
+   *  reaches the stream, a go at a time. */
+  unpacking(): Unpacking | null {
+    const r: RawReply<Unpacking | null> = JSON.parse(this.editor.unpacking(this.space));
+    return r.status === "ok" ? r.node : null;
   }
 
   /** Where the byte at `byte` of this space came from, or null. */

@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, prefetchMagic, type DiagramBox, type MapStep } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -707,15 +707,39 @@ function buildDocument(tab: Tab): Page {
     view.markHover({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
   };
   inspector.onOpenTab = openEmbedded;
+  /** The stream Open unpacked is waiting on while a large one is unpacked
+   *  over several goes. Pressing it on another stream moves the wait there,
+   *  and closing the tab ends it. */
+  let unpackingAt: string | null = null;
+  tab.release.push(() => (unpackingAt = null));
   /**
    * Open a compressed run as a document of its own, or bring its tab to the
    * front if it is already open. The run is unpacked once and kept, so a second
    * ask costs nothing.
+   *
+   * A deflate stream too large to unpack in one go is unpacked a go at a time
+   * between frames. Until it is done the status bar says how far it has got,
+   * and this asks again once the page has drawn; the tab opens at the end.
    */
   const openUnpacked = (path: readonly number[]): void => {
     const n = doc.templateNode(path);
     if (n.status !== "ok") return;
     const unpacked = doc.openSpace(path);
+    const key = path.join(".");
+    if (unpacked !== null && "working" in unpacked) {
+      unpackingAt = key;
+      const u = unpacked.unpacking;
+      saveMsg.classList.remove("warn");
+      saveMsg.textContent = UNPACKED.unpacking(n.node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0));
+      setTimeout(() => {
+        if (unpackingAt === key) openUnpacked(path);
+      }, 0);
+      return;
+    }
+    if (unpackingAt === key) {
+      unpackingAt = null;
+      saveMsg.textContent = "";
+    }
     if (unpacked === null) return;
     // A compressed run that will not open says why on its own row and is not
     // offered. A joined stream is offered whatever its length, and one whose

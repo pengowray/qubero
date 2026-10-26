@@ -56,6 +56,9 @@ export const streamsSection: Section = {
       const bytes = node.size_bits / 8;
       if (opened.filter((o) => o.space !== null).length < OPEN_MAX && bytes <= OPEN_BYTES && openedBytes + bytes <= OPEN_TOTAL) {
         const r = ctx.doc.openSpace(node.path);
+        // A large stream is unpacked over several goes, and the section waits
+        // for it as it waits for bytes.
+        if (r !== null && "working" in r) return WAIT;
         space = r !== null && !("refused" in r) ? r : null;
         if (space !== null) openedBytes += bytes;
       }

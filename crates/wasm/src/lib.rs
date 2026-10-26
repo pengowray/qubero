@@ -3600,6 +3600,16 @@ const WORK_SLICE: u64 = 5_000;
 /// host's chunk arithmetic is the same on both sides.
 const SPACE_CHUNK: u64 = 64 * 1024;
 
+/// How far a large stream's unpacking has got. See `Editor::unpacking`.
+#[derive(Serialize)]
+struct UnpackingDto {
+    run_space: u32,
+    run_offset_bits: f64,
+    read_bits: f64,
+    run_bits: f64,
+    unpacked_bytes: f64,
+}
+
 /// What `open_space` came to: the space, or why it would not open.
 #[derive(Serialize)]
 struct SpaceDto {
@@ -3849,17 +3859,31 @@ impl Editor {
         self.reopen(i)
     }
 
-    /// Open the stream at `path` of sheet `home`'s own reading, with no
-    /// allowance: unpacking a run is not something to do by halves, since it
-    /// reads the whole run and decodes it, and a half-decoded stream is not a
-    /// document. Nothing when the sheet has no reading.
+    /// Open the stream at `path` of sheet `home`'s own reading, one go's
+    /// worth of work at a time. A deflate, zlib or gzip stream large enough to
+    /// take more than a go is unpacked over several: the core keeps the
+    /// half-done pass, the call hands back `Busy`, and asking again carries on.
+    /// `unpacking` says how far it has got. Nothing when the sheet has no
+    /// reading.
     fn open_in(&mut self, home: usize, path: &[usize]) -> Result<Option<SpaceId>, EvalError> {
         let Some(sh) = self.sheets.get_mut(home) else { return Ok(None) };
         let Some(e) = &mut sh.eval else { return Ok(None) };
-        e.set_slice(None);
-        let got = e.open_space(&sh.doc, 0, path);
-        e.set_slice(Some(WORK_SLICE));
-        got
+        e.begin_slice();
+        e.open_space(&sh.doc, 0, path)
+    }
+
+    /// Which sheet's reading unpacks the streams of the tab over `space`: the
+    /// file's for the file, the tab's own for a stream with a reading of its
+    /// own, and its home's for one read where it was declared. The same
+    /// choice `open_space` makes.
+    fn reading_of(&self, space: u32) -> usize {
+        match self.sheets.get(space as usize) {
+            Some(sh) if space != 0 => match &sh.view {
+                Some(_) => sh.home,
+                None => space as usize,
+            },
+            _ => 0,
+        }
     }
 
     /// The sheet for a stream `open_in` opened, or an empty one for a stream
@@ -3929,12 +3953,10 @@ impl Editor {
             return reply::<SpaceDto>(Err(err));
         }
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        let (home, at) = match self.sheets.get(space as usize) {
-            Some(sh) if space != 0 => match &sh.view {
-                Some(root) => (sh.home, [root.as_slice(), &p].concat()),
-                None => (space as usize, p),
-            },
-            _ => (0, p),
+        let home = self.reading_of(space);
+        let at = match self.sheets.get(space as usize).and_then(|sh| sh.view.as_ref()) {
+            Some(root) if space != 0 => [root.as_slice(), &p].concat(),
+            _ => p,
         };
         let known = self.sheets.iter().enumerate().skip(1).find(|(_, sh)| sh.home == home && sh.origin == at).map(|(i, _)| i);
         if let Some(i) = known {
@@ -3965,6 +3987,27 @@ impl Editor {
         let space = (self.sheets.len() - 1) as u32;
         let (joined, stored) = self.space_joined(space);
         reply(Ok(SpaceDto { space: space as f64, template, refused: None, joined, stored }))
+    }
+
+    /// How far the pass unpacking a large compressed stream has got, in the
+    /// reading the tab over `space` unpacks its streams in:
+    /// {status:"ok",node:{run_space,run_offset_bits,read_bits,run_bits,unpacked_bytes}},
+    /// or a null node when no pass is under way.
+    ///
+    /// Asked after any reply that said "working": the pass is charged to the
+    /// same allowance as the rest of the reading, so a listing that reaches a
+    /// stream's bytes, and Open unpacked, both carry it on. The bits count
+    /// from the start of the compressed run, and `run_offset_bits` is where
+    /// that is in `run_space`, 0 being the file.
+    pub fn unpacking(&self, space: u32) -> String {
+        let progress = self.sheets.get(self.reading_of(space)).and_then(|sh| sh.eval.as_ref()).and_then(|e| e.unpacking());
+        reply(Ok(progress.map(|p| UnpackingDto {
+            run_space: p.run_space,
+            run_offset_bits: p.run_offset_bits as f64,
+            read_bits: p.read_bits as f64,
+            run_bits: p.run_bits as f64,
+            unpacked_bytes: p.unpacked_bytes as f64,
+        })))
     }
 
     /// Whether one of this editor's spaces is a stream joined from several

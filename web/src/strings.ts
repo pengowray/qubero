@@ -497,6 +497,12 @@ export const UNPACKED = {
   tabTitle: (field: string, file: string): string => `${field} unpacked from ${file}`,
   /** On the listing heading and in the inspector, for a stream that opened. */
   open: "Open unpacked",
+  /** In the status bar after Open unpacked was pressed on a stream large
+   *  enough to take several goes, until the tab opens. `percent` is how much
+   *  of the compressed data has been read and `size` what it has unpacked to
+   *  so far; the final size is not known until the end. */
+  unpacking: (field: string, percent: string, size: string): string =>
+    `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   openTitle: (field: string): string => `Open ${field} as a document of its own`,
   /** Typing, pasting or any other edit inside an unpacked stream. A byte of it
    *  is worked out from every compressed byte before it, so there is nowhere to
@@ -2141,6 +2147,12 @@ export const REPORT = {
   /** A stretch whose bytes have not arrived yet. Same situation as the older
    *  listing's, and the same words. */
   reading: "Loading bytes needed to map these fields…",
+  /** The same stretch while the fields under it wait on a large compressed
+   *  stream being unpacked, a go at a time between frames. Redrawn as it goes.
+   *  `percent` is how much of the compressed data has been read, the one
+   *  measure of progress there is. The size unpacked so far is left out: it
+   *  changes on every redraw, and beside a percentage it reads as a total. */
+  unpacking: (percent: string): string => `Unpacking the compressed data to read these fields… ${percent}`,
   /** The control on a heading or a row that shows the bytes behind it, and
    *  the one that puts them away again. Both are the mockup's own. */
   showBytes: "bytes",
