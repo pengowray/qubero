@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::checksum::{adler32, adler32_update, crc32, crc32_update};
 use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
-use crate::codec::{frames, xz, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
+use crate::codec::{frames, xz, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES, MAX_STEPS};
 
 /// The most a run read a piece at a time may come to. Past this it is refused
 /// as [`Refusal::TooLargeLazy`].
@@ -55,8 +55,14 @@ pub const SPACING_START: u64 = 1 << 20;
 /// longest ago is dropped. One span is kept whatever its size.
 pub const SPAN_CACHE_BYTES: usize = 16 << 20;
 
-/// How many steps a span's trace may hold before it names blocks rather than
-/// codes, as [`crate::codec::MAX_STEPS`] does for a whole run.
+/// How many steps a deflate span's trace may hold before it names blocks
+/// rather than codes, as [`crate::codec::MAX_STEPS`] does for a whole run.
+///
+/// A zstd or xz span's trace may hold [`crate::codec::MAX_STEPS`], as many as
+/// a whole run's. Such a span is one or more frames or blocks of up to
+/// [`Limits::span`] (64 MiB), which is as large as a run decoded whole, and an
+/// `xz -T0` block of 24 MiB of text takes over two million steps. A deflate
+/// span is a few megabytes at most.
 pub const SPAN_TRACE_STEPS: usize = 1_000_000;
 
 /// As far back as a deflate match can copy from.
@@ -825,7 +831,7 @@ impl Seekable {
             Kind::Deflate(f) => self.deflate_span_trace(k, c, f)?,
             Kind::Zstd => {
                 let range = self.span_in(k);
-                let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(range.start as u64 * 8, c.out);
+                let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, c.out);
                 let frame_cap = self.limits.span as u64;
                 let end = frames::zstd_walk(&self.packed, range.clone(), c.out, frame_cap, &mut b, &mut |_, _| {}, &mut |_| Ok(()))?;
                 b.finish_at(range.end as u64 * 8, end);
@@ -835,11 +841,11 @@ impl Seekable {
                 let range = self.span_in(k);
                 let units = self.span_units(k, l);
                 let last = units.end == l.blocks.len();
-                let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(range.start as u64 * 8, c.out);
+                let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, c.out);
                 if k == 0 {
                     b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
                 }
-                let end = c.out + xz::blocks(&self.packed, l, units, c.out, self.limits.span_steps, &mut b)?.len() as u64;
+                let end = c.out + xz::blocks(&self.packed, l, units, c.out, MAX_STEPS, &mut b)?.len() as u64;
                 if last {
                     xz::push_index(l, &mut b, end);
                 }

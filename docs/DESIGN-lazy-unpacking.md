@@ -67,7 +67,7 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `MAX_CHECKPOINTS` | 256 | Restart points kept per run. 256 × 32 KiB = 8 MiB of windows. |
 | `SPACING_START` | 1 MiB | Output between restart points, doubled whenever the count passes 256. |
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
-| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. |
+| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
 | `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded whole, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
