@@ -14,13 +14,13 @@
 //! their length and distance, so they can be read off any stretch of the
 //! stream without the output before it.
 //!
-//! The blocks are recorded on the same pass: where each one starts in the run
-//! and in the output, which is enough to list them and to trace any one of
-//! them alone when asked, since a block's codes, like a span's, need none of
-//! the output before them. A run may hold tens of millions of tiny blocks, so
-//! past [`MAX_BLOCK_MARKS`] only every second one is kept, as checkpoints are
-//! thinned, and the ones between are found again by decoding from the one
-//! before.
+//! The same pass records where each block starts, in the run and in the
+//! output. That is enough to list the blocks, and to trace any one block when
+//! asked: like a span, a block can be traced from the compressed run alone.
+//! A hostile run can hold tens of millions of tiny blocks, so past
+//! [`MAX_BLOCK_MARKS`] the index keeps the start of every second block,
+//! halving again each time the list fills, as it does with checkpoints. A
+//! dropped start is found again by decoding from the kept start before it.
 //!
 //! The guard against a zip bomb is [`LAZY_CAP_BYTES`], a limit on the output.
 //! Memory is bounded by the limits below whatever the output comes to, so a
@@ -53,17 +53,18 @@ pub const SPAN_CACHE_BYTES: usize = 16 << 20;
 /// codes, as [`crate::codec::MAX_STEPS`] does for a whole run.
 pub const SPAN_TRACE_STEPS: usize = 1_000_000;
 
-/// The most block starts one run keeps. Past this every second one goes and
-/// the ones between two that are kept are found by decoding from the first,
-/// so 65,536 × 16 bytes = 1 MiB is the most a run's block starts hold.
-/// Ordinary encoders write far fewer: zlib ends a block every 16,384 codes,
-/// and a stored block holds up to 64 KiB, so 1 GiB of output is tens of
-/// thousands of blocks at most. A run written to be hostile can hold a block
-/// in every ten bits.
+/// The most block starts one run keeps. Past this, every second start is
+/// dropped, and a dropped start is found again by decoding from the kept start
+/// before it. So a run's block starts take at most 65,536 × 16 bytes = 1 MiB.
+/// Ordinary encoders write far fewer blocks: zlib ends a block every 16,384
+/// codes and a stored block holds at most 64 KiB, so 1 GiB of output is tens
+/// of thousands of blocks. A hostile run can start a new block every 10 bits,
+/// since an empty fixed-Huffman block is 10 bits long.
 pub const MAX_BLOCK_MARKS: usize = 1 << 16;
 
-/// How many groups of blocks between two kept block starts one run keeps,
-/// once found. A group is at most a few thousand starts.
+/// How many lists of dropped block starts one run keeps once it has found
+/// them again by decoding. Each list covers the blocks from one kept start to
+/// the next, at most 1,024 blocks under the default limits.
 const GROUPS_KEPT: usize = 16;
 
 /// As far back as a deflate match can copy from.
@@ -88,8 +89,9 @@ pub struct Limits {
     pub checkpoints: usize,
     /// [`SPAN_CACHE_BYTES`].
     pub span_cache: usize,
-    /// [`SPAN_TRACE_STEPS`]. Also the most steps one block's trace holds,
-    /// and the most the block traces one run keeps hold between them.
+    /// [`SPAN_TRACE_STEPS`]. Also the most steps one block's trace holds
+    /// before its codes become one opaque step, and the most steps the cached
+    /// block traces of one run hold in total.
     pub span_steps: usize,
     /// [`MAX_BLOCK_MARKS`].
     pub block_marks: usize,
@@ -187,7 +189,8 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
     let last = marks.list.last().cloned().expect("checkpoint 0 is taken before any output");
     let upto = &whole.hist[..last.out as usize];
     let (crc, adler) = (crc32(upto), adler32(upto));
-    // The blocks that start from the checkpoint on are recorded again.
+    // The second pass records again every block that starts at or after the
+    // checkpoint, so those are dropped here.
     let mut blocks = whole.blocks.take().expect("the first pass records blocks");
     blocks.truncate(last.blocks);
     drop(whole);
@@ -197,7 +200,7 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
     index.sums = Some(Sums { crc, adler, upto: last.out });
     let blocks_end = match inflate::run(data, f.start, f.end, &mut index, &mut TraceBuilder::off(), Some(last.resume())) {
         Ok(Ended::Stream(at)) => at,
-        // Nothing here tells the decoder to stop.
+        // This sink never asks the decoder to stop, so a stop is a fault.
         Ok(Ended::Stopped(_)) => return Err(Refusal::Failed),
         Err(Refusal::TooLarge) => return Err(Refusal::TooLargeLazy),
         Err(other) => return Err(other),
@@ -238,8 +241,8 @@ struct Checkpoint {
     /// The header of the Huffman-coded block it is inside, whose tables a
     /// decode starting here reads again. Nothing at the start of a block.
     block: Option<u64>,
-    /// How many blocks start before `in_bit`: the one it is inside among
-    /// them, and one starting at `in_bit` not.
+    /// How many blocks start before `in_bit`. This counts the block the
+    /// checkpoint is inside, and does not count a block starting at `in_bit`.
     blocks: u64,
     /// The last 32 KiB of output before it, or all of it when there is less.
     window: Arc<[u8]>,
@@ -286,9 +289,10 @@ impl Checkpoints {
     }
 }
 
-/// Where the blocks an index pass has passed start, as the bit of the run and
-/// the byte of the output: every block's, or past the most there may be,
-/// every `stride`th block's. The first is always kept.
+/// Where each block starts, as a bit of the run and a byte of the output,
+/// recorded by the index pass. Holds every block's start until there are more
+/// than `max`, and from then on the start of every `stride`th block. Block 0's
+/// start is always kept.
 #[derive(Debug, Clone)]
 struct BlockMarks {
     /// The start of blocks 0, `stride`, 2 × `stride` and so on.
@@ -304,9 +308,10 @@ impl BlockMarks {
         BlockMarks { list: Vec::new(), count: 0, stride: 1, max: max.max(2) }
     }
 
-    /// A block starts at `in_bit`, with `out` bytes of output before it.
-    /// Past the most there may be, every second start goes and the stride
-    /// doubles, which leaves the ones whose number is a multiple of it.
+    /// Record a block that starts at `in_bit`, with `out` bytes of output
+    /// before it. When the list grows past `max`, every second start is
+    /// dropped and the stride doubles, so the list keeps the starts of the
+    /// blocks whose number is a multiple of the stride.
     fn record(&mut self, in_bit: u64, out: u64) {
         if self.count % self.stride == 0 {
             self.list.push((in_bit, out));
@@ -322,8 +327,8 @@ impl BlockMarks {
         self.count += 1;
     }
 
-    /// Back to the first `count` blocks, for a pass that starts again from a
-    /// checkpoint they all start before.
+    /// Keep only the first `count` blocks, for a second pass that starts again
+    /// from a checkpoint after them and records the later blocks again.
     fn truncate(&mut self, count: u64) {
         self.list.truncate(count.div_ceil(self.stride) as usize);
         self.count = count;
@@ -521,8 +526,8 @@ pub struct Seekable {
     limits: Limits,
     spans: Mutex<Recent<Arc<Vec<u8>>>>,
     traced: Mutex<Option<(usize, Arc<Trace>)>>,
-    /// The starts of the blocks between two kept ones, by the number of the
-    /// first, once found.
+    /// Block starts found again by decoding: one list for each kept start,
+    /// keyed by that start's place in `blocks.list`.
     groups: Mutex<Recent<Arc<[(u64, u64)]>>>,
     block_traces: Mutex<Recent<Arc<Trace>>>,
 }
@@ -731,9 +736,8 @@ impl Seekable {
             true => self.block_start(i + 1)?,
             false => (self.blocks_end, self.len),
         };
-        // The header's first three bits, low bit first: whether this is the
-        // last block, and how it is coded. Read again rather than kept, since
-        // they are in the run and the run is in memory.
+        // BFINAL and BTYPE, the first three bits of the block header, low bit
+        // first, read from the run, which is in memory.
         let bit = |k: u64| self.packed.get((k / 8) as usize).map_or(0, |b| (b >> (k % 8)) & 1);
         let kind = match bit(in_start + 1) | bit(in_start + 2) << 1 {
             0 => BlockKind::Stored,
@@ -744,8 +748,8 @@ impl Seekable {
         Ok(Block { steps: 0..0, kind, last: bit(in_start) == 1, in_bits: in_start..in_end, out_bytes: out_start..out_end })
     }
 
-    /// The block whose bits hold bit `bit` of the run. Nothing for a bit of
-    /// the wrapper or of the padding after the last block.
+    /// The block that bit `bit` of the run belongs to. None for a bit of the
+    /// gzip or zlib wrapper, or of the padding after the last block.
     pub fn block_of_bit(&self, bit: u64) -> Option<u64> {
         let list = &self.blocks.list;
         if bit < list.first()?.0 || bit >= self.blocks_end {
@@ -773,8 +777,8 @@ impl Seekable {
         self.group(g)?.get(j).copied().ok_or(Refusal::Failed)
     }
 
-    /// The starts of every block from kept start `g` to the next, found by
-    /// decoding from the first and counting what comes out.
+    /// The start of every block from kept start `g` up to the next kept start,
+    /// found by decoding from start `g` and counting the output.
     fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, Refusal> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
@@ -784,7 +788,8 @@ impl Seekable {
         let f = &self.framing;
         inflate::run(&self.packed, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
         let starts: Arc<[(u64, u64)]> = sink.starts.take().unwrap_or_default().into();
-        // The same decoder over the same bits as the pass that counted them.
+        // The same decoder read these bits on the index pass, so a different
+        // count is the decoder disagreeing with itself.
         let want = self.blocks.stride.min(self.blocks.count - g as u64 * self.blocks.stride);
         if starts.len() as u64 != want || starts.first() != Some(&(in_bit, out)) {
             return Err(Refusal::Failed);
@@ -794,12 +799,14 @@ impl Seekable {
     }
 
     /// The trace of block `i` alone: its header, its tables and its codes,
-    /// counted from the front of the run and of the output as every trace
-    /// here is, with the block as its one entry in [`Trace::blocks`]. The
-    /// last block's trace goes on past it to the end of the deflate data.
+    /// with bits and bytes counted from the start of the run and of the
+    /// output, as in every trace here. [`Trace::blocks`] has this block as its
+    /// only entry. The last block's trace also covers the padding after it, up
+    /// to the end of the deflate data.
     ///
-    /// A block of more codes than [`Limits::span_steps`] has them as one
-    /// step, as a whole run's trace does past [`crate::codec::MAX_STEPS`].
+    /// In a block of more than [`Limits::span_steps`] codes, the codes are one
+    /// opaque step, as they are in a whole run's trace past
+    /// [`crate::codec::MAX_STEPS`].
     pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, Refusal> {
         if let Some(t) = lock(&self.block_traces).get(i) {
             return Ok(t);
@@ -837,10 +844,10 @@ impl Seekable {
     }
 }
 
-/// What was made most recently for one run, up to a total weight, with the
-/// one asked for longest ago going first: spans weighed in bytes, block
-/// traces in steps, groups of block starts one each. At least one is kept
-/// whatever it weighs.
+/// A cache of what was made most recently for one run, up to a total weight,
+/// that drops the entry used longest ago first. Spans are weighed in bytes,
+/// block traces in steps, and each list of block starts counts as 1. The
+/// newest entry is kept whatever it weighs.
 struct Recent<T> {
     entries: Vec<(u64, T, usize, u64)>,
     weight: usize,

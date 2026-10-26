@@ -256,11 +256,11 @@ impl Space {
     /// block. Its steps count from the run's start either way, so
     /// [`crate::codec::inflate::decode_step`] reads them against the run.
     ///
-    /// The block's trace rather than the span's, because it is the one the
-    /// listing lays the block's codes out from, so a code the listing names
-    /// is one this can take apart. A span's trace names no codes once it
-    /// holds more than [`crate::codec::lazy::SPAN_TRACE_STEPS`] steps, which
-    /// a span of 1 MiB of literals does.
+    /// It uses the block's trace because the listing lays out the block's
+    /// codes from that trace, so every code the listing shows can be taken
+    /// apart here. A span's trace replaces its codes with one opaque step once
+    /// it passes [`crate::codec::lazy::SPAN_TRACE_STEPS`] steps, which a span
+    /// of 1 MiB of literals does.
     pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
         match self.doc.source() {
             SpaceSource::Lazy(index) => match index.block_of_bit(bit) {

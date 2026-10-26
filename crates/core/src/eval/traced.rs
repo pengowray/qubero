@@ -30,10 +30,10 @@
 //! it is not a range: it is written out in the order the decoder read, which
 //! the trace says. See `read::Evaluator::read_code_bits`.
 //!
-//! A deflate run too large to hold whole keeps no trace of the whole run (see
-//! [`crate::codec::lazy`]). Its blocks are listed from where the index pass
-//! found them, and a block's own trace is made when the block is opened. See
-//! [`Blocks`].
+//! A deflate run too large to hold whole has no trace of the whole run (see
+//! [`crate::codec::lazy`]). Its blocks are listed from the block starts the
+//! index pass recorded, and the trace of one block is made when that block is
+//! opened. See [`Blocks`].
 
 use std::ops::{Deref, Range};
 use std::sync::Arc;
@@ -43,13 +43,13 @@ use crate::codec::{Block, BlockKind, Step, StepField, StepKind, TableField, Trac
 use crate::eval::{Evaluator, Sizing};
 use crate::template::{Expr as E, Ty as T};
 
-/// What the fields a trace lays down are read off: the trace of a whole run,
-/// or the index of a run too large to hold whole.
+/// Where the `blocks` row and the rows under it get their facts: the trace of
+/// a whole run, or the index of a run too large to hold whole.
 ///
-/// Both list the same blocks. The index knows where each one starts and ends
-/// and how it is coded, which is all the `blocks` row and its entries need;
-/// the steps of a block, which the rows inside it need, come from a trace of
-/// that block alone, made when asked for. See [`Blocks::trace_of`].
+/// Both give the same blocks. For the `blocks` row and the row of each block,
+/// the index has enough: where each block starts and ends, and how it is
+/// coded. The rows inside a block need its steps, which come from a trace of
+/// that block alone. See [`Blocks::trace_of`].
 #[derive(Clone, Copy)]
 pub(super) enum Blocks<'a> {
     Whole(&'a Trace),
@@ -64,7 +64,8 @@ impl<'a> Blocks<'a> {
         }
     }
 
-    /// Block `i`. An indexed run's has no steps: they are in its own trace.
+    /// Block `i`. For an indexed run its `steps` are empty, and the steps are
+    /// in the block's own trace.
     pub fn get(self, i: u64) -> Option<Block> {
         match self {
             Blocks::Whole(t) => t.blocks().get(i as usize).cloned(),
@@ -72,9 +73,9 @@ impl<'a> Blocks<'a> {
         }
     }
 
-    /// The trace of the whole run, for the questions only it can answer: a
-    /// JPEG scan's units and the bytes its decoder read past. Nothing for an
-    /// indexed run, which is deflate and has neither.
+    /// The trace of the whole run, for a JPEG scan's units and the bytes its
+    /// decoder skipped, which only a whole trace has. None for an indexed run,
+    /// which is deflate and has neither.
     pub fn whole(self) -> Option<&'a Trace> {
         match self {
             Blocks::Whole(t) => Some(t),
@@ -114,7 +115,7 @@ impl<'a> Blocks<'a> {
     pub fn name(self, block: &Block) -> String {
         match self {
             Blocks::Whole(t) => block_name(t, block),
-            // Deflate's blocks are named by their coding alone.
+            // A deflate block's name needs only its kind and last flag.
             Blocks::Indexed(_) => block_name(&Trace::default(), block),
         }
     }
@@ -129,8 +130,8 @@ impl<'a> Blocks<'a> {
     }
 }
 
-/// A trace borrowed from the space that holds it, or one made for a single
-/// block and shared with the index's cache of them.
+/// A whole trace borrowed from its space, or the trace of one block, shared
+/// with the index's cache of block traces.
 pub(super) enum TraceRef<'a> {
     Whole(&'a Trace),
     Block(Arc<Trace>),
