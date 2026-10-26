@@ -198,7 +198,8 @@ impl Evaluator {
     /// trace already says where every step read from, so the first one over the
     /// window is found by halving and the rest are read off in order.
     fn block_cells(&mut self, block: u32, path: &[usize], from: u64, to: u64, max: usize) -> R<Vec<Cell>> {
-        let Some((base, trace)) = self.trace_for(path) else { return Ok(Vec::new()) };
+        let Some((base, trace, block)) = self.block_trace(path, block) else { return Ok(Vec::new()) };
+        let trace = &*trace;
         // A JPEG MCU holds 8×8 blocks rather than codes, and each of those is
         // a run of its own.
         if !trace.units().is_empty() {

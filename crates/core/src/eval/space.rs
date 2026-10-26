@@ -251,12 +251,22 @@ impl Space {
 
     /// The trace that names bit `bit` of the run this space was unpacked
     /// from, counted from the run's start: the whole trace for a stream held
-    /// whole, and for one read a piece at a time, the trace of the span that
-    /// read that bit. Its steps count from the run's start either way, so
+    /// whole, and for one read a piece at a time, the trace of the block that
+    /// holds that bit, or of the span that read it for a bit outside every
+    /// block. Its steps count from the run's start either way, so
     /// [`crate::codec::inflate::decode_step`] reads them against the run.
+    ///
+    /// The block's trace rather than the span's, because it is the one the
+    /// listing lays the block's codes out from, so a code the listing names
+    /// is one this can take apart. A span's trace names no codes once it
+    /// holds more than [`crate::codec::lazy::SPAN_TRACE_STEPS`] steps, which
+    /// a span of 1 MiB of literals does.
     pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
         match self.doc.source() {
-            SpaceSource::Lazy(index) => index.trace_at_bit(bit),
+            SpaceSource::Lazy(index) => match index.block_of_bit(bit) {
+                Some(i) => index.block_trace(i).ok(),
+                None => index.trace_at_bit(bit),
+            },
             _ => Some(self.trace.clone()),
         }
     }
@@ -1149,9 +1159,9 @@ mod tests {
         assert!(index.held_bytes() < 2 << 20, "{} bytes held", index.held_bytes());
         let verdict = e.run_check(&d, &[7]).unwrap().expect("the Adler-32 is a check");
         assert!(verdict.ok, "{verdict:?}");
-        // The blocks a trace lays out need the trace of the whole run, which
-        // a stream this size does not keep.
-        assert_eq!(e.node(&d, RUN).unwrap().child_count, 1);
+        // The blocks are listed from the index, which found where each one
+        // starts on the same pass.
+        assert_eq!(e.node(&d, RUN).unwrap().child_count, 2);
         // A second node over the same run is read through the same index.
         assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
     }

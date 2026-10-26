@@ -29,12 +29,150 @@
 //! no such question. The *value* of a code does not have the problem, because
 //! it is not a range: it is written out in the order the decoder read, which
 //! the trace says. See `read::Evaluator::read_code_bits`.
+//!
+//! A deflate run too large to hold whole keeps no trace of the whole run (see
+//! [`crate::codec::lazy`]). Its blocks are listed from where the index pass
+//! found them, and a block's own trace is made when the block is opened. See
+//! [`Blocks`].
 
-use std::ops::Range;
+use std::ops::{Deref, Range};
+use std::sync::Arc;
 
+use crate::codec::lazy::Seekable;
 use crate::codec::{Block, BlockKind, Step, StepField, StepKind, TableField, Trace, Unit};
-use crate::eval::Sizing;
+use crate::eval::{Evaluator, Sizing};
 use crate::template::{Expr as E, Ty as T};
+
+/// What the fields a trace lays down are read off: the trace of a whole run,
+/// or the index of a run too large to hold whole.
+///
+/// Both list the same blocks. The index knows where each one starts and ends
+/// and how it is coded, which is all the `blocks` row and its entries need;
+/// the steps of a block, which the rows inside it need, come from a trace of
+/// that block alone, made when asked for. See [`Blocks::trace_of`].
+#[derive(Clone, Copy)]
+pub(super) enum Blocks<'a> {
+    Whole(&'a Trace),
+    Indexed(&'a Seekable),
+}
+
+impl<'a> Blocks<'a> {
+    pub fn len(self) -> u64 {
+        match self {
+            Blocks::Whole(t) => t.blocks().len() as u64,
+            Blocks::Indexed(s) => s.blocks(),
+        }
+    }
+
+    /// Block `i`. An indexed run's has no steps: they are in its own trace.
+    pub fn get(self, i: u64) -> Option<Block> {
+        match self {
+            Blocks::Whole(t) => t.blocks().get(i as usize).cloned(),
+            Blocks::Indexed(s) => s.block(i).ok(),
+        }
+    }
+
+    /// The trace of the whole run, for the questions only it can answer: a
+    /// JPEG scan's units and the bytes its decoder read past. Nothing for an
+    /// indexed run, which is deflate and has neither.
+    pub fn whole(self) -> Option<&'a Trace> {
+        match self {
+            Blocks::Whole(t) => Some(t),
+            Blocks::Indexed(_) => None,
+        }
+    }
+
+    /// Which block holds bit `want` of the run.
+    pub fn at_bit(self, want: u64) -> Option<u64> {
+        match self {
+            Blocks::Whole(t) => {
+                let i = t.blocks().partition_point(|b| b.in_bits.start <= want).checked_sub(1)?;
+                (want < t.blocks()[i].in_bits.end).then_some(i as u64)
+            }
+            Blocks::Indexed(s) => s.block_of_bit(want),
+        }
+    }
+
+    /// From where the first block starts to where the last one ends, in bits
+    /// of the run.
+    pub fn extent(self) -> Option<Range<u64>> {
+        let first = self.get(0)?;
+        let last = self.get(self.len().checked_sub(1)?)?;
+        Some(first.in_bits.start..last.in_bits.end)
+    }
+
+    /// Whether the run's bits are counted from the low bit of a byte. Every
+    /// indexed run is deflate, which counts them that way.
+    pub fn lsb_first(self) -> bool {
+        match self {
+            Blocks::Whole(t) => t.lsb_first(),
+            Blocks::Indexed(_) => true,
+        }
+    }
+
+    /// What block `block` is called. See [`block_name`].
+    pub fn name(self, block: &Block) -> String {
+        match self {
+            Blocks::Whole(t) => block_name(t, block),
+            // Deflate's blocks are named by their coding alone.
+            Blocks::Indexed(_) => block_name(&Trace::default(), block),
+        }
+    }
+
+    /// The trace that holds block `i`'s steps, and the block's number in
+    /// it: the whole trace and `i`, or the block's own trace and 0.
+    pub fn trace_of(self, i: u32) -> Option<(TraceRef<'a>, u32)> {
+        match self {
+            Blocks::Whole(t) => Some((TraceRef::Whole(t), i)),
+            Blocks::Indexed(s) => Some((TraceRef::Block(s.block_trace(u64::from(i)).ok()?), 0)),
+        }
+    }
+}
+
+/// A trace borrowed from the space that holds it, or one made for a single
+/// block and shared with the index's cache of them.
+pub(super) enum TraceRef<'a> {
+    Whole(&'a Trace),
+    Block(Arc<Trace>),
+}
+
+impl Deref for TraceRef<'_> {
+    type Target = Trace;
+
+    fn deref(&self) -> &Trace {
+        match self {
+            TraceRef::Whole(t) => t,
+            TraceRef::Block(t) => t,
+        }
+    }
+}
+
+impl Evaluator {
+    /// The blocks behind a `Traced` node, and where the run they were read
+    /// from starts. Found by walking up to the stream that opened them, as
+    /// [`Evaluator::trace_for`] finds a whole trace.
+    pub(super) fn blocks_for(&self, path: &[usize]) -> Option<(u64, Blocks<'_>)> {
+        for k in (0..=path.len()).rev() {
+            let Some(r) = self.memo.get(&path[..k]) else { continue };
+            if matches!(r.ty, T::Decoded { .. }) {
+                let super::space::Opened::Space(id) = self.spaces.get(&path[..k])? else { return None };
+                if let Some(t) = self.spaces.trace(id) {
+                    return Some((r.offset, Blocks::Whole(t)));
+                }
+                return Some((r.offset, Blocks::Indexed(self.spaces.lazy(id)?)));
+            }
+        }
+        None
+    }
+
+    /// The trace that holds block `i` of the stream above `path`, the
+    /// block's number in it, and where the run starts.
+    pub(super) fn block_trace(&self, path: &[usize], i: u32) -> Option<(u64, TraceRef<'_>, u32)> {
+        let (base, blocks) = self.blocks_for(path)?;
+        let (t, j) = blocks.trace_of(i)?;
+        Some((base, t, j))
+    }
+}
 
 /// Which of the blocks in a trace a symbol step belongs to, and where its
 /// symbols begin: worked out once when a block node is placed.
@@ -811,6 +949,122 @@ mod tests {
         let settled = e.memo.len();
         e.spans(&d, run.offset_bits, run.offset_bits + run.size_bits, 5000).unwrap();
         assert_eq!(e.memo.len(), settled, "asking again placed more nodes");
+    }
+
+    /// zlib flushed every `every` bytes of input, which ends a block and
+    /// adds an empty stored one each time, so a few hundred kilobytes come to
+    /// hundreds of blocks of both kinds.
+    fn flushed_zlib(data: &[u8], every: usize) -> Vec<u8> {
+        use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush};
+        let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(6, 15, 0));
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; every * 2 + 4096];
+        let chunks: Vec<&[u8]> = data.chunks(every).collect();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let flush = if k + 1 == chunks.len() { TDEFLFlush::Finish } else { TDEFLFlush::Sync };
+            let mut input = *chunk;
+            loop {
+                let (_, read, wrote) = compress(&mut c, input, &mut buf, flush);
+                out.extend_from_slice(&buf[..wrote]);
+                input = &input[read..];
+                if input.is_empty() && wrote < buf.len() {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    /// What a test compares of a row: everything the listing shows of it.
+    fn row(n: &crate::eval::NodeInfo) -> (String, String, Option<String>, u64, u64, u64, bool, crate::eval::Value) {
+        (n.name.clone(), n.type_name.clone(), n.unit.clone(), n.offset_bits, n.size_bits, n.child_count, n.lsb_first, n.value.clone())
+    }
+
+    /// A stream too large to hold whole lists its blocks from the index, and
+    /// a block opened there holds the rows it holds when the stream is held
+    /// whole: the same header fields, tables and codes, at the same bits,
+    /// with the same values. The limits are made small, so that a megabyte
+    /// is past them and the block starts are thinned.
+    #[test]
+    fn a_stream_read_a_piece_at_a_time_lists_the_same_blocks() {
+        use crate::codec::lazy::Limits;
+        let text: Vec<u8> =
+            (0..20_000).flat_map(|i| format!("line {i} of a stream whose blocks are listed {}\n", i * i % 977).into_bytes()).collect();
+        let d = Document::new(MemSource(flushed_zlib(&text, 4000)));
+        let template = crate::formats::builtin("zlib").unwrap();
+        let mut whole = Evaluator::new(template.clone());
+        let mut lazy = Evaluator::new(template);
+        lazy.spaces.set_lazy_limits(Limits {
+            whole: 64 << 10,
+            spacing: 16 << 10,
+            checkpoints: 8,
+            span_cache: 64 << 10,
+            block_marks: 16,
+            ..Limits::default()
+        });
+        assert_eq!(lazy.node(&d, RUN).unwrap().child_count, 2, "no blocks under a stream read a piece at a time");
+        let crate::eval::space::Opened::Space(id) = lazy.spaces.get(RUN).unwrap() else { panic!("the stream did not open") };
+        assert!(lazy.spaces.lazy(id).is_some(), "the stream was held whole");
+        assert!(whole.spaces.lazy(1).is_none());
+
+        let blocks = [6, 1];
+        assert_eq!(row(&lazy.node(&d, &blocks).unwrap()), row(&whole.node(&d, &blocks).unwrap()));
+        let n = whole.node(&d, &blocks).unwrap().child_count as usize;
+        assert!(n > 200, "only {n} blocks");
+        let a = whole.children(&d, &blocks, 0, n as u64).unwrap();
+        let b = lazy.children(&d, &blocks, 0, n as u64).unwrap();
+        assert_eq!(a.iter().map(row).collect::<Vec<_>>(), b.iter().map(row).collect::<Vec<_>>());
+        // Inside a few blocks, backwards so the block traces turn over: every
+        // header field and table row, and every code.
+        for i in (0..n).step_by(37).rev() {
+            let block = [6, 1, i];
+            let m = whole.node(&d, &block).unwrap().child_count;
+            let a = whole.children(&d, &block, 0, m).unwrap();
+            let b = lazy.children(&d, &block, 0, m).unwrap();
+            assert_eq!(a.iter().map(row).collect::<Vec<_>>(), b.iter().map(row).collect::<Vec<_>>(), "block {i}");
+            let codes = [6, 1, i, m as usize - 1];
+            let k = whole.node(&d, &codes).unwrap().child_count;
+            let a = whole.children(&d, &codes, 0, k).unwrap();
+            let b = lazy.children(&d, &codes, 0, k).unwrap();
+            assert_eq!(a.iter().map(row).collect::<Vec<_>>(), b.iter().map(row).collect::<Vec<_>>(), "block {i}'s codes");
+            // The value table's cells over the block, read off its trace.
+            let r = whole.node(&d, &block).unwrap();
+            let (from, to) = (r.offset_bits, r.offset_bits + r.size_bits);
+            assert_eq!(whole.run_cells(&d, &block, from, to, 500).unwrap(), lazy.run_cells(&d, &block, from, to, 500).unwrap(), "block {i}'s cells");
+        }
+        // A bit of the run finds the same row either way, down to the code.
+        let run = whole.node(&d, RUN).unwrap();
+        let mut seed = 0x9e37_79b9_u64;
+        for _ in 0..300 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let bit = run.offset_bits + seed % run.size_bits;
+            assert_eq!(lazy.locate(&d, bit).unwrap(), whole.locate(&d, bit).unwrap(), "bit {bit}");
+        }
+        // And the column beside the bytes names the same blocks.
+        let (from, to) = (run.offset_bits, run.offset_bits + 40_000);
+        let names = |e: &mut Evaluator| e.spans(&d, from, to, 5000).unwrap().into_iter().map(|s| (s.name, s.offset_bits, s.size_bits, s.count)).collect::<Vec<_>>();
+        assert_eq!(names(&mut lazy), names(&mut whole));
+        // The inspector takes a code apart from the trace the space gives for
+        // its bit, and gets the same answer from the block's trace as from
+        // the whole run's.
+        let packed = d.source().0[(run.offset_bits / 8) as usize..((run.offset_bits + run.size_bits) / 8) as usize].to_vec();
+        let (a, b) = (whole.open_space(&d, 0, RUN).unwrap().unwrap(), lazy.open_space(&d, 0, RUN).unwrap().unwrap());
+        let (a, b) = (whole.space(a).unwrap(), lazy.space(b).unwrap());
+        let mut compared = 0;
+        for bit in (0..run.size_bits).step_by(997) {
+            let (ta, tb) = (a.trace_at_bit(bit).unwrap(), b.trace_at_bit(bit).expect("a block or span names it"));
+            let (Some(ka), Some(kb)) = (ta.index_in(bit), tb.index_in(bit)) else { continue };
+            let plain = |d: crate::codec::inflate::DecodedStep| {
+                let plain = |c: crate::codec::inflate::DecodedCode| crate::codec::inflate::DecodedCode { entry: None, ..c };
+                (plain(d.symbol), d.distance.map(plain), d.block_kind)
+            };
+            let (x, y) = (crate::codec::inflate::decode_step(&packed, &ta, ka), crate::codec::inflate::decode_step(&packed, &tb, kb));
+            assert_eq!(x.map(plain), y.map(plain), "bit {bit}");
+            compared += x.is_some() as usize;
+        }
+        assert!(compared > 100, "only {compared} codes taken apart");
     }
 
     #[test]

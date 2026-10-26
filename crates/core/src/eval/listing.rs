@@ -944,14 +944,17 @@ impl Evaluator {
         // no count for those, and the chip falls back to the size.
         // A JPEG MCU is counted in the 8×8 blocks it holds, which is what it is
         // made of; its codes are one level further in.
-        let (symbols, unit) = match (self.trace_for(path), &self.memo[path].ty) {
-            (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) if !trace.units().is_empty() => {
-                (trace.units_of(*i as usize).len() as u64, "block")
+        let blocks = self.blocks_for(path).map(|(_, b)| b);
+        let (symbols, unit) = match (blocks, &self.memo[path].ty) {
+            (Some(b), Ty::Traced { part: TracedPart::Block(i) }) if b.whole().is_some_and(|t| !t.units().is_empty()) => {
+                (b.whole().map_or(0, |t| t.units_of(*i as usize).len() as u64), "block")
             }
-            (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => (
-                super::traced::BlockView::of(trace, *i)
-                    .filter(|v| !matches!(v.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline))
-                    .map_or(0, |v| v.symbols.len() as u64),
+            (Some(b), Ty::Traced { part: TracedPart::Block(i) }) => (
+                b.trace_of(*i).map_or(0, |(trace, j)| {
+                    super::traced::BlockView::of(&trace, j)
+                        .filter(|v| !matches!(v.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline))
+                        .map_or(0, |v| v.symbols.len() as u64)
+                }),
                 "code",
             ),
             _ => (0, "code"),
@@ -1395,17 +1398,15 @@ impl Evaluator {
         use crate::template::TracedPart as P;
         // The trace counts bits from the front of the run, and the cursor
         // counts them from the front of the file.
-        let (base, trace) = self.trace_for(path)?;
+        let (base, blocks) = self.blocks_for(path)?;
         // A stream that fills its bytes from the low bit is counted that way.
-        let bit = if trace.lsb_first() { mirror_in_byte(bit) } else { bit };
+        let bit = if blocks.lsb_first() { mirror_in_byte(bit) } else { bit };
         let want = bit.checked_sub(base)?;
+        let units = blocks.whole().filter(|t| !t.units().is_empty());
         match part {
-            P::Blocks => {
-                let k = trace.blocks().partition_point(|b| b.in_bits.start <= want);
-                let i = k.checked_sub(1)?;
-                (want < trace.blocks()[i].in_bits.end).then_some(i)
-            }
-            P::Block(i) if !trace.units().is_empty() => {
+            P::Blocks => blocks.at_bit(want).map(|i| i as usize),
+            P::Block(i) if units.is_some() => {
+                let trace = units?;
                 let view = super::traced::UnitsView::of(trace, i)?;
                 let block = trace.blocks().get(i as usize)?;
                 if !block.in_bits.contains(&want) {
@@ -1414,12 +1415,15 @@ impl Evaluator {
                 view.index_of_step(trace, trace.index_in(want)? as u32)
             }
             P::Unit(j) => {
+                let trace = units?;
                 let unit = trace.units().get(j as usize)?;
                 let k = trace.index_in(want)? as u32;
                 unit.steps.contains(&k).then(|| (k - unit.steps.start) as usize)
             }
             P::Block(i) => {
-                let view = super::traced::BlockView::of(trace, i)?;
+                let (trace, j) = blocks.trace_of(i)?;
+                let trace = &*trace;
+                let view = super::traced::BlockView::of(trace, j)?;
                 if want >= view.symbols_at(trace) {
                     return (!view.symbols.is_empty()).then_some(view.head.len());
                 }
@@ -1427,7 +1431,9 @@ impl Evaluator {
                 (view.head.contains(&(k as u32))).then(|| k - view.head.start as usize)
             }
             P::Symbols(i) => {
-                let view = super::traced::BlockView::of(trace, i)?;
+                let (trace, j) = blocks.trace_of(i)?;
+                let trace = &*trace;
+                let view = super::traced::BlockView::of(trace, j)?;
                 let k = trace.index_in(want)?;
                 (view.symbols.contains(&(k as u32))).then(|| k - view.symbols.start as usize)
             }

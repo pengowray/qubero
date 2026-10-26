@@ -377,25 +377,19 @@ impl Evaluator {
     #[inline(never)]
     fn traced_bits(&self, path: &[usize], part: crate::template::TracedPart) -> R<u64> {
         use crate::template::TracedPart as P;
-        let Some((_, trace)) = self.trace_for(path) else {
+        let Some((_, blocks)) = self.blocks_for(path) else {
             return fail("this stream is no longer open");
         };
         Ok(match part {
-            P::Blocks => match (trace.blocks().first(), trace.blocks().last()) {
-                (Some(a), Some(b)) => b.in_bits.end - a.in_bits.start,
-                _ => 0,
-            },
-            P::Block(i) => match trace.blocks().get(i as usize) {
-                Some(b) => b.in_bits.end - b.in_bits.start,
-                None => 0,
-            },
-            P::Symbols(i) => match super::traced::BlockView::of(trace, i) {
-                Some(v) => v.block.in_bits.end - v.symbols_at(trace),
+            P::Blocks => blocks.extent().map_or(0, |r| r.end - r.start),
+            P::Block(i) => blocks.get(u64::from(i)).map_or(0, |b| b.in_bits.end - b.in_bits.start),
+            P::Symbols(i) => match blocks.trace_of(i) {
+                Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.block.in_bits.end - v.symbols_at(&trace)),
                 None => 0,
             },
             // From its first code to where its last one ends.
-            P::Unit(j) => match trace.units().get(j as usize) {
-                Some(u) if !u.steps.is_empty() => {
+            P::Unit(j) => match blocks.whole().and_then(|t| Some((t, t.units().get(j as usize)?))) {
+                Some((trace, u)) if !u.steps.is_empty() => {
                     let first = trace.step(u.steps.start as usize).map_or(0, |s| s.in_bits.start);
                     let last = trace.step(u.steps.end as usize - 1).map_or(first, |s| s.in_bits.end);
                     last - first
@@ -410,17 +404,18 @@ impl Evaluator {
     #[inline(never)]
     fn traced_count(&self, path: &[usize], part: crate::template::TracedPart) -> u64 {
         use crate::template::TracedPart as P;
-        let Some((_, trace)) = self.trace_for(path) else { return 0 };
+        let Some((_, blocks)) = self.blocks_for(path) else { return 0 };
+        let units = blocks.whole().filter(|t| !t.units().is_empty());
         match part {
-            P::Blocks => trace.blocks().len() as u64,
-            P::Block(i) if !trace.units().is_empty() => super::traced::UnitsView::of(trace, i).map_or(0, |v| v.len() as u64),
-            P::Unit(j) => trace.units().get(j as usize).map_or(0, |u| u.steps.len() as u64),
-            P::Block(i) => match super::traced::BlockView::of(trace, i) {
-                Some(v) => v.head.len() as u64 + u64::from(!v.symbols.is_empty()),
+            P::Blocks => blocks.len(),
+            P::Block(i) if units.is_some() => units.and_then(|t| super::traced::UnitsView::of(t, i)).map_or(0, |v| v.len() as u64),
+            P::Unit(j) => units.and_then(|t| t.units().get(j as usize)).map_or(0, |u| u.steps.len() as u64),
+            P::Block(i) => match blocks.trace_of(i) {
+                Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.head.len() as u64 + u64::from(!v.symbols.is_empty())),
                 None => 0,
             },
-            P::Symbols(i) => match super::traced::BlockView::of(trace, i) {
-                Some(v) => v.symbols.len() as u64,
+            P::Symbols(i) => match blocks.trace_of(i) {
+                Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.symbols.len() as u64),
                 None => 0,
             },
         }

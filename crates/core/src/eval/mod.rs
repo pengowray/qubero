@@ -1268,7 +1268,7 @@ impl Evaluator {
             unit: self.unit_of(path, &r.ty).map(str::to_string),
             offset_bits: r.offset,
             size_bits: size,
-            lsb_first: from_bottom(&r, size) || (self.is_trace_field(path) && self.trace_for(path).is_some_and(|(_, t)| t.lsb_first())),
+            lsb_first: from_bottom(&r, size) || (self.is_trace_field(path) && self.blocks_for(path).is_some_and(|(_, b)| b.lsb_first())),
             value,
             child_count,
             composite,
@@ -1674,7 +1674,7 @@ impl Evaluator {
         // those as blocks would say something the format does not.
         if let Ty::Traced { part } = ty {
             return match part {
-                TracedPart::Blocks => Some(traced::blocks_unit(self.trace_for(path).and_then(|(_, t)| t.blocks().first().map(|b| b.kind)))),
+                TracedPart::Blocks => Some(traced::blocks_unit(self.blocks_for(path).and_then(|(_, b)| b.get(0)).map(|b| b.kind))),
                 TracedPart::Block(_) => None,
                 TracedPart::Symbols(_) | TracedPart::Unit(_) => Some("code"),
             };
@@ -1810,8 +1810,8 @@ impl Evaluator {
                 self.open_space_at(doc, parent)?;
                 // Where the first block starts, which for a wrapped stream is
                 // past whatever the wrapper put in front of it.
-                let at = match self.trace_for(parent) {
-                    Some((base, t)) => base + t.blocks().first().map_or(0, |b| b.in_bits.start),
+                let at = match self.blocks_for(parent) {
+                    Some((base, b)) => base + b.get(0).map_or(0, |b| b.in_bits.start),
                     None => return fail("this stream is no longer open"),
                 };
                 return Ok(Some(Place {
@@ -2953,21 +2953,24 @@ impl Evaluator {
         part: TracedPart,
         idx: usize,
     ) -> R<Option<Place>> {
-        let Some((base, trace)) = self.trace_for(parent) else {
+        let Some((base, blocks)) = self.blocks_for(parent) else {
             return fail("this stream is no longer open");
         };
         let place = |name: String, ty: Ty, at: u64| {
             Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
         };
+        // A JPEG scan's trace, which is the one kind with units.
+        let units = blocks.whole().filter(|t| !t.units().is_empty());
         match part {
             TracedPart::Blocks => {
-                let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
+                let Some(block) = blocks.get(idx as u64) else { return fail("no such block") };
                 let at = block.in_bits.start;
-                place(traced::block_name(trace, block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+                place(blocks.name(&block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
             }
             // A JPEG MCU: its 8×8 blocks, and the padding and restart marker
             // after them.
-            TracedPart::Block(i) if trace.blocks().get(i as usize).is_some() && !trace.units().is_empty() => {
+            TracedPart::Block(i) if units.is_some_and(|t| t.blocks().get(i as usize).is_some()) => {
+                let trace = units.expect("a trace with units");
                 let view = traced::UnitsView::of(trace, i).expect("a trace with units");
                 match view.child(idx) {
                     Some(traced::UnitsChild::Unit(j)) => {
@@ -2984,6 +2987,7 @@ impl Evaluator {
                 }
             }
             TracedPart::Unit(j) => {
+                let Some(trace) = units else { return fail("no such block") };
                 let Some(unit) = trace.units().get(j as usize) else { return fail("no such block") };
                 let k = unit.steps.start as usize + idx;
                 if k >= unit.steps.end as usize {
@@ -2994,7 +2998,9 @@ impl Evaluator {
                 place(name, ty, step.in_bits.start)
             }
             TracedPart::Block(i) => {
-                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let Some((trace, j)) = blocks.trace_of(i) else { return fail("no such block") };
+                let trace = &*trace;
+                let Some(view) = traced::BlockView::of(trace, j) else { return fail("no such block") };
                 let head = view.head.len();
                 if idx < head {
                     let step = trace.step(view.head.start as usize + idx).expect("in range");
@@ -3020,7 +3026,9 @@ impl Evaluator {
                 }
             }
             TracedPart::Symbols(i) => {
-                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let Some((trace, j)) = blocks.trace_of(i) else { return fail("no such block") };
+                let trace = &*trace;
+                let Some(view) = traced::BlockView::of(trace, j) else { return fail("no such block") };
                 let k = view.symbols.start as usize + idx;
                 if k >= view.symbols.end as usize {
                     return fail("no such symbol");
@@ -3060,7 +3068,7 @@ impl Evaluator {
     /// the stream has a `blocks` child at all. zstd and xz are traced at the
     /// block and have no blocks to open, so they do not get one.
     pub(super) fn has_blocks(&self, path: &[usize]) -> bool {
-        self.trace_for(path).is_some_and(|(_, t)| !t.blocks().is_empty())
+        self.blocks_for(path).is_some_and(|(_, b)| b.len() > 0)
     }
 
     /// How many bits space `space` holds, which for 0 is the file's length.
