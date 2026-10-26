@@ -310,19 +310,21 @@ fn index_zstd(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> 
     Ok(Decoded::Indexed(seekable(Codec::Zstd, packed, Kind::Zstd, len, marks.list, limits)))
 }
 
-/// An xz stream, laid out from the index at its end with no pass at all: the
-/// index gives every block's two sizes, and a block copies nothing from the
-/// ones before it, so a checkpoint is the start of a block.
+/// An xz stream, indexed from the index at its end without decoding any of
+/// it: that index lists every block's packed and unpacked size, and an xz
+/// block never copies from an earlier block, so a checkpoint is the start of
+/// a block.
 ///
-/// A stream laid out to no more than the cap is decoded whole, and so is one
-/// that cannot be laid out, which is refused past the cap as it always was.
-/// So is one whose blocks need a filter our decoder does not run, since the
-/// decoder that does reads only whole streams. A block larger than
-/// [`Limits::span`] is refused as too large: a file of one block is what
-/// plain `xz` writes, and `xz -T` writes several.
+/// A stream whose index adds up to no more than [`Limits::whole`], and a
+/// stream [`xz::layout`] cannot read, go to the whole decoder as before, which
+/// decodes them or refuses them. A larger stream is refused as too large when
+/// its blocks use a filter our LZMA2 decoder does not run, because `lzma-rs`,
+/// which runs those filters, reads only whole streams. It is refused as too
+/// large too when any block unpacks to more than [`Limits::span`], which is
+/// what a file of one block, as plain `xz` writes, is.
 ///
-/// Nothing is decoded here, so a block that does not come to what the index
-/// says is found when it is read, and the read is refused.
+/// Nothing is decoded here, so a block whose unpacked size differs from the
+/// index is found only when its span is read, and that read is refused.
 fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> {
     let Some(l) = xz::layout(&packed).filter(|l| l.total_out > limits.whole as u64) else {
         return whole(Codec::Xz, &packed);
