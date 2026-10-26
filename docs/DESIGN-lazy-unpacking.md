@@ -5,21 +5,19 @@ Written 2026-10-21. How a compressed run whose output is larger than
 Deflate, zlib and gzip first; zstd and xz in "zstd frames and xz blocks"; the
 other codecs are covered at the end.
 
-**State, 2026-10-21:** built as described below, on branch
-`nonhuman/sweet-solomon-104c5d`, in `codec/lazy.rs`, `eval/space.rs`,
-`eval/stitch.rs` and the wasm crate. "Still to do" at the end lists what is
-left.
+**State, 2026-10-26:** built as described below and merged into main, in
+`codec/lazy.rs`, `eval/space.rs`, `eval/stitch.rs` and the wasm crate. It was
+built in four parts:
 
-**State, 2026-10-26:** three branches built on that one, each from the same
-commit, and since merged together:
+- 2026-10-21: the index, the spans and reading a run through them.
+- 2026-10-26: the `blocks` listing for these runs. See "Blocks".
+- 2026-10-26: the index pass runs a go at a time, so the browser keeps drawing
+  while it runs, and the listing and the status bar say how far it has got.
+  See "The pass in steps" and "The browser".
+- 2026-10-26: zstd runs of several frames and xz streams of several blocks are
+  indexed too. See "zstd frames and xz blocks".
 
-- `nonhuman/great-kapitsa-d7a052`: the `blocks` listing for these runs. See
-  "Blocks".
-- `nonhuman/elegant-lalande-c05913`: the index pass runs a go at a time, so
-  the browser keeps drawing while it runs, and the listing and the status bar
-  say how far it has got. See "The pass in steps" and "The browser".
-- `nonhuman/objective-euclid-8f08a9`: zstd runs of several frames and xz
-  streams of several blocks are indexed too. See "zstd frames and xz blocks".
+"Still to do" at the end lists what is left.
 
 ## The problem
 

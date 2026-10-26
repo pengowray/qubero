@@ -38,9 +38,9 @@ except the gzipped LATISS raw (see the unpack cap below).
 
 ## Piece 1: Avro, and Rubin alerts
 
-**Done 2026-10-23**, on branch `nonhuman/busy-roentgen-b3d838`: a new `avro`
-template (`avro.rs`, `avro_schema.rs`, `avro_alerts.rs`). Both Rubin alert
-samples and six generated container files read with every value matching
+**Done 2026-10-23**, merged into main 2026-10-26: a new `avro` template
+(`avro.rs`, `avro_schema.rs`, `avro_alerts.rs`). Both Rubin alert samples and
+six generated container files read with every value matching
 fastavro 1.13.1 (1,952 values, `crates/core/tests/avro_real.rs`), and the
 cutouts open as FITS.
 
@@ -119,7 +119,7 @@ they are not in the collection (not Rubin production data, licence unclear).
 
 ## Piece 2: the afw layout inside FITS (images)
 
-**Built 2026-10-23**, on branch `nonhuman/eager-engelbart-642ee1`. Checked
+**Built 2026-10-23**, merged into main 2026-10-26. Checked
 against astropy on `visit_image.fits`, `difference_image.fits`,
 `exposure-version-2.fits` and `archiveImportTest.fits` by
 `crates/core/tests/afw_real.rs`, whose reference values
