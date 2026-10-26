@@ -8,17 +8,18 @@ other codecs are covered at the end.
 **State, 2026-10-21:** built as described below, on branch
 `nonhuman/sweet-solomon-104c5d`, in `codec/lazy.rs`, `eval/space.rs`,
 `eval/stitch.rs` and the wasm crate. "Still to do" at the end lists what is
-left. **2026-10-26:** the `blocks` listing for these runs (see "Blocks") is on
-branch `nonhuman/great-kapitsa-d7a052`, built on that one.
+left.
 
-**2026-10-26:** the index pass runs a go at a time, so the browser keeps
-drawing while it runs, and the listing and the status bar say how far it has
-got. See "The pass in steps" and "The browser". Branch
-`nonhuman/elegant-lalande-c05913`, on top of the one above.
+**State, 2026-10-26:** three branches built on that one, each from the same
+commit, and since merged together:
 
-**State, 2026-10-26:** zstd runs of several frames and xz streams of several
-blocks are indexed too, on branch `nonhuman/objective-euclid-8f08a9`, which
-starts from the branch above. See "zstd frames and xz blocks".
+- `nonhuman/great-kapitsa-d7a052`: the `blocks` listing for these runs. See
+  "Blocks".
+- `nonhuman/elegant-lalande-c05913`: the index pass runs a go at a time, so
+  the browser keeps drawing while it runs, and the listing and the status bar
+  say how far it has got. See "The pass in steps" and "The browser".
+- `nonhuman/objective-euclid-8f08a9`: zstd runs of several frames and xz
+  streams of several blocks are indexed too. See "zstd frames and xz blocks".
 
 ## The problem
 
@@ -75,7 +76,7 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `SPACING_START` | 1 MiB | Output between restart points, doubled whenever the count passes 256. |
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
 | `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one deflate block's trace, and in all the block traces a run keeps. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
-| `MAX_BLOCK_MARKS` | 65,536 | Block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
+| `MAX_BLOCK_MARKS` | 65,536 | Deflate block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
 | `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded whole, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
@@ -143,8 +144,9 @@ the decision is made during the decode, in one walk:
    leaves the window. Starting again costs at most one spacing of output
    decoded twice.
 4. At the end, check the gzip or zlib trailer as today, and return an index:
-   the compressed run, the checkpoints, the output length, both checksums, and
-   where the deflate data starts and ends inside the run.
+   the compressed run, the checkpoints, the block starts (see "Blocks"), the
+   output length, both checksums, and where the deflate data starts and ends
+   inside the run.
 
 The peak memory of the pass is the first decode's: up to 64 MiB of output
 and its trace, which is what decoding a run at the cap costs today.
@@ -176,9 +178,11 @@ keeps no trace, since only the end of the stream is wanted.
 `lazy::Indexing` is the same pass made resumable. `Indexing::step(out_bytes)`
 decodes about that much more output, stops, and the next step carries on from
 exactly where it stopped, not from the last checkpoint: the sink (with its
-window or its whole output), the trace builder, the checkpoints and the
-running sums are all kept in the `Indexing` between steps.
-`decode_or_index` is `step(u64::MAX)` until it is done.
+window or its whole output), the trace builder, the checkpoints, the block
+starts and the running sums are all kept in the `Indexing` between steps.
+`decode_or_index` is `step(u64::MAX)` until it is done. Only deflate's pass is
+done in steps; see `lazy::can_step`, and "zstd frames and xz blocks" for the
+other two.
 
 - **Where a step stops.** At the first code past its share of output, and
   never inside a stored block (so at most 64 KiB over). In the traced phase a
@@ -187,6 +191,15 @@ running sums are all kept in the `Indexing` between steps.
   block's header and tables again with the trace muted, so the trace comes
   out step for step as one pass makes it, including a block whose symbols are
   named as one step once the trace passes `MAX_STEPS` partway through it.
+- **Block starts.** A step that stops at the start of a block does not record
+  that start. The next step starts there, so the decoder tells the sink about
+  the same start again, and the start is recorded then. A step that stops
+  inside a block has recorded its start already, and the next step reads the
+  block's header again without telling the sink about it, since a decode
+  starting inside a block only calls `Sink::boundary` from the first code on.
+  So each block is recorded once however the pass is cut into steps. The
+  checkpoint the pass goes back to at the cap keeps how many blocks start
+  before it, as in "Blocks".
 - **The sums.** In the traced phase they are brought up to the latest
   checkpoint at the end of each step, because past the cap the pass goes back
   to that checkpoint. A pass in one go never stops, so it sums as before.
@@ -210,6 +223,8 @@ passes are kept, since one in its traced phase holds up to 64 MiB. A finished
 index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
 tab's source reads an index with no evaluator behind it. `Spaces::forget`
 drops both. `Evaluator::unpacking` reports the pass stepped most recently.
+A zstd or xz run comes through `index_run` too, and is handed to
+`decode_or_index` there, which indexes it in one go with nothing charged.
 
 ### One decoder
 
@@ -298,23 +313,25 @@ its blocks come from the index pass instead.
 - **Bounded like checkpoints.** A hostile run can start a block every 10 bits,
   which is tens of millions of blocks in a 64 MiB compressed run. Past
   `MAX_BLOCK_MARKS` the index keeps the start of every second block, then of
-  every fourth, every eighth and so on, each time the list fills. A dropped start is found again by decoding from the kept start
-  before it with the output counted and not kept, and the lists found this way
-  are cached (16 of them). The total count is kept exactly, so the listing
+  every fourth, every eighth and so on, each time the list fills. A dropped
+  start is found again by decoding from the kept start before it with the
+  output counted and not kept, and the lists found this way are cached (16 of
+  them). The total count is kept exactly, so the listing
   shows every block either way.
 - **Where the second pass starts.** When the first pass's output passes
   64 MiB (see "The index pass: one walk"), the second pass starts from the
-  last checkpoint and records again every block that
-  starts at or after it. Each checkpoint keeps how many blocks start before
-  it, so the record is cut back to that count first.
+  last checkpoint and records again every block that starts at or after it.
+  Each checkpoint keeps how many blocks start before it, so the record is cut
+  back to that count first. A pass done in steps records each block once too;
+  see "The pass in steps".
 - **A block's rows.** Opening a block traces that block alone: the decoder
   starts at the block's header (as a span starting at a block boundary does)
   and stops at the next block's start, with the output counted and not kept.
   The trace has the block as its only entry, so `BlockView` and the rest of
-  `traced.rs` read it as they read block `i` of a whole trace. `SPAN_TRACE_STEPS`
-  sets two limits here: a block with more codes than that has its codes as one
-  opaque step, and the cached block traces of one run hold at most that many
-  steps in total.
+  `traced.rs` read it as they read block `i` of a whole trace.
+  `SPAN_TRACE_STEPS` sets two limits here: a block with more codes than that
+  has its codes as one opaque step, and the cached block traces of one run
+  hold at most that many steps in total.
 - **One view in the evaluator.** `traced::Blocks` is either a whole trace or
   an index. The `blocks` row, each block's row, and which block holds a bit all
   come from the block starts, with no block traced (a dropped start is still
@@ -341,11 +358,12 @@ unchanged. The changes are in the decoded-space layer, plus one small change
 to `ChunkStore` in `source.rs`.
 
 **`codec::lazy` (new).** `Seekable`: the index, the span cache, the span trace
-cache, `read(at, out)`, `map_out(byte)`, `map_in(bit)`, `trace_near(bit)`,
-`crc32()`, `adler32()`. `decode_traced` keeps its signature; a new
+cache, `read(at, out)`, `map_out(byte)`, `map_in(bit)`, `span_trace(k)`,
+`trace_at_bit(bit)`, `crc32()`, `adler32()`, and for deflate `block(i)` and
+`block_trace(i)`. `decode_traced` keeps its signature; a new
 `decode_or_index(codec, packed)` returns either the whole bytes and trace or a
-`Seekable`, for the three deflate codecs, and calls `decode_traced` for the
-rest.
+`Seekable`, for the three deflate codecs, zstd and xz, and calls
+`decode_traced` for the rest. `Indexing` is deflate's pass in steps.
 
 **`Spaces` (`eval/space.rs`).** A third backing, `Backing::Lazy(Arc<Seekable>)`.
 `Spaces::set_lazy_limits` (tests only) makes the limits small, as
@@ -358,7 +376,8 @@ node, the stitched part over the same run and the tab all share one index. The
 registry holds at most 64 MiB of compressed runs in total and drops the index
 used longest ago to make room.
 
-**`open_space_at`.** Calls `decode_or_index`; a `Seekable` becomes
+**`open_space_at`.** Calls `Evaluator::index_run`, which makes the pass of
+`decode_or_index` (see "The pass in steps"); a `Seekable` becomes
 `Backing::Lazy` instead of a refusal.
 
 **Stitched streams (`eval/stitch.rs`).** `read_stitched`, for a packed part
@@ -386,8 +405,9 @@ otherwise; no code outside tests calls it. `template_for` sniffs the first
 36 KiB through `read`. `map_out` and `map_in` go to the `Seekable` or the
 joined parts when there is no whole trace, and `Space::trace_at_bit(bit)`
 gives the wasm crate's `decode_step` the trace that holds a bit: the whole
-trace, or a span's. A joined document's codec is `Stored`, so `decode_step`
-answers nothing for one, as before.
+trace, or the trace of the block or the span that holds it (see "Blocks"). A
+joined document's codec is `Stored`, so `decode_step` answers nothing for
+one, as before.
 
 **`ChunkStore` (`source.rs`).** Gains an optional source behind it. A chunk it
 does not hold is read from that source instead of reported missing, and
@@ -401,7 +421,9 @@ space's store must never answer false.
 whole output of a `Decoded` node. For a lazy one it uses the CRC-32 or
 Adler-32 the index pass kept when the check is one of those (gzip's `crc32`
 and zlib's `adler32` are), and otherwise refuses as too large, as it does
-today. A check over one member of a lazy run is refused as unmapped.
+today. A check over one member of a lazy run reads that member's bytes
+through the index when the member is an xz block (see "zstd frames and xz
+blocks"), and is refused as unmapped otherwise.
 
 **Other `spaces.buf` callers.** `jpegscan.rs`, `picklecells.rs`,
 `pickletorch.rs` and `stitch.rs`'s whole-space shortcut read whole buffers of
@@ -463,7 +485,8 @@ checkpoint with no window: a decoder starting there needs only that position
 in the compressed run. `Seekable` keeps one list of checkpoints for all three
 codecs. Each checkpoint has the bit offset in the compressed run, the byte
 offset in the output, and what a decoder needs to start there: for deflate,
-the block header and the 32 KiB window; for xz, the number of the xz block.
+the block header and the 32 KiB window, and how many deflate blocks start
+before it; for xz, the number of the xz block.
 `Seekable` also keeps the same span cache (decoded spans) and span trace cache
 (the trace of the span asked about most recently) for all three. Each codec
 has its own decoder for spans.
@@ -494,6 +517,12 @@ without keeping it. At most one frame is decoded twice. If a frame's output
 passes `Limits::span`, the pass stops there and the run is refused. Each
 skippable frame that `pzstd` writes before a frame is in the same span as the
 frame that follows it.
+
+The zstd pass is not done in steps. `Evaluator::index_run` hands a zstd run to
+`decode_or_index`, which makes the whole pass in one go, so in the browser
+the page stops for the length of the pass and no progress is shown. xz has no
+pass to step. Neither gets the `blocks` child that "Blocks" describes, which
+is for deflate: `Seekable::blocks` is 0 for both.
 
 **xz: no pass.** The index at the end of an xz stream lists each block's
 packed and unpacked size, so `codec::xz::layout` finds every block without
@@ -603,9 +632,10 @@ blocks.
 - While the pass runs, the listing shows no rows for a structure whose
   children wait on it, even the ones before the stream (a gzip member's
   header fields), since a slice of children is answered whole.
-- A `blocks` listing for a run read a piece at a time, from block positions
-  the index pass could record.
-- Run the index pass in slices with progress on the tab (see "The browser").
+- zstd's index pass runs in one go, with nothing charged to the go, so a large
+  `pzstd` file stops the page for the whole pass (1.6 s native for 500 MB at
+  `-1`) with no progress shown. It could stop at frame starts, as deflate's
+  pass stops between codes.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
 - A read of an xz span decodes every block in it to the end, even when the
   read wants only the first bytes. Stopping at the end of the read would make
@@ -645,7 +675,11 @@ blocks.
   checkpoints, sums and bytes as one pass, and under the cap to the same
   trace step for step; a trace that names blocks partway through a block
   that steps stopped in; refusals; `known_large` and a gzip trailer that
-  says the run is large, truthfully or not.
+  says the run is large, truthfully or not. Steps of 100 bytes, stopping at
+  block starts (stored blocks) and inside blocks, before the cap and after
+  it, with `known_large` and with thinned block starts, record the same block
+  starts as one pass, the same count before each checkpoint, and the blocks
+  of the whole trace.
 - The evaluator (`eval::space`): a zlib stream past the (small) cap opened a
   go at a time, with `unpacking` moving forward between goes and the index
   the same as one go's, and a gzip's joined stream read a go at a time
