@@ -7,7 +7,8 @@ Deflate, zlib and gzip first; the other codecs are covered at the end.
 **State, 2026-10-21:** built as described below, on branch
 `nonhuman/sweet-solomon-104c5d`, in `codec/lazy.rs`, `eval/space.rs`,
 `eval/stitch.rs` and the wasm crate. "Still to do" at the end lists what is
-left.
+left. **2026-10-26:** the `blocks` listing for these runs (see "Blocks") is on
+branch `nonhuman/great-kapitsa-d7a052`, built on that one.
 
 ## The problem
 
@@ -45,8 +46,9 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
   Memory stays bounded whatever the output size (see "Memory").
 - Selecting a byte of the unpacked tab still shows the deflate code that made
   it, and selecting a bit of the compressed run still shows the bytes it made.
-- The `blocks` child of the compressed run (one row per deflate block, with
-  its tables and codes) is absent for a run opened this way. See "Traces".
+- The compressed run still has its `blocks` child: one row per deflate block,
+  and inside each block its header, tables and codes. The rows inside a block
+  are made when the block is opened. See "Blocks".
 - Runs of the other codecs past 64 MiB are refused as they are today.
 - Runs at or under 64 MiB are decoded and traced exactly as they are today.
 
@@ -59,7 +61,8 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `MAX_CHECKPOINTS` | 256 | Restart points kept per run. 256 × 32 KiB = 8 MiB of windows. |
 | `SPACING_START` | 1 MiB | Output between restart points, doubled whenever the count passes 256. |
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
-| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. |
+| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one block's trace, and in all the block traces a run keeps. |
+| `MAX_BLOCK_MARKS` | 65,536 | Block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
 a time limit makes the same file open on one computer and not on another, and
@@ -224,9 +227,56 @@ never dropped when the checkpoints are thinned. Checkpoints are taken only at
 the start of a block and between two codes of a Huffman-coded block, never
 inside a block header, its tables or a stored block.
 
-The `blocks` child that `traced.rs` lays over a compressed run needs the whole
-trace and is not offered for these runs. A list of blocks without their codes
-could come from the index pass later, bounded the way checkpoints are.
+### Blocks
+
+The `blocks` child that `traced.rs` lays over a compressed run is built from
+a whole trace for a run held whole. A run read a piece at a time has none, so
+its blocks come from the index pass instead.
+
+- **Where each block starts.** The decoder calls `Sink::boundary` with
+  `block` set to `None` at the start of every block, and the index pass
+  records two numbers there: the bit position in the compressed run, and how
+  many bytes of output come before the block. Where the last block ends
+  comes back from `inflate::run` as `Ended::Stream(bit)`. A block ends where
+  the next one starts. BFINAL and BTYPE are read again from the run when
+  asked for, so a block start is 16 bytes.
+- **Bounded like checkpoints.** A hostile run can start a block every 10 bits,
+  which is tens of millions of blocks in a 64 MiB compressed run. Past
+  `MAX_BLOCK_MARKS` the index keeps the start of every second block, then of
+  every fourth, every eighth and so on, each time the list fills. A dropped start is found again by decoding from the kept start
+  before it with the output counted and not kept, and the lists found this way
+  are cached (16 of them). The total count is kept exactly, so the listing
+  shows every block either way.
+- **Where the second pass starts.** When the first pass's output passes
+  64 MiB (see "The index pass: one walk"), the second pass starts from the
+  last checkpoint and records again every block that
+  starts at or after it. Each checkpoint keeps how many blocks start before
+  it, so the record is cut back to that count first.
+- **A block's rows.** Opening a block traces that block alone: the decoder
+  starts at the block's header (as a span starting at a block boundary does)
+  and stops at the next block's start, with the output counted and not kept.
+  The trace has the block as its only entry, so `BlockView` and the rest of
+  `traced.rs` read it as they read block `i` of a whole trace. `SPAN_TRACE_STEPS`
+  sets two limits here: a block with more codes than that has its codes as one
+  opaque step, and the cached block traces of one run hold at most that many
+  steps in total.
+- **One view in the evaluator.** `traced::Blocks` is either a whole trace or
+  an index. The `blocks` row, each block's row, and which block holds a bit all
+  come from the block starts, with no block traced (a dropped start is still
+  found by decoding, as above). The rows inside a block come from
+  `Blocks::trace_of(i)`, which returns the trace holding block `i`'s steps and
+  the block's number in that trace: the whole trace and `i`, or the block's
+  own trace and 0.
+- **The inspector's code panel.** `Space::trace_at_bit` gives the trace of the
+  block holding the bit, and the span's trace only for a bit outside every
+  block (the wrapper, the padding). The listing lays a block's codes out from
+  the same trace, so the panel can decode every code the listing shows. A
+  span's trace could disagree with the listing: a span of 1 MiB of literals
+  has more than `SPAN_TRACE_STEPS` steps, so its trace has one opaque step
+  where the listing shows codes.
+
+The gzipped Rubin raw, the test file above, has 10 blocks in its one member,
+about 7.5 MB of output each.
 
 ## Where it plugs in
 
@@ -345,8 +395,6 @@ the tab. That is v2.
 ## Still to do
 
 - Run the index pass in slices with progress on the tab (see "The browser").
-- A `blocks` listing for a run read a piece at a time, from block positions
-  the index pass could record.
 - The other codecs, in the order of the table above.
 - A test of a joined stream mixing stored and packed parts past the cap: the
   stored parts' path in `Joined` (`JoinedBytes::Held`) has no test of its own.
@@ -364,5 +412,12 @@ the tab. That is v2.
 - The test file: the gzip template reads 16 HDUs out of `decoded` in the
   listing, and Open unpacked on `decoded` gives a FITS tab with 16 image HDUs
   named `Segment..`. Skipped when `qubero2-extras` is absent.
+- Blocks: under small limits, the blocks the index lists are the whole
+  trace's, one for one (where each starts and ends, its kind, its steps),
+  with stored blocks, flushed streams and thinned block starts; the listing
+  of a zlib stream read a piece at a time matches the listing of the same
+  stream held whole, row for row, down to the codes, the value table's cells,
+  the column beside the bytes and the code panel's answer; and the Rubin raw
+  lists its blocks under `members[0].compressed`.
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
