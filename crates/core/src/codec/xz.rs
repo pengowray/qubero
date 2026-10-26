@@ -66,32 +66,34 @@ const LZMA2: u64 = 0x21;
 const MAX_DICT_CODE: u8 = 40;
 
 /// Where one block is and what the file says about it.
-struct BlockAt {
+#[derive(Debug, Clone)]
+pub(super) struct BlockAt {
     /// Its first byte, which is the first byte of its header.
-    at: usize,
+    pub(super) at: usize,
     /// How long that header is, which its first byte gives in units of four.
     header: usize,
     /// The compressed data: what is left of the block once the header and the
     /// check have come off it, before the padding that is not part of either.
     packed: usize,
     /// What the index says it comes to.
-    unpacked: u64,
+    pub(super) unpacked: u64,
 }
 
 /// A stream laid out from its index: every block placed, and the two numbers
 /// the blocks are measured against.
-struct Layout {
+#[derive(Debug, Clone)]
+pub(super) struct Layout {
     /// How many bytes the integrity check after every block takes, which the
     /// stream header's check type says and every block obeys.
     check: usize,
-    blocks: Vec<BlockAt>,
+    pub(super) blocks: Vec<BlockAt>,
     /// Where the index starts, which is where the last block stops.
     index_at: usize,
     /// What the index says the whole stream unpacks to.
-    total_out: u64,
+    pub(super) total_out: u64,
     /// Whether every block's chain is one LZMA2 filter. All of them or none of
     /// them: see the module doc for why this is not asked per block.
-    plain: bool,
+    pub(super) plain: bool,
 }
 
 /// An xz stream: the bytes, and a trace over them.
@@ -186,16 +188,39 @@ fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Re
     if l.total_out > CAP_BYTES as u64 {
         return Err(Refusal::TooLarge);
     }
-    let mut out: Vec<u8> = Vec::with_capacity(l.total_out as usize);
     let mut b = TraceBuilder::default();
     // The stream header, which the next step's start gives the width of.
     b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
+    let out = blocks(data, l, 0..l.blocks.len(), 0, budget, &mut b)?;
+    if out.len() as u64 != l.total_out {
+        return Err(Refusal::Failed);
+    }
+    push_index(l, &mut b, out.len() as u64);
+    b.finish_at(data.len() as u64 * 8, out.len() as u64);
+    Ok((out, b.done()))
+}
 
-    for blk in &l.blocks {
+/// Blocks `which` of a stream laid out as `l`, through our own LZMA2, with
+/// their steps pushed onto `b` after `before` bytes of the stream's output.
+/// What [`unpack`] reads a whole stream with, and what a stream too large to
+/// hold whole reads a few of its blocks with: see [`crate::codec::lazy`].
+///
+/// `budget` is how many steps `b` may hold in all, as [`unpack`] says.
+pub(super) fn blocks(
+    data: &[u8],
+    l: &Layout,
+    which: std::ops::Range<usize>,
+    before: u64,
+    budget: usize,
+    b: &mut TraceBuilder,
+) -> Result<Vec<u8>, Refusal> {
+    let mut out: Vec<u8> = Vec::new();
+    for blk in &l.blocks[which] {
         let from = blk.at + blk.header;
         let end = from + blk.packed;
         let Some(chunk) = data.get(from..end) else { return Err(Refusal::Failed) };
-        b.push(blk.at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, blk.header as u32));
+        let here = before + out.len() as u64;
+        b.push(blk.at as u64 * 8, here, StepKind::Header(StepField::BlockHeader, blk.header as u32));
 
         let left = budget.saturating_sub(b.steps());
         let (mut got, t) = lzma::lzma2_within(chunk, left)?;
@@ -205,32 +230,47 @@ fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Re
         if got.len() as u64 != blk.unpacked {
             return Err(Refusal::Failed);
         }
-        b.absorb(&t, from as u64 * 8, out.len() as u64);
+        b.absorb(&t, from as u64 * 8, here);
         // Which bytes of the stream's output this block is, which is what its
         // own integrity check covers and what nothing else can say: the offset
         // is the running sum of every earlier block, and no field of the file
         // holds it. See `formats::xz`, where the check is declared over this.
-        b.member(from as u64 * 8..end as u64 * 8, out.len() as u64..out.len() as u64 + got.len() as u64);
+        b.member(from as u64 * 8..end as u64 * 8, here..here + got.len() as u64);
         out.append(&mut got);
+        let here = before + out.len() as u64;
 
         // A block is padded out to a multiple of four bytes. The header is
         // already one, so what pads is the compressed data.
         let pad = blk.packed.next_multiple_of(4) - blk.packed;
         if pad > 0 {
-            b.push(end as u64 * 8, out.len() as u64, StepKind::Header(StepField::Padding, pad as u32));
+            b.push(end as u64 * 8, here, StepKind::Header(StepField::Padding, pad as u32));
         }
         if l.check > 0 {
-            b.push((end + pad) as u64 * 8, out.len() as u64, StepKind::Header(StepField::Footer, l.check as u32));
+            b.push((end + pad) as u64 * 8, here, StepKind::Header(StepField::Footer, l.check as u32));
         }
     }
+    Ok(out)
+}
 
-    if out.len() as u64 != l.total_out {
-        return Err(Refusal::Failed);
-    }
-    // The index and the stream footer, which say again what the blocks did.
-    b.push(l.index_at as u64 * 8, out.len() as u64, StepKind::Header(StepField::Footer, 0));
-    b.finish_at(data.len() as u64 * 8, out.len() as u64);
-    Ok((out, b.done()))
+/// One step over the index and the stream footer, which say again what the
+/// blocks did: what a trace reaching the end of the stream ends with.
+pub(super) fn push_index(l: &Layout, b: &mut TraceBuilder, out: u64) {
+    b.push(l.index_at as u64 * 8, out, StepKind::Header(StepField::Footer, 0));
+}
+
+/// Each block's share of the output, the way [`blocks`] declares it, read off
+/// the index alone.
+pub(super) fn members(l: &Layout) -> Vec<crate::codec::Member> {
+    let mut out = 0u64;
+    l.blocks
+        .iter()
+        .map(|blk| {
+            let from = (blk.at + blk.header) as u64 * 8;
+            let m = crate::codec::Member { in_bits: from..from + blk.packed as u64 * 8, out_bytes: out..out + blk.unpacked };
+            out += blk.unpacked;
+            m
+        })
+        .collect()
 }
 
 /// The blocks of a stream and nothing inside them: a step for the header, one
@@ -275,7 +315,7 @@ fn block_trace(l: &Layout, len: usize, total_out: usize) -> Option<Trace> {
 /// them has a footer in the middle that this does not go looking for; such a
 /// file lays out as nothing at all and is opened by the crate, which is what
 /// happened to it before this module read any block itself.
-fn layout(data: &[u8]) -> Option<Layout> {
+pub(super) fn layout(data: &[u8]) -> Option<Layout> {
     if data.len() < HEADER + FOOTER || !data.starts_with(MAGIC) {
         return None;
     }

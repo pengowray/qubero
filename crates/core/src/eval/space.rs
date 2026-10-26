@@ -1156,6 +1156,45 @@ mod tests {
         assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
     }
 
+    /// An xz stream of several blocks and a zstd run of several frames, past
+    /// the cap, open through their templates as spaces read a block or a
+    /// frame at a time. An xz block's check is taken over that block's bytes,
+    /// read through the index.
+    #[test]
+    fn xz_blocks_and_zstd_frames_past_the_cap_read_one_at_a_time() {
+        use crate::codec::lazy::tests::{mixed, xz_of, zstd_of};
+        use crate::codec::lazy::Limits;
+        let data = mixed(400_000, 89);
+        let limits = Limits { whole: 64 << 10, span: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Limits::default() };
+        let open = |template: &str, packed: Vec<u8>| {
+            let d = Document::new(MemSource(packed));
+            let mut e = Evaluator::new(formats::builtin(template).unwrap());
+            e.spaces.set_lazy_limits(limits);
+            let decoded = e.child_named(&d, &[], "decoded").unwrap().expect("a decoded field");
+            let id = e.open_space(&d, 0, &[decoded[0], 0]).unwrap().expect("opens");
+            (d, e, id)
+        };
+        for (template, packed) in [("xz", xz_of(&data, 30_000)), ("zstd", zstd_of(&data, 30_000, true))] {
+            let (d, e, id) = open(template, packed);
+            assert!(e.spaces.lazy(id).is_some(), "{template}: held whole");
+            for at in [0usize, 12_345, 299_999, data.len() - 100] {
+                let got = e.read_in(&d, id, at as u64 * 8, 800).unwrap();
+                assert_eq!(got, &data[at..at + 100], "{template}: 100 bytes at {at}");
+            }
+            let space = e.space(id).unwrap();
+            assert_eq!(space.len_bytes(), data.len() as u64);
+            let step = space.map_out(350_000).expect("a step made it");
+            assert!(step.out_bytes.contains(&350_000), "{template}: {step:?}");
+        }
+        let (d, mut e, _) = open("xz", xz_of(&data, 30_000));
+        let blocks = e.child_named(&d, &[], "blocks").unwrap().unwrap();
+        for i in [0, 5, 13] {
+            let check = e.child_named(&d, &[blocks[0], i], "check").unwrap().unwrap();
+            let v = e.run_check(&d, &check).unwrap().expect("the block's CRC-32 is a check");
+            assert!(v.ok, "block {i}: {v:?}");
+        }
+    }
+
     #[test]
     fn the_map_runs_both_ways() {
         let text = "map me both ways. ".repeat(50).into_bytes();
