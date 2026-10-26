@@ -2549,7 +2549,7 @@ impl Evaluator {
             if let Some(index) = self.spaces.indexed(key, codec) {
                 return Ok(space::Opened::Space(self.spaces.add_lazy(path, index)));
             }
-            return Ok(match self.index_run(doc, key, codec)? {
+            return Ok(match self.index_run(doc, key, codec, false)? {
                 Ok(crate::codec::lazy::Decoded::Whole(bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
                 Ok(crate::codec::lazy::Decoded::Indexed(index)) => {
                     let index = std::sync::Arc::new(index);

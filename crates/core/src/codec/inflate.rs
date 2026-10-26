@@ -157,19 +157,16 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 ///
 /// The same refusals as [`inflate`]: a stream that will not decode, or one
 /// that comes to more than [`CAP_BYTES`], has no length to give.
+///
+/// Neither the output nor a trace is kept, since only the end is wanted: the
+/// output is counted, which is enough to refuse a match reaching back before
+/// the start and a stream past the cap.
 pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
-    let mut b = TraceBuilder::default();
-    let mut out = Vec::new();
-    run(data, 0, data.len() as u64 * 8, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
-    let trace = b.done();
-    // The decoder marks whatever it did not read as one opaque step at the
-    // end; the stream ends where that begins. No such step and the stream
-    // ran to the last bit it was given.
-    let end = match trace.steps().last() {
-        Some(step) if step.kind == StepKind::Opaque => step.in_bits.start,
-        _ => trace.in_bits(),
-    };
-    Ok(end.div_ceil(8))
+    let mut sink = CountSink { len: 0, cap: CAP_BYTES as u64, stop_at: None };
+    match run(data, 0, data.len() as u64 * 8, &mut sink, &mut TraceBuilder::off(), None)? {
+        Ended::Stream(end) => Ok(end.div_ceil(8)),
+        Ended::Stopped(_) => Err(Refusal::Failed),
+    }
 }
 
 /// The same, with a step budget the tests can reach. See [`crate::codec::MAX_STEPS`].
@@ -466,6 +463,62 @@ impl Sink for VecSink<'_> {
     }
 }
 
+/// Output counted and not kept, up to `cap`, for a decode that wants to know
+/// where the stream ends or what its trace is, and not what it came to. A
+/// deflate step says what it copied and from how far back, not what the bytes
+/// were, so neither needs the output. `len` starts at the output before where
+/// the decode starts, and `stop_at` stops it at the first boundary at or past
+/// that bit.
+pub(crate) struct CountSink {
+    pub(crate) len: u64,
+    pub(crate) cap: u64,
+    pub(crate) stop_at: Option<u64>,
+}
+
+impl Sink for CountSink {
+    #[inline]
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    #[inline]
+    fn literal(&mut self, _: u8) -> Result<(), Refusal> {
+        if self.len >= self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn copy(&mut self, dist: u32, len: u32) -> Result<(), Refusal> {
+        if u64::from(dist) > self.len {
+            return Err(Refusal::Failed);
+        }
+        if self.len + u64::from(len) > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += u64::from(len);
+        Ok(())
+    }
+
+    fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
+        if self.len + bytes.len() as u64 > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += bytes.len() as u64;
+        Ok(())
+    }
+
+    #[inline]
+    fn boundary(&mut self, in_bit: u64, _: Option<u64>) -> ControlFlow<()> {
+        match self.stop_at.is_some_and(|stop| in_bit >= stop) {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
+        }
+    }
+}
+
 /// Where a decode starts when it does not start at the front of the stream:
 /// one of the places [`Sink::boundary`] was told about, with the sink already
 /// holding the 32 KiB of output before it.
@@ -478,8 +531,9 @@ pub(crate) struct Resume {
 /// How a decode ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ended {
-    /// The block that said it was the last one ended.
-    Stream,
+    /// The block that said it was the last one ended, and the stream with the
+    /// padding after it ends at the bit this gives.
+    Stream(u64),
     /// The sink said to stop, at the bit this gives.
     Stopped(u64),
 }
@@ -585,6 +639,7 @@ pub(crate) fn run<K: Sink>(
     if skipped > 0 {
         b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
     }
+    let stream_end = bits.pos();
     // Anything after the stream inside the run the template named. A zlib
     // trailer arrives here as its own step; anything else is bytes nobody
     // claimed, and saying so is better than pretending the run ended early.
@@ -592,7 +647,7 @@ pub(crate) fn run<K: Sink>(
         b.push(bits.pos(), out.len(), StepKind::Opaque);
     }
     b.finish_at(end.max(bits.pos()), out.len());
-    Ok(Ended::Stream)
+    Ok(Ended::Stream(stream_end))
 }
 
 /// For a decode that starts inside a Huffman-coded block, once the block's
@@ -1086,6 +1141,20 @@ pub fn is_symbol(step: &Step) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream's length is where its last block and the padding after it
+    /// end, whatever comes after, and a stream cut short has none.
+    #[test]
+    fn a_stream_measures_to_the_end_of_its_last_block() {
+        let text: Vec<u8> = (0..20_000).flat_map(|i| format!("{i} ").into_bytes()).collect();
+        for level in [0u8, 1, 6, 9] {
+            let raw = miniz_oxide::deflate::compress_to_vec(&text, level);
+            let n = raw.len() as u64;
+            assert_eq!(inflate_len(&raw), Ok(n), "level {level}");
+            assert_eq!(inflate_len(&[&raw[..], b"a trailer after it"].concat()), Ok(n), "level {level}, with more after");
+            assert!(inflate_len(&raw[..raw.len() / 2]).is_err(), "level {level}, cut short");
+        }
+    }
 
     /// The bytes and the map, checked together: what came out has to be what
     /// `miniz_oxide` says came out, and the steps have to account for every

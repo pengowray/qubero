@@ -22,7 +22,7 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::checksum::{adler32_update, crc32_update};
-use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, CountSink, Ended, Framing, Resume, Sink, Wrapper};
 use crate::codec::{Codec, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
 /// The most a run read a piece at a time may come to. Past this it is refused
@@ -182,6 +182,11 @@ impl Indexing {
     /// Start indexing `packed`. `codec` is one [`can_index`] says yes to; any
     /// other is refused as [`Refusal::Failed`]. Nothing is decoded until the
     /// first step.
+    ///
+    /// A gzip run whose trailer says it comes to more than the cap starts as
+    /// [`Indexing::known_large`] does. The trailer gives the size modulo
+    /// 4 GiB, so a size past the cap there is past it in fact; a trailer that
+    /// is wrong about it fails the check at the end either way.
     pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
         let wrapper = wrapper(codec).ok_or(Refusal::Failed)?;
         if packed.len() > CAP_BYTES {
@@ -195,7 +200,32 @@ impl Indexing {
         let mut sink = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
         sink.marks = Some(Checkpoints::new(limits.spacing, limits.checkpoints));
         sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
-        Ok(Indexing { codec, packed, framing, limits, phase: Phase::Whole { sink, trace, from: None }, furthest: 0, most: 0 })
+        let phase = Phase::Whole { sink, trace, from: None };
+        let pass = Indexing { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
+        let says = match pass.packed.len().checked_sub(4) {
+            Some(at) if wrapper == Wrapper::Gzip => u32::from_le_bytes(pass.packed[at..].try_into().expect("four bytes")),
+            _ => 0,
+        };
+        Ok(if says as usize > limits.whole { pass.known_large() } else { pass })
+    }
+
+    /// The same pass for a run the caller knows comes to more than the cap: a
+    /// stitched stream's part whose length the file gives. It starts with the
+    /// trace off, as a pass that has passed the cap carries on, and so skips
+    /// decoding the first 64 MiB with the trace on, which is the slowest part
+    /// of the pass and can only stop between blocks. What it comes to is the
+    /// index the pass would have made. A run that turns out to fit under the
+    /// cap after all comes back indexed too, and a caller that knew its
+    /// length finds it is not the one it was told.
+    pub fn known_large(mut self) -> Indexing {
+        if matches!(self.phase, Phase::Whole { from: None, .. }) {
+            let mut sink = WindowSink::new(Vec::new(), 0, self.limits.lazy, true);
+            sink.marks = Some(Checkpoints::new(self.limits.spacing, self.limits.checkpoints));
+            sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
+            sink.mid_block = true;
+            self.phase = Phase::Index { sink, from: Resume { in_bit: self.framing.start, block: None } };
+        }
+        self
     }
 
     /// How far the pass has got: the bits of the run read and the bytes of
@@ -247,7 +277,7 @@ impl Indexing {
                         self.phase = Phase::Whole { sink, trace, from };
                         Ok(Stepped::Working)
                     }
-                    Ok(Ended::Stream) => {
+                    Ok(Ended::Stream(_)) => {
                         let sums = sink.sums.expect("set when the pass started");
                         let out = sink.hist;
                         let rest = &out[sums.upto as usize..];
@@ -277,7 +307,7 @@ impl Indexing {
                         self.phase = Phase::Index { sink, from };
                         Ok(Stepped::Working)
                     }
-                    Ok(Ended::Stream) => self.finish(sink).map(Stepped::Done),
+                    Ok(Ended::Stream(_)) => self.finish(sink).map(Stepped::Done),
                     Err(Refusal::TooLarge) => Err(Refusal::TooLargeLazy),
                     Err(other) => Err(other),
                 }
@@ -522,49 +552,6 @@ impl Sink for WindowSink {
     }
 }
 
-/// Output counted and not kept, for a decode that wants only its trace. A
-/// deflate step says what it copied and from how far back, not what the
-/// bytes were, so the trace of a span needs none of the output before it.
-struct CountSink {
-    len: u64,
-    stop_at: Option<u64>,
-}
-
-impl Sink for CountSink {
-    #[inline]
-    fn len(&self) -> u64 {
-        self.len
-    }
-
-    #[inline]
-    fn literal(&mut self, _: u8) -> Result<(), Refusal> {
-        self.len += 1;
-        Ok(())
-    }
-
-    #[inline]
-    fn copy(&mut self, dist: u32, len: u32) -> Result<(), Refusal> {
-        if u64::from(dist) > self.len {
-            return Err(Refusal::Failed);
-        }
-        self.len += u64::from(len);
-        Ok(())
-    }
-
-    fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
-        self.len += bytes.len() as u64;
-        Ok(())
-    }
-
-    #[inline]
-    fn boundary(&mut self, in_bit: u64, _: Option<u64>) -> ControlFlow<()> {
-        match self.stop_at.is_some_and(|stop| in_bit >= stop) {
-            true => ControlFlow::Break(()),
-            false => ControlFlow::Continue(()),
-        }
-    }
-}
-
 /// A compressed run that comes to more than can be held whole, read through
 /// its checkpoints.
 ///
@@ -741,9 +728,9 @@ impl Seekable {
         if k == 0 && wrapped {
             b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
-        let mut sink = CountSink { len: c.out, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit) };
+        let mut sink = CountSink { len: c.out, cap: u64::MAX, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit) };
         let ended = inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(c.resume()))?;
-        if ended == Ended::Stream && wrapped {
+        if matches!(ended, Ended::Stream(_)) && wrapped {
             b.push(f.end, sink.len, StepKind::Header(StepField::Wrapper, 0));
             b.finish_at(self.packed.len() as u64 * 8, sink.len);
         }
@@ -1149,6 +1136,35 @@ mod tests {
         assert!(t.coarse());
         assert!(t.steps().eq(trace.steps()), "the steps differ");
         assert_eq!(t.blocks(), trace.blocks());
+    }
+
+    /// A pass told the run is large starts with the trace off and comes to the
+    /// same index as one that found out at the cap; one told so of a run
+    /// under the cap indexes it all the same. A gzip run's trailer tells it.
+    #[test]
+    fn a_pass_told_the_run_is_large_comes_to_the_same_index() {
+        let data = mixed(300_000, 43);
+        let raw = Arc::new(deflate_in_blocks(&data, 3000));
+        let found = in_steps(Indexing::new(Codec::Deflate, raw.clone(), small()).expect("starts"), 5000).0;
+        let told = in_steps(Indexing::new(Codec::Deflate, raw, small()).expect("starts").known_large(), 5000).0;
+        let (Ok(Decoded::Indexed(found)), Ok(Decoded::Indexed(told))) = (found, told) else { panic!("not indexed") };
+        assert_eq!(told.marks(), found.marks());
+        assert_eq!((told.len(), told.crc32(), told.adler32()), (found.len(), found.crc32(), found.adler32()));
+
+        let short = mixed(50_000, 47);
+        let raw = Arc::new(miniz_oxide::deflate::compress_to_vec(&short, 6));
+        let told = in_steps(Indexing::new(Codec::Deflate, raw, small()).expect("starts").known_large(), 5000).0;
+        let Ok(Decoded::Indexed(told)) = told else { panic!("not indexed") };
+        assert_eq!(told.len(), short.len() as u64);
+
+        // A gzip trailer saying 50 KB comes back whole; one saying 1 MB about
+        // the same 50 KB is wrong, and refused as a wrong trailer is.
+        let gzip = wrapped(Codec::Gzip, &deflate_in_blocks(&short, 3000), &short);
+        let Ok(Decoded::Whole(..)) = decode_or_index_with(Codec::Gzip, Arc::new(gzip.clone()), small()) else { panic!("not whole") };
+        let mut lying = gzip;
+        let n = lying.len();
+        lying[n - 4..].copy_from_slice(&(1u32 << 20).to_le_bytes());
+        assert_eq!(decode_or_index_with(Codec::Gzip, Arc::new(lying), small()).err(), Some(Refusal::Failed));
     }
 
     /// Refusals come out of the pass in steps as they do in one go.

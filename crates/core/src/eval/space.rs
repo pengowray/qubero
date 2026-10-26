@@ -1009,10 +1009,13 @@ impl super::Evaluator {
     /// that runs out hands back `Busy` with the pass kept, to be carried on
     /// from where it stopped the next time anything asks for the same run.
     /// `Ok(Err)` is the run refusing, as it would refuse in one go.
+    /// `known_large` is a caller that knows the run comes to more than the
+    /// cap, which lets the pass skip the part that might have been a run held
+    /// whole: see [`lazy::Indexing::known_large`].
     ///
     /// Takes the evaluator shared, since a read of a stitched stream reaches
     /// here, and reads do.
-    pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec) -> super::R<Result<Decoded, Refusal>> {
+    pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
         let started = self.spaces.unfinished.borrow_mut().take(key, codec);
         let mut pass = match started {
             Some(pass) => pass,
@@ -1022,6 +1025,7 @@ impl super::Evaluator {
                 }
                 let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
                 match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
+                    Ok(pass) if known_large => pass.known_large(),
                     Ok(pass) => pass,
                     Err(why) => return Ok(Err(why)),
                 }

@@ -258,7 +258,7 @@ impl Evaluator {
         if let Some(index) = self.spaces.indexed(key, codec) {
             return Ok(Ok(index.len()));
         }
-        Ok(match self.index_run(doc, key, codec)? {
+        Ok(match self.index_run(doc, key, codec, false)? {
             Ok(lazy::Decoded::Whole(bytes, _)) => Ok(bytes.len() as u64),
             Ok(lazy::Decoded::Indexed(index)) => {
                 let len = index.len();
@@ -291,8 +291,9 @@ impl Evaluator {
         };
         let index = match open.or_else(|| self.spaces.indexed(key, *codec)) {
             Some(index) => index,
+            // Only a part the file says is past the cap gets here.
             None => {
-                match self.index_run(doc, key, *codec)? {
+                match self.index_run(doc, key, *codec, true)? {
                     Ok(lazy::Decoded::Indexed(index)) => {
                         let index = Arc::new(index);
                         self.spaces.keep_index(key, *codec, index.clone());
