@@ -670,11 +670,14 @@ impl Unfinished {
 }
 
 /// How much output one step of an indexing pass decodes, and what it is
-/// charged against a go's allowance. 256 bytes an element: a go of 5,000
-/// elements, which is what the web app asks for, decodes about 1.2 MB, a few
-/// tens of milliseconds with the trace on.
+/// charged against a go's allowance. 512 bytes an element: a go of 5,000
+/// elements, which is what the web app asks for, decodes about 2.5 MiB. In
+/// wasm that took about 18 ms on 2026-10-26, with the trace on or off: 1.25
+/// MiB took 9 ms. Less than the twentieth of a second a go is meant to take,
+/// since a listing drawing a frame asks several things that each carry the
+/// same pass on.
 const INDEX_STEP_BYTES: u64 = 256 << 10;
-const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 256;
+const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 512;
 
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
@@ -1284,7 +1287,7 @@ mod tests {
 
         let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
         e.spaces.set_lazy_limits(small_limits());
-        e.set_slice(Some(2000));
+        e.set_slice(Some(600));
         let (mut goes, mut read) = (0, 0);
         let id = loop {
             e.begin_slice();
@@ -1323,7 +1326,7 @@ mod tests {
         let d = Document::new(MemSource(gzip));
         let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
         e.spaces.set_lazy_limits(small_limits());
-        e.set_slice(Some(2000));
+        e.set_slice(Some(600));
         let mut goes = 0;
         let node = loop {
             e.begin_slice();
