@@ -20,7 +20,7 @@ use std::ops::ControlFlow;
 
 use crate::bits::{Bits, LowBits};
 use crate::codec::{
-    BlockKind, Refusal, Step, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES,
+    BlockKind, Paused, Refusal, Step, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES,
 };
 
 /// The longest a Huffman code may be in deflate.
@@ -571,6 +571,13 @@ pub(crate) fn run<K: Sink>(
     // Where to move to once the first block's tables are read again, for a
     // decode that starts inside a block.
     let mut skip_to = None;
+    // A decode carrying on inside a block that an earlier decode into the
+    // same trace stopped in and left open. The block's header and tables are
+    // in the trace already, so they are read again without being recorded.
+    let mut paused = b.paused.take();
+    if paused.is_some() && !from.is_some_and(|r| r.block.is_some()) {
+        return Err(Refusal::Failed);
+    }
     if let Some(r) = from {
         match r.block {
             Some(header) => {
@@ -593,6 +600,9 @@ pub(crate) fn run<K: Sink>(
             b.finish_at(block_in, block_out);
             return Ok(Ended::Stopped(block_in));
         }
+        if paused.is_some() {
+            b.mute(true);
+        }
         b.open_block(block_in, block_out);
         let at = bits.pos();
         let last = bits.read_bit()? == 1;
@@ -612,18 +622,23 @@ pub(crate) fn run<K: Sink>(
             1 => {
                 let (lit, dist) = fixed_codes();
                 skip(&mut bits, &mut skip_to, out, b)?;
-                (BlockKind::Fixed, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse)?)
+                let paused = unmute(b, paused.take());
+                (BlockKind::Fixed, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse, paused)?)
             }
             2 => {
                 let (lit, dist) = dynamic_tables(&mut bits, out.len(), b)?;
                 skip(&mut bits, &mut skip_to, out, b)?;
-                (BlockKind::Dynamic, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse)?)
+                let paused = unmute(b, paused.take());
+                (BlockKind::Dynamic, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse, paused)?)
             }
             _ => return Err(Refusal::Failed),
         };
         if flow.is_break() {
             let at = bits.pos();
-            b.close_block(at, out.len(), kind, false);
+            // Left open when the decode carrying on will close it.
+            if b.paused.is_none() {
+                b.close_block(at, out.len(), kind, false);
+            }
             b.finish_at(at, out.len());
             return Ok(Ended::Stopped(at));
         }
@@ -648,6 +663,15 @@ pub(crate) fn run<K: Sink>(
     }
     b.finish_at(end.max(bits.pos()), out.len());
     Ok(Ended::Stream(stream_end))
+}
+
+/// Start recording again once a block left open has had its tables read
+/// again, and hand on where its symbols started.
+fn unmute(b: &mut TraceBuilder, paused: Option<Paused>) -> Option<Paused> {
+    if paused.is_some() {
+        b.mute(false);
+    }
+    paused
 }
 
 /// For a decode that starts inside a Huffman-coded block, once the block's
@@ -771,6 +795,10 @@ fn dynamic_tables(bits: &mut LowBits, out_at: u64, b: &mut TraceBuilder) -> Resu
 /// `block` is the bit the block's header starts at, which is what a sink
 /// keeping places to start again from has to know. `Break` is the sink saying
 /// to stop before the symbol at `bits.pos()`.
+///
+/// `paused` is where the block's symbols started, for a decode carrying on
+/// part-way through them into a trace that already has the ones before.
+#[allow(clippy::too_many_arguments)]
 fn symbols<K: Sink>(
     bits: &mut LowBits,
     block: u64,
@@ -779,11 +807,15 @@ fn symbols<K: Sink>(
     lit: &Code,
     dist: &Code,
     coarse: &mut bool,
+    paused: Option<Paused>,
 ) -> Result<ControlFlow<()>, Refusal> {
-    let sym_start = b.steps();
-    let sym_in = bits.pos();
-    let sym_out = out.len();
-    if *coarse {
+    let (sym_start, sym_in, sym_out) = match paused {
+        Some(p) => (p.first_step, p.in_bits, p.out_bytes),
+        None => (b.steps(), bits.pos(), out.len()),
+    };
+    // A block's symbols named as one step, once the trace is too long: the
+    // step is there already for a block carried on from part-way.
+    if *coarse && paused.is_none() {
         b.push(sym_in, sym_out, StepKind::Opaque);
     }
     loop {
@@ -797,6 +829,9 @@ fn symbols<K: Sink>(
         }
         let at = bits.pos();
         if out.boundary(at, Some(block)).is_break() {
+            if b.is_carried_on() {
+                b.paused = Some(Paused { first_step: sym_start, in_bits: sym_in, out_bytes: sym_out });
+            }
             return Ok(ControlFlow::Break(()));
         }
         let sym = lit.decode(bits)?;

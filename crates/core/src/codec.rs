@@ -1057,6 +1057,23 @@ pub(crate) struct TraceBuilder {
     /// Record nothing at all, for a decode that only wants the bytes. See
     /// [`TraceBuilder::off`].
     off: bool,
+    /// Whether a decode that stops between two codes of a block leaves the
+    /// block open, for a decode carrying on from there into this same trace.
+    /// See [`TraceBuilder::carried_on`].
+    carried_on: bool,
+    /// Where the symbols of that open block started, while it is open.
+    pub(crate) paused: Option<Paused>,
+}
+
+/// Where the symbols of a block left open by a decode that stopped between
+/// two of them started: their first step, and the bit and byte it was at.
+/// What a decode carrying on needs to name them all as one step if the trace
+/// grows too long partway through the block, as one decode would have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Paused {
+    pub(crate) first_step: usize,
+    pub(crate) in_bits: u64,
+    pub(crate) out_bytes: u64,
 }
 
 impl TraceBuilder {
@@ -1096,6 +1113,27 @@ impl TraceBuilder {
     /// [`crate::codec::lazy`].
     pub(crate) fn off() -> TraceBuilder {
         TraceBuilder { off: true, ..TraceBuilder::default() }
+    }
+
+    /// A builder for a decode done in pieces into one trace, each stopping
+    /// where it likes and the next carrying on from there: the trace comes
+    /// out step for step as one decode would make it. A piece that stops
+    /// between two codes of a block leaves the block open, and the next reads
+    /// the block's header and tables again without recording them. See
+    /// [`crate::codec::lazy::Indexing`].
+    pub(crate) fn carried_on(mut self) -> TraceBuilder {
+        self.carried_on = true;
+        self
+    }
+
+    pub(crate) fn is_carried_on(&self) -> bool {
+        self.carried_on
+    }
+
+    /// Stop recording for a while, or start again. For a decode carrying on
+    /// inside a block, while it reads again what the trace already has.
+    pub(crate) fn mute(&mut self, muted: bool) {
+        self.off = muted;
     }
 
     /// Say that the first step will start at bit `in_bits` of the run and

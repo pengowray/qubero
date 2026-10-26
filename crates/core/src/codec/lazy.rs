@@ -160,12 +160,11 @@ pub struct Indexing {
 enum Phase {
     /// Decoding as a run held whole is decoded, traced, with checkpoints
     /// taken in case it comes to more than the cap. `from` is where the step
-    /// before stopped, which is always the start of a block: stopping between
-    /// two codes and carrying on would read the block's header and tables
-    /// into the trace a second time.
+    /// before stopped. A step that stops inside a block leaves it open in the
+    /// trace, and the next reads its header and tables again without
+    /// recording them; see [`TraceBuilder::carried_on`].
     Whole { sink: WindowSink, trace: TraceBuilder, from: Option<Resume> },
-    /// Past the cap: the trace is off and only the window is kept, so a step
-    /// can stop between any two codes.
+    /// Past the cap: the trace is off and only the window is kept.
     Index { sink: WindowSink, from: Resume },
     /// Finished, or refused. A step asked of it is a caller's mistake.
     Over,
@@ -193,13 +192,14 @@ impl Indexing {
             return Err(Refusal::TooLarge);
         }
         let framing = inflate::framing(wrapper, &packed)?;
-        let mut trace = TraceBuilder::with_budget(limits.whole_steps);
+        let mut trace = TraceBuilder::with_budget(limits.whole_steps).carried_on();
         if wrapper != Wrapper::Raw {
             trace.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
         let mut sink = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
         sink.marks = Some(Checkpoints::new(limits.spacing, limits.checkpoints));
         sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
+        sink.mid_block = true;
         let phase = Phase::Whole { sink, trace, from: None };
         let pass = Indexing { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
         let says = match pass.packed.len().checked_sub(4) {
@@ -213,7 +213,7 @@ impl Indexing {
     /// stitched stream's part whose length the file gives. It starts with the
     /// trace off, as a pass that has passed the cap carries on, and so skips
     /// decoding the first 64 MiB with the trace on, which is the slowest part
-    /// of the pass and can only stop between blocks. What it comes to is the
+    /// of the pass and is thrown away at the cap. What it comes to is the
     /// index the pass would have made. A run that turns out to fit under the
     /// cap after all comes back indexed too, and a caller that knew its
     /// length finds it is not the one it was told.
@@ -240,13 +240,9 @@ impl Indexing {
         Progress { read_bits: self.furthest, run_bits, unpacked: self.most.max(unpacked) }
     }
 
-    /// Decode about `out_bytes` more output and stop, or finish.
-    ///
-    /// While the run might still come to a whole one, a step stops only at
-    /// the start of a block, so it can overrun by up to one block's output: a
-    /// few megabytes from an ordinary encoder, and as much as the cap from
-    /// one that wrote the whole run as one block. Past the cap it stops at
-    /// the first code past `out_bytes`.
+    /// Decode about `out_bytes` more output and stop at the next code, or
+    /// finish. A stored block is not stopped in, so a step can overrun by up
+    /// to one stored block, 64 KiB.
     pub fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
         let stepped = self.step_on(out_bytes);
         let (at, out) = match &self.phase {
@@ -1082,15 +1078,18 @@ mod tests {
     /// The pass done in steps of every size, from smaller than one code's
     /// output to larger than the run, comes to what the pass in one go comes
     /// to: the same checkpoints and sums for a run past the cap, and for a run
-    /// under it the same bytes and the same trace, step for step. Under the
-    /// cap a step stops only at the start of a block, so a step smaller than a
-    /// block still makes headway.
+    /// under it the same bytes and the same trace, step for step. Steps stop
+    /// inside blocks too, so the runs are a block every 3,000 bytes and one
+    /// block for the whole run, which a step of 100 bytes stops in hundreds
+    /// of times.
     #[test]
     fn a_pass_in_steps_comes_to_what_one_pass_does() {
         let large = mixed(300_000, 29);
         let small_run = mixed(50_000, 31);
-        for data in [&large, &small_run] {
-            let raw = deflate_in_blocks(data, 3000);
+        for (data, raw) in [&large, &small_run]
+            .into_iter()
+            .flat_map(|data| [(data, deflate_in_blocks(data, 3000)), (data, miniz_oxide::deflate::compress_to_vec(data, 6))])
+        {
             for codec in [Codec::Deflate, Codec::Gzip, Codec::Zlib] {
                 let packed = Arc::new(wrapped(codec, &raw, data));
                 let one = decode_or_index_with(codec, packed.clone(), small()).expect("decodes");
@@ -1121,21 +1120,24 @@ mod tests {
         }
     }
 
-    /// A trace that has started naming blocks rather than codes carries on
-    /// that way in the next step, as it would in one pass.
+    /// A trace that grows too long partway through a block names that
+    /// block's symbols as one step, the ones from steps before as well, and
+    /// carries on naming blocks in the steps after, as it would in one pass.
     #[test]
     fn a_trace_that_names_blocks_still_does_after_a_step() {
         let data = mixed(50_000, 37);
-        let packed = Arc::new(deflate_in_blocks(&data, 3000));
-        let limits = Limits { whole_steps: 2000, ..small() };
-        let Ok(Decoded::Whole(_, trace)) = decode_or_index_with(Codec::Deflate, packed.clone(), limits) else { panic!("not whole") };
-        assert!(trace.coarse());
-        assert!(trace.blocks().len() > 3, "{} blocks", trace.blocks().len());
-        let (got, _) = in_steps(Indexing::new(Codec::Deflate, packed, limits).expect("starts"), 100);
-        let Ok(Decoded::Whole(_, t)) = got else { panic!("not whole in steps") };
-        assert!(t.coarse());
-        assert!(t.steps().eq(trace.steps()), "the steps differ");
-        assert_eq!(t.blocks(), trace.blocks());
+        for packed in [deflate_in_blocks(&data, 3000), miniz_oxide::deflate::compress_to_vec(&data, 6)] {
+            let packed = Arc::new(packed);
+            let limits = Limits { whole_steps: 2000, ..small() };
+            let Ok(Decoded::Whole(_, trace)) = decode_or_index_with(Codec::Deflate, packed.clone(), limits) else { panic!("not whole") };
+            assert!(trace.coarse());
+            let (got, steps) = in_steps(Indexing::new(Codec::Deflate, packed, limits).expect("starts"), 100);
+            assert!(steps > 100, "{steps} steps");
+            let Ok(Decoded::Whole(_, t)) = got else { panic!("not whole in steps") };
+            assert!(t.coarse());
+            assert!(t.steps().eq(trace.steps()), "the steps differ");
+            assert_eq!(t.blocks(), trace.blocks());
+        }
     }
 
     /// A pass told the run is large starts with the trace off and comes to the
