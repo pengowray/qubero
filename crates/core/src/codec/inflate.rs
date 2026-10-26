@@ -478,8 +478,9 @@ pub(crate) struct Resume {
 /// How a decode ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ended {
-    /// The block that said it was the last one ended.
-    Stream,
+    /// The block that said it was the last one ended, at the bit this gives:
+    /// before the padding out to the byte, which belongs to no block.
+    Stream(u64),
     /// The sink said to stop, at the bit this gives.
     Stopped(u64),
 }
@@ -579,6 +580,7 @@ pub(crate) fn run<K: Sink>(
     // The bits between the last block and the byte boundary, which the format
     // does not use and a decoder reads past.
     let at = bits.pos();
+    let blocks_end = at;
     let skipped = bits.align();
     if skipped > 0 {
         b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
@@ -590,7 +592,7 @@ pub(crate) fn run<K: Sink>(
         b.push(bits.pos(), out.len(), StepKind::Opaque);
     }
     b.finish_at(end.max(bits.pos()), out.len());
-    Ok(Ended::Stream)
+    Ok(Ended::Stream(blocks_end))
 }
 
 /// For a decode that starts inside a Huffman-coded block, once the block's

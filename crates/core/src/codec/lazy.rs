@@ -14,6 +14,14 @@
 //! their length and distance, so they can be read off any stretch of the
 //! stream without the output before it.
 //!
+//! The blocks are recorded on the same pass: where each one starts in the run
+//! and in the output, which is enough to list them and to trace any one of
+//! them alone when asked, since a block's codes, like a span's, need none of
+//! the output before them. A run may hold tens of millions of tiny blocks, so
+//! past [`MAX_BLOCK_MARKS`] only every second one is kept, as checkpoints are
+//! thinned, and the ones between are found again by decoding from the one
+//! before.
+//!
 //! The guard against a zip bomb is [`LAZY_CAP_BYTES`], a limit on the output.
 //! Memory is bounded by the limits below whatever the output comes to, so a
 //! bomb can only cost the time of one pass up to that limit.
@@ -23,7 +31,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::checksum::{adler32, adler32_update, crc32, crc32_update};
 use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
-use crate::codec::{Codec, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
+use crate::codec::{Block, BlockKind, Codec, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
 /// The most a run read a piece at a time may come to. Past this it is refused
 /// as [`Refusal::TooLargeLazy`].
@@ -44,6 +52,19 @@ pub const SPAN_CACHE_BYTES: usize = 16 << 20;
 /// How many steps a span's trace may hold before it names blocks rather than
 /// codes, as [`crate::codec::MAX_STEPS`] does for a whole run.
 pub const SPAN_TRACE_STEPS: usize = 1_000_000;
+
+/// The most block starts one run keeps. Past this every second one goes and
+/// the ones between two that are kept are found by decoding from the first,
+/// so 65,536 × 16 bytes = 1 MiB is the most a run's block starts hold.
+/// Ordinary encoders write far fewer: zlib ends a block every 16,384 codes,
+/// and a stored block holds up to 64 KiB, so 1 GiB of output is tens of
+/// thousands of blocks at most. A run written to be hostile can hold a block
+/// in every ten bits.
+pub const MAX_BLOCK_MARKS: usize = 1 << 16;
+
+/// How many groups of blocks between two kept block starts one run keeps,
+/// once found. A group is at most a few thousand starts.
+const GROUPS_KEPT: usize = 16;
 
 /// As far back as a deflate match can copy from.
 const WINDOW: usize = 32 * 1024;
@@ -67,8 +88,11 @@ pub struct Limits {
     pub checkpoints: usize,
     /// [`SPAN_CACHE_BYTES`].
     pub span_cache: usize,
-    /// [`SPAN_TRACE_STEPS`].
+    /// [`SPAN_TRACE_STEPS`]. Also the most steps one block's trace holds,
+    /// and the most the block traces one run keeps hold between them.
     pub span_steps: usize,
+    /// [`MAX_BLOCK_MARKS`].
+    pub block_marks: usize,
 }
 
 impl Default for Limits {
@@ -80,6 +104,7 @@ impl Default for Limits {
             checkpoints: MAX_CHECKPOINTS,
             span_cache: SPAN_CACHE_BYTES,
             span_steps: SPAN_TRACE_STEPS,
+            block_marks: MAX_BLOCK_MARKS,
         }
     }
 }
@@ -137,6 +162,7 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
     }
     let mut whole = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
     whole.marks = Some(marks);
+    whole.blocks = Some(BlockMarks::new(limits.block_marks));
     match inflate::run(data, f.start, f.end, &mut whole, &mut b, None) {
         Ok(_) => {
             let out = whole.hist;
@@ -161,15 +187,21 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
     let last = marks.list.last().cloned().expect("checkpoint 0 is taken before any output");
     let upto = &whole.hist[..last.out as usize];
     let (crc, adler) = (crc32(upto), adler32(upto));
+    // The blocks that start from the checkpoint on are recorded again.
+    let mut blocks = whole.blocks.take().expect("the first pass records blocks");
+    blocks.truncate(last.blocks);
     drop(whole);
     let mut index = WindowSink::new(last.window.to_vec(), last.out - last.window.len() as u64, limits.lazy, true);
     index.marks = Some(marks);
+    index.blocks = Some(blocks);
     index.sums = Some(Sums { crc, adler, upto: last.out });
-    match inflate::run(data, f.start, f.end, &mut index, &mut TraceBuilder::off(), Some(last.resume())) {
-        Ok(_) => {}
+    let blocks_end = match inflate::run(data, f.start, f.end, &mut index, &mut TraceBuilder::off(), Some(last.resume())) {
+        Ok(Ended::Stream(at)) => at,
+        // Nothing here tells the decoder to stop.
+        Ok(Ended::Stopped(_)) => return Err(Refusal::Failed),
         Err(Refusal::TooLarge) => return Err(Refusal::TooLargeLazy),
         Err(other) => return Err(other),
-    }
+    };
     let len = index.len();
     index.sum_to(len);
     let sums = index.sums.expect("set above");
@@ -177,17 +209,22 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
         return Err(Refusal::Failed);
     }
     let checkpoints = index.marks.take().expect("set above").list;
+    let blocks = index.blocks.take().expect("set above");
     Ok(Decoded::Indexed(Seekable {
         codec,
         packed,
         framing: f,
         len,
         checkpoints,
+        blocks,
+        blocks_end,
         crc32: sums.crc,
         adler32: sums.adler,
         limits,
-        spans: Mutex::new(SpanCache::new(limits.span_cache)),
+        spans: Mutex::new(Recent::new(limits.span_cache)),
         traced: Mutex::new(None),
+        groups: Mutex::new(Recent::new(GROUPS_KEPT)),
+        block_traces: Mutex::new(Recent::new(limits.span_steps)),
     }))
 }
 
@@ -201,6 +238,9 @@ struct Checkpoint {
     /// The header of the Huffman-coded block it is inside, whose tables a
     /// decode starting here reads again. Nothing at the start of a block.
     block: Option<u64>,
+    /// How many blocks start before `in_bit`: the one it is inside among
+    /// them, and one starting at `in_bit` not.
+    blocks: u64,
     /// The last 32 KiB of output before it, or all of it when there is less.
     window: Arc<[u8]>,
 }
@@ -228,11 +268,11 @@ impl Checkpoints {
     /// may be, every second one goes and the spacing doubles. The first is
     /// never one that goes: a span starting anywhere else would have nothing
     /// to start from.
-    fn offer(&mut self, in_bit: u64, out: u64, block: Option<u64>, window: &[u8]) {
+    fn offer(&mut self, in_bit: u64, out: u64, block: Option<u64>, blocks: u64, window: &[u8]) {
         if out < self.next {
             return;
         }
-        self.list.push(Checkpoint { in_bit, out, block, window: window.into() });
+        self.list.push(Checkpoint { in_bit, out, block, blocks, window: window.into() });
         self.next = out + self.spacing;
         if self.list.len() > self.max {
             let mut i = 0;
@@ -243,6 +283,50 @@ impl Checkpoints {
             self.spacing *= 2;
             self.next = self.list.last().map_or(0, |c| c.out) + self.spacing;
         }
+    }
+}
+
+/// Where the blocks an index pass has passed start, as the bit of the run and
+/// the byte of the output: every block's, or past the most there may be,
+/// every `stride`th block's. The first is always kept.
+#[derive(Debug, Clone)]
+struct BlockMarks {
+    /// The start of blocks 0, `stride`, 2 × `stride` and so on.
+    list: Vec<(u64, u64)>,
+    /// How many blocks have started, kept or not.
+    count: u64,
+    stride: u64,
+    max: usize,
+}
+
+impl BlockMarks {
+    fn new(max: usize) -> BlockMarks {
+        BlockMarks { list: Vec::new(), count: 0, stride: 1, max: max.max(2) }
+    }
+
+    /// A block starts at `in_bit`, with `out` bytes of output before it.
+    /// Past the most there may be, every second start goes and the stride
+    /// doubles, which leaves the ones whose number is a multiple of it.
+    fn record(&mut self, in_bit: u64, out: u64) {
+        if self.count % self.stride == 0 {
+            self.list.push((in_bit, out));
+            if self.list.len() > self.max {
+                let mut i = 0;
+                self.list.retain(|_| {
+                    i += 1;
+                    (i - 1) % 2 == 0
+                });
+                self.stride *= 2;
+            }
+        }
+        self.count += 1;
+    }
+
+    /// Back to the first `count` blocks, for a pass that starts again from a
+    /// checkpoint they all start before.
+    fn truncate(&mut self, count: u64) {
+        self.list.truncate(count.div_ceil(self.stride) as usize);
+        self.count = count;
     }
 }
 
@@ -266,6 +350,8 @@ struct WindowSink {
     slide: bool,
     /// Take checkpoints on the way.
     marks: Option<Checkpoints>,
+    /// Record where blocks start on the way.
+    blocks: Option<BlockMarks>,
     /// Sum the output as it leaves.
     sums: Option<Sums>,
     /// Stop at the first boundary at or past this bit.
@@ -274,7 +360,7 @@ struct WindowSink {
 
 impl WindowSink {
     fn new(hist: Vec<u8>, base: u64, cap: u64, slide: bool) -> WindowSink {
-        WindowSink { hist, base, cap, slide, marks: None, sums: None, stop_at: None }
+        WindowSink { hist, base, cap, slide, marks: None, blocks: None, sums: None, stop_at: None }
     }
 
     /// Bring the sums up to `upto`, from what `hist` still holds.
@@ -351,19 +437,27 @@ impl Sink for WindowSink {
         if let Some(marks) = &mut self.marks {
             if out >= marks.next {
                 let keep = (WINDOW as u64).min(out) as usize;
-                marks.offer(in_bit, out, block, &self.hist[self.hist.len() - keep..]);
+                let started = self.blocks.as_ref().map_or(0, |b| b.count);
+                marks.offer(in_bit, out, block, started, &self.hist[self.hist.len() - keep..]);
             }
+        }
+        if let (None, Some(blocks)) = (block, &mut self.blocks) {
+            blocks.record(in_bit, out);
         }
         ControlFlow::Continue(())
     }
 }
 
-/// Output counted and not kept, for a decode that wants only its trace. A
-/// deflate step says what it copied and from how far back, not what the
-/// bytes were, so the trace of a span needs none of the output before it.
+/// Output counted and not kept, for a decode that wants only its trace or
+/// where its blocks start. A deflate step says what it copied and from how
+/// far back, not what the bytes were, so the trace of a span needs none of
+/// the output before it.
 struct CountSink {
     len: u64,
     stop_at: Option<u64>,
+    /// Where each block starts, as the bit of the run and the byte of the
+    /// output, when asked for.
+    starts: Option<Vec<(u64, u64)>>,
 }
 
 impl Sink for CountSink {
@@ -393,20 +487,25 @@ impl Sink for CountSink {
     }
 
     #[inline]
-    fn boundary(&mut self, in_bit: u64, _: Option<u64>) -> ControlFlow<()> {
-        match self.stop_at.is_some_and(|stop| in_bit >= stop) {
-            true => ControlFlow::Break(()),
-            false => ControlFlow::Continue(()),
+    fn boundary(&mut self, in_bit: u64, block: Option<u64>) -> ControlFlow<()> {
+        if self.stop_at.is_some_and(|stop| in_bit >= stop) {
+            return ControlFlow::Break(());
         }
+        if let (None, Some(starts)) = (block, &mut self.starts) {
+            starts.push((in_bit, self.len));
+        }
+        ControlFlow::Continue(())
     }
 }
 
 /// A compressed run that comes to more than can be held whole, read through
 /// its checkpoints.
 ///
-/// Holds the run itself, which is at most [`CAP_BYTES`]; the checkpoints; the
-/// spans decoded most recently, up to [`Limits::span_cache`]; and the trace of
-/// the span asked about most recently. Reads take `&self`, as a
+/// Holds the run itself, which is at most [`CAP_BYTES`]; the checkpoints; where
+/// the blocks start; the spans decoded most recently, up to
+/// [`Limits::span_cache`]; the trace of the span asked about most recently;
+/// and the traces of the blocks asked about most recently, up to
+/// [`Limits::span_steps`] steps between them. Reads take `&self`, as a
 /// [`Source`](crate::source::Source) is read, so the caches are behind locks.
 pub struct Seekable {
     codec: Codec,
@@ -414,11 +513,18 @@ pub struct Seekable {
     framing: Framing,
     len: u64,
     checkpoints: Vec<Checkpoint>,
+    blocks: BlockMarks,
+    /// Where the last block ends, as a bit of the run.
+    blocks_end: u64,
     crc32: u32,
     adler32: u32,
     limits: Limits,
-    spans: Mutex<SpanCache>,
+    spans: Mutex<Recent<Arc<Vec<u8>>>>,
     traced: Mutex<Option<(usize, Arc<Trace>)>>,
+    /// The starts of the blocks between two kept ones, by the number of the
+    /// first, once found.
+    groups: Mutex<Recent<Arc<[(u64, u64)]>>>,
+    block_traces: Mutex<Recent<Arc<Trace>>>,
 }
 
 impl std::fmt::Debug for Seekable {
@@ -428,6 +534,7 @@ impl std::fmt::Debug for Seekable {
             .field("packed", &self.packed.len())
             .field("len", &self.len)
             .field("checkpoints", &self.checkpoints.len())
+            .field("blocks", &self.blocks.count)
             .finish()
     }
 }
@@ -522,11 +629,11 @@ impl Seekable {
 
     /// Everything span `k` comes to, from the cache or decoded now.
     fn span(&self, k: usize) -> Result<Arc<Vec<u8>>, Refusal> {
-        if let Some(bytes) = lock(&self.spans).get(k) {
+        if let Some(bytes) = lock(&self.spans).get(k as u64) {
             return Ok(bytes);
         }
         let bytes = Arc::new(self.decode_span(k)?);
-        lock(&self.spans).put(k, bytes.clone());
+        lock(&self.spans).put(k as u64, bytes.clone(), bytes.len());
         Ok(bytes)
     }
 
@@ -577,9 +684,9 @@ impl Seekable {
         if k == 0 && wrapped {
             b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
-        let mut sink = CountSink { len: c.out, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit) };
+        let mut sink = CountSink { len: c.out, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit), starts: None };
         let ended = inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(c.resume()))?;
-        if ended == Ended::Stream && wrapped {
+        if matches!(ended, Ended::Stream(_)) && wrapped {
             b.push(f.end, sink.len, StepKind::Header(StepField::Wrapper, 0));
             b.finish_at(self.packed.len() as u64 * 8, sink.len);
         }
@@ -610,10 +717,116 @@ impl Seekable {
         self.trace_at_bit(bit)?.map_in(bit)
     }
 
-    /// How many bytes the checkpoints' windows and the span cache hold, for
-    /// tests and for saying what a run costs.
+    /// How many blocks the run holds.
+    pub fn blocks(&self) -> u64 {
+        self.blocks.count
+    }
+
+    /// Block `i`: where it is in the run and in the output, how it is coded
+    /// and whether it says it is the last. Its `steps` are empty; they are in
+    /// [`Seekable::block_trace`].
+    pub fn block(&self, i: u64) -> Result<Block, Refusal> {
+        let (in_start, out_start) = self.block_start(i)?;
+        let (in_end, out_end) = match i + 1 < self.blocks.count {
+            true => self.block_start(i + 1)?,
+            false => (self.blocks_end, self.len),
+        };
+        // The header's first three bits, low bit first: whether this is the
+        // last block, and how it is coded. Read again rather than kept, since
+        // they are in the run and the run is in memory.
+        let bit = |k: u64| self.packed.get((k / 8) as usize).map_or(0, |b| (b >> (k % 8)) & 1);
+        let kind = match bit(in_start + 1) | bit(in_start + 2) << 1 {
+            0 => BlockKind::Stored,
+            1 => BlockKind::Fixed,
+            2 => BlockKind::Dynamic,
+            _ => return Err(Refusal::Failed),
+        };
+        Ok(Block { steps: 0..0, kind, last: bit(in_start) == 1, in_bits: in_start..in_end, out_bytes: out_start..out_end })
+    }
+
+    /// The block whose bits hold bit `bit` of the run. Nothing for a bit of
+    /// the wrapper or of the padding after the last block.
+    pub fn block_of_bit(&self, bit: u64) -> Option<u64> {
+        let list = &self.blocks.list;
+        if bit < list.first()?.0 || bit >= self.blocks_end {
+            return None;
+        }
+        let g = list.partition_point(|m| m.0 <= bit) - 1;
+        if self.blocks.stride == 1 {
+            return Some(g as u64);
+        }
+        let starts = self.group(g).ok()?;
+        Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.0 <= bit) as u64 - 1)
+    }
+
+    /// Where block `i` starts: the bit of its header and how much output
+    /// comes before it.
+    fn block_start(&self, i: u64) -> Result<(u64, u64), Refusal> {
+        if i >= self.blocks.count {
+            return Err(Refusal::Failed);
+        }
+        let stride = self.blocks.stride;
+        let (g, j) = ((i / stride) as usize, (i % stride) as usize);
+        if j == 0 {
+            return Ok(self.blocks.list[g]);
+        }
+        self.group(g)?.get(j).copied().ok_or(Refusal::Failed)
+    }
+
+    /// The starts of every block from kept start `g` to the next, found by
+    /// decoding from the first and counting what comes out.
+    fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, Refusal> {
+        if let Some(starts) = lock(&self.groups).get(g as u64) {
+            return Ok(starts);
+        }
+        let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
+        let mut sink = CountSink { len: out, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()) };
+        let f = &self.framing;
+        inflate::run(&self.packed, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
+        let starts: Arc<[(u64, u64)]> = sink.starts.take().unwrap_or_default().into();
+        // The same decoder over the same bits as the pass that counted them.
+        let want = self.blocks.stride.min(self.blocks.count - g as u64 * self.blocks.stride);
+        if starts.len() as u64 != want || starts.first() != Some(&(in_bit, out)) {
+            return Err(Refusal::Failed);
+        }
+        lock(&self.groups).put(g as u64, starts.clone(), 1);
+        Ok(starts)
+    }
+
+    /// The trace of block `i` alone: its header, its tables and its codes,
+    /// counted from the front of the run and of the output as every trace
+    /// here is, with the block as its one entry in [`Trace::blocks`]. The
+    /// last block's trace goes on past it to the end of the deflate data.
+    ///
+    /// A block of more codes than [`Limits::span_steps`] has them as one
+    /// step, as a whole run's trace does past [`crate::codec::MAX_STEPS`].
+    pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, Refusal> {
+        if let Some(t) = lock(&self.block_traces).get(i) {
+            return Ok(t);
+        }
+        let block = self.block(i)?;
+        let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
+        let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
+        let mut sink = CountSink { len: out, stop_at: next, starts: None };
+        let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(in_bit, out);
+        let f = &self.framing;
+        inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;
+        let t = b.done();
+        match t.blocks() {
+            [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => {}
+            _ => return Err(Refusal::Failed),
+        }
+        let t = Arc::new(t);
+        lock(&self.block_traces).put(i, t.clone(), t.len());
+        Ok(t)
+    }
+
+    /// How many bytes the checkpoints' windows, the block starts and the span
+    /// cache hold, for tests and for saying what a run costs.
     pub fn held_bytes(&self) -> usize {
-        self.checkpoints.iter().map(|c| c.window.len()).sum::<usize>() + lock(&self.spans).bytes
+        self.checkpoints.iter().map(|c| c.window.len()).sum::<usize>()
+            + self.blocks.list.len() * std::mem::size_of::<(u64, u64)>()
+            + lock(&self.spans).weight
     }
 
     /// Where each checkpoint is, as the bit of the run and the byte of the
@@ -624,23 +837,24 @@ impl Seekable {
     }
 }
 
-/// The spans of one run decoded most recently, up to a number of bytes, with
-/// the one read longest ago going first. At least one is kept whatever its
-/// size.
-struct SpanCache {
-    entries: Vec<(usize, Arc<Vec<u8>>, u64)>,
-    bytes: usize,
+/// What was made most recently for one run, up to a total weight, with the
+/// one asked for longest ago going first: spans weighed in bytes, block
+/// traces in steps, groups of block starts one each. At least one is kept
+/// whatever it weighs.
+struct Recent<T> {
+    entries: Vec<(u64, T, usize, u64)>,
+    weight: usize,
     cap: usize,
     clock: u64,
     #[cfg(test)]
     peak: usize,
 }
 
-impl SpanCache {
-    fn new(cap: usize) -> SpanCache {
-        SpanCache {
+impl<T: Clone> Recent<T> {
+    fn new(cap: usize) -> Recent<T> {
+        Recent {
             entries: Vec::new(),
-            bytes: 0,
+            weight: 0,
             cap,
             clock: 0,
             #[cfg(test)]
@@ -648,27 +862,27 @@ impl SpanCache {
         }
     }
 
-    fn get(&mut self, k: usize) -> Option<Arc<Vec<u8>>> {
+    fn get(&mut self, k: u64) -> Option<T> {
         self.clock += 1;
         let clock = self.clock;
         let e = self.entries.iter_mut().find(|e| e.0 == k)?;
-        e.2 = clock;
+        e.3 = clock;
         Some(e.1.clone())
     }
 
-    fn put(&mut self, k: usize, bytes: Arc<Vec<u8>>) {
-        while !self.entries.is_empty() && self.bytes + bytes.len() > self.cap {
-            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].2).expect("not empty");
+    fn put(&mut self, k: u64, value: T, weight: usize) {
+        while !self.entries.is_empty() && self.weight + weight > self.cap {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
             let gone = self.entries.swap_remove(oldest);
-            self.bytes -= gone.1.len();
+            self.weight -= gone.2;
         }
         self.clock += 1;
-        self.bytes += bytes.len();
+        self.weight += weight;
         #[cfg(test)]
         {
-            self.peak = self.peak.max(self.bytes);
+            self.peak = self.peak.max(self.weight);
         }
-        self.entries.push((k, bytes, self.clock));
+        self.entries.push((k, value, weight, self.clock));
     }
 }
 
@@ -680,7 +894,7 @@ mod tests {
     /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
     /// than 12 of them, and the cache holds 40 KiB.
     fn small() -> Limits {
-        Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000 }
+        Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, block_marks: MAX_BLOCK_MARKS }
     }
 
     fn rand_from(mut seed: u64) -> impl FnMut() -> u64 {
@@ -715,11 +929,39 @@ mod tests {
     }
 
     fn gzip_of(data: &[u8], level: u8) -> Vec<u8> {
+        gzip_around(data, &miniz_oxide::deflate::compress_to_vec(data, level))
+    }
+
+    fn gzip_around(data: &[u8], raw: &[u8]) -> Vec<u8> {
         let mut out = vec![0x1f, 0x8b, 8, 0x08, 0, 0, 0, 0, 0, 3];
         out.extend_from_slice(b"name.fits\0");
-        out.extend_from_slice(&miniz_oxide::deflate::compress_to_vec(data, level));
+        out.extend_from_slice(raw);
         out.extend_from_slice(&crc32(data).to_le_bytes());
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out
+    }
+
+    /// Raw deflate flushed every `every` bytes of input, as a writer that
+    /// flushes each line does: each flush ends a block and adds an empty
+    /// stored one, so a few hundred kilobytes come to hundreds of blocks.
+    fn flushed(data: &[u8], level: u8, every: usize) -> Vec<u8> {
+        use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush};
+        let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(level as i32, -15, 0));
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; every * 2 + 4096];
+        let chunks: Vec<&[u8]> = data.chunks(every).collect();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let flush = if k + 1 == chunks.len() { TDEFLFlush::Finish } else { TDEFLFlush::Sync };
+            let mut input = *chunk;
+            loop {
+                let (_, read, wrote) = compress(&mut c, input, &mut buf, flush);
+                out.extend_from_slice(&buf[..wrote]);
+                input = &input[read..];
+                if input.is_empty() && wrote < buf.len() {
+                    break;
+                }
+            }
+        }
         out
     }
 
@@ -874,6 +1116,79 @@ mod tests {
             compared += a.is_some() as usize;
         }
         assert!(compared > 500, "only {compared} codes compared");
+    }
+
+    /// The blocks found on the index pass are the blocks of the whole trace,
+    /// one for one: where each starts and ends in the run and in the output,
+    /// how it is coded and whether it is the last. And each block's own trace
+    /// holds the same steps as the whole trace does over that block.
+    #[test]
+    fn the_blocks_of_an_index_are_the_blocks_of_the_whole_trace() {
+        let data = mixed(300_000, 29);
+        // Level 0 writes stored blocks, so checkpoints land at block starts;
+        // the others put them inside Huffman-coded blocks. Flushing makes
+        // hundreds of blocks of every kind.
+        let mut most = 0;
+        for level in [0u8, 1, 6] {
+            for (codec, packed) in [
+                (Codec::Deflate, miniz_oxide::deflate::compress_to_vec(&data, level)),
+                (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, level)),
+                (Codec::Deflate, flushed(&data, level, 3000)),
+                (Codec::Gzip, gzip_around(&data, &flushed(&data, level, 5000))),
+            ] {
+                let (_, whole) = crate::codec::decode_traced(codec, &packed).expect("decodes whole");
+                let s = indexed(codec, &packed, small());
+                assert_eq!(s.blocks(), whole.blocks().len() as u64, "{codec:?} level {level}");
+                most = most.max(s.blocks());
+                for (i, want) in whole.blocks().iter().enumerate() {
+                    let got = s.block(i as u64).expect("a block");
+                    assert_eq!(
+                        (got.kind, got.last, &got.in_bits, &got.out_bytes),
+                        (want.kind, want.last, &want.in_bits, &want.out_bytes),
+                        "{codec:?} level {level}: block {i}"
+                    );
+                    for bit in [want.in_bits.start, want.in_bits.end - 1] {
+                        assert_eq!(s.block_of_bit(bit), Some(i as u64), "{codec:?} level {level}: bit {bit}");
+                    }
+                    let t = s.block_trace(i as u64).expect("traces");
+                    t.check_tiles().unwrap_or_else(|e| panic!("{codec:?} level {level} block {i}: {e}"));
+                    let ours: Vec<Step> = t.steps().take(t.blocks()[0].steps.len()).collect();
+                    let theirs: Vec<Step> = want.steps.clone().map(|k| whole.step(k as usize).unwrap()).collect();
+                    assert!(ours == theirs, "{codec:?} level {level}: block {i}'s steps differ");
+                }
+                assert_eq!(s.block(s.blocks()).err(), Some(Refusal::Failed));
+                // Bits outside every block: the wrapper's, and the padding.
+                let first = whole.blocks()[0].in_bits.start;
+                if first > 0 {
+                    assert_eq!(s.block_of_bit(first - 1), None);
+                }
+                assert_eq!(s.block_of_bit(whole.blocks().last().unwrap().in_bits.end), None);
+            }
+        }
+        assert!(most > 100, "at most {most} blocks");
+    }
+
+    /// Past the most block starts there may be, every second one goes and
+    /// the ones between are found again by decoding: every block still reads
+    /// as the whole trace has it, and no more starts are kept than the limit.
+    #[test]
+    fn block_starts_thin_out_and_the_rest_are_found_again() {
+        let data = mixed(300_000, 31);
+        let packed = flushed(&data, 1, 2000);
+        let (_, whole) = crate::codec::decode_traced(Codec::Deflate, &packed).expect("decodes whole");
+        let n = whole.blocks().len();
+        let limits = Limits { block_marks: 4, ..small() };
+        let s = indexed(Codec::Deflate, &packed, limits);
+        assert!(n > 16, "only {n} blocks");
+        assert!(s.blocks.list.len() <= 4 && s.blocks.stride > 1, "{} starts kept {} apart", s.blocks.list.len(), s.blocks.stride);
+        assert_eq!(s.blocks(), n as u64);
+        // Backwards, so that the groups turn over.
+        for (i, want) in whole.blocks().iter().enumerate().rev() {
+            let got = s.block(i as u64).expect("a block");
+            assert_eq!((&got.in_bits, &got.out_bytes, got.kind), (&want.in_bits, &want.out_bytes, want.kind), "block {i}");
+            let mid = (want.in_bits.start + want.in_bits.end) / 2;
+            assert_eq!(s.block_of_bit(mid), Some(i as u64), "bit {mid}");
+        }
     }
 
     /// Past the limit for a run read a piece at a time, a run is refused with
