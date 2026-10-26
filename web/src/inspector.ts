@@ -1176,11 +1176,11 @@ export class Inspector {
     // stays connected to the bytes it came from, and so can a stream joined
     // from several runs, with the words the listing offers each with. A run
     // that would not open has no button; the line saying why is already beside
-    // the address above. A joined stream too long to hold whole has no such
-    // line, since it still reads a part at a time, so it is said here instead.
+    // the address above. A joined stream is offered whatever its length, and
+    // one too large to open says so when the button is pressed.
     const first = n.composite && n.child_count > 0 ? this.doc.templateNode([...path, 0]) : null;
     const offer = streamOffer(path, n, first?.status === "ok" ? first.node : null);
-    if (offer !== null && "open" in offer) {
+    if (offer !== null) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "insp-check-button";
@@ -1188,11 +1188,6 @@ export class Inspector {
       button.title = UNPACKED.openTitle(n.name);
       button.addEventListener("click", () => this.onOpenUnpacked(offer.open));
       parts.push(button);
-    } else if (offer !== null) {
-      const why = document.createElement("div");
-      why.className = "insp-detail";
-      why.textContent = JOINED.tooLarge;
-      parts.push(why);
     }
     // A list of records, or a run of samples, read as rows. Offered on the
     // list itself and on anything inside it: a reader whose cursor is on one

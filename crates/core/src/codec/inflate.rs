@@ -16,9 +16,11 @@
 //! The reader is the shared one, [`LowBits`], bounded wherever the run the
 //! stream sits in ends.
 
+use std::ops::ControlFlow;
+
 use crate::bits::{Bits, LowBits};
 use crate::codec::{
-    BlockKind, Refusal, Step, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES,
+    BlockKind, Paused, Refusal, Step, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES,
 };
 
 /// The longest a Huffman code may be in deflate.
@@ -135,7 +137,7 @@ fn fixed_codes() -> (Code, Code) {
 pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::default();
     let mut out = Vec::new();
-    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
+    run(data, 0, data.len() as u64 * 8, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
     Ok((out, b.done()))
 }
 
@@ -155,19 +157,16 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 ///
 /// The same refusals as [`inflate`]: a stream that will not decode, or one
 /// that comes to more than [`CAP_BYTES`], has no length to give.
+///
+/// Neither the output nor a trace is kept, since only the end is wanted: the
+/// output is counted, which is enough to refuse a match reaching back before
+/// the start and a stream past the cap.
 pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
-    let mut b = TraceBuilder::default();
-    let mut out = Vec::new();
-    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
-    let trace = b.done();
-    // The decoder marks whatever it did not read as one opaque step at the
-    // end; the stream ends where that begins. No such step and the stream
-    // ran to the last bit it was given.
-    let end = match trace.steps().last() {
-        Some(step) if step.kind == StepKind::Opaque => step.in_bits.start,
-        _ => trace.in_bits(),
-    };
-    Ok(end.div_ceil(8))
+    let mut sink = CountSink { len: 0, cap: CAP_BYTES as u64, stop_at: None };
+    match run(data, 0, data.len() as u64 * 8, &mut sink, &mut TraceBuilder::off(), None)? {
+        Ended::Stream(end) => Ok(end.div_ceil(8)),
+        Ended::Stopped(_) => Err(Refusal::Failed),
+    }
 }
 
 /// The same, with a step budget the tests can reach. See [`crate::codec::MAX_STEPS`].
@@ -175,7 +174,127 @@ pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
 fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::with_budget(budget);
     let mut out = Vec::new();
-    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
+    run(data, 0, data.len() as u64 * 8, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
+    Ok((out, b.done()))
+}
+
+/// What is wrapped round the deflate data of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wrapper {
+    /// Nothing: the run is the deflate data.
+    Raw,
+    /// RFC 1950: two bytes of header, and an Adler-32 after.
+    Zlib,
+    /// RFC 1952: a header of ten bytes or more, and a CRC-32 and the length
+    /// after.
+    Gzip,
+}
+
+/// Where the deflate data inside a run is, as bits of the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Framing {
+    pub(crate) wrapper: Wrapper,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+}
+
+/// Where the deflate data inside a run wrapped as `wrapper` is, from the
+/// wrapper's header. Refused when the header is not one.
+pub(crate) fn framing(wrapper: Wrapper, data: &[u8]) -> Result<Framing, Refusal> {
+    match wrapper {
+        Wrapper::Raw => Ok(Framing { wrapper, start: 0, end: data.len() as u64 * 8 }),
+        Wrapper::Zlib => {
+            if data.len() < 6 {
+                return Err(Refusal::Failed);
+            }
+            let (cmf, flg) = (data[0], data[1]);
+            if cmf & 0x0f != 8 || (cmf as u16 * 256 + flg as u16) % 31 != 0 || flg & 0x20 != 0 {
+                return Err(Refusal::Failed);
+            }
+            Ok(Framing { wrapper, start: 16, end: (data.len() as u64 - 4) * 8 })
+        }
+        Wrapper::Gzip => {
+            // The two magic bytes, the method, the flags, four of time, one of
+            // how hard the packer tried and one of what wrote it.
+            const FIXED: usize = 10;
+            if data.len() < FIXED + GZIP_TRAILER || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
+                return Err(Refusal::Failed);
+            }
+            let flags = data[3];
+            // The top three flag bits are reserved and a decoder is told to
+            // refuse a member that sets one.
+            if flags & 0xe0 != 0 {
+                return Err(Refusal::Failed);
+            }
+            let mut at = FIXED;
+            if flags & 0x04 != 0 {
+                // Extra fields, as a length and then that many bytes.
+                let len = u16::from_le_bytes([byte(data, at)?, byte(data, at + 1)?]) as usize;
+                at = at.checked_add(2 + len).ok_or(Refusal::Failed)?;
+            }
+            if flags & 0x08 != 0 {
+                at = past_nul(data, at)?; // the name the file had before it was packed
+            }
+            if flags & 0x10 != 0 {
+                at = past_nul(data, at)?; // a comment, which almost nothing writes
+            }
+            if flags & 0x02 != 0 {
+                // Two bytes of CRC over the header. Not checked: nothing
+                // writes one, and refusing a member for a sum this does not
+                // compute would be refusing it for the wrong reason.
+                at = at.checked_add(2).ok_or(Refusal::Failed)?;
+            }
+            if at + GZIP_TRAILER > data.len() {
+                return Err(Refusal::Failed);
+            }
+            Ok(Framing { wrapper, start: at as u64 * 8, end: (data.len() - GZIP_TRAILER) as u64 * 8 })
+        }
+    }
+}
+
+/// The CRC-32 of what came out and how long it was, both little-endian,
+/// unlike zlib's big-endian Adler.
+const GZIP_TRAILER: usize = 8;
+
+/// Whether the wrapper's trailer agrees with what came out: `len` bytes whose
+/// sums `crc32` and `adler32` give. Only the sum the wrapper keeps is asked
+/// for. A raw run has no trailer and always agrees.
+pub(crate) fn trailer_agrees(
+    f: &Framing,
+    data: &[u8],
+    len: u64,
+    crc32: impl FnOnce() -> u32,
+    adler32: impl FnOnce() -> u32,
+) -> bool {
+    match f.wrapper {
+        Wrapper::Raw => true,
+        Wrapper::Zlib => {
+            let n = data.len();
+            u32::from_be_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]) == adler32()
+        }
+        Wrapper::Gzip => {
+            let tail = &data[data.len() - GZIP_TRAILER..];
+            let crc = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+            let size = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
+            crc == crc32() && size == len as u32
+        }
+    }
+}
+
+/// A zlib or gzip run decoded whole, with the wrapper's own bytes as steps so
+/// the trace tiles the run the template named rather than only the middle of
+/// it.
+fn wrapped(wrapper: Wrapper, data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    let f = framing(wrapper, data)?;
+    let mut b = TraceBuilder::default();
+    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
+    let mut out = Vec::new();
+    run(data, f.start, f.end, &mut VecSink::new(&mut out, CAP_BYTES), &mut b, None)?;
+    if !trailer_agrees(&f, data, out.len() as u64, || crate::checksum::crc32(&out), || crate::checksum::adler32(&out)) {
+        return Err(Refusal::Failed);
+    }
+    b.push(f.end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
+    b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
 }
 
@@ -184,25 +303,7 @@ fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusa
 /// The wrapper's own bytes are steps too, so the trace tiles the run the
 /// template named rather than only the middle of it.
 pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    if data.len() < 6 {
-        return Err(Refusal::Failed);
-    }
-    let (cmf, flg) = (data[0], data[1]);
-    if cmf & 0x0f != 8 || (cmf as u16 * 256 + flg as u16) % 31 != 0 || flg & 0x20 != 0 {
-        return Err(Refusal::Failed);
-    }
-    let mut b = TraceBuilder::default();
-    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
-    let end = (data.len() as u64 - 4) * 8;
-    let mut out = Vec::new();
-    run(data, 16, end, CAP_BYTES, &mut out, &mut b)?;
-    let adler = u32::from_be_bytes([data[data.len() - 4], data[data.len() - 3], data[data.len() - 2], data[data.len() - 1]]);
-    if adler != crate::checksum::adler32(&out) {
-        return Err(Refusal::Failed);
-    }
-    b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
-    b.finish_at(data.len() as u64 * 8, out.len() as u64);
-    Ok((out, b.done()))
+    wrapped(Wrapper::Zlib, data)
 }
 
 /// A whole gzip member, RFC 1952: the header and its optional name and
@@ -219,56 +320,7 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// run holding two is refused rather than half-read: the trailer this looks at
 /// is the last eight bytes, which belong to the member this did not decode.
 pub fn gzip(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    // The two magic bytes, the method, the flags, four of time, one of how
-    // hard the packer tried and one of what wrote it.
-    const FIXED: usize = 10;
-    // The CRC-32 of what came out and how long it was, both little-endian,
-    // unlike zlib's big-endian Adler.
-    const TRAILER: usize = 8;
-    if data.len() < FIXED + TRAILER || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
-        return Err(Refusal::Failed);
-    }
-    let flags = data[3];
-    // The top three flag bits are reserved and a decoder is told to refuse a
-    // member that sets one.
-    if flags & 0xe0 != 0 {
-        return Err(Refusal::Failed);
-    }
-    let mut at = FIXED;
-    if flags & 0x04 != 0 {
-        // Extra fields, as a length and then that many bytes.
-        let len = u16::from_le_bytes([byte(data, at)?, byte(data, at + 1)?]) as usize;
-        at = at.checked_add(2 + len).ok_or(Refusal::Failed)?;
-    }
-    if flags & 0x08 != 0 {
-        at = past_nul(data, at)?; // the name the file had before it was packed
-    }
-    if flags & 0x10 != 0 {
-        at = past_nul(data, at)?; // a comment, which almost nothing writes
-    }
-    if flags & 0x02 != 0 {
-        // Two bytes of CRC over the header. Not checked: nothing writes one,
-        // and refusing a member for a sum this does not compute would be
-        // refusing it for the wrong reason.
-        at = at.checked_add(2).ok_or(Refusal::Failed)?;
-    }
-    if at + TRAILER > data.len() {
-        return Err(Refusal::Failed);
-    }
-    let mut b = TraceBuilder::default();
-    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
-    let end = (data.len() - TRAILER) as u64 * 8;
-    let mut out = Vec::new();
-    run(data, at as u64 * 8, end, CAP_BYTES, &mut out, &mut b)?;
-    let tail = &data[data.len() - TRAILER..];
-    let crc = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
-    let size = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
-    if crc != crate::checksum::crc32(&out) || size != out.len() as u32 {
-        return Err(Refusal::Failed);
-    }
-    b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
-    b.finish_at(data.len() as u64 * 8, out.len() as u64);
-    Ok((out, b.done()))
+    wrapped(Wrapper::Gzip, data)
 }
 
 fn byte(data: &[u8], at: usize) -> Result<u8, Refusal> {
@@ -310,7 +362,7 @@ pub fn inflate_prefix(data: &[u8], cap: usize) -> Vec<u8> {
     }
     let mut b = TraceBuilder::default();
     let mut out = Vec::new();
-    let _ = run(data, 16, data.len() as u64 * 8, cap, &mut out, &mut b);
+    let _ = run(data, 16, data.len() as u64 * 8, &mut VecSink::new(&mut out, cap), &mut b, None);
     out
 }
 
@@ -320,25 +372,194 @@ pub fn inflate_prefix(data: &[u8], cap: usize) -> Vec<u8> {
 pub fn inflate_raw_prefix(data: &[u8], cap: usize) -> Vec<u8> {
     let mut b = TraceBuilder::default();
     let mut out = Vec::new();
-    let _ = run(data, 0, data.len() as u64 * 8, cap, &mut out, &mut b);
+    let _ = run(data, 0, data.len() as u64 * 8, &mut VecSink::new(&mut out, cap), &mut b, None);
     out.truncate(cap);
     out
 }
 
+/// Where a decoder's output goes.
+///
+/// Deflate's output is also its input: a match copies bytes it already wrote,
+/// up to 32,768 back. So the decoder cannot hand its bytes on and forget them,
+/// and what keeps them is the sink. [`VecSink`] keeps all of them, which is
+/// what a run decoded whole wants. The window sink in [`crate::codec::lazy`]
+/// keeps the last 32 KiB and passes the rest on, which is what a run too large
+/// to hold whole wants.
+pub(crate) trait Sink {
+    /// How many bytes of the whole stream's output come before the next one.
+    /// For a decode that started part-way through a stream, that counts the
+    /// bytes before where it started too.
+    fn len(&self) -> u64;
+    fn literal(&mut self, byte: u8) -> Result<(), Refusal>;
+    /// `len` bytes copied from `dist` back. A distance reaching before the
+    /// start of the stream is the stream being wrong, and is refused as
+    /// [`Refusal::Failed`].
+    fn copy(&mut self, dist: u32, len: u32) -> Result<(), Refusal>;
+    fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal>;
+    /// The decoder is at a place it could be started again from: bit
+    /// `in_bit` of the run, at the start of a block when `block` is `None`,
+    /// or between two codes of the Huffman-coded block whose header starts at
+    /// bit `block`. Called at no other places: never inside a block header,
+    /// its tables, or a stored block.
+    ///
+    /// `Break` stops the decode there, as [`Ended::Stopped`].
+    #[inline]
+    fn boundary(&mut self, _in_bit: u64, _block: Option<u64>) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+}
+
+/// Every byte of the output in one vector, up to `cap`.
+pub(crate) struct VecSink<'a> {
+    out: &'a mut Vec<u8>,
+    cap: usize,
+}
+
+impl<'a> VecSink<'a> {
+    pub(crate) fn new(out: &'a mut Vec<u8>, cap: usize) -> VecSink<'a> {
+        VecSink { out, cap }
+    }
+}
+
+impl Sink for VecSink<'_> {
+    #[inline]
+    fn len(&self) -> u64 {
+        self.out.len() as u64
+    }
+
+    #[inline]
+    fn literal(&mut self, byte: u8) -> Result<(), Refusal> {
+        if self.out.len() >= self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.out.push(byte);
+        Ok(())
+    }
+
+    #[inline]
+    fn copy(&mut self, dist: u32, len: u32) -> Result<(), Refusal> {
+        if dist as usize > self.out.len() {
+            return Err(Refusal::Failed);
+        }
+        if self.out.len() + len as usize > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        let from = self.out.len() - dist as usize;
+        // A match may read what it is writing: `dist` of 1 fills with one
+        // byte, and that is the format working as intended.
+        for k in 0..len as usize {
+            let byte = self.out[from + k];
+            self.out.push(byte);
+        }
+        Ok(())
+    }
+
+    fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
+        if self.out.len() + bytes.len() > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.out.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+/// Output counted and not kept, up to `cap`, for a decode that wants to know
+/// where the stream ends or what its trace is, and not what it came to. A
+/// deflate step says what it copied and from how far back, not what the bytes
+/// were, so neither needs the output. `len` starts at the output before where
+/// the decode starts, and `stop_at` stops it at the first boundary at or past
+/// that bit.
+pub(crate) struct CountSink {
+    pub(crate) len: u64,
+    pub(crate) cap: u64,
+    pub(crate) stop_at: Option<u64>,
+}
+
+impl Sink for CountSink {
+    #[inline]
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    #[inline]
+    fn literal(&mut self, _: u8) -> Result<(), Refusal> {
+        if self.len >= self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn copy(&mut self, dist: u32, len: u32) -> Result<(), Refusal> {
+        if u64::from(dist) > self.len {
+            return Err(Refusal::Failed);
+        }
+        if self.len + u64::from(len) > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += u64::from(len);
+        Ok(())
+    }
+
+    fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
+        if self.len + bytes.len() as u64 > self.cap {
+            return Err(Refusal::TooLarge);
+        }
+        self.len += bytes.len() as u64;
+        Ok(())
+    }
+
+    #[inline]
+    fn boundary(&mut self, in_bit: u64, _: Option<u64>) -> ControlFlow<()> {
+        match self.stop_at.is_some_and(|stop| in_bit >= stop) {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
+        }
+    }
+}
+
+/// Where a decode starts when it does not start at the front of the stream:
+/// one of the places [`Sink::boundary`] was told about, with the sink already
+/// holding the 32 KiB of output before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Resume {
+    pub(crate) in_bit: u64,
+    pub(crate) block: Option<u64>,
+}
+
+/// How a decode ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// The block that said it was the last one ended, and the stream with the
+    /// padding after it ends at the bit this gives.
+    Stream(u64),
+    /// The sink said to stop, at the bit this gives.
+    Stopped(u64),
+}
+
 /// The blocks between `start` and `end`, bits of `data`, written into `out`.
 ///
-/// The bytes go into a vector the caller owns rather than one made here, so
-/// that a caller reading a stream which stops early keeps what came out before
-/// it stopped. `cap` is the most output the run may produce; past it the run is
-/// refused as [`Refusal::TooLarge`].
-fn run(
+/// The bytes go into a sink the caller owns rather than one made here, so that
+/// a caller reading a stream which stops early keeps what came out before it
+/// stopped. The sink is also what refuses a run that comes to too much, as
+/// [`Refusal::TooLarge`].
+///
+/// `from` starts the decode part-way through instead of at `start`. Inside a
+/// Huffman-coded block, the block's header and tables are read again from
+/// where it starts, which is what rebuilds the codes, and the decoder then
+/// moves on to `from.in_bit`. A trace of that decode has one
+/// [`StepKind::Opaque`] step over the codes it moved past, which made no bytes
+/// of this decode: the steps tile what this decode read and wrote, and the
+/// trace starts at the block's header rather than at bit 0.
+pub(crate) fn run<K: Sink>(
     data: &[u8],
     start: u64,
     end: u64,
-    cap: usize,
-    out: &mut Vec<u8>,
+    out: &mut K,
     b: &mut TraceBuilder,
-) -> Result<(), Refusal> {
+    from: Option<Resume>,
+) -> Result<Ended, Refusal> {
     if end > data.len() as u64 * 8 || start > end {
         return Err(Refusal::Failed);
     }
@@ -347,35 +568,81 @@ fn run(
     b.counts_low_bit_first();
     let mut bits = Bits::low_first(data).until(end as usize);
     bits.at = start as usize;
-    let mut coarse = false;
+    // Where to move to once the first block's tables are read again, for a
+    // decode that starts inside a block.
+    let mut skip_to = None;
+    // A decode carrying on inside a block that an earlier decode into the
+    // same trace stopped in and left open. The block's header and tables are
+    // in the trace already, so they are read again without being recorded.
+    let mut paused = b.paused.take();
+    if paused.is_some() && !from.is_some_and(|r| r.block.is_some()) {
+        return Err(Refusal::Failed);
+    }
+    if let Some(r) = from {
+        match r.block {
+            Some(header) => {
+                bits.at = header as usize;
+                skip_to = Some(r.in_bit);
+            }
+            None => bits.at = r.in_bit as usize,
+        }
+        if bits.pos() > end {
+            return Err(Refusal::Failed);
+        }
+    }
+    // Taken from the builder, so a decode carried on from where an earlier
+    // one stopped keeps naming blocks if that one had started to.
+    let mut coarse = b.is_coarse();
     loop {
         let block_in = bits.pos();
-        let block_out = out.len() as u64;
+        let block_out = out.len();
+        if skip_to.is_none() && out.boundary(block_in, None).is_break() {
+            b.finish_at(block_in, block_out);
+            return Ok(Ended::Stopped(block_in));
+        }
+        if paused.is_some() {
+            b.mute(true);
+        }
         b.open_block(block_in, block_out);
         let at = bits.pos();
         let last = bits.read_bit()? == 1;
-        b.push(at, out.len() as u64, StepKind::Header(StepField::Bfinal, last as u32));
+        b.push(at, out.len(), StepKind::Header(StepField::Bfinal, last as u32));
         let at = bits.pos();
         let btype = bits.read(2)?;
-        b.push(at, out.len() as u64, StepKind::Header(StepField::Btype, btype));
-        let kind = match btype {
+        b.push(at, out.len(), StepKind::Header(StepField::Btype, btype));
+        let (kind, flow) = match btype {
             0 => {
-                stored(&mut bits, out, cap, b)?;
-                BlockKind::Stored
+                // Nothing starts a decode inside a stored block.
+                if skip_to.is_some() {
+                    return Err(Refusal::Failed);
+                }
+                stored(&mut bits, out, b)?;
+                (BlockKind::Stored, ControlFlow::Continue(()))
             }
             1 => {
                 let (lit, dist) = fixed_codes();
-                symbols(&mut bits, out, cap, b, &lit, &dist, &mut coarse)?;
-                BlockKind::Fixed
+                skip(&mut bits, &mut skip_to, out, b)?;
+                let paused = unmute(b, paused.take());
+                (BlockKind::Fixed, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse, paused)?)
             }
             2 => {
-                let (lit, dist) = dynamic_tables(&mut bits, out.len() as u64, b)?;
-                symbols(&mut bits, out, cap, b, &lit, &dist, &mut coarse)?;
-                BlockKind::Dynamic
+                let (lit, dist) = dynamic_tables(&mut bits, out.len(), b)?;
+                skip(&mut bits, &mut skip_to, out, b)?;
+                let paused = unmute(b, paused.take());
+                (BlockKind::Dynamic, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse, paused)?)
             }
             _ => return Err(Refusal::Failed),
         };
-        b.close_block(bits.pos(), out.len() as u64, kind, last);
+        if flow.is_break() {
+            let at = bits.pos();
+            // Left open when the decode carrying on will close it.
+            if b.paused.is_none() {
+                b.close_block(at, out.len(), kind, false);
+            }
+            b.finish_at(at, out.len());
+            return Ok(Ended::Stopped(at));
+        }
+        b.close_block(bits.pos(), out.len(), kind, last);
         if last {
             break;
         }
@@ -385,31 +652,56 @@ fn run(
     let at = bits.pos();
     let skipped = bits.align();
     if skipped > 0 {
-        b.push(at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
+        b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
     }
+    let stream_end = bits.pos();
     // Anything after the stream inside the run the template named. A zlib
     // trailer arrives here as its own step; anything else is bytes nobody
     // claimed, and saying so is better than pretending the run ended early.
     if bits.pos() < end {
-        b.push(bits.pos(), out.len() as u64, StepKind::Opaque);
+        b.push(bits.pos(), out.len(), StepKind::Opaque);
     }
-    b.finish_at(end.max(bits.pos()), out.len() as u64);
+    b.finish_at(end.max(bits.pos()), out.len());
+    Ok(Ended::Stream(stream_end))
+}
+
+/// Start recording again once a block left open has had its tables read
+/// again, and hand on where its symbols started.
+fn unmute(b: &mut TraceBuilder, paused: Option<Paused>) -> Option<Paused> {
+    if paused.is_some() {
+        b.mute(false);
+    }
+    paused
+}
+
+/// For a decode that starts inside a Huffman-coded block, once the block's
+/// tables are read again: on to the code it starts at, with one opaque step
+/// over the codes in between, which belong to an earlier decode.
+fn skip<K: Sink>(bits: &mut LowBits, skip_to: &mut Option<u64>, out: &K, b: &mut TraceBuilder) -> Result<(), Refusal> {
+    let Some(to) = skip_to.take() else { return Ok(()) };
+    if to < bits.pos() || to > bits.end() as u64 {
+        return Err(Refusal::Failed);
+    }
+    if to > bits.pos() {
+        b.push(bits.pos(), out.len(), StepKind::Opaque);
+    }
+    bits.at = to as usize;
     Ok(())
 }
 
 /// A stored block: the rest of the byte, a length, its complement, and that
 /// many bytes as they are.
-fn stored(bits: &mut LowBits, out: &mut Vec<u8>, cap: usize, b: &mut TraceBuilder) -> Result<(), Refusal> {
+fn stored<K: Sink>(bits: &mut LowBits, out: &mut K, b: &mut TraceBuilder) -> Result<(), Refusal> {
     let at = bits.pos();
     if bits.align() > 0 {
-        b.push(at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
+        b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
     }
     let at = bits.pos();
     let len = bits.read(16)?;
-    b.push(at, out.len() as u64, StepKind::Header(StepField::StoredLen, len));
+    b.push(at, out.len(), StepKind::Header(StepField::StoredLen, len));
     let at = bits.pos();
     let nlen = bits.read(16)?;
-    b.push(at, out.len() as u64, StepKind::Header(StepField::StoredNlen, nlen));
+    b.push(at, out.len(), StepKind::Header(StepField::StoredNlen, nlen));
     if len ^ 0xffff != nlen {
         return Err(Refusal::Failed);
     }
@@ -418,12 +710,9 @@ fn stored(bits: &mut LowBits, out: &mut Vec<u8>, cap: usize, b: &mut TraceBuilde
     if stop as u64 * 8 > bits.end() as u64 {
         return Err(Refusal::Failed);
     }
-    if out.len() + len as usize > cap {
-        return Err(Refusal::TooLarge);
-    }
     if len > 0 {
-        b.push(bits.pos(), out.len() as u64, StepKind::Stored);
-        out.extend_from_slice(&bits.buf()[start..stop]);
+        b.push(bits.pos(), out.len(), StepKind::Stored);
+        out.stored(&bits.buf()[start..stop])?;
         bits.at = stop * 8;
     }
     Ok(())
@@ -503,19 +792,30 @@ fn dynamic_tables(bits: &mut LowBits, out_at: u64, b: &mut TraceBuilder) -> Resu
 }
 
 /// The symbols of one Huffman-coded block, up to and including its end mark.
-fn symbols(
+/// `block` is the bit the block's header starts at, which is what a sink
+/// keeping places to start again from has to know. `Break` is the sink saying
+/// to stop before the symbol at `bits.pos()`.
+///
+/// `paused` is where the block's symbols started, for a decode carrying on
+/// part-way through them into a trace that already has the ones before.
+#[allow(clippy::too_many_arguments)]
+fn symbols<K: Sink>(
     bits: &mut LowBits,
-    out: &mut Vec<u8>,
-    cap: usize,
+    block: u64,
+    out: &mut K,
     b: &mut TraceBuilder,
     lit: &Code,
     dist: &Code,
     coarse: &mut bool,
-) -> Result<(), Refusal> {
-    let sym_start = b.steps();
-    let sym_in = bits.pos();
-    let sym_out = out.len() as u64;
-    if *coarse {
+    paused: Option<Paused>,
+) -> Result<ControlFlow<()>, Refusal> {
+    let (sym_start, sym_in, sym_out) = match paused {
+        Some(p) => (p.first_step, p.in_bits, p.out_bytes),
+        None => (b.steps(), bits.pos(), out.len()),
+    };
+    // A block's symbols named as one step, once the trace is too long: the
+    // step is there already for a block carried on from part-way.
+    if *coarse && paused.is_none() {
         b.push(sym_in, sym_out, StepKind::Opaque);
     }
     loop {
@@ -528,22 +828,25 @@ fn symbols(
             b.push(sym_in, sym_out, StepKind::Opaque);
         }
         let at = bits.pos();
+        if out.boundary(at, Some(block)).is_break() {
+            if b.is_carried_on() {
+                b.paused = Some(Paused { first_step: sym_start, in_bits: sym_in, out_bytes: sym_out });
+            }
+            return Ok(ControlFlow::Break(()));
+        }
         let sym = lit.decode(bits)?;
         match sym {
             0..=255 => {
-                if out.len() >= cap {
-                    return Err(Refusal::TooLarge);
-                }
-                out.push(sym as u8);
+                out.literal(sym as u8)?;
                 if !*coarse {
-                    b.push(at, out.len() as u64 - 1, StepKind::Literal(sym as u8));
+                    b.push(at, out.len() - 1, StepKind::Literal(sym as u8));
                 }
             }
             256 => {
                 if !*coarse {
-                    b.push(at, out.len() as u64, StepKind::EndOfBlock);
+                    b.push(at, out.len(), StepKind::EndOfBlock);
                 }
-                return Ok(());
+                return Ok(ControlFlow::Continue(()));
             }
             257..=285 => {
                 let i = sym as usize - 257;
@@ -553,22 +856,10 @@ fn symbols(
                     return Err(Refusal::Failed);
                 }
                 let d = DIST_BASE[dsym] + bits.read(DIST_EXTRA[dsym] as u32)?;
-                if d as usize > out.len() {
-                    return Err(Refusal::Failed);
-                }
-                if out.len() + len as usize > cap {
-                    return Err(Refusal::TooLarge);
-                }
-                let from = out.len() - d as usize;
                 let was = out.len();
-                // A match may read what it is writing: `dist` of 1 fills with
-                // one byte, and that is the format working as intended.
-                for k in 0..len as usize {
-                    let byte = out[from + k];
-                    out.push(byte);
-                }
+                out.copy(d, len as u32)?;
                 if !*coarse {
-                    b.push(at, was as u64, StepKind::Match { len: len as u32, dist: d });
+                    b.push(at, was, StepKind::Match { len: len as u32, dist: d });
                 }
             }
             _ => return Err(Refusal::Failed),
@@ -885,6 +1176,20 @@ pub fn is_symbol(step: &Step) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream's length is where its last block and the padding after it
+    /// end, whatever comes after, and a stream cut short has none.
+    #[test]
+    fn a_stream_measures_to_the_end_of_its_last_block() {
+        let text: Vec<u8> = (0..20_000).flat_map(|i| format!("{i} ").into_bytes()).collect();
+        for level in [0u8, 1, 6, 9] {
+            let raw = miniz_oxide::deflate::compress_to_vec(&text, level);
+            let n = raw.len() as u64;
+            assert_eq!(inflate_len(&raw), Ok(n), "level {level}");
+            assert_eq!(inflate_len(&[&raw[..], b"a trailer after it"].concat()), Ok(n), "level {level}, with more after");
+            assert!(inflate_len(&raw[..raw.len() / 2]).is_err(), "level {level}, cut short");
+        }
+    }
 
     /// The bytes and the map, checked together: what came out has to be what
     /// `miniz_oxide` says came out, and the steps have to account for every

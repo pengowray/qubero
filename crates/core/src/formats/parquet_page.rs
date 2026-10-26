@@ -381,6 +381,7 @@ fn level_note(count: usize, width: u32, max: u32, encoding: i64) -> String {
 fn refusal(why: codec::Refusal) -> &'static str {
     match why {
         codec::Refusal::TooLarge => "too large to unpack (over 64 MiB)",
+        codec::Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
         codec::Refusal::Failed => "unpacking failed",
         codec::Refusal::Unaligned => "not on a byte boundary",
         codec::Refusal::Settings => "the file doesn't say how this was packed",

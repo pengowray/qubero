@@ -112,6 +112,18 @@ impl Evaluator {
             return self.read_stitched(doc, stitch, at, n);
         }
         let mut buf = vec![0u8; bytes_for(n)];
+        if let Some(index) = self.spaces.lazy(space) {
+            if at + n > index.len() * 8 {
+                return fail("field extends beyond the end of the decoded stream");
+            }
+            let first = at / 8;
+            let mut bytes = vec![0u8; ((at + n).div_ceil(8) - first) as usize];
+            if index.read(first, &mut bytes).is_err() {
+                return fail("unpacking failed");
+            }
+            crate::bits::copy_bits(&bytes, at % 8, &mut buf, 0, n);
+            return Ok(buf);
+        }
         if space != 0 {
             let Some(src) = self.spaces.buf(space) else { return fail("this stream is no longer open") };
             if at + n > src.len() as u64 * 8 {

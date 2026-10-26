@@ -597,15 +597,20 @@ impl Evaluator {
         let super::space::Opened::Space(id) = self.open_space_at(doc, &path)? else {
             return fail("this array's numbers did not open");
         };
-        let Some(held) = self.spaces.buf(id).cloned() else { return fail("this array's numbers are no longer open") };
         let size = width * 8;
         let Some(offset) = into.checked_mul(8) else { return Ok((None, CellAt::Nowhere)) };
-        if offset.checked_add(size).is_none_or(|end| end > held.len() as u64 * 8) {
+        if offset.checked_add(size).is_none_or(|end| end > self.spaces.len_bits(id)) {
             return Ok((None, CellAt::Nowhere));
         }
-        let run = Document::new(crate::source::ArcSource(held));
+        // The cell's own bytes, read the way any field of the space is: from
+        // the buffer when the stream is held whole, and through its index
+        // when it is too large to be.
+        let (run, at) = match self.spaces.buf(id).cloned() {
+            Some(held) => (Document::new(crate::source::ArcSource(held)), offset),
+            None => (Document::new(crate::source::ArcSource(std::sync::Arc::new(self.read_in(doc, id, offset, size)?))), 0),
+        };
         let r = self.memo[&path].clone();
-        let one = Resolved { offset, lsb: false, limit: offset + size, size: Some(size), space: 0, ..r };
+        let one = Resolved { offset: at, lsb: false, limit: at + size, size: Some(size), space: 0, ..r };
         let read = self.primitive_value(&run, &[], &one, ty, size)?;
         Ok((Some(read), CellAt::Bytes { space: id, offset_bits: offset, size_bits: size }))
     }

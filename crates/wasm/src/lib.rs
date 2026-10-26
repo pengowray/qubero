@@ -106,25 +106,16 @@ struct Sheet {
 impl Sheet {
     /// A reading of one of the core's spaces.
     ///
-    /// The bytes are all here already, so the store keeps every chunk: a space
-    /// has no file behind it to fetch a missing one back from. The template is
-    /// the one the core settled on, which is the stream's own or, where that
-    /// said only bytes, whatever the unpacked bytes were recognised as. Only
-    /// the second is read here; the first is read in the file's reading.
+    /// The store reads the space's own source, so nothing is missing and
+    /// nothing is copied: a space has no file behind it to fetch a missing
+    /// chunk back from, and a stream too large to hold whole is decoded a
+    /// piece at a time as it is read. The template is the one the core
+    /// settled on, which is the stream's own or, where that said only bytes,
+    /// whatever the unpacked bytes were recognised as. Only the second is read
+    /// here; the first is read in the file's reading.
     fn from_space(space: &qubero_core::eval::Space, home: usize, origin: Vec<usize>) -> Sheet {
         let template = space.read_as().clone();
-        let bytes = space.bytes();
-        let n = bytes.len() as u64;
-        let chunks = (n / SPACE_CHUNK + 1) as usize;
-        let mut store = ChunkStore::new(n, SPACE_CHUNK, chunks);
-        for c in 0..chunks as u64 {
-            let from = (c * SPACE_CHUNK) as usize;
-            if from >= bytes.len() {
-                break;
-            }
-            let to = bytes.len().min(from + SPACE_CHUNK as usize);
-            store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
-        }
+        let store = ChunkStore::behind(Box::new(space.source().clone()), SPACE_CHUNK);
         let mut sheet = Sheet::new(store, origin);
         sheet.home = home;
         sheet.core_space = space.id;
@@ -3604,10 +3595,20 @@ fn hex_trouble(text: &str) -> &'static str {
 /// last go left off rather than starting over.
 const WORK_SLICE: u64 = 5_000;
 
-/// Chunk size of a space's store. The bytes are already in memory, so this only
-/// decides how they are cut up; it matches the file's so the host's chunk
-/// arithmetic is the same on both sides.
+/// Chunk size of a space's store. Nothing is fetched in chunks for a space, so
+/// this only decides what a chunk number means; it matches the file's so the
+/// host's chunk arithmetic is the same on both sides.
 const SPACE_CHUNK: u64 = 64 * 1024;
+
+/// How far a large stream's unpacking has got. See `Editor::unpacking`.
+#[derive(Serialize)]
+struct UnpackingDto {
+    run_space: u32,
+    run_offset_bits: f64,
+    read_bits: f64,
+    run_bits: f64,
+    unpacked_bytes: f64,
+}
 
 /// What `open_space` came to: the space, or why it would not open.
 #[derive(Serialize)]
@@ -3858,17 +3859,31 @@ impl Editor {
         self.reopen(i)
     }
 
-    /// Open the stream at `path` of sheet `home`'s own reading, with no
-    /// allowance: unpacking a run is not something to do by halves, since it
-    /// reads the whole run and decodes it, and a half-decoded stream is not a
-    /// document. Nothing when the sheet has no reading.
+    /// Open the stream at `path` of sheet `home`'s own reading, one go's
+    /// worth of work at a time. A deflate, zlib or gzip stream large enough to
+    /// take more than a go is unpacked over several: the core keeps the
+    /// half-done pass, the call hands back `Busy`, and asking again carries on.
+    /// `unpacking` says how far it has got. Nothing when the sheet has no
+    /// reading.
     fn open_in(&mut self, home: usize, path: &[usize]) -> Result<Option<SpaceId>, EvalError> {
         let Some(sh) = self.sheets.get_mut(home) else { return Ok(None) };
         let Some(e) = &mut sh.eval else { return Ok(None) };
-        e.set_slice(None);
-        let got = e.open_space(&sh.doc, 0, path);
-        e.set_slice(Some(WORK_SLICE));
-        got
+        e.begin_slice();
+        e.open_space(&sh.doc, 0, path)
+    }
+
+    /// Which sheet's reading unpacks the streams of the tab over `space`: the
+    /// file's for the file, the tab's own for a stream with a reading of its
+    /// own, and its home's for one read where it was declared. The same
+    /// choice `open_space` makes.
+    fn reading_of(&self, space: u32) -> usize {
+        match self.sheets.get(space as usize) {
+            Some(sh) if space != 0 => match &sh.view {
+                Some(_) => sh.home,
+                None => space as usize,
+            },
+            _ => 0,
+        }
     }
 
     /// The sheet for a stream `open_in` opened, or an empty one for a stream
@@ -3938,12 +3953,10 @@ impl Editor {
             return reply::<SpaceDto>(Err(err));
         }
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        let (home, at) = match self.sheets.get(space as usize) {
-            Some(sh) if space != 0 => match &sh.view {
-                Some(root) => (sh.home, [root.as_slice(), &p].concat()),
-                None => (space as usize, p),
-            },
-            _ => (0, p),
+        let home = self.reading_of(space);
+        let at = match self.sheets.get(space as usize).and_then(|sh| sh.view.as_ref()) {
+            Some(root) if space != 0 => [root.as_slice(), &p].concat(),
+            _ => p,
         };
         let known = self.sheets.iter().enumerate().skip(1).find(|(_, sh)| sh.home == home && sh.origin == at).map(|(i, _)| i);
         if let Some(i) = known {
@@ -3974,6 +3987,27 @@ impl Editor {
         let space = (self.sheets.len() - 1) as u32;
         let (joined, stored) = self.space_joined(space);
         reply(Ok(SpaceDto { space: space as f64, template, refused: None, joined, stored }))
+    }
+
+    /// How far the pass unpacking a large compressed stream has got, in the
+    /// reading the tab over `space` unpacks its streams in:
+    /// {status:"ok",node:{run_space,run_offset_bits,read_bits,run_bits,unpacked_bytes}},
+    /// or a null node when no pass is under way.
+    ///
+    /// Asked after any reply that said "working": the pass is charged to the
+    /// same allowance as the rest of the reading, so a listing that reaches a
+    /// stream's bytes, and Open unpacked, both carry it on. The bits count
+    /// from the start of the compressed run, and `run_offset_bits` is where
+    /// that is in `run_space`, 0 being the file.
+    pub fn unpacking(&self, space: u32) -> String {
+        let progress = self.sheets.get(self.reading_of(space)).and_then(|sh| sh.eval.as_ref()).and_then(|e| e.unpacking());
+        reply(Ok(progress.map(|p| UnpackingDto {
+            run_space: p.run_space,
+            run_offset_bits: p.run_offset_bits as f64,
+            read_bits: p.read_bits as f64,
+            run_bits: p.run_bits as f64,
+            unpacked_bytes: p.unpacked_bytes as f64,
+        })))
     }
 
     /// Whether one of this editor's spaces is a stream joined from several
@@ -4078,19 +4112,23 @@ impl Editor {
         // Which step, and whether this is a codec with symbols at all. Both
         // come off the trace, so a question with no answer is answered before
         // any of the run is read.
-        let (index, want_bytes) = {
+        // The trace that names the bit: the whole run's, or for a run too
+        // large to hold whole, the span's that read it. Kept across the read
+        // of the run below, since a span's trace is made when asked for.
+        let (trace, index, want_bytes) = {
             let Some(e) = &self.sheets[home].eval else { return none() };
             let Some(sp) = e.space(core) else { return none() };
             if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
                 return none();
             }
-            let trace = sp.trace();
+            let Some(trace) = sp.trace_at_bit(bit as u64) else { return none() };
             let Some(index) = trace.index_in(bit as u64) else { return none() };
             let Some(step) = trace.step(index) else { return none() };
             // As much of the run as the step reaches, and no more. Bit
             // positions count from the front of the run, so a prefix ending
             // after the step is all the walk can touch.
-            (index, step.in_bits.end.div_ceil(8))
+            let want = step.in_bits.end.div_ceil(8);
+            (trace, index, want)
         };
         // The compressed bytes, which the space does not hold: what it holds is
         // what came out. They are a field of the reading that opened the
@@ -4104,9 +4142,7 @@ impl Editor {
             Ok((bytes, _)) => bytes,
             Err(err) => return reply::<Option<DecodedStepDto>>(Err(err)),
         };
-        let Some(e) = &self.sheets[home].eval else { return none() };
-        let Some(sp) = e.space(core) else { return none() };
-        reply(Ok(inflate::decode_step(&run, sp.trace(), index).map(decoded_step_dto)))
+        reply(Ok(inflate::decode_step(&run, &trace, index).map(decoded_step_dto)))
     }
 
     /// The `Decoded` node a space was unpacked from, as a path in the reading

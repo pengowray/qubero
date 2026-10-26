@@ -319,7 +319,7 @@ impl Evaluator {
         }
         let end = match space {
             0 => doc.len_bytes(),
-            _ => self.spaces.buf(space).map_or(0, |b| b.len() as u64),
+            _ => self.spaces.len_bits(space) / 8,
         };
         let mut found = self.directory(doc, space, end)?;
         // A legacy checkpoint is no archive at all, and the numbers are still

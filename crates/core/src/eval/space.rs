@@ -15,20 +15,26 @@
 //! Opening one is refused rather than attempted when the run is past the cap
 //! or does not start on a byte, and refused after the fact when the decoder
 //! will not read it. All three read as the bytes that are there, with the node
-//! saying which happened; see [`crate::codec::Refusal`].
+//! saying which happened; see [`crate::codec::Refusal`]. A deflate, zlib or
+//! gzip run whose output is past the cap is the exception: it is indexed
+//! instead, up to a larger limit.
 //!
 //! A [`Ty::Stitched`](crate::template::Ty::Stitched) field opens a space too,
 //! and that one is not a buffer: it is a table of the parts it is joined from,
 //! read a part at a time, with the parts that have to be unpacked kept in a
 //! small cache rather than all at once. See [`Backing`] and `stitch.rs`.
+//!
+//! A deflate run whose output is past the cap is not a buffer either: it is an
+//! index of checkpoints, read a span at a time. See [`crate::codec::lazy`].
 
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use crate::codec::{Codec, Refusal, Step, Trace};
+use crate::codec::lazy::{self, Decoded, Limits, Seekable, Stepped};
+use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
-use crate::source::ArcSource;
+use crate::source::{Missing, Source};
 use crate::template::Template;
 
 /// Which address space something is a bit of. 0 is the file.
@@ -70,13 +76,15 @@ pub(crate) enum Opened {
 /// bytes were recognised, a gzip of a tar, is read by a template that needs
 /// nothing outside it, and has a reading of its own. See [`View`].
 ///
-/// A stream joined from several runs opens as one of these too, when it is
-/// small enough to hold whole. Its trace is every part's laid end to end, with
+/// A stream joined from several runs opens as one of these too. When it is
+/// small enough to hold whole, its trace is every part's laid end to end, with
 /// each part's bits counted along an axis of the trace's own rather than at
 /// any place in a file, since the runs are scattered and a PDB's run 3 can be
 /// before its run 1. `runs` says where each part's run really is, and the two
 /// maps answer through it: a step is given in bits of its own part's run, as a
-/// step of a stream unpacked from one run is.
+/// step of a stream unpacked from one run is. Too large to hold whole, it is
+/// read a part at a time through a [`Joined`], which keeps no trace laid end
+/// to end and asks each part for its own steps.
 pub struct Space {
     /// This space's own number, which is what everything outside calls it by.
     pub id: SpaceId,
@@ -95,9 +103,12 @@ pub struct Space {
     /// than from what the stream's own template declared. A gzip of a tar
     /// opens as a tar, and this is what says so.
     pub recognised: bool,
-    doc: Document<ArcSource>,
+    doc: Document<SpaceSource>,
     reading: Reading,
-    trace: Trace,
+    /// The trace of the whole decoding, for a stream held whole. Empty for
+    /// one read a piece at a time, whose traces are made a span at a time:
+    /// see [`Space::trace_at_bit`].
+    trace: Arc<Trace>,
     /// For a joined stream, where each part's run is, in the order the parts
     /// go. Empty for a stream unpacked from one run.
     runs: Vec<JoinedRun>,
@@ -177,7 +188,7 @@ impl Space {
         parent: SpaceId,
         path: Vec<usize>,
         codec: Codec,
-        bytes: Arc<Vec<u8>>,
+        source: SpaceSource,
         trace: Trace,
         runs: Vec<JoinedRun>,
         run: Option<SingleRun>,
@@ -191,28 +202,63 @@ impl Space {
             codec,
             template: template.name.clone(),
             recognised: view.is_none(),
-            doc: Document::new(ArcSource(bytes)),
+            doc: Document::new(source),
             reading: match view {
                 None => Reading::Own(Box::new(super::Evaluator::new(template))),
                 Some(view) => Reading::Declared { template, view },
             },
-            trace,
+            trace: Arc::new(trace),
             runs,
             run,
         }
     }
 
-    /// The bytes this space holds.
+    /// What this space's bytes are read from: a buffer, or a run read a
+    /// piece at a time. Cloning it is cheap, and a clone reads the same
+    /// bytes through the same caches.
+    pub fn source(&self) -> &SpaceSource {
+        self.doc.source()
+    }
+
+    /// The bytes this space holds, when it holds them all. Nothing for a
+    /// stream read a piece at a time: see [`Space::source`].
+    pub fn held(&self) -> Option<&[u8]> {
+        match self.doc.source() {
+            SpaceSource::Whole(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The bytes this space holds, for a space known to be held whole.
+    ///
+    /// # Panics
+    ///
+    /// For a stream read a piece at a time. Code that does not know which it
+    /// has asks [`Space::held`] or reads through [`Space::source`].
     pub fn bytes(&self) -> &[u8] {
-        &self.doc.source().0
+        self.held().expect("a space held whole")
     }
 
     pub fn len_bytes(&self) -> u64 {
         self.doc.len_bytes()
     }
 
+    /// The trace of the whole decoding. Empty for a stream read a piece at a
+    /// time, which keeps none: see [`Space::trace_at_bit`].
     pub fn trace(&self) -> &Trace {
         &self.trace
+    }
+
+    /// The trace that names bit `bit` of the run this space was unpacked
+    /// from, counted from the run's start: the whole trace for a stream held
+    /// whole, and for one read a piece at a time, the trace of the span that
+    /// read that bit. Its steps count from the run's start either way, so
+    /// [`crate::codec::inflate::decode_step`] reads them against the run.
+    pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
+        match self.doc.source() {
+            SpaceSource::Lazy(index) => index.trace_at_bit(bit),
+            _ => Some(self.trace.clone()),
+        }
     }
 
     /// Which step of the decoding produced a byte of this space, with its bits
@@ -226,6 +272,11 @@ impl Space {
     /// says where the block's deflate is. A byte of a stored part is the one
     /// step over that part's bytes.
     pub fn map_out(&self, byte: u64) -> Option<Step> {
+        match self.doc.source() {
+            SpaceSource::Lazy(index) => return index.map_out(byte),
+            SpaceSource::Joined(joined) => return joined.map_out(byte),
+            SpaceSource::Whole(_) => {}
+        }
         let step = self.trace.map_out(byte)?;
         if self.runs.is_empty() {
             return Some(step);
@@ -250,9 +301,16 @@ impl Space {
         if self.runs.is_empty() {
             let run = self.run?;
             let in_run = bit.checked_sub(run.run_offset_bits).filter(|&at| at < run.run_bits)?;
-            return self.trace.map_in(in_run);
+            return match self.doc.source() {
+                SpaceSource::Lazy(index) => index.map_in(in_run),
+                _ => self.trace.map_in(in_run),
+            };
         }
         let run = self.run_holding(bit)?;
+        if let SpaceSource::Joined(joined) = self.doc.source() {
+            let i = self.runs.iter().position(|r| std::ptr::eq(r, run))?;
+            return joined.map_in(i, bit - run.run_offset_bits);
+        }
         Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
     }
 
@@ -291,7 +349,7 @@ impl Space {
     /// one is no use without the other. Nothing for a stream read where it was
     /// declared, which has none: see [`Space::view`] and
     /// [`Evaluator::tab_node`](super::Evaluator::tab_node).
-    pub fn reading(&mut self) -> Option<(&mut super::Evaluator, &Document<ArcSource>)> {
+    pub fn reading(&mut self) -> Option<(&mut super::Evaluator, &Document<SpaceSource>)> {
         match &mut self.reading {
             Reading::Own(ev) => Some((ev, &self.doc)),
             Reading::Declared { .. } => None,
@@ -318,6 +376,195 @@ impl Space {
     }
 }
 
+/// What the document of a space opened as a tab of its own reads its bytes
+/// from.
+///
+/// Never reports a chunk missing: every byte is either held or decoded when
+/// it is read. A read the decoder fails on, which a run that indexed cleanly
+/// should never give, reads as zeroes.
+#[derive(Clone)]
+pub enum SpaceSource {
+    /// Every byte, held.
+    Whole(Arc<Vec<u8>>),
+    /// One run too large to hold whole, read through its index.
+    Lazy(Arc<Seekable>),
+    /// A stream joined from parts and too large to hold whole, read a part at
+    /// a time.
+    Joined(Arc<Joined>),
+}
+
+impl SpaceSource {
+    /// Bytes `at..at + out.len()`. False when they could not be read, which
+    /// leaves `out` as zeroes.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> bool {
+        let ok = match self {
+            SpaceSource::Whole(bytes) => match bytes.get(at as usize..at as usize + out.len()) {
+                Some(have) => {
+                    out.copy_from_slice(have);
+                    true
+                }
+                None => false,
+            },
+            SpaceSource::Lazy(index) => index.read(at, out).is_ok(),
+            SpaceSource::Joined(joined) => joined.read(at, out).is_ok(),
+        };
+        if !ok {
+            out.fill(0);
+        }
+        ok
+    }
+}
+
+impl Source for SpaceSource {
+    fn len_bytes(&self) -> u64 {
+        match self {
+            SpaceSource::Whole(bytes) => bytes.len() as u64,
+            SpaceSource::Lazy(index) => index.len(),
+            SpaceSource::Joined(joined) => joined.len,
+        }
+    }
+
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        self.read(offset, out);
+        Vec::new()
+    }
+}
+
+/// A stream joined from parts, too large to hold whole, read a part at a
+/// time. What [`SpaceSource::Joined`] reads.
+///
+/// Everything it is read from is held here, so it needs nothing of the file
+/// once it is made: the bytes of each stored part, and the compressed run of
+/// each packed one. A packed part small enough to decode whole is decoded when
+/// it is read and kept in a cache like a stitched space's; a larger one is
+/// read through its index.
+pub struct Joined {
+    parts: Vec<(std::ops::Range<u64>, JoinedBytes)>,
+    len: u64,
+    cache: std::sync::Mutex<PartCache>,
+    /// The trace of the packed part asked about most recently, which is
+    /// decoded again to make it.
+    traced: std::sync::Mutex<Option<(usize, Arc<Trace>)>>,
+}
+
+/// Where one part of a [`Joined`] stream's bytes come from.
+pub(super) enum JoinedBytes {
+    /// A part stored as it is, copied out of the file.
+    Held(Arc<Vec<u8>>),
+    /// A part small enough to decode whole: its compressed run.
+    Packed { run: Arc<Vec<u8>>, codec: Codec },
+    /// A part too large to decode whole.
+    Indexed(Arc<Seekable>),
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Joined {
+    pub(super) fn new(parts: Vec<(std::ops::Range<u64>, JoinedBytes)>, len: u64, cache: usize) -> Joined {
+        Joined { parts, len, cache: std::sync::Mutex::new(PartCache::new(cache)), traced: std::sync::Mutex::new(None) }
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn part_at(&self, byte: u64) -> Option<usize> {
+        let i = self.parts.partition_point(|p| p.0.end <= byte);
+        self.parts.get(i).filter(|p| p.0.contains(&byte)).map(|_| i)
+    }
+
+    /// Bytes `at..at + out.len()`, from as many parts as they cover.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), Refusal> {
+        let end = at + out.len() as u64;
+        let mut pos = at;
+        while pos < end {
+            let i = self.part_at(pos).ok_or(Refusal::Failed)?;
+            let range = self.parts[i].0.clone();
+            let take = (range.end.min(end) - pos) as usize;
+            let from = pos - range.start;
+            let to = (pos - at) as usize;
+            match &self.parts[i].1 {
+                JoinedBytes::Held(bytes) => out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]),
+                JoinedBytes::Indexed(index) => index.read(from, &mut out[to..to + take])?,
+                JoinedBytes::Packed { run, codec } => {
+                    let cached = lock(&self.cache).get(i);
+                    let bytes = match cached {
+                        Some(bytes) => bytes,
+                        None => {
+                            let bytes = Arc::new(crate::codec::decode(*codec, run)?);
+                            if bytes.len() as u64 != range.end - range.start {
+                                return Err(Refusal::Failed);
+                            }
+                            lock(&self.cache).put(i, bytes.clone());
+                            bytes
+                        }
+                    };
+                    out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]);
+                }
+            }
+            pos += take as u64;
+        }
+        Ok(())
+    }
+
+    /// The trace of packed part `i`, decoded again with its trace on.
+    fn part_trace(&self, i: usize, run: &[u8], codec: Codec) -> Option<Arc<Trace>> {
+        if let Some((held, t)) = lock(&self.traced).as_ref() {
+            if *held == i {
+                return Some(t.clone());
+            }
+        }
+        let (_, t) = crate::codec::decode_traced(codec, run).ok()?;
+        let t = Arc::new(t);
+        *lock(&self.traced) = Some((i, t.clone()));
+        Some(t)
+    }
+
+    /// A step of part `i` with its output moved to where the part is in the
+    /// joined stream. Its bits stay counted from the start of the part's own
+    /// run, as a joined stream held whole gives them.
+    fn shifted(&self, i: usize, step: Step) -> Step {
+        let start = self.parts[i].0.start;
+        Step { out_bytes: step.out_bytes.start + start..step.out_bytes.end + start, ..step }
+    }
+
+    /// Which step of which part produced byte `byte`, as
+    /// [`Space::map_out`] gives it for a joined stream held whole.
+    pub fn map_out(&self, byte: u64) -> Option<Step> {
+        let i = self.part_at(byte)?;
+        let (range, bytes) = &self.parts[i];
+        let at = byte - range.start;
+        let step = match bytes {
+            JoinedBytes::Held(_) => {
+                Step { in_bits: 0..(range.end - range.start) * 8, out_bytes: 0..range.end - range.start, kind: StepKind::Stored }
+            }
+            JoinedBytes::Indexed(index) => index.map_out(at)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_out(at)?,
+        };
+        Some(self.shifted(i, step))
+    }
+
+    /// Which step of part `i` read bit `bit` of that part's run.
+    pub fn map_in(&self, i: usize, bit: u64) -> Option<Step> {
+        let (range, bytes) = self.parts.get(i)?;
+        let step = match bytes {
+            JoinedBytes::Held(_) => {
+                let bits = (range.end - range.start) * 8;
+                (bit < bits).then(|| Step { in_bits: 0..bits, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })?
+            }
+            JoinedBytes::Indexed(index) => index.map_in(bit)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_in(bit)?,
+        };
+        Some(self.shifted(i, step))
+    }
+}
+
 /// A step of a joined stream's trace with its bits counted from the start of
 /// its part's run, which is a place a reader can go, rather than along the
 /// trace's own axis, which is not.
@@ -336,7 +583,101 @@ fn in_run(step: Step, run: &JoinedRun) -> Step {
 pub(super) enum Backing {
     Whole { bytes: Arc<Vec<u8>>, trace: Trace },
     Stitched(Box<Stitch>),
+    /// A run too large to hold whole, read through its checkpoints.
+    Lazy(Arc<Seekable>),
 }
+
+/// Where a compressed run is: the space it is a field of, the bit it starts
+/// at there and how many bits it is. What an index is kept by, so that every
+/// node reading the same run reads it through the same index.
+pub(super) type RunKey = (u32, u64, u64);
+
+/// The indexes of runs too large to hold whole, by where each run is, so a
+/// run is indexed once however many things read it: the `Decoded` node over
+/// it, a stitched stream with it as a part, and the tab.
+///
+/// Each index holds its compressed run, so the total of those is capped, and
+/// the index used longest ago goes first.
+#[derive(Default)]
+pub(super) struct Indexes {
+    entries: Vec<(RunKey, Codec, Arc<Seekable>, u64)>,
+    clock: u64,
+}
+
+impl Indexes {
+    fn get(&mut self, key: RunKey, codec: Codec) -> Option<Arc<Seekable>> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.entries.iter_mut().find(|e| e.0 == key && e.1 == codec)?;
+        e.3 = clock;
+        Some(e.2.clone())
+    }
+
+    fn put(&mut self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
+        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.packed().len()).sum::<usize>();
+        while !self.entries.is_empty() && held(&self.entries) + index.packed().len() > INDEXED_RUN_BYTES {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
+            self.entries.swap_remove(oldest);
+        }
+        self.clock += 1;
+        self.entries.push((key, codec, index, self.clock));
+    }
+}
+
+/// The most compressed bytes the indexes hold between them. The same as the
+/// most one run may be.
+const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
+
+/// Runs whose indexing pass has started and not finished, by where each run
+/// is, carried on a step at a time on each go until they are done. Kept apart
+/// from [`Indexes`], which holds only finished indexes: those are read with no
+/// evaluator behind them, by a tab's source, and a half-made one must never
+/// get there.
+///
+/// A pass that might still come to a run held whole holds up to the cap of
+/// output, so only a couple are kept, and the one stepped longest ago goes
+/// first. A reading stepping two runs by turns keeps both.
+#[derive(Default)]
+pub(super) struct Unfinished {
+    entries: Vec<(RunKey, Codec, lazy::Indexing, u64)>,
+    clock: u64,
+}
+
+/// How many unfinished passes are kept at once.
+const UNFINISHED_PASSES: usize = 2;
+
+impl Unfinished {
+    /// The pass over the run at `key`, taken out to be stepped.
+    fn take(&mut self, key: RunKey, codec: Codec) -> Option<lazy::Indexing> {
+        let i = self.entries.iter().position(|e| e.0 == key && e.1 == codec)?;
+        Some(self.entries.swap_remove(i).2)
+    }
+
+    /// Put a pass back to be carried on next go.
+    fn put(&mut self, key: RunKey, codec: Codec, pass: lazy::Indexing) {
+        while self.entries.len() >= UNFINISHED_PASSES {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
+            self.entries.swap_remove(oldest);
+        }
+        self.clock += 1;
+        self.entries.push((key, codec, pass, self.clock));
+    }
+
+    /// How far the pass stepped most recently has got.
+    fn latest(&self) -> Option<(RunKey, lazy::Progress)> {
+        self.entries.iter().max_by_key(|e| e.3).map(|e| (e.0, e.2.progress()))
+    }
+}
+
+/// How much output one step of an indexing pass decodes, and what it is
+/// charged against a go's allowance. 512 bytes an element: a go of 5,000
+/// elements, which is what the web app asks for, decodes about 2.5 MiB. In
+/// wasm that took about 18 ms on 2026-10-26, with the trace on or off: 1.25
+/// MiB took 9 ms. Less than the twentieth of a second a go is meant to take,
+/// since a listing drawing a frame asks several things that each carry the
+/// same pass on.
+const INDEX_STEP_BYTES: u64 = 256 << 10;
+const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 512;
 
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
@@ -480,6 +821,13 @@ pub(super) struct Spaces {
     whole_refused: FxHashMap<Vec<usize>, Refusal>,
     /// The most a stitched stream may come to and still be held whole.
     whole_cap: usize,
+    /// The limits a run too large to hold whole is indexed under.
+    lazy_limits: Limits,
+    /// Every index made so far that is still kept. Asked for while reading,
+    /// which borrows the spaces shared, so it is a cell.
+    indexes: std::cell::RefCell<Indexes>,
+    /// Indexes still being made. A cell for the same reason.
+    unfinished: std::cell::RefCell<Unfinished>,
 }
 
 impl Default for Spaces {
@@ -490,6 +838,9 @@ impl Default for Spaces {
             cache_cap: STITCH_CACHE_BYTES,
             whole_refused: FxHashMap::default(),
             whole_cap: crate::codec::CAP_BYTES,
+            lazy_limits: Limits::default(),
+            indexes: Default::default(),
+            unfinished: Default::default(),
         }
     }
 }
@@ -505,6 +856,47 @@ impl Spaces {
         let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id
+    }
+
+    /// Keep the index of a run too large to hold whole, and hand back the
+    /// space it became.
+    pub(super) fn add_lazy(&mut self, path: &[usize], index: Arc<Seekable>) -> u32 {
+        self.backings.push(Backing::Lazy(index));
+        let id = self.backings.len() as u32;
+        self.opened.insert(path.to_vec(), Opened::Space(id));
+        id
+    }
+
+    /// The index of the run at `key`, packed with `codec`, if one was made
+    /// and is still kept.
+    pub(super) fn indexed(&self, key: RunKey, codec: Codec) -> Option<Arc<Seekable>> {
+        self.indexes.borrow_mut().get(key, codec)
+    }
+
+    /// Keep an index of the run at `key`.
+    pub(super) fn keep_index(&self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
+        self.indexes.borrow_mut().put(key, codec, index);
+    }
+
+    /// The limits a run too large to hold whole is indexed under.
+    pub(super) fn lazy_limits(&self) -> Limits {
+        self.lazy_limits
+    }
+
+    /// Those limits made small, so that a test reaches them with a few
+    /// hundred kilobytes rather than sixty-four megabytes.
+    #[cfg(test)]
+    pub(super) fn set_lazy_limits(&mut self, limits: Limits) {
+        self.lazy_limits = limits;
+    }
+
+    /// The index behind a space read a piece at a time. Nothing for any
+    /// other space.
+    pub(super) fn lazy(&self, space: u32) -> Option<&Arc<Seekable>> {
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Lazy(index) => Some(index),
+            _ => None,
+        }
     }
 
     /// Keep the part table of a stitched space, and hand back the space it
@@ -552,7 +944,7 @@ impl Spaces {
     pub(super) fn trace(&self, space: u32) -> Option<&Trace> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Whole { trace, .. } => Some(trace),
-            Backing::Stitched(_) => None,
+            Backing::Stitched(_) | Backing::Lazy(_) => None,
         }
     }
 
@@ -566,7 +958,7 @@ impl Spaces {
     pub(super) fn buf(&self, space: u32) -> Option<&Arc<Vec<u8>>> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Whole { bytes, .. } => Some(bytes),
-            Backing::Stitched(_) => None,
+            Backing::Stitched(_) | Backing::Lazy(_) => None,
         }
     }
 
@@ -574,7 +966,7 @@ impl Spaces {
     pub(super) fn stitch(&self, space: u32) -> Option<&Stitch> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Stitched(s) => Some(s),
-            Backing::Whole { .. } => None,
+            Backing::Whole { .. } | Backing::Lazy(_) => None,
         }
     }
 
@@ -583,6 +975,7 @@ impl Spaces {
         match space.checked_sub(1).and_then(|i| self.backings.get(i as usize)) {
             Some(Backing::Whole { bytes, .. }) => bytes.len() as u64 * 8,
             Some(Backing::Stitched(s)) => s.len_bytes * 8,
+            Some(Backing::Lazy(index)) => index.len() * 8,
             None => 0,
         }
     }
@@ -600,6 +993,58 @@ impl Spaces {
         self.backings.clear();
         self.opened.clear();
         self.whole_refused.clear();
+        // Kept by where a run is, and an edit can change what is there.
+        self.indexes.borrow_mut().entries.clear();
+        self.unfinished.borrow_mut().entries.clear();
+    }
+
+    /// The run being indexed most recently, and how far its pass has got,
+    /// while it has not finished.
+    pub(super) fn unpacking(&self) -> Option<(RunKey, lazy::Progress)> {
+        self.unfinished.borrow().latest()
+    }
+}
+
+impl super::Evaluator {
+    /// The run at `key`, packed with `codec`, decoded whole when it fits under
+    /// the cap and indexed when it does not: [`lazy::decode_or_index`], done
+    /// a step at a time. Each step is charged to this go's allowance, and a go
+    /// that runs out hands back `Busy` with the pass kept, to be carried on
+    /// from where it stopped the next time anything asks for the same run.
+    /// `Ok(Err)` is the run refusing, as it would refuse in one go.
+    /// `known_large` is a caller that knows the run comes to more than the
+    /// cap, which lets the pass skip the part that might have been a run held
+    /// whole: see [`lazy::Indexing::known_large`].
+    ///
+    /// Takes the evaluator shared, since a read of a stitched stream reaches
+    /// here, and reads do.
+    pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
+        let started = self.spaces.unfinished.borrow_mut().take(key, codec);
+        let mut pass = match started {
+            Some(pass) => pass,
+            None => {
+                if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
+                    return Ok(Err(Refusal::TooLarge));
+                }
+                let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
+                match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
+                    Ok(pass) if known_large => pass.known_large(),
+                    Ok(pass) => pass,
+                    Err(why) => return Ok(Err(why)),
+                }
+            }
+        };
+        loop {
+            if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
+                self.spaces.unfinished.borrow_mut().put(key, codec, pass);
+                return Err(busy);
+            }
+            match pass.step(INDEX_STEP_BYTES) {
+                Ok(Stepped::Working) => {}
+                Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
+                Err(why) => return Ok(Err(why)),
+            }
+        }
     }
 }
 
@@ -607,6 +1052,7 @@ impl Spaces {
 mod tests {
     use crate::codec::StepKind;
     use crate::document::Document;
+    use crate::eval::space::{Opened, SpaceSource};
     use crate::eval::{Evaluator, SingleRun, Value};
     use crate::formats;
     use crate::source::MemSource;
@@ -782,6 +1228,127 @@ mod tests {
     /// the stream's field is: two bytes into a zlib file, after the header. So
     /// the bit of the file that leads back to a step is the run's place plus
     /// the step's bits, and the header's bits lead nowhere.
+    /// A stream whose output is past the cap is indexed rather than refused:
+    /// its fields read, a read anywhere in it decodes only the span it is in,
+    /// and the Adler-32 after it is checked against the sum the indexing pass
+    /// took. The limits are made small, so a few megabytes are past them.
+    #[test]
+    fn a_stream_past_the_cap_reads_a_piece_at_a_time() {
+        use crate::codec::lazy::Limits;
+        use crate::eval::space::Opened;
+        let text: Vec<u8> = (0..60_000).flat_map(|i| format!("line {i} of a stream too large to hold\n").into_bytes()).collect();
+        let d = zlib_over(&text);
+        let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        e.spaces.set_lazy_limits(Limits { whole: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Limits::default() });
+        let inner = e.node(&d, &[6, 0]).unwrap();
+        assert_eq!(inner.size_bits, text.len() as u64 * 8);
+        let Some(Opened::Space(id)) = e.spaces.get(RUN) else { panic!("the stream did not open") };
+        let index = e.spaces.lazy(id).expect("indexed, not held whole").clone();
+        assert!(index.spans() > 10);
+        for at in [0usize, 1000, 777_777, text.len() - 100] {
+            let got = e.read_in(&d, id, at as u64 * 8, 800).unwrap();
+            assert_eq!(got, &text[at..at + 100], "100 bytes at {at}");
+        }
+        // Four reads far apart, and what the index holds is its checkpoints
+        // and a few spans.
+        assert!(index.held_bytes() < 2 << 20, "{} bytes held", index.held_bytes());
+        let verdict = e.run_check(&d, &[7]).unwrap().expect("the Adler-32 is a check");
+        assert!(verdict.ok, "{verdict:?}");
+        // The blocks a trace lays out need the trace of the whole run, which
+        // a stream this size does not keep.
+        assert_eq!(e.node(&d, RUN).unwrap().child_count, 1);
+        // A second node over the same run is read through the same index.
+        assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
+    }
+
+    /// Limits small enough that a few megabytes of text are past the cap and
+    /// take several goes to index.
+    fn small_limits() -> crate::codec::lazy::Limits {
+        crate::codec::lazy::Limits { whole: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Default::default() }
+    }
+
+    fn many_lines() -> Vec<u8> {
+        (0..60_000).flat_map(|i| format!("line {i} of a stream opened a go at a time\n").into_bytes()).collect()
+    }
+
+    /// Indexing a stream past the cap is charged to the work allowed for a
+    /// go like any other reading: a go that runs out hands back `Busy` and
+    /// says how far the pass has got, and the next go carries on from there.
+    /// What it comes to is the index one go makes.
+    #[test]
+    fn a_stream_past_the_cap_opens_a_go_at_a_time() {
+        use crate::eval::EvalError;
+        let text = many_lines();
+        let d = zlib_over(&text);
+        let mut one = Evaluator::new(formats::builtin("zlib").unwrap());
+        one.spaces.set_lazy_limits(small_limits());
+        let id = one.open_space(&d, 0, RUN).unwrap().expect("opens in one go");
+        let SpaceSource::Lazy(whole) = one.space(id).unwrap().source().clone() else { panic!("held whole") };
+
+        let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        let (mut goes, mut read) = (0, 0);
+        let id = loop {
+            e.begin_slice();
+            match e.open_space(&d, 0, RUN) {
+                Ok(Some(id)) => break id,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    let p = e.unpacking().expect("a pass is under way");
+                    assert_eq!((p.run_space, p.run_offset_bits), (0, 16));
+                    assert!(p.read_bits >= read && p.read_bits <= p.run_bits, "{read} then {p:?}");
+                    read = p.read_bits;
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(goes >= 3, "{goes} goes");
+        assert_eq!(e.unpacking(), None);
+        let SpaceSource::Lazy(index) = e.space(id).unwrap().source().clone() else { panic!("held whole") };
+        assert_eq!((index.len(), index.crc32(), index.spans()), (whole.len(), whole.crc32(), whole.spans()));
+        assert!((0..index.spans()).all(|k| index.span_bytes(k) == whole.span_bytes(k)));
+        let mut got = vec![0u8; text.len()];
+        assert!(index.read(0, &mut got).is_ok() && got == text);
+    }
+
+    /// The same for a gzip's joined stream, which is what the gzip template
+    /// reads its member through, and which the listing reaches by reading
+    /// the stream's first bytes rather than by opening it.
+    #[test]
+    fn a_gzip_past_the_cap_reads_a_go_at_a_time() {
+        use crate::eval::EvalError;
+        let text = many_lines();
+        let mut gzip = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        gzip.extend(miniz_oxide::deflate::compress_to_vec(&text, 6));
+        gzip.extend(crate::checksum::crc32(&text).to_le_bytes());
+        gzip.extend((text.len() as u32).to_le_bytes());
+        let d = Document::new(MemSource(gzip));
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        let mut goes = 0;
+        let node = loop {
+            e.begin_slice();
+            match e.node(&d, &[1, 0, 0]) {
+                Ok(node) => break node,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    assert!(e.unpacking().is_some());
+                    assert!(goes < 1000);
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        };
+        assert!(goes >= 3, "{goes} goes");
+        assert_eq!(node.size_bits, text.len() as u64 * 8);
+        let Some(Opened::Space(id)) = e.spaces.get(&[1]) else { panic!("the joined stream did not open") };
+        e.begin_slice();
+        for at in [0usize, 777_777, text.len() - 100] {
+            assert_eq!(e.read_in(&d, id, at as u64 * 8, 800).unwrap(), &text[at..at + 100], "100 bytes at {at}");
+        }
+    }
+
     #[test]
     fn the_map_runs_both_ways() {
         let text = "map me both ways. ".repeat(50).into_bytes();

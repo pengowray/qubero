@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { JOINED } from "../src/strings.ts";
-import { JOINED_WHOLE_CAP_BITS, startsInGroup, streamOffer, tabGroups, type PartGroup, type PartLine } from "../src/joinedpart.ts";
+import { startsInGroup, streamOffer, tabGroups, type PartGroup, type PartLine } from "../src/joinedpart.ts";
 import type { JoinedPart, TemplateNode } from "../src/doc.ts";
 
 /** Byte 0x50 of the stream is 0x50 into its first page, a 4 KiB page stored
@@ -101,7 +101,10 @@ test("a run stored at a longer path says whose path it is, and only that row doe
 
 test("the open button and its refusals say joined, not unpacked", () => {
   assert.equal(JOINED.open, "Open joined stream");
-  assert.equal(JOINED.tooLarge, "Too large to open as a document of its own (over 64 MiB)");
+  assert.equal(
+    JOINED.tooLarge(JOINED.tabTitle("stream", "range.bam")),
+    "Couldn't open stream joined from range.bam: its parts take up over 64 MiB in the file.",
+  );
   assert.equal(
     JOINED.failed(JOINED.tabTitle("stream", "range.bam")),
     "Couldn't open stream joined from range.bam: one of its parts couldn't be read or unpacked.",
@@ -121,13 +124,12 @@ test("a joined stream is offered on the node that joined it and on the node it h
   assert.equal(streamOffer([1, 2, 0, 3], node({ joined: true }), null), null);
 });
 
-test("a joined stream past the cap is refused before anyone asks", () => {
-  const long = node({ joined: true, space_root: true, size_bits: JOINED_WHOLE_CAP_BITS + 8 });
-  assert.deepEqual(streamOffer([4, 0], long, null), { refused: "too-large" });
-  assert.deepEqual(streamOffer([4], node({ composite: true, child_count: 1 }), long), { refused: "too-large" });
-  // Exactly at the cap opens, as the core's test is `len > CAP_BYTES`.
-  const full = node({ joined: true, space_root: true, size_bits: JOINED_WHOLE_CAP_BITS });
-  assert.deepEqual(streamOffer([4, 0], full, null), { open: [4], joined: true });
+test("a joined stream is offered whatever its length", () => {
+  // Whether it opens depends on how much of the file its parts take up, which
+  // only the core knows, so the refusal comes when it is opened.
+  const long = node({ joined: true, space_root: true, size_bits: 2 ** 33 });
+  assert.deepEqual(streamOffer([4, 0], long, null), { open: [4], joined: true });
+  assert.deepEqual(streamOffer([4], node({ composite: true, child_count: 1 }), long), { open: [4], joined: true });
 });
 
 test("a compressed run keeps its own offer, and a refused one gets none here", () => {

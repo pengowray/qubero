@@ -7,10 +7,6 @@ import { ADDRESS_MARK, formatOffset, offsetDigits } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import type { JoinedPart, TemplateNode } from "./doc.ts";
 
-/** The most a joined stream may come to and still open as a document of its
- *  own: `CAP_BYTES` in the core's `codec.rs`, in bits. */
-export const JOINED_WHOLE_CAP_BITS = 64 * 1024 * 1024 * 8;
-
 /** One row under the heading. */
 export type PartLine = {
   readonly text: string;
@@ -101,11 +97,8 @@ export function tabGroups(part: JoinedPart, file: string, underCursor: boolean, 
   return groups;
 }
 
-/** What the inspector offers for the field at the cursor: a stream to open, or
- *  the reason one will not open. */
-export type StreamOffer =
-  | { readonly open: readonly number[]; readonly joined: boolean }
-  | { readonly refused: "too-large" };
+/** What the inspector offers for the field at the cursor: a stream to open. */
+export type StreamOffer = { readonly open: readonly number[]; readonly joined: boolean };
 
 /**
  * Whether the field is where a stream is offered as a tab of its own, and
@@ -117,17 +110,18 @@ export type StreamOffer =
  * holds, and on the node that joined it, which is zero bits in the file and
  * reached from the listing or the trail. `first` is that node's first child.
  *
- * A joined stream past the cap is refused before anyone asks, since its
- * length is known; the core would refuse it the same way. One with a part
- * that will not read is found out only when it is joined whole.
+ * A joined stream of any length is offered. Whether it opens depends on how
+ * much of the file its parts take up, which only the core knows, so a stream
+ * too large to open, or one with a part that will not read, is found out when
+ * it is opened.
  */
 export function streamOffer(path: readonly number[], n: TemplateNode, first: TemplateNode | null): StreamOffer | null {
   if (n.decoded) return n.refused === null ? { open: path, joined: false } : null;
-  if (n.joined && n.space_root && path.length > 0) return joinedOffer(path.slice(0, -1), n.size_bits);
-  if (first !== null && first.joined && first.space_root) return joinedOffer(path, first.size_bits);
+  if (n.joined && n.space_root && path.length > 0) return joinedOffer(path.slice(0, -1));
+  if (first !== null && first.joined && first.space_root) return joinedOffer(path);
   return null;
 }
 
-function joinedOffer(path: readonly number[], bits: number): StreamOffer {
-  return bits > JOINED_WHOLE_CAP_BITS ? { refused: "too-large" } : { open: path, joined: true };
+function joinedOffer(path: readonly number[]): StreamOffer {
+  return { open: path, joined: true };
 }

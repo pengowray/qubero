@@ -30,8 +30,9 @@
 use std::sync::Arc;
 
 use super::gather::Landing;
-use super::space::{JoinedRun, Opened, Part, PartSource, Stitch};
+use super::space::{Joined, JoinedBytes, JoinedRun, Opened, Part, PartSource, Stitch};
 use super::*;
+use crate::codec::lazy::{self, Seekable};
 use crate::codec::{Codec, StepKind, Trace, TraceBuilder};
 
 /// A stitched stream held whole: its bytes, the trace of every part end to
@@ -40,6 +41,24 @@ pub(super) struct Whole {
     pub(super) bytes: Vec<u8>,
     pub(super) trace: Trace,
     pub(super) runs: Vec<JoinedRun>,
+}
+
+/// A stitched stream made ready to open as a document of its own.
+pub(super) enum Joining {
+    Whole(Whole),
+    /// Too large to hold whole, and read a part at a time. Each run's
+    /// `in_start` is 0: there is no trace laid end to end for it to be a
+    /// place on.
+    Lazy { joined: Arc<Joined>, runs: Vec<JoinedRun> },
+}
+
+/// Why a packed part too large to decode whole could not be read through an
+/// index.
+enum PartTrouble {
+    /// It unpacks to this many bytes, which is not what the file says.
+    Length(u64),
+    /// It would not unpack at all.
+    Unpack,
 }
 
 /// What the walk to a stitched stream's parts has found so far.
@@ -176,8 +195,8 @@ impl Evaluator {
             // out. Not kept: a read that wants it unpacks it again, which
             // costs one more inflate of one part and keeps the walk from
             // holding every part it measured.
-            (None, Ok(codec)) => match self.unpack_run(doc, r.space, r.offset, size, codec)? {
-                Ok(bytes) => bytes.len() as u64,
+            (None, Ok(codec)) => match self.measure_run(doc, r.space, r.offset, size, codec)? {
+                Ok(len) => len,
                 Err(_) => return Ok(Reached::End),
             },
             (None, Err(_)) => return Ok(Reached::End),
@@ -226,6 +245,86 @@ impl Evaluator {
         let Some(holder) = self.part_holder(&part) else { return Ok(None) };
         let (end, here) = self.record_frame(doc, &holder)?;
         Ok(Some(PartFrame { holder, end, here }))
+    }
+
+    /// How many bytes a packed run comes to. A run that can be indexed and
+    /// comes to more than can be held whole is indexed, and the index kept,
+    /// so that a read of it later does not decode it again to find a place.
+    fn measure_run<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, size: u64, codec: Codec) -> R<Result<u64, Refusal>> {
+        if !lazy::can_index(codec) {
+            return Ok(self.unpack_run(doc, space, at, size, codec)?.map(|bytes| bytes.len() as u64));
+        }
+        let key = (space, at, size);
+        if let Some(index) = self.spaces.indexed(key, codec) {
+            return Ok(Ok(index.len()));
+        }
+        Ok(match self.index_run(doc, key, codec, false)? {
+            Ok(lazy::Decoded::Whole(bytes, _)) => Ok(bytes.len() as u64),
+            Ok(lazy::Decoded::Indexed(index)) => {
+                let len = index.len();
+                self.spaces.keep_index(key, codec, Arc::new(index));
+                Ok(len)
+            }
+            Err(why) => Err(why),
+        })
+    }
+
+    /// The index of packed part `i`, for a part too large to decode whole.
+    /// `Ok(None)` for a part that is decoded whole, which is every part the
+    /// file says comes to no more than the cap, and every part of a codec
+    /// that has no index.
+    ///
+    /// The index is the one already made for the part's run if there is one:
+    /// by the part's own `Decoded` node, by the walk that measured it, or by
+    /// an earlier read. One made here is kept the same way.
+    fn index_part<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize) -> R<Result<Option<Arc<Seekable>>, PartTrouble>> {
+        let part = &stitch.parts[i];
+        let PartSource::Packed { space, at_bits, size_bits, codec: Ok(codec) } = &part.source else { return Ok(Ok(None)) };
+        let limits = self.spaces.lazy_limits();
+        if !lazy::can_index(*codec) || part.len <= limits.whole as u64 {
+            return Ok(Ok(None));
+        }
+        let key = (*space, *at_bits, *size_bits);
+        let open = match self.spaces.get(&part.path) {
+            Some(Opened::Space(id)) => self.spaces.lazy(id).cloned(),
+            _ => None,
+        };
+        let index = match open.or_else(|| self.spaces.indexed(key, *codec)) {
+            Some(index) => index,
+            // Only a part the file says is past the cap gets here.
+            None => {
+                match self.index_run(doc, key, *codec, true)? {
+                    Ok(lazy::Decoded::Indexed(index)) => {
+                        let index = Arc::new(index);
+                        self.spaces.keep_index(key, *codec, index.clone());
+                        index
+                    }
+                    // Small enough to hold whole after all, which a part the
+                    // file says is larger than the cap is not.
+                    Ok(lazy::Decoded::Whole(bytes, _)) => return Ok(Err(PartTrouble::Length(bytes.len() as u64))),
+                    Err(_) => return Ok(Err(PartTrouble::Unpack)),
+                }
+            }
+        };
+        if index.len() != part.len {
+            return Ok(Err(PartTrouble::Length(index.len())));
+        }
+        Ok(Ok(Some(index)))
+    }
+
+    /// [`Self::index_part`], with its trouble said the way a read of the
+    /// part says it.
+    fn part_index<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize) -> R<Option<Arc<Seekable>>> {
+        match self.index_part(doc, stitch, i)? {
+            Ok(index) => Ok(index),
+            Err(PartTrouble::Length(n)) => fail(format!(
+                "{} unpacks to {} bytes, not the {} the file says",
+                self.part_label(stitch, i),
+                n,
+                stitch.parts[i].len
+            )),
+            Err(PartTrouble::Unpack) => fail(format!("{} could not be unpacked", self.part_label(stitch, i))),
+        }
     }
 
     /// The bytes of a packed run, unpacked. The outer error is the run's bytes
@@ -283,10 +382,19 @@ impl Evaluator {
                 PartSource::Stored { space, at_bits } => {
                     bytes.extend_from_slice(&self.read_in(doc, *space, at_bits + from * 8, take * 8)?);
                 }
-                PartSource::Packed { .. } => {
-                    let unpacked = self.unpacked_part(doc, stitch, i)?;
-                    bytes.extend_from_slice(&unpacked[from as usize..(from + take) as usize]);
-                }
+                PartSource::Packed { .. } => match self.part_index(doc, stitch, i)? {
+                    Some(index) => {
+                        let mut got = vec![0u8; take as usize];
+                        if index.read(from, &mut got).is_err() {
+                            return fail(format!("{} could not be unpacked", self.part_label(stitch, i)));
+                        }
+                        bytes.extend_from_slice(&got);
+                    }
+                    None => {
+                        let unpacked = self.unpacked_part(doc, stitch, i)?;
+                        bytes.extend_from_slice(&unpacked[from as usize..(from + take) as usize]);
+                    }
+                },
             }
             pos += take;
         }
@@ -353,14 +461,14 @@ impl Evaluator {
     /// Every part is read and every packed one unpacked here, again, with its
     /// trace: the cache a listing reads through keeps bytes and not traces,
     /// and a trace is what a document of its own is for.
-    pub(super) fn join_whole<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Result<Whole, Refusal>> {
+    pub(super) fn join_whole<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Result<Joining, Refusal>> {
         let id = match self.open_stitched_at(doc, path)? {
             Opened::Space(id) => id,
             Opened::Refused(why) => return Ok(Err(why)),
         };
         let Some(stitch) = self.spaces.stitch(id) else { return fail("this stream is no longer open") };
         if stitch.len_bytes > self.spaces.whole_cap() as u64 {
-            return Ok(Err(Refusal::TooLarge));
+            return self.join_lazily(doc, stitch);
         }
         // A read that has to wait for bytes waits; one that fails is a part
         // that will not read, which refuses the whole as a stream that will
@@ -438,7 +546,73 @@ impl Evaluator {
             axis += run_bits;
         }
         trace.finish_at(axis, stitch.len_bytes);
-        Ok(Ok(Whole { bytes, trace: trace.done(), runs }))
+        Ok(Ok(Joining::Whole(Whole { bytes, trace: trace.done(), runs })))
+    }
+
+    /// A stitched stream too large to hold whole, made ready to read a part
+    /// at a time as a document of its own: every stored part's bytes and every
+    /// packed part's compressed run are read once and kept, up to the same cap
+    /// between them as the stream would have had to fit under whole, and a
+    /// packed part too large to decode whole is read through its index.
+    ///
+    /// Refused as too large when what it is read from passes the cap, and as
+    /// failed when a part will not read or unpacks to another length than its
+    /// run claimed. Every packed part small enough to decode whole is decoded
+    /// once here to check that, and its bytes are not kept.
+    fn join_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch) -> R<Result<Joining, Refusal>> {
+        macro_rules! read {
+            ($space:expr, $at:expr, $bits:expr) => {
+                match self.read_in(doc, $space, $at, $bits) {
+                    Ok(bytes) => bytes,
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(Err(Refusal::Failed)),
+                }
+            };
+        }
+        let cap = self.spaces.whole_cap() as u64;
+        let mut held = 0u64;
+        let mut parts = Vec::with_capacity(stitch.parts.len());
+        let mut runs = Vec::with_capacity(stitch.parts.len());
+        for (i, part) in stitch.parts.iter().enumerate() {
+            let out = part.start..part.start + part.len;
+            let (space, at_bits, run_bits, packed, bytes) = match &part.source {
+                PartSource::Stored { space, at_bits } => {
+                    held += part.len;
+                    if held > cap {
+                        return Ok(Err(Refusal::TooLarge));
+                    }
+                    let bytes = JoinedBytes::Held(Arc::new(read!(*space, *at_bits, part.len * 8)));
+                    (*space, *at_bits, part.len * 8, false, bytes)
+                }
+                PartSource::Packed { space, at_bits, size_bits, codec } => {
+                    let codec = match codec {
+                        Ok(codec) => *codec,
+                        Err(why) => return Ok(Err(*why)),
+                    };
+                    held += size_bits / 8;
+                    if held > cap {
+                        return Ok(Err(Refusal::TooLarge));
+                    }
+                    let bytes = match self.index_part(doc, stitch, i)? {
+                        Ok(Some(index)) => JoinedBytes::Indexed(index),
+                        Err(_) => return Ok(Err(Refusal::Failed)),
+                        Ok(None) => {
+                            let run = read!(*space, *at_bits, *size_bits);
+                            match crate::codec::decode(codec, &run) {
+                                Ok(unpacked) if unpacked.len() as u64 == part.len => {}
+                                _ => return Ok(Err(Refusal::Failed)),
+                            }
+                            JoinedBytes::Packed { run: Arc::new(run), codec }
+                        }
+                    };
+                    (*space, *at_bits, *size_bits, true, bytes)
+                }
+            };
+            parts.push((out.clone(), bytes));
+            runs.push(JoinedRun { out_bytes: out, path: part.path.clone(), run_space: space, run_offset_bits: at_bits, run_bits, packed, in_start: 0 });
+        }
+        let joined = Arc::new(Joined::new(parts, stitch.len_bytes, super::space::STITCH_CACHE_BYTES));
+        Ok(Ok(Joining::Lazy { joined, runs }))
     }
 
     /// Part `i` as a reader would name it, for a read that failed in it: the
@@ -1229,6 +1403,53 @@ mod tests {
         // A plain field is a name and not a formula, so the relations panel
         // leaves it to the row above.
         assert!(e.relations(&d, &JOINED).unwrap().iter().all(|r| r.role != Role::Length));
+    }
+
+    /// A joined stream past the cap opens as a document all the same when
+    /// what it is read from fits: the BGZF blocks' compressed runs are kept,
+    /// each part is unpacked when it is read, and one part past the cap a run
+    /// may be decoded whole at is read through its index. Every byte reads and
+    /// maps to the step it does when the same stream is held whole.
+    #[test]
+    fn a_joined_stream_past_the_cap_opens_a_part_at_a_time() {
+        use crate::codec::lazy::Limits;
+        use crate::eval::space::SpaceSource;
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let text = [&big[..], b"and a short block after it"].concat();
+        let d = Document::new(MemSource(bgzf_of(&[&big, b"and a short block after it"])));
+        let mut whole = Evaluator::new(crate::formats::bgzf());
+        let held = whole.open_space(&d, 0, &[1]).unwrap().expect("opens whole");
+        let held = whole.space(held).unwrap();
+        assert_eq!(held.bytes(), text);
+
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        e.spaces.set_whole_cap(10_000);
+        e.spaces.set_lazy_limits(Limits { whole: 4096, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() });
+        let id = e.open_space(&d, 0, &[1]).unwrap().expect("opens a part at a time");
+        let space = e.space(id).unwrap();
+        let SpaceSource::Joined(_) = space.source() else { panic!("held whole") };
+        // The first block is past the cap a part may be decoded whole at, so
+        // it is read through an index of its run.
+        let first = &space.runs()[0];
+        assert!(e.spaces.indexed((first.run_space, first.run_offset_bits, first.run_bits), crate::codec::Codec::Deflate).is_some());
+        let mut got = vec![0u8; text.len()];
+        assert!(space.source().read(0, &mut got));
+        assert_eq!(got, text);
+        assert_eq!(space.runs().len(), held.runs().len());
+        for byte in 0..text.len() as u64 {
+            assert_eq!(space.map_out(byte), held.map_out(byte), "byte {byte}");
+        }
+        for run in held.runs() {
+            for bit in run.run_offset_bits..run.run_offset_bits + run.run_bits {
+                assert_eq!(space.map_in(bit), held.map_in(bit), "bit {bit}");
+            }
+        }
+        // Held to the cap on what it is read from as well: the blocks' runs
+        // are about two hundred bytes, which a cap of a hundred refuses.
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        e.spaces.set_whole_cap(100);
+        assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+        assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::TooLarge));
     }
 
     #[test]

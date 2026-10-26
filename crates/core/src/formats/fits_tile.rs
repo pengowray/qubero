@@ -872,6 +872,7 @@ fn read_numbers(tile: &mut Tile, bytes: &[u8], width: usize, quantized: bool) ->
 fn refusal(why: codec::Refusal) -> &'static str {
     match why {
         codec::Refusal::TooLarge => "too large to unpack (over 64 MiB)",
+        codec::Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
         codec::Refusal::Failed => "unpacking failed",
         codec::Refusal::Unaligned => "not on a byte boundary",
         codec::Refusal::Settings => "the file doesn't say how this was packed",

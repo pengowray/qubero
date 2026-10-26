@@ -57,7 +57,7 @@ fn voxel<S: Source>(ev: &mut Evaluator, d: &Document<S>, index: &[usize]) -> Val
 /// space was given, and the reading over it. The stream is the file's
 /// `decoded`, every member's output joined; one member's own run is a piece
 /// of that and is not opened as what its front looks like.
-fn open_gzip(name: &str, check: impl FnOnce(&str, bool, &mut Evaluator, &Document<qubero_core::source::ArcSource>)) -> bool {
+fn open_gzip(name: &str, check: impl FnOnce(&str, bool, &mut Evaluator, &Document<qubero_core::eval::SpaceSource>)) -> bool {
     let Some((d, sniffed, mut ev)) = read(name) else { return false };
     assert_eq!(sniffed, "gzip", "{name} is a gzip file first");
     let at = path(&mut ev, &d, &["decoded"]);

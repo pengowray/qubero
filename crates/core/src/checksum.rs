@@ -195,8 +195,15 @@ fn crc32_table() -> &'static [u32; 256] {
 
 /// The CRC-32 of PNG, ZIP, gzip and RAR.
 pub fn crc32(bytes: &[u8]) -> u32 {
+    crc32_update(0, bytes)
+}
+
+/// The CRC-32 of what `crc` was the CRC-32 of, with `bytes` after it, for a
+/// stream summed a piece at a time. `crc32(a ++ b)` is
+/// `crc32_update(crc32(a), b)`, and the CRC-32 of nothing is 0.
+pub fn crc32_update(crc: u32, bytes: &[u8]) -> u32 {
     let t = crc32_table();
-    let mut crc = 0xffff_ffffu32;
+    let mut crc = !crc;
     for &b in bytes {
         crc = t[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8);
     }
@@ -301,7 +308,13 @@ pub fn byte_sum(bytes: &[u8]) -> u32 {
 /// Adler-32, the zlib trailer. Two running sums modulo 65521, the second of
 /// the first, taken in blocks short enough that neither can overflow.
 pub fn adler32(bytes: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
+    adler32_update(1, bytes)
+}
+
+/// The Adler-32 of what `adler` was the Adler-32 of, with `bytes` after it.
+/// The Adler-32 of nothing is 1.
+pub fn adler32_update(adler: u32, bytes: &[u8]) -> u32 {
+    let (mut a, mut b) = (adler & 0xffff, adler >> 16);
     for chunk in bytes.chunks(5552) {
         for &byte in chunk {
             a += byte as u32;

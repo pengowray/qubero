@@ -154,8 +154,9 @@ pub(super) struct Refused {
 pub(super) struct Go {
     /// Elements left before this go has to hand back, and how many each go is
     /// allowed. None works to the end, which is what a caller with nothing to
-    /// draw meanwhile wants.
-    left: Option<u64>,
+    /// draw meanwhile wants. A cell, so that work done inside a read, which
+    /// borrows the evaluator shared, can be charged too: see `charge`.
+    left: std::cell::Cell<Option<u64>>,
     slice: Option<u64>,
     /// How far into the file the reading has got, at its furthest.
     reached_bits: u64,
@@ -194,13 +195,13 @@ impl Go {
     /// ready however long that takes.
     pub(super) fn set_slice(&mut self, elements: Option<u64>) {
         self.slice = elements;
-        self.left = elements;
+        self.left.set(elements);
     }
 
     /// Start another go: the allowance is refilled and the list of bytes to
     /// fetch starts again. What has been worked out already is not touched.
     pub(super) fn begin(&mut self) {
-        self.left = self.slice;
+        self.left.set(self.slice);
         self.wanted.clear();
         // A go that is starting has no read open, whatever a panic part way
         // through the last one may have left behind.
@@ -241,11 +242,11 @@ impl Go {
     /// reading has reached.
     pub(super) fn spend(&mut self, at_bits: u64) -> R<()> {
         self.reached_bits = self.reached_bits.max(at_bits);
-        let Some(left) = self.left.as_mut() else { return Ok(()) };
-        if *left == 0 {
+        let Some(left) = self.left.get() else { return Ok(()) };
+        if left == 0 {
             return Err(EvalError::Busy { reached_bits: self.reached_bits });
         }
-        *left -= 1;
+        self.left.set(Some(left - 1));
         Ok(())
     }
 
@@ -254,11 +255,18 @@ impl Go {
     /// hands back.
     pub(super) fn spend_n(&mut self, at_bits: u64, n: u64) -> R<()> {
         self.reached_bits = self.reached_bits.max(at_bits);
-        let Some(left) = self.left.as_mut() else { return Ok(()) };
-        if *left == 0 {
+        self.charge(n)
+    }
+
+    /// `spend_n` for work that is not a step through the file, so it says
+    /// nothing about how far the reading has reached, and is charged from
+    /// inside a read: unpacking a stream a slice at a time.
+    pub(super) fn charge(&self, n: u64) -> R<()> {
+        let Some(left) = self.left.get() else { return Ok(()) };
+        if left == 0 {
             return Err(EvalError::Busy { reached_bits: self.reached_bits });
         }
-        *left = left.saturating_sub(n);
+        self.left.set(Some(left.saturating_sub(n)));
         Ok(())
     }
 
