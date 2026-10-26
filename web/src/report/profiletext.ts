@@ -259,48 +259,48 @@ export function readingWriting(p: Profile): ReadWrite[] {
   }
   if (f.from_end > 0) {
     out.push({
-      summary: `${counted(f.from_end, "field")} found from the end of the file`,
+      summary: `${counted(f.from_end, "field")} whose position is worked out from the end of the file`,
       detail: `A program that reads this format has to know the file's length, or read the end of the file, before it can find ${f.from_end === 1 ? "that field" : "those fields"}.`,
     });
   }
   if (f.backward > 0) {
     const one = f.backward === 1;
     out.push({
-      summary: one ? "1 field found by a backward offset" : `${counted(f.backward, "field")} found by backward offsets`,
+      summary: one ? "1 field that a backward offset points to" : `${counted(f.backward, "field")} that backward offsets point to`,
       detail:
-        "A backward offset points to an earlier position in the file than the offset itself. " +
+        "A backward offset points to a position earlier in the file than where the offset is stored. " +
         (one
-          ? "A program that reads this format has to seek back to read that field. A program that writes this format can write the field first and then the offset that points to it, because by then the field's position is known."
-          : "A program that reads this format has to seek back to read those fields. A program that writes this format can write each of those fields first and then the offset that points to it, because by then the field's position is known."),
+          ? "A program that reads this format has to seek back to read that field. A program that writes this format can write the field first and then the offset that points to it, because the field's position is already known when the program writes the offset."
+          : "A program that reads this format has to seek back to read those fields. A program that writes this format can write each of those fields first and then the offset that points to it, because the field's position is already known when the program writes the offset."),
     });
   }
   if (f.forward > 0) {
     const one = f.forward === 1;
     out.push({
-      summary: one ? "1 field found by a forward offset" : `${counted(f.forward, "field")} found by forward offsets`,
+      summary: one ? "1 field that a forward offset points to" : `${counted(f.forward, "field")} that forward offsets point to`,
       detail:
-        "A forward offset points to a later position in the file than the offset itself. " +
+        "A forward offset points to a position later in the file than where the offset is stored. " +
         (one
-          ? "A program that writes this format from start to end has to know where that field will go before it writes the offset, or write a placeholder and fill in the offset afterwards."
-          : "A program that writes this format from start to end has to know where each of those fields will go before it writes the offset, or write a placeholder and fill in the offset afterwards."),
+          ? "A program that writes this format from start to end has to know the position of that field before it writes the offset, or write a placeholder offset and fill it in once the field has been written."
+          : "A program that writes this format from start to end has to know the position of each of those fields before it writes the offset, or write a placeholder offset and fill it in once the field has been written."),
     });
   }
   if (f.lengths_before > 0) {
     const one = f.lengths_before === 1;
     out.push({
-      summary: one ? "1 field with a length or count field before it" : `${counted(f.lengths_before, "field")} with a length or count field before them`,
+      summary: one ? "1 field whose length or count is stored before it" : `${counted(f.lengths_before, "field")} whose length or count is stored before them`,
       detail: one
-        ? "A program that writes this format from start to end has to know the field's length or count before it writes the field, or write a placeholder and fill in the length or count afterwards."
-        : "A program that writes this format from start to end has to know each field's length or count before it writes the field, or write a placeholder and fill in the length or count afterwards.",
+        ? "A program that writes this format from start to end has to know the field's length or count before it writes the field, or write a placeholder and fill in the length or count after writing the field."
+        : "A program that writes this format from start to end has to know the length or count of each of those fields before it writes the field, or write a placeholder and fill in the length or count after writing the field.",
     });
   }
   if (f.lengths_after > 0) {
     const one = f.lengths_after === 1;
     out.push({
-      summary: one ? "1 field with a length or count field after it" : `${counted(f.lengths_after, "field")} with a length or count field after them`,
+      summary: one ? "1 field whose length or count is stored after it" : `${counted(f.lengths_after, "field")} whose length or count is stored after them`,
       detail: one
-        ? "A program that reads this format has to read ahead to the length or count field, then seek back to read the field. A program that writes this format can write the field first and then its length or count."
-        : "A program that reads this format has to read ahead to each length or count field, then seek back to read the field. A program that writes this format can write each field first and then its length or count.",
+        ? "A program that reads this format has to read the length or count stored after the field first, then seek back to read the field. A program that writes this format can write the field first and then its length or count."
+        : "A program that reads this format has to read the length or count stored after each of those fields first, then seek back to read the field. A program that writes this format can write each field first and then its length or count.",
     });
   }
   return out;
