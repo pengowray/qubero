@@ -210,6 +210,17 @@ fn zstd() {
     single_run_links_the_file("compressed/hello.txt.zst", None);
 }
 
+/// Four frames, each behind a skippable frame, which the file opens with.
+#[test]
+fn zstd_from_pzstd() {
+    single_run_links_the_file("compressed/pzstd-frames.zst", None);
+}
+
+#[test]
+fn xz_of_several_blocks() {
+    single_run_links_the_file("compressed/xz-T0-blocks.xz", None);
+}
+
 #[test]
 fn lzma2_in_a_7z() {
     single_run_links_the_file("compressed/nested-dirs-nonsolid.7z", None);
