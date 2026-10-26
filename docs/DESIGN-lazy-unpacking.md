@@ -452,7 +452,7 @@ and peak RSS are in MB (10^6 bytes); span sizes are output in MiB.
 |---|---|---|---|---|---|---|
 | `pzstd -1` | 37.5 MB | 239 spans of 2 MiB | 1.59 s | 0.36 s (7 ms each) | 1.76 s | 106 MB |
 | `pzstd -3` | 43.4 MB | 60 spans of 8 MiB | 1.63 s | 1.55 s (31 ms each) | 2.01 s | 117 MB |
-| `xz -6 -T6` | 17.4 MB | 20 spans of 24 MiB | 25 µs (no pass) | 7.63 s (153 ms each) | 3.22 s | 158 MB |
+| `xz -6 -T0` | 17.4 MB | 20 spans of 24 MiB | 25 µs (no pass) | 7.63 s (153 ms each) | 3.22 s | 158 MB |
 | `zstd -3 -T6` (one frame) | 43.1 MB | refused as too large, 0.31 s after the pass started | | | | 116 MB |
 
 The peak RSS of the zstd files comes from the first part of the index pass,
