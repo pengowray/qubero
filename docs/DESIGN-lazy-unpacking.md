@@ -2,7 +2,8 @@
 
 Written 2026-10-21. How a compressed run whose output is larger than
 `codec::CAP_BYTES` (64 MiB) opens, with only the part being read decoded.
-Deflate, zlib and gzip first; the other codecs are covered at the end.
+Deflate, zlib and gzip first; zstd and xz in "zstd frames and xz blocks"; the
+other codecs are covered at the end.
 
 **State, 2026-10-21:** built as described below, on branch
 `nonhuman/sweet-solomon-104c5d`, in `codec/lazy.rs`, `eval/space.rs`,
@@ -14,6 +15,10 @@ branch `nonhuman/great-kapitsa-d7a052`, built on that one.
 drawing while it runs, and the listing and the status bar say how far it has
 got. See "The pass in steps" and "The browser". Branch
 `nonhuman/elegant-lalande-c05913`, on top of the one above.
+
+**State, 2026-10-26:** zstd runs of several frames and xz streams of several
+blocks are indexed too, on branch `nonhuman/objective-euclid-8f08a9`, which
+starts from the branch above. See "zstd frames and xz blocks".
 
 ## The problem
 
@@ -54,7 +59,10 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 - The compressed run still has its `blocks` child: one row per deflate block,
   and inside each block its header, tables and codes. The rows inside a block
   are made when the block is opened. See "Blocks".
-- Runs of the other codecs past 64 MiB are refused as they are today.
+- A zstd run of several frames and an xz stream of several blocks open the
+  same way, as long as no one frame or block comes to more than 64 MiB. A
+  file of one frame or one block past 64 MiB is refused as before, and so is
+  every other codec.
 - Runs at or under 64 MiB are decoded and traced exactly as they are today.
 
 ## Limits
@@ -66,8 +74,9 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `MAX_CHECKPOINTS` | 256 | Restart points kept per run. 256 × 32 KiB = 8 MiB of windows. |
 | `SPACING_START` | 1 MiB | Output between restart points, doubled whenever the count passes 256. |
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
-| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one block's trace, and in all the block traces a run keeps. |
+| `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one deflate block's trace, and in all the block traces a run keeps. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
 | `MAX_BLOCK_MARKS` | 65,536 | Block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
+| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded whole, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
 a time limit makes the same file open on one computer and not on another, and
@@ -446,12 +455,136 @@ so a run larger than 32 MiB compressed cannot be read in one go there even
 under `CAP_BYTES`. Reading the compressed side a piece at a time as well is
 separate work.
 
+## zstd frames and xz blocks
+
+A zstd frame never copies from an earlier frame, and an xz block never copies
+from an earlier block. So the start of a frame or of an xz block is a
+checkpoint with no window: a decoder starting there needs only that position
+in the compressed run. `Seekable` keeps one list of checkpoints for all three
+codecs. Each checkpoint has the bit offset in the compressed run, the byte
+offset in the output, and what a decoder needs to start there: for deflate,
+the block header and the 32 KiB window; for xz, the number of the xz block.
+`Seekable` also keeps the same span cache (decoded spans) and span trace cache
+(the trace of the span asked about most recently) for all three. Each codec
+has its own decoder for spans.
+
+Spans are built from these checkpoints with the same rules as deflate's. A
+frame start or an xz block start becomes a checkpoint when the output since
+the previous checkpoint is at least `SPACING_START` bytes (1 MiB). When the
+list grows past `MAX_CHECKPOINTS` (256), every second checkpoint is dropped
+and the spacing doubles. So one span can hold several small frames or blocks,
+and the number of spans stays at most 256 however small the frames are.
+
+A span is decoded whole, so a frame or an xz block whose output is larger
+than `Limits::span` is refused with `Refusal::TooLarge`. This rule is what
+keeps refusing a file whose only frame or only xz block unpacks to more than
+64 MiB. A decoder can start inside a frame only if the checkpoint keeps the
+frame's whole window (up to 128 MiB with `zstd --long`), and inside an xz
+block only if it keeps the LZMA dictionary (up to 64 MiB).
+
+**zstd: one pass.** A zstd frame records its output size only in the
+optional content size field, and `pzstd` does not write that field, so the
+index pass decodes every frame. The pass uses `frames::zstd_walk`, the same
+function that decodes a run whole, in the same way that deflate's index pass
+uses the same inflater. Until the output passes `Limits::whole`, the pass
+keeps the output and the trace, and a run that ends before then is returned
+whole. Once the output passes `Limits::whole`, the pass starts again at the
+start of the frame it had reached, with the trace off, and counts the output
+without keeping it. At most one frame is decoded twice. If a frame's output
+passes `Limits::span`, the pass stops there and the run is refused. Each
+skippable frame that `pzstd` writes before a frame is in the same span as the
+frame that follows it.
+
+**xz: no pass.** The index at the end of an xz stream lists each block's
+packed and unpacked size, so `codec::xz::layout` finds every block without
+decoding any of them. A stream whose index adds up to no more than
+`Limits::whole` is decoded whole, as before this change. A stream whose
+blocks use a filter that our own LZMA2 decoder does not run (delta, or a
+branch filter) is refused as too large, because `lzma-rs`, the decoder that
+runs those filters, reads only whole streams. A stream that `layout` cannot
+read (several streams joined end to end, or an index that does not match the
+blocks) goes to the whole decoder as before, which decodes it or refuses it.
+Because nothing is decoded when the stream is indexed, a block whose
+unpacked size differs from the index is found only when its span is read,
+and that read is refused.
+
+**Traces.** The trace of a zstd span is the same as the part of a whole
+run's trace that covers the same frames, starting at the span's first bit
+and byte. The trace of an xz span is the per-symbol LZMA2 trace that a whole
+stream has for the same blocks (`codec::xz::blocks`), with the stream header
+in span 0 and the index and footer in the last span. In both, every step is
+the same step that the whole trace has at that position.
+
+**The zstd decoder, fixed on the way.** Before this change, `codec::zstd`
+read only the first frame of a run, so a file of two frames came back as the
+first frame's bytes. It also refused any run that starts with a skippable
+frame, which every `pzstd` file does. Now one walk reads every frame, for the
+bytes and for the trace, with a new `ruzstd` decoder for each frame. Bytes
+after the last frame that are neither a zstd frame nor a skippable frame now
+make the run fail to decode; the old decoder stopped after the first frame and
+never looked at them. Every zstd sample in the collection still reads. The walk
+also fixed the block trace. Until a frame ends, `ruzstd` holds back the last
+window's worth of output, and the old trace counted only the output that
+`ruzstd` had handed over, so it assigned each zstd block's output to a later
+zstd block. Now the zstd blocks that decode while `ruzstd` is still filling
+its first window are one step, because the decoder does not report where
+their outputs divide. Every zstd block after that is a step of its own, with
+the output that block produced. A frame that asks for a window larger than
+128 MiB is refused as too large before it is decoded, because `ruzstd` hands
+over nothing until the window is full, so the output of such a frame could
+grow far past every limit before any check sees it. 128 MiB is the largest
+window the `zstd` command line decodes by default. A `pzstd` file was also
+not recognised as zstd, because it starts with a skippable frame. The sniff
+in `formats/recognise.rs` now also takes a file that starts with a skippable
+frame when the zstd magic is where that frame's length says the next frame
+starts. (LZ4 uses the same skippable frame magics.)
+
+**Checks.** For a whole deflate run past the cap, the index pass computes
+gzip's CRC-32 and zlib's Adler-32. A zstd or xz run has no sum over its whole
+output. An xz block's own check (declared in the template with
+`Covers::UnpackedMember`) is computed over that block's output, read through
+the index.
+
+**What the tools write.** Checked with zstd 1.5.5 and xz 5.4.5:
+
+- `pzstd -<level>` cuts its input every four window sizes (2 MiB at level 1,
+  8 MiB at level 3) and writes each piece as a frame, with a skippable frame
+  before it that gives its length, and with no content size. The last frame
+  is empty.
+- `zstd -T0 -B<size>` writes one frame. In compression, `-B` sets the size of
+  each thread's job, and a job may copy from the job before it. (The help
+  text's "cut file into independent chunks" describes `-B` in benchmark mode
+  only.) So a file from it whose output is over 64 MiB is still refused.
+- `xz -T0` cuts its input into blocks of three times the dictionary size, or
+  1 MiB if that is larger: 24 MiB at the default `-6`, 1 MiB at `-0`. Plain
+  `xz` writes one block. `xz -T0 -9` writes 192 MiB blocks, which are over
+  the 64 MiB span limit, so a file from it is refused once its output passes
+  64 MiB.
+
+Measured in a release build, native, on 500,000,000 bytes of generated
+CSV-like text. Every read was compared with the original text. Packed sizes
+and peak RSS are in MB (10^6 bytes); span sizes are output in MiB.
+
+| File | Packed | Spans | Index pass | 50 random 64 KiB reads | Reading all of it, 1 MiB at a time | Peak RSS |
+|---|---|---|---|---|---|---|
+| `pzstd -1` | 37.5 MB | 239 spans of 2 MiB | 1.59 s | 0.36 s (7 ms each) | 1.76 s | 106 MB |
+| `pzstd -3` | 43.4 MB | 60 spans of 8 MiB | 1.63 s | 1.55 s (31 ms each) | 2.01 s | 117 MB |
+| `xz -6 -T0` | 17.4 MB | 20 spans of 24 MiB | 25 µs (no pass) | 7.63 s (153 ms each) | 3.22 s | 158 MB |
+| `zstd -3 -T6` (one frame) | 43.1 MB | refused as too large, 0.31 s after the pass started | | | | 116 MB |
+
+The peak RSS of the zstd files comes from the first part of the index pass,
+which holds up to 64 MiB of output (`Limits::whole`) and its trace, as
+deflate's pass does. A random read of the xz file decodes the whole 24 MiB
+xz block it falls in. The span cache holds 16 MiB of spans but always keeps
+at least the most recent span, whatever its size, so it keeps one of these
+blocks.
+
 ## The other codecs
 
 | Codec | Restart points | Plan |
 |---|---|---|
-| zstd | A frame is independent; inside a frame, blocks share a window of up to 8 MiB at the default levels and up to 128 MiB at `--long`. A `.zst` file is usually one frame. | Several frames: a frame is a natural span, with no window to keep. One frame: stays whole. The seekable format (a skippable frame with a jump table) would give spans; `ruzstd` does not read it. |
-| xz | Each xz block is independent and the index lists every block's two sizes. `xz -T` writes several blocks; plain `xz` writes one. | Several blocks: a block is a span, found from the index without a pass. One block: needs the LZMA dictionary (up to 64 MiB) per checkpoint, so it stays whole. |
+| zstd | A frame is independent; inside a frame, blocks share a window of up to 8 MiB at the default levels and up to 128 MiB at `--long`. A `.zst` file is usually one frame. | Built for several frames: see "zstd frames and xz blocks". One frame stays whole. The seekable format (a skippable frame with a jump table) would give its frames' places without a pass; `ruzstd` does not read it. |
+| xz | Each xz block is independent and the index lists every block's two sizes. `xz -T` writes several blocks; plain `xz` writes one. | Built for several blocks: see "zstd frames and xz blocks". One block stays whole. |
 | bzip2 | Blocks are independent and at most 900 kB of output, but start at any bit, found by the 48-bit block magic. | Restartable in principle. `bzip2-rs` decodes a whole stream only, so it needs a block decoder of our own or a way to hand the crate one block. |
 | LZ4 frame | Independent blocks when the descriptor says so; linked blocks need 64 KiB of history. | Same shape as deflate with a 64 KiB window, and our own decoder. Later. |
 | LZMA, lzip, RAR 5, LHA, Brotli, the rest | The dictionary or the context model is the state, and it is large or not exposed. | Stay whole. |
@@ -473,7 +606,15 @@ separate work.
 - A `blocks` listing for a run read a piece at a time, from block positions
   the index pass could record.
 - Run the index pass in slices with progress on the tab (see "The browser").
-- The other codecs, in the order of the table above.
+- The other codecs, in the order of the table above: bzip2, then LZ4 frames.
+- A read of an xz span decodes every block in it to the end, even when the
+  read wants only the first bytes. Stopping at the end of the read would make
+  a random read of a 24 MiB block cost what reading up to that point costs.
+- zstd frame checksums (XXH64) are not checked: `ruzstd` is built without its
+  `hash` feature.
+- A run refused because one frame or block is past 64 MiB says "over 64 MiB"
+  like any other run past the cap. It could say that one frame or block is
+  too large.
 - A test of a joined stream mixing stored and packed parts past the cap: the
   stored parts' path in `Joined` (`JoinedBytes::Held`) has no test of its own.
 - A joined stream with a part past 1 GiB is refused as failed rather than as
@@ -509,3 +650,15 @@ separate work.
   go at a time, with `unpacking` moving forward between goes and the index
   the same as one go's, and a gzip's joined stream read a go at a time
   through the listing's path, a read of its first bytes.
+- zstd and xz, in `codec::lazy` with the limits made small: runs of several
+  frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
+  streams of several blocks packed by `lzma-rust2`, read back from anywhere;
+  span traces that match the whole trace; one frame or block past
+  `Limits::span` refused; a frame's raw blocks traced to exactly their own
+  bytes once the frame is past its first window; an xz block that does not
+  match the index refused when read. In `eval::space`, both open through their
+  templates, and an xz block's CRC-32 is checked through the index.
+- `crates/core/tests/lazy_frames_real.rs`: files from `pzstd -1`,
+  `zstd -1 -T0 -B1MiB` and `xz -0 -T0` in the sample collection's
+  `compressed` folder, made by its `tools/make_frame_samples.py`, read back
+  byte for byte with `whole` at 256 KiB. The `zstd -B` file is refused.

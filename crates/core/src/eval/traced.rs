@@ -39,7 +39,7 @@ use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 use crate::codec::lazy::Seekable;
-use crate::codec::{Block, BlockKind, Step, StepField, StepKind, TableField, Trace, Unit};
+use crate::codec::{Block, BlockKind, Codec, Step, StepField, StepKind, TableField, Trace, Unit};
 use crate::eval::{Evaluator, Sizing};
 use crate::template::{Expr as E, Ty as T};
 
@@ -75,7 +75,7 @@ impl<'a> Blocks<'a> {
 
     /// The trace of the whole run, for a JPEG scan's units and the bytes its
     /// decoder skipped, which only a whole trace has. None for an indexed run,
-    /// which is deflate and has neither.
+    /// which is deflate, zstd or xz and has neither.
     pub fn whole(self) -> Option<&'a Trace> {
         match self {
             Blocks::Whole(t) => Some(t),
@@ -102,12 +102,13 @@ impl<'a> Blocks<'a> {
         Some(first.in_bits.start..last.in_bits.end)
     }
 
-    /// Whether the run's bits are counted from the low bit of a byte. Every
-    /// indexed run is deflate, which counts them that way.
+    /// Whether the run's bits are counted from the low bit of a byte. Of the
+    /// codecs read a piece at a time, deflate counts them that way, and zstd
+    /// and xz do not.
     pub fn lsb_first(self) -> bool {
         match self {
             Blocks::Whole(t) => t.lsb_first(),
-            Blocks::Indexed(_) => true,
+            Blocks::Indexed(s) => matches!(s.codec(), Codec::Deflate | Codec::Zlib | Codec::Gzip),
         }
     }
 

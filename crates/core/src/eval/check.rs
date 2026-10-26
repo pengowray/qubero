@@ -208,18 +208,36 @@ impl Evaluator {
             (None, Some(u)) => {
                 let (at, member) = (u.at.clone(), u.member.clone());
                 match self.open_space_at(doc, &at)? {
-                    // A stream too large to hold whole was summed by the pass
-                    // that indexed it, with the two sums gzip and zlib keep.
-                    // Any other sum, or a sum over one member, would need the
-                    // whole output, which is what was too large to hold.
+                    // A deflate stream too large to hold whole was summed by
+                    // the pass that indexed it, with the two sums gzip and
+                    // zlib keep. Any other sum over the whole output would
+                    // need all of it, which is what was too large to hold.
+                    // One member of it, which is an xz block, is read through
+                    // the index and summed like any other run.
                     space::Opened::Space(id) if self.spaces.lazy(id).is_some() => {
                         let index = self.spaces.lazy(id).expect("just asked").clone();
                         let value = match (c.algorithm, member) {
                             (crate::checksum::Checksum::Crc32, None) => index.crc32(),
                             (crate::checksum::Checksum::Adler32, None) => index.adler32(),
-                            (_, None) => return fail(too_large(index.len())),
-                            (_, Some(_)) => return fail(UNMAPPED_MEMBER.to_string()),
+                            (_, None) => None,
+                            (_, Some(packed)) => {
+                                let Some(out) = member_out(&index.members(), &packed) else {
+                                    return fail(UNMAPPED_MEMBER.to_string());
+                                };
+                                let len = out.end - out.start;
+                                if len > crate::codec::CAP_BYTES as u64 {
+                                    return fail(too_large(len));
+                                }
+                                let mut bytes = vec![0u8; len as usize];
+                                if let Err(why) = index.read(out.start, &mut bytes) {
+                                    return fail(refused(why));
+                                }
+                                let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
+                                let computed = c.algorithm.over(&bytes);
+                                return Ok(Some(Verdict { ok: computed == stored, computed, stored }));
+                            }
                         };
+                        let Some(value) = value else { return fail(too_large(index.len())) };
                         let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
                         let computed = c.algorithm.stored(u128::from(value));
                         return Ok(Some(Verdict { ok: computed == stored, computed, stored }));

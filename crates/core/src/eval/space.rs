@@ -16,16 +16,17 @@
 //! or does not start on a byte, and refused after the fact when the decoder
 //! will not read it. All three read as the bytes that are there, with the node
 //! saying which happened; see [`crate::codec::Refusal`]. A deflate, zlib or
-//! gzip run whose output is past the cap is the exception: it is indexed
-//! instead, up to a larger limit.
+//! gzip run, a zstd run of several frames or an xz stream of several blocks
+//! whose output is past the cap is the exception: it is indexed instead, up
+//! to a larger limit.
 //!
 //! A [`Ty::Stitched`](crate::template::Ty::Stitched) field opens a space too,
 //! and that one is not a buffer: it is a table of the parts it is joined from,
 //! read a part at a time, with the parts that have to be unpacked kept in a
 //! small cache rather than all at once. See [`Backing`] and `stitch.rs`.
 //!
-//! A deflate run whose output is past the cap is not a buffer either: it is an
-//! index of checkpoints, read a span at a time. See [`crate::codec::lazy`].
+//! Such a run is not a buffer either: it is an index of checkpoints, read a
+//! span at a time. See [`crate::codec::lazy`].
 
 use std::sync::Arc;
 
@@ -1026,6 +1027,10 @@ impl super::Evaluator {
     /// cap, which lets the pass skip the part that might have been a run held
     /// whole: see [`lazy::Indexing::known_large`].
     ///
+    /// Only deflate, zlib and gzip are indexed a step at a time. A zstd or xz
+    /// run is decoded or indexed in one go, with nothing charged, as
+    /// [`lazy::decode_or_index`] does it: see [`lazy::can_step`].
+    ///
     /// Takes the evaluator shared, since a read of a stitched stream reaches
     /// here, and reads do.
     pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
@@ -1037,6 +1042,9 @@ impl super::Evaluator {
                     return Ok(Err(Refusal::TooLarge));
                 }
                 let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
+                if !lazy::can_step(codec) {
+                    return Ok(lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits));
+                }
                 match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
                     Ok(pass) if known_large => pass.known_large(),
                     Ok(pass) => pass,
@@ -1356,6 +1364,45 @@ mod tests {
         e.begin_slice();
         for at in [0usize, 777_777, text.len() - 100] {
             assert_eq!(e.read_in(&d, id, at as u64 * 8, 800).unwrap(), &text[at..at + 100], "100 bytes at {at}");
+        }
+    }
+
+    /// An xz stream of several blocks and a zstd run of several frames, past
+    /// the cap, open through their templates as spaces read a block or a
+    /// frame at a time. An xz block's check is taken over that block's bytes,
+    /// read through the index.
+    #[test]
+    fn xz_blocks_and_zstd_frames_past_the_cap_read_one_at_a_time() {
+        use crate::codec::lazy::tests::{mixed, xz_of, zstd_of};
+        use crate::codec::lazy::Limits;
+        let data = mixed(400_000, 89);
+        let limits = Limits { whole: 64 << 10, span: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Limits::default() };
+        let open = |template: &str, packed: Vec<u8>| {
+            let d = Document::new(MemSource(packed));
+            let mut e = Evaluator::new(formats::builtin(template).unwrap());
+            e.spaces.set_lazy_limits(limits);
+            let decoded = e.child_named(&d, &[], "decoded").unwrap().expect("a decoded field");
+            let id = e.open_space(&d, 0, &[decoded[0], 0]).unwrap().expect("opens");
+            (d, e, id)
+        };
+        for (template, packed) in [("xz", xz_of(&data, 30_000)), ("zstd", zstd_of(&data, 30_000, true))] {
+            let (d, e, id) = open(template, packed);
+            assert!(e.spaces.lazy(id).is_some(), "{template}: held whole");
+            for at in [0usize, 12_345, 299_999, data.len() - 100] {
+                let got = e.read_in(&d, id, at as u64 * 8, 800).unwrap();
+                assert_eq!(got, &data[at..at + 100], "{template}: 100 bytes at {at}");
+            }
+            let space = e.space(id).unwrap();
+            assert_eq!(space.len_bytes(), data.len() as u64);
+            let step = space.map_out(350_000).expect("a step made it");
+            assert!(step.out_bytes.contains(&350_000), "{template}: {step:?}");
+        }
+        let (d, mut e, _) = open("xz", xz_of(&data, 30_000));
+        let blocks = e.child_named(&d, &[], "blocks").unwrap().unwrap();
+        for i in [0, 5, 13] {
+            let check = e.child_named(&d, &[blocks[0], i], "check").unwrap().unwrap();
+            let v = e.run_check(&d, &check).unwrap().expect("the block's CRC-32 is a check");
+            assert!(v.ok, "block {i}: {v:?}");
         }
     }
 

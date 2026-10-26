@@ -12,9 +12,10 @@
 //! [`Ty::Decoded`](crate::template::Ty::Decoded).
 //!
 //! Every decoder here is pure Rust and builds for wasm32. A stream is opened
-//! whole or not at all, which is why there is a cap, with one exception:
-//! deflate, zlib and gzip past the cap are indexed and read a piece at a
-//! time, up to a larger limit. See [`lazy`].
+//! whole or not at all, which is why there is a cap, with three exceptions:
+//! deflate (raw, zlib or gzip), a zstd run of several frames and an xz stream
+//! of several blocks past the cap are indexed and read a piece at a time, up
+//! to a larger limit. See [`lazy`].
 
 pub mod bzip2;
 pub mod cfb;
@@ -1555,10 +1556,10 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Latin1Text
         | Codec::EscapedLatin1Text
         | Codec::PngScanlines { .. }
+        | Codec::Zstd
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }
-        Codec::Zstd => zstd(data)?,
         // Not the traced path, but the same decisions and the same decoder:
         // see `xz::bytes`, which is the traced path with the recording left
         // out rather than a second reading of the format.
@@ -1569,22 +1570,6 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         return Err(Refusal::TooLarge);
     }
     Ok(out)
-}
-
-/// Zstandard, read a frame at a time. A file compressed by `zstd` is one
-/// frame; ROOT writes one per block. Concatenated frames are read through to
-/// the end, which is what the format says a decoder does.
-fn zstd(data: &[u8]) -> Result<Vec<u8>, Refusal> {
-    use std::io::Read;
-    let mut decoder = ruzstd::decoding::StreamingDecoder::new(data).map_err(|_| Refusal::Failed)?;
-    // One byte past the cap, so a stream that only just fits is told from one
-    // that does not.
-    let mut out = Vec::new();
-    match decoder.by_ref().take(CAP_BYTES as u64 + 1).read_to_end(&mut out) {
-        Ok(_) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
-        Ok(_) => Ok(out),
-        Err(_) => Err(Refusal::Failed),
-    }
 }
 
 #[cfg(test)]

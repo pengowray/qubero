@@ -330,6 +330,11 @@ const PROBES: &[Probe] = &[
     // ADIOS2's BP4 files and BP5 index, which sign themselves with a version
     // string whose last word and the version byte after it say which file.
     Probe::Which(adios::sniff_signed),
+    // A zstd file from `pzstd`, which puts a skippable frame in front of
+    // every frame, so the zstd magic is at byte 12 and not at the front.
+    // The skippable magic is LZ4's too, so what settles it is the zstd magic
+    // where the skippable frame's length says the next frame starts.
+    Probe::Is("zstd", |h, _| is_zstd_after_skippable(h)),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the
     // table above knows `{"` and nothing else, and a brace, a newline and two
@@ -784,6 +789,16 @@ fn is_user_blocked_hdf5(head: &[u8]) -> bool {
     std::iter::successors(Some(512usize), |n| n.checked_mul(2))
         .take_while(|at| at + hdf5::SIGNATURE.len() <= head.len())
         .any(|at| &head[at..at + hdf5::SIGNATURE.len()] == hdf5::SIGNATURE)
+}
+
+fn is_zstd_after_skippable(head: &[u8]) -> bool {
+    let word = |at: usize| head.get(at..at + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let Some(magic) = word(0) else { return false };
+    if !(0x184d_2a50..=0x184d_2a5f).contains(&magic) {
+        return false;
+    }
+    let Some(next) = word(4).and_then(|len| usize::try_from(len).ok()?.checked_add(8)) else { return false };
+    head.get(next..next + 4) == Some(zstd::MAGIC)
 }
 
 fn is_deb(head: &[u8]) -> bool {
@@ -1768,6 +1783,21 @@ mod tests {
     /// chose.
     fn sniffed(head: &[u8]) -> Option<&'static str> {
         sniff(head, head.len() as u64)
+    }
+
+    /// A `pzstd` file opens with a skippable frame holding the length of the
+    /// zstd frame after it, and is zstd. A skippable frame in front of
+    /// anything else is not, since LZ4 uses the same magics.
+    #[test]
+    fn a_zstd_file_behind_a_skippable_frame_is_zstd() {
+        let mut head = 0x184d_2a50u32.to_le_bytes().to_vec();
+        head.extend_from_slice(&4u32.to_le_bytes());
+        head.extend_from_slice(&1000u32.to_le_bytes());
+        head.extend_from_slice(zstd::MAGIC);
+        head.extend_from_slice(&[0x00, 0x48, 0, 0, 0]);
+        assert_eq!(sniffed(&head), Some("zstd"));
+        head[12..16].copy_from_slice(lz4::MAGIC);
+        assert_ne!(sniffed(&head), Some("zstd"));
     }
 
     /// A name in the signature table with no template behind it would send a
