@@ -416,7 +416,11 @@ the output that block produced. A frame that asks for a window larger than
 128 MiB is refused as too large before it is decoded, because `ruzstd` hands
 over nothing until the window is full, so the output of such a frame could
 grow far past every limit before any check sees it. 128 MiB is the largest
-window the `zstd` command line decodes by default.
+window the `zstd` command line decodes by default. A `pzstd` file was also
+not recognised as zstd, because it starts with a skippable frame. The sniff
+in `formats/recognise.rs` now also takes a file that starts with a skippable
+frame when the zstd magic is where that frame's length says the next frame
+starts. (LZ4 uses the same skippable frame magics.)
 
 **Checks.** For a whole deflate run past the cap, the index pass computes
 gzip's CRC-32 and zlib's Adler-32. A zstd or xz run has no sum over its whole
