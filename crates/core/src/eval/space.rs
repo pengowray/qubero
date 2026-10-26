@@ -16,16 +16,17 @@
 //! or does not start on a byte, and refused after the fact when the decoder
 //! will not read it. All three read as the bytes that are there, with the node
 //! saying which happened; see [`crate::codec::Refusal`]. A deflate, zlib or
-//! gzip run whose output is past the cap is the exception: it is indexed
-//! instead, up to a larger limit.
+//! gzip run, a zstd run of several frames or an xz stream of several blocks
+//! whose output is past the cap is the exception: it is indexed instead, up
+//! to a larger limit.
 //!
 //! A [`Ty::Stitched`](crate::template::Ty::Stitched) field opens a space too,
 //! and that one is not a buffer: it is a table of the parts it is joined from,
 //! read a part at a time, with the parts that have to be unpacked kept in a
 //! small cache rather than all at once. See [`Backing`] and `stitch.rs`.
 //!
-//! A deflate run whose output is past the cap is not a buffer either: it is an
-//! index of checkpoints, read a span at a time. See [`crate::codec::lazy`].
+//! Such a run is not a buffer either: it is an index of checkpoints, read a
+//! span at a time. See [`crate::codec::lazy`].
 
 use std::sync::Arc;
 

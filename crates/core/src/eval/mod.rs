@@ -2525,9 +2525,9 @@ impl Evaluator {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
-        // Deflate, zlib and gzip are decoded whole when they fit and indexed
-        // when they do not, in one pass, and an index is shared by every node
-        // over the same run. See `codec::lazy`.
+        // Deflate, zlib, gzip, zstd and xz are decoded whole when they fit and
+        // indexed when they do not, and an index is shared by every node over
+        // the same run. See `codec::lazy`.
         if crate::codec::lazy::can_index(codec) {
             let key = (r.space, r.offset, size);
             if let Some(index) = self.spaces.indexed(key, codec) {
