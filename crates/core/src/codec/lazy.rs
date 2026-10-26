@@ -717,9 +717,14 @@ impl Seekable {
     }
 
     /// Which step read bit `bit` of the run, as [`Trace::map_in`] says for a
-    /// whole run.
+    /// whole run. Asked of the trace of the block holding the bit, which is
+    /// the trace the listing and the inspector take a code from, and of the
+    /// span's trace for a bit outside every block.
     pub fn map_in(&self, bit: u64) -> Option<Step> {
-        self.trace_at_bit(bit)?.map_in(bit)
+        match self.block_of_bit(bit) {
+            Some(i) => self.block_trace(i).ok()?.map_in(bit),
+            None => self.trace_at_bit(bit)?.map_in(bit),
+        }
     }
 
     /// How many blocks the run holds.
@@ -1173,6 +1178,32 @@ mod tests {
             }
         }
         assert!(most > 100, "at most {most} blocks");
+    }
+
+    /// A block of more codes than a block's trace may hold has them as one
+    /// opaque step, which still tiles the block, and which the inspector
+    /// declines to take apart rather than misreading.
+    #[test]
+    fn a_block_of_too_many_codes_has_them_as_one_step() {
+        let data = mixed(300_000, 37);
+        let packed = flushed(&data, 6, 6000);
+        let s = indexed(Codec::Deflate, &packed, Limits { span_steps: 200, ..small() });
+        let mut coarse = 0;
+        for i in 0..s.blocks() {
+            let t = s.block_trace(i).expect("traces");
+            t.check_tiles().unwrap_or_else(|e| panic!("block {i}: {e}"));
+            let block = &t.blocks()[0];
+            let payload: Vec<Step> = block.steps.clone().map(|k| t.step(k as usize).unwrap()).filter(|s| s.kind == StepKind::Opaque).collect();
+            if let [one] = &payload[..] {
+                coarse += 1;
+                assert!(t.coarse());
+                assert_eq!(one.in_bits.end, block.in_bits.end, "block {i}: the opaque step stops short of the block's end");
+                let bit = (one.in_bits.start + one.in_bits.end) / 2;
+                let k = t.index_in(bit).expect("a step reads it");
+                assert_eq!(inflate::decode_step(&packed, &t, k), None, "block {i}: an opaque step taken apart");
+            }
+        }
+        assert!(coarse > 10, "only {coarse} blocks over the limit");
     }
 
     /// Past the most block starts there may be, every second one goes and

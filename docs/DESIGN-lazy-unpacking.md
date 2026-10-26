@@ -269,7 +269,8 @@ its blocks come from the index pass instead.
   own trace and 0.
 - **The inspector's code panel.** `Space::trace_at_bit` gives the trace of the
   block holding the bit, and the span's trace only for a bit outside every
-  block (the wrapper, the padding). The listing lays a block's codes out from
+  block (the wrapper, the padding). `Seekable::map_in`, which says which bytes
+  a code wrote, asks the same trace. The listing lays a block's codes out from
   the same trace, so the panel can decode every code the listing shows. A
   span's trace could disagree with the listing: a span of 1 MiB of literals
   has more than `SPAN_TRACE_STEPS` steps, so its trace has one opaque step
