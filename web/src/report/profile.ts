@@ -58,12 +58,22 @@ export const profileSection: Section = {
           ? RV.profileHeadingUndeclared(usedDeclared, declared, undeclared)
           : RV.profileHeading(used.length, declared);
     sec.append(h);
-    const sentences = readingWriting(file);
-    if (sentences.length > 0) {
-      const p = document.createElement("p");
-      p.className = "rv-readwrite";
-      p.textContent = sentences.join(" ");
-      sec.append(p);
+    // One line a fact, each opening into what it means for a program that
+    // reads or writes the format.
+    const facts = readingWriting(file);
+    if (facts.length > 0) {
+      const box = document.createElement("div");
+      box.className = "rv-readwrite";
+      for (const fact of facts) {
+        const d = document.createElement("details");
+        const s = document.createElement("summary");
+        s.textContent = fact.summary;
+        const p = document.createElement("p");
+        p.textContent = fact.detail;
+        d.append(s, p);
+        box.append(d);
+      }
+      sec.append(box);
     }
     sec.append(profileTable(joined, template !== null));
     const choices = choiceTable(file);

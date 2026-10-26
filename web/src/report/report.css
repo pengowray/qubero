@@ -695,6 +695,14 @@
 .rv-readwrite {
   margin: 4px 0 10px;
 }
+.rv-readwrite summary {
+  cursor: pointer;
+}
+.rv-readwrite p {
+  margin: 2px 0 8px 1.2em;
+  color: var(--muted);
+  font-size: 14px;
+}
 .rv-table tr.is-unused td {
   color: var(--muted);
 }

@@ -96,7 +96,7 @@ export const JPEG = {
   unnamedBlock: (limit: number): string =>
     `Codes not listed: this block is past the limit of ${limit.toLocaleString()} Huffman codes listed one by one. The map still counts its bits.`,
   stripCaptionLead: (codes: number, bits: number): string => `${counted(codes, "code")} in ${bitCount(bits)}.`,
-  stripCaption: "Each box is one code, as its bits: the Huffman code first, then its value bits in lighter type. Hover a box for what it says.",
+  stripCaption: "Each box is one code: the Huffman code's bits first, then the value bits in lighter text. Hover a box to see what the code decodes to.",
   codeNo: "#",
   codeBits: "Bits",
   codeSays: "What it says",

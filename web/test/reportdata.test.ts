@@ -184,8 +184,37 @@ test("both byte orders are said with their counts", () => {
 
 test("a reader who can go straight through is told so, and a writer what to know", () => {
   const said = readingWriting(profile([], { every_field_follows: true, lengths_before: 4 }));
-  assert.equal(said[0], "A reader can go from the start of the file to the end without going back.");
-  assert.match(said[1] ?? "", /^4 lengths come before what they size/);
+  assert.deepEqual(said.map((s) => s.summary), ["Readable in a single pass", "4 fields with a length or count field before them"]);
+  assert.equal(said[0]?.detail, "A program that reads this format can read this file from start to end without seeking back.");
+  assert.match(said[1]?.detail ?? "", /^A program that writes this format from start to end has to know each field's length or count before it writes the field/);
+});
+
+test("the lines about offsets and lengths agree with a count of one", () => {
+  const said = readingWriting(profile([], { from_end: 1, backward: 1, forward: 1, lengths_before: 1, lengths_after: 1 }));
+  assert.deepEqual(said.map((s) => s.summary), [
+    "1 field found from the end of the file",
+    "1 field found by a backward offset",
+    "1 field found by a forward offset",
+    "1 field with a length or count field before it",
+    "1 field with a length or count field after it",
+  ]);
+  assert.match(said[0]?.detail ?? "", /before it can find that field\.$/);
+  assert.match(said[1]?.detail ?? "", /seek back to read that field\. A program that writes this format can write the field first/);
+  assert.match(said[2]?.detail ?? "", /has to know where that field will go before it writes the offset/);
+  assert.match(said[3]?.detail ?? "", /has to know the field's length or count before it writes the field/);
+  assert.match(said[4]?.detail ?? "", /can write the field first and then its length or count\.$/);
+});
+
+test("the lines about offsets and lengths agree with a count above one", () => {
+  const said = readingWriting(profile([], { from_end: 2, backward: 3, forward: 4, lengths_after: 5 }));
+  assert.deepEqual(said.map((s) => s.summary), [
+    "2 fields found from the end of the file",
+    "3 fields found by backward offsets",
+    "4 fields found by forward offsets",
+    "5 fields with a length or count field after them",
+  ]);
+  assert.match(said[0]?.detail ?? "", /before it can find those fields\.$/);
+  assert.match(said[1]?.detail ?? "", /seek back to read those fields\./);
 });
 
 test("profile rows read as plain words", () => {
