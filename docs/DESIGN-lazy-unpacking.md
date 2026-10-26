@@ -9,6 +9,11 @@ Deflate, zlib and gzip first; the other codecs are covered at the end.
 `eval/stitch.rs` and the wasm crate. "Still to do" at the end lists what is
 left.
 
+**2026-10-26:** the index pass runs a go at a time, so the browser keeps
+drawing while it runs, and the listing and the status bar say how far it has
+got. See "The pass in steps" and "The browser". Branch
+`nonhuman/elegant-lalande-c05913`, on top of the one above.
+
 ## The problem
 
 Every codec in `codec.rs` decodes a run whole into one `Vec<u8>` and refuses
@@ -151,7 +156,48 @@ Measured in a release build, native:
 at 64 MiB. Past that the template's fallback (everything before the trailer)
 is right for a file of one member, which the test file is. Raising it would
 make a hostile file cost the full 1 GiB walk once to size the member and again
-to index it.
+to index it. Since 2026-10-26 it counts the output rather than keeping it, and
+keeps no trace, since only the end of the stream is wanted.
+
+### The pass in steps
+
+`lazy::Indexing` is the same pass made resumable. `Indexing::step(out_bytes)`
+decodes about that much more output, stops, and the next step carries on from
+exactly where it stopped, not from the last checkpoint: the sink (with its
+window or its whole output), the trace builder, the checkpoints and the
+running sums are all kept in the `Indexing` between steps.
+`decode_or_index` is `step(u64::MAX)` until it is done.
+
+- **Where a step stops.** At the first code past its share of output, and
+  never inside a stored block (so at most 64 KiB over). In the traced phase a
+  step that stops inside a block leaves the block open in the trace
+  (`TraceBuilder::carried_on`, `codec::Paused`), and the next step reads the
+  block's header and tables again with the trace muted, so the trace comes
+  out step for step as one pass makes it, including a block whose symbols are
+  named as one step once the trace passes `MAX_STEPS` partway through it.
+- **The sums.** In the traced phase they are brought up to the latest
+  checkpoint at the end of each step, because past the cap the pass goes back
+  to that checkpoint. A pass in one go never stops, so it sums as before.
+- **Progress.** `Indexing::progress` gives the bits of the run read and the
+  bytes unpacked, each at the furthest it has been, since the pass goes back a
+  little at the cap.
+- **Skipping the traced phase.** `Indexing::known_large` starts with the trace
+  off, for a run the caller knows is past the cap: a stitched stream's part
+  whose length the file gives (`index_part`). A gzip run whose trailer says
+  more than the cap starts that way too. It comes to the same index; a run
+  that turns out to fit under the cap comes back indexed, and its caller finds
+  the length is not the one it was told.
+
+In the evaluator, `Evaluator::index_run` is the one way in, used by
+`open_space_at`, `measure_run` and `index_part`. Each step of 256 KiB is
+charged to the go's allowance first (`Go::charge`, which takes the evaluator
+shared, since reads of a stitched stream reach here and reads do), and a go
+that runs out hands back `Busy` with the pass put back in `Spaces`'
+`Unfinished` table, keyed by the run like `Indexes`. Only two unfinished
+passes are kept, since one in its traced phase holds up to 64 MiB. A finished
+index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
+tab's source reads an index with no evaluator behind it. `Spaces::forget`
+drops both. `Evaluator::unpacking` reports the pass stepped most recently.
 
 ### One decoder
 
@@ -314,23 +360,40 @@ status bar when the button is pressed. `DECODED_REFUSED` has a string for
 
 ## The browser
 
-The index pass runs inside `open_space`, which the wasm crate runs with no
-work slice (`open_in`), on the main thread. Measured native (see the table
-above): the test file in 0.38 s, 500 MB of text-like data in 2.1 s, longer in
-wasm.
+The pass is charged to the same allowance as the rest of a reading, so
+whatever reaches the stream first carries it on, a go at a time: the listing
+reading the stream's first bytes, or Open unpacked. `open_in` in the wasm
+crate runs with the usual `WORK_SLICE` now, and `open_space` answers
+"working" until the pass is done. `Editor::unpacking(space)` says how far the
+pass has got in the reading behind a tab.
+
+On the web side, `Doc.openSpace` comes back as `{working, unpacking}` until
+then. Open unpacked (`openUnpacked` in `main.ts`) writes the progress in the
+status bar and asks again after the page has drawn; the tab opens at the end.
+The listing's placeholder row for fields it cannot show yet says how far the
+unpacking has got while one is under way (`pendingText` in `listingdraw.ts`),
+and is updated on each redraw. The report's streams section waits for it as
+it waits for bytes.
+
+Measured on 2026-10-26 in Chromium, with a generated gzip of 500,007,092
+bytes of CSV-like text packed to 20,306,027 (`make_gz.py` in that session's
+scratchpad: 16 KB blocks of rows, a sixth of them new):
+
+| | Before | After |
+|---|---|---|
+| Longest task while opening and unpacking | 2,928 ms | 122 ms |
+| Tasks over 50 ms | 4, one of them the 2,928 ms | 11, each 50 to 122 ms |
+| Whole pass | 2.9 s, in that one task | 3.0 s, from the drop to the tab |
+| One go of 5,000 elements | | 2.5 MiB, about 18 ms (1.25 MiB took 9 ms, trace on or off) |
+
+The tasks over 50 ms are frames in which the listing and the Open unpacked
+loop both carried the pass on, with the drawing around them.
 
 The compressed run is still read into memory whole, and in the browser the
 file's chunk cache holds 512 chunks of 64 KiB (`CHUNK_CAPACITY` in `doc.ts`),
 so a run larger than 32 MiB compressed cannot be read in one go there even
 under `CAP_BYTES`. Reading the compressed side a piece at a time as well is
 separate work.
-
-v1 accepts the blocking. The fix is cheap on the codec side because the walk can
-restart from its last checkpoint: an index pass can stop at any checkpoint and
-carry on later. What is left is the plumbing: keep the half-built index in
-`Spaces`, charge the walk to the evaluator's work budget so it returns
-`Interrupted` like any other slow reading, and have `doc.ts` show progress on
-the tab. That is v2.
 
 ## The other codecs
 
@@ -344,7 +407,18 @@ the tab. That is v2.
 
 ## Still to do
 
-- Run the index pass in slices with progress on the tab (see "The browser").
+- `inflate_len` still counts up to 64 MiB of output in one go when a gzip
+  member's run is sized; it is about 175 ms of the open in wasm for the test
+  file above. It could be resumable the same way: its state is a bit, a block
+  and a count.
+- Open unpacked stops waiting when the reply is "pending" rather than
+  "working" (bytes of the file still to load), as it did before, and has to
+  be pressed again.
+- `Evaluator::unpacking` reports only its own reading's passes, not those of
+  a stream opened inside a recognised stream's reading.
+- While the pass runs, the listing shows no rows for a structure whose
+  children wait on it, even the ones before the stream (a gzip member's
+  header fields), since a slice of children is answered whole.
 - A `blocks` listing for a run read a piece at a time, from block positions
   the index pass could record.
 - The other codecs, in the order of the table above.
@@ -366,3 +440,13 @@ the tab. That is v2.
   named `Segment..`. Skipped when `qubero2-extras` is absent.
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
+- The pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,
+  over runs of one block and of a block every 3,000 bytes, come to the same
+  checkpoints, sums and bytes as one pass, and under the cap to the same
+  trace step for step; a trace that names blocks partway through a block
+  that steps stopped in; refusals; `known_large` and a gzip trailer that
+  says the run is large, truthfully or not.
+- The evaluator (`eval::space`): a zlib stream past the (small) cap opened a
+  go at a time, with `unpacking` moving forward between goes and the index
+  the same as one go's, and a gzip's joined stream read a go at a time
+  through the listing's path, a read of its first bytes.
