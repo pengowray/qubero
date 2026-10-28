@@ -688,7 +688,7 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
         heading(w, only.path, only, 0, part.from, part.to, part.inner, titleOf(only, list), true, part.via);
       }
     } else {
-      runHeading(w, path, kids, part.from, part.to, breaks, base);
+      runHeading(w, path, kids, part.from, part.to, base);
     }
     if (part.extent !== null) at(part.extent.end);
   }
@@ -893,7 +893,6 @@ function runHeading(
   kids: readonly TemplateNode[],
   from: number,
   to: number,
-  breaks: readonly number[],
   base: number,
 ): void {
   const run = kids.slice(from, to);
@@ -921,7 +920,7 @@ function runHeading(
   // The run is a slice of a slice, so what reads one of its fields may be a
   // sibling outside it: SQLite's `page_size` is written in the header and read
   // by a page. The whole of the parent's children go along for that lookup.
-  rows(w, path, run, base + from, breaks, 1, null, kids.length, kids, base);
+  rows(w, path, run, base + from, 1, null, kids.length, kids, base);
 }
 
 /** What is inside one heading. */
@@ -1029,7 +1028,7 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // parts. Asked once for the run, so a list is drawn one way the whole way
   // down rather than a band here and a row there.
   const how = w.opts.density?.(node, slice.nodes) ?? densityOf(slice.nodes);
-  rows(w, path, slice.nodes, slice.from, [], depth, bounds, node.child_count, slice.nodes, slice.from, how);
+  rows(w, path, slice.nodes, slice.from, depth, bounds, node.child_count, slice.nodes, slice.from, how);
   if (after > 0 && !elsewhere) {
     edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
@@ -1050,7 +1049,6 @@ function rows(
   path: readonly number[],
   kids: readonly TemplateNode[],
   base: number,
-  breaks: readonly number[],
   depth: number,
   bounds: { readonly start: number; readonly end: number } | null,
   total: number,

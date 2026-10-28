@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { ADDRESS_MARK, formatAddress, formatBytes, formatOffset, offsetDigits } from "./doc.ts";
+import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { bitOrderFigure, type BitPart } from "./bitorder.ts";
@@ -32,7 +32,7 @@ import { folds, shownBeforeFold } from "./fold.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
 import { typePanel } from "./typepanel.ts";
-import { fieldNumber, openPlan, type OpenPlan } from "./openplan.ts";
+import { openPlan, type OpenPlan } from "./openplan.ts";
 import { extraction } from "./bitextract.ts";
 import {
   CODEPAGE_A_DEFAULT,
@@ -1717,16 +1717,6 @@ export class Inspector {
     return { element: rows, setSize };
   }
 
-  private async loadBytes(at: number, len: number): Promise<Uint8Array> {
-    await this.doc.ensureRange(at, len);
-    const read = this.doc.read(at, len);
-    // Only what went wrong: the state in front of it is added where every
-    // failure is caught, so a browser's own decompression error gets the same
-    // treatment as this one.
-    if (!read.complete) throw new Error(CHECKED.missingBytes);
-    return read.bytes;
-  }
-
   /**
    * The shift-and-mask that lifts the value at the cursor out of the bytes it
    * straddles. Shown for a value that does not start and end on a byte
@@ -3406,12 +3396,6 @@ function storedEl(line: StoredLine): HTMLElement {
   text.textContent = line.text;
   el.append(word, text);
   return el;
-}
-
-/** A clause that is only the field's name and what it says: what a count or a
- *  name was taken from needs no verb, since the label supplies it. */
-function originClause(o: Origin): string {
-  return o.value === "" ? o.label : `${o.label} = ${grouped(o.value)}`;
 }
 
 /** The one block that is not a property of the field: what the structures

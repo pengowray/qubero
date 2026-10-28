@@ -11,7 +11,7 @@ import { el } from "./dom.ts";
 import { saveBlob } from "./save.ts";
 import { storedChoice, rememberChoice } from "./stored.ts";
 import { TABLE } from "./strings.ts";
-import { exportName, exportSize, exportText, FORMAT_FACTS, FORMATS, scopeOf, writtenTurned, type ExportFormat, type ExportJob } from "./tableexport.ts";
+import { exportName, exportSize, exportText, FORMAT_FACTS, FORMATS, scopeOf, writtenTurned, type ExportJob } from "./tableexport.ts";
 import type { TableRow } from "./tableplan.ts";
 import type { Lead } from "./tabletext.ts";
 

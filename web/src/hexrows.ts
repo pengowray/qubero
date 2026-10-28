@@ -36,7 +36,7 @@ import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run 
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl, type ChipPick } from "./hexchips.ts";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.ts";
-import { NO_VALUES, type PlacedCell, type RowValues } from "./valuetable.ts";
+import { NO_VALUES, type RowValues } from "./valuetable.ts";
 
 /** What pressing something in a row does. Held as one object for the life of
  *  the view: every chip and every heading keeps the function it was built

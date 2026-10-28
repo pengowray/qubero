@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { Tree, TreeNode } from "../src/doc.ts";
-import { boxesOf, entriesOf, leafBand, leafCount, place, readoutLines, widthCaption, type Box } from "../src/btreedraw.ts";
+import { boxesOf, entriesOf, leafBand, leafCount, place, readoutLines, widthCaption } from "../src/btreedraw.ts";
 import { BTREES } from "../src/strings.ts";
 
 /** One node of a fixture, with its children. Written as a tree because that is

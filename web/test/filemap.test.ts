@@ -11,7 +11,7 @@ import type { MapSegment } from "../src/filemap.ts";
 const seg = (bytes: number): MapSegment => ({ offsetBits: 0, sizeBits: bytes * 8, color: "#000" });
 
 /** Total drawn width, gaps included, which must come to the strip's own. */
-function spans(widths: readonly number[], width = 96): number {
+function spans(widths: readonly number[]): number {
   return widths.reduce((a, b) => a + b, 0) + (widths.length - 1);
 }
 

@@ -6,7 +6,7 @@
 
 import { extraction } from "./bitextract.ts";
 import type { BitRange } from "./hexview.ts";
-import type { QuantPart, QuantWeight, QuantInfo } from "./doc.ts";
+import type { QuantWeight, QuantInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 /** Asked for when a weight is clicked, so the views go to its bits and mark

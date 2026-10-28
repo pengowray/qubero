@@ -970,7 +970,7 @@ export class DiagramView {
       note.textContent = DIAGRAM.omitted(made.omitted);
       this.note.append(" ", note);
     }
-    for (const strip of made.strips) this.laid.push(this.buildStrip(d, strip));
+    for (const strip of made.strips) this.laid.push(this.buildStrip(strip));
     this.apply();
 
     // Measured off the page rather than guessed at: a box is as wide as its
@@ -1049,7 +1049,7 @@ export class DiagramView {
   }
 
   /** One type as a row of boxes. */
-  private buildStrip(d: TemplateDiagram, strip: Strip): { strip: Strip; el: HTMLElement; boxes: HTMLElement[] } {
+  private buildStrip(strip: Strip): { strip: Strip; el: HTMLElement; boxes: HTMLElement[] } {
     const el = document.createElement("div");
     el.className = "dv-strip";
     const head = document.createElement("div");
@@ -1076,14 +1076,14 @@ export class DiagramView {
     const line = document.createElement("div");
     line.className = "dv-strip-row";
     const boxes: HTMLElement[] = [];
-    for (const item of strip.items) boxes.push(this.buildItem(d, strip, item, line));
+    for (const item of strip.items) boxes.push(this.buildItem(strip, item, line));
     el.append(head, line);
     this.stage.append(el);
     return { strip, el, boxes };
   }
 
   /** One box of one strip: the field's name, and under it what it is. */
-  private buildItem(d: TemplateDiagram, strip: Strip, item: Item, into: HTMLElement): HTMLElement {
+  private buildItem(strip: Strip, item: Item, into: HTMLElement): HTMLElement {
     const el = document.createElement("div");
     if (item.kind === "band") {
       // The stretch a run stands for. Dotted rather than drawn, because how

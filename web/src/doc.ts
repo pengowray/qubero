@@ -2,7 +2,7 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "./pkg/qubero_wasm.js";
-import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
+import { formatBytes, formatOffset } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
 import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";

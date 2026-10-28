@@ -15,7 +15,7 @@
  * `diagramview.ts` lays them out once it has. Keeping the two apart is what
  * lets this be read and tested on its own.
  */
-import type { DiagramBox, DiagramEdge, TemplateDiagram } from "./doc.ts";
+import type { DiagramBox, TemplateDiagram } from "./doc.ts";
 import { folds } from "./fold.ts";
 
 /** How many strips the plan may hold. A format whose types run past this is a

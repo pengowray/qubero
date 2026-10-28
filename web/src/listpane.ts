@@ -51,12 +51,9 @@ export class ListPane {
   private count = 0;
   /** The format's word for one element: values, tensors, entries. */
   private unit = "item";
-  private name = "";
   /** Elements already read, by index. Cleared whenever the file changes, since
    *  that is when what one of them says can stop being true. */
   private have = new Map<number, TemplateNode>();
-  /** True while some row on screen is waiting on bytes. */
-  private waiting = false;
   private drawn: { from: number; to: number } | null = null;
   private selected: { readonly offsetBits: number; readonly sizeBits: number } | null = null;
   /** True while a selection this pane made is being sent out, so the cursor
@@ -106,7 +103,6 @@ export class ListPane {
     this.path = path;
     this.count = node.child_count;
     this.unit = childWord(node);
-    this.name = node.name;
     this.have.clear();
     this.el.hidden = false;
     this.scroller.scrollTop = 0;
@@ -167,7 +163,7 @@ export class ListPane {
     const out: HTMLElement[] = [];
     for (let i = first; i < last; i++) {
       const node = this.have.get(i);
-      const row = node === undefined ? this.drawWaiting(i) : this.drawRow(i, node);
+      const row = node === undefined ? this.drawWaiting(i) : this.drawRow(node);
       row.style.top = `${i * ROW}px`;
       row.dataset["index"] = String(i);
       out.push(row);
@@ -187,14 +183,12 @@ export class ListPane {
     if (reply.status !== "ok") {
       // Not an answer, so nothing is kept: the redraw after the chunks land
       // asks again. `Doc` has already gone for them.
-      this.waiting = reply.status === "pending" || reply.status === "working";
       return;
     }
-    this.waiting = false;
     reply.node.forEach((node, i) => this.have.set(from + i, node));
   }
 
-  private drawRow(index: number, node: TemplateNode): HTMLElement {
+  private drawRow(node: TemplateNode): HTMLElement {
     const row = el("div", "lp-row");
     if (this.isSelected(node.offset_bits, node.size_bits)) row.classList.add("is-on");
     row.append(el("span", "lp-at", formatOffset(fieldStart(node.offset_bits, node.lsb_first))));
