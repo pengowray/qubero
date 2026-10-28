@@ -1,7 +1,7 @@
 // The listing's format cards, drawn in the report: a JPEG's quantization
-// square, its Huffman code set, its frame summary and its scan line
-// (`jpegcards.ts`). Where the listing draws a card for a node, the part's
-// section in the report opens with the same card, above its fields.
+// square, its Huffman code set, its frame summary and its scan line, and a
+// PNG's palette (`formatcards.ts`). Where the listing draws a card for a node,
+// the part's section in the report opens with the same card, above its fields.
 //
 // The card is drawn by the listing's own code with a context made for it
 // here. Every number on a card names the field it was read from (`data-reads`,
@@ -9,13 +9,13 @@
 // so a click on one moves the cursor there as any other reference does.
 
 import type { Doc, TemplateNode } from "../doc.ts";
-import { drawJpegCard, jpegCardKind } from "../jpegcards.ts";
+import { drawFormatCard, formatCardKind } from "../formatcards.ts";
 import type { DrawContext } from "../listingdraw.ts";
 import { pointAt } from "./refs.ts";
 
 /** The card for a node, or null for a node the listing draws no card for. */
 export function formatCard(doc: Doc, node: TemplateNode): HTMLElement | null {
-  const kind = jpegCardKind(doc, node);
+  const kind = formatCardKind(doc, node);
   if (kind === null) return null;
   const host = document.createElement("div");
   host.className = "rv-card";
@@ -43,7 +43,7 @@ export function formatCard(doc: Doc, node: TemplateNode): HTMLElement | null {
       streams: new Set(),
       shown: true,
     };
-    const card = drawJpegCard(c, {
+    const card = drawFormatCard(c, {
       kind: "formatcard",
       key: `card:${node.path.join("/")}`,
       section: -1,

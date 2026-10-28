@@ -10,6 +10,7 @@
 // are a division rather than a search and only those are read: four kilobytes
 // of free space and four hundred megabytes of payload both open at once.
 
+import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import type { Doc } from "./doc.ts";
 import { REPORT } from "./strings.ts";
@@ -25,13 +26,6 @@ const OVERSCAN = 4;
 /** How tall the area is, in lines. Enough to read a sentence out of a string
  *  field without taking the listing's own screen. */
 const VIEW_LINES = 10;
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 /** A byte as the one character that stands for it, and a dot for the ones that
  *  stand for nothing. The hex view's own rule, so a run reads the same in

@@ -13,6 +13,7 @@
 // window are asked for, which is what makes a list nobody could draw scroll
 // like one anybody can.
 
+import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { Doc, FieldPick, TemplateNode } from "./doc.ts";
@@ -32,13 +33,6 @@ const OVERSCAN = 8;
  *  A quarter of a million rows is five and a half million pixels, so this is
  *  headroom rather than a limit anybody meets. */
 const MAX_CANVAS = 16_000_000;
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 export class ListPane {
   readonly el: HTMLElement;

@@ -8,6 +8,7 @@
 // account for.
 
 import { ADDRESS_MARK } from "./format.ts";
+import { PROBLEMS } from "./strings.ts";
 
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -18,6 +19,30 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   Object.assign(e, props);
   e.append(...children);
   return e;
+}
+
+/**
+ * An element with a class and, if given, its text: the one shape the listing,
+ * the inspector, the byte strips and the list panes build over and over. Each
+ * of them kept a copy of these four lines, and imports this as `el` instead.
+ */
+export function tagged<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/**
+ * The mark every view puts on a wrong value: loud where the format rules the
+ * value out, quiet where Qubero only has no name for it. Hidden from a screen
+ * reader, since the words saying what is wrong are always beside it or on its
+ * hover.
+ */
+export function problemGlyph(invalid: boolean): HTMLSpanElement {
+  const dot = tagged("span", `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`, PROBLEMS.glyph);
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";

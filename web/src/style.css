@@ -1709,6 +1709,17 @@ button.insp-prop-head:hover {
 .insp-field:not([readonly]) {
   background: var(--bg);
 }
+/* A colour, under the box that spells it: a swatch in a row is enough to tell
+   two colours apart, and this is where a reader comes to look at one. */
+.insp-colour {
+  height: 28px;
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.insp-colour.is-see-through {
+  background-size: auto, 12px 12px;
+}
 .insp-area {
   width: 100%;
   font-family: var(--mono);
@@ -3607,6 +3618,14 @@ button.insp-xrow-where:hover {
   border: 1px solid var(--muted);
   border-radius: 2px;
 }
+/* A colour with an alpha, over a checkerboard: the colour is a gradient of one
+   stop laid on top, since a background colour always sits under the image. */
+.is-see-through {
+  background-image:
+    linear-gradient(var(--see-through, transparent), var(--see-through, transparent)),
+    repeating-conic-gradient(#c8c8c8 0 25%, #fff 0 50%);
+  background-size: auto, 6px 6px;
+}
 .rp-type {
   flex: none;
   width: 105px;
@@ -4752,6 +4771,33 @@ table.rec tr.is-on td {
   font-size: 12px;
 }
 
+/* A PNG's palette as the colours it is: sixteen to a row, the order the
+   entries are numbered in, each square a way to the entry it was read from. */
+.pc-grid {
+  display: grid;
+  grid-template-columns: repeat(16, 22px);
+  gap: 2px;
+  width: max-content;
+  margin-block: 2px 8px;
+}
+.pc-swatch {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.pc-swatch:hover {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.pc-swatch.is-on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ---- the content card ---- */
 /* What an image file is a picture of, before the parts that encode it. Its
    head is drawn as a top-level heading is, since that is its place in the
@@ -5237,6 +5283,19 @@ table.rec tr.is-on td {
    chips at a glance. Pressing it twice opens it, which is what a second press
    means everywhere else in this app; the tooltip says so, since a corner mark
    can say "there is something here" and cannot say what to do about it. */
+/* The square of a structure that is a colour, at the front of its chip: a
+   palette entry's chip is its colour spelt out and nothing else. Bordered, as
+   `.rp-swatch` is, so a colour near the chip's own tint still shows. */
+.hv-chip-colour::before {
+  content: "";
+  flex: none;
+  align-self: center;
+  width: 0.75em;
+  height: 0.75em;
+  background: var(--chip-colour);
+  border: 1px solid var(--muted);
+  border-radius: 2px;
+}
 .hv-chip-opens {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--field-color) 70%, var(--fg));
 }

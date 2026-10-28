@@ -14,7 +14,7 @@
 import { formatBytes } from "./doc.ts";
 import type { Doc } from "./doc.ts";
 import type { CardKind, Item } from "./flatten.ts";
-import { el } from "./listingdraw.ts";
+import { tagged as el } from "./dom.ts";
 import { REPORT } from "./strings.ts";
 
 /** The most the card will hand the browser to decode. Past this the picture

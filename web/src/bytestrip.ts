@@ -11,6 +11,7 @@
 // including the stretches nothing covers. That is the same question the hex
 // view's annotation column asks.
 
+import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import type { Doc, Span } from "./doc.ts";
 import { byteDump } from "./bytedump.ts";
@@ -25,13 +26,6 @@ const MAX_FIELDS = 24;
 /** Bytes of one field shown before the run is cut short. A strip is for
  *  seeing where the fields are, not for reading a kilobyte of payload. */
 const BYTES_SHOWN = 12;
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 /** A field's bytes as hex, cut short when the field runs longer than a strip
  *  should show, with how many bytes are not drawn. Bits when it does not fill

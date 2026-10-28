@@ -3,6 +3,8 @@
 // structure. Shared by the parts section and the content section.
 
 import type { Doc, TableFact, TemplateNode } from "../doc.ts";
+import { swatch } from "../colour.ts";
+import { problemGlyph } from "../dom.ts";
 import { fieldClass } from "../fieldstyle.ts";
 import { childWord, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
 import { formatOffset } from "../format.ts";
@@ -71,9 +73,7 @@ function valueCell(doc: Doc, n: TemplateNode): HTMLTableCellElement {
   const td = document.createElement("td");
   td.className = `rv-val ${fieldClass(n.kind)}`;
   if (n.problem !== undefined) {
-    const mark = document.createElement("span");
-    mark.className = `problem-glyph is-${n.problem.tier}`;
-    mark.textContent = "●";
+    const mark = problemGlyph(n.problem.tier === "invalid");
     mark.title = n.problem.text;
     td.append(mark, " ");
     td.title = n.problem.text;
@@ -213,6 +213,9 @@ export function planTable(plan: TablePlan, rows: number): { el: HTMLElement; com
     const tr = document.createElement("tr");
     const idx = cell("td", String(i), "rv-num");
     pointAt(idx, { path: row.path, startBit: row.offsetBits, endBit: row.offsetBits + row.sizeBits });
+    // A row that is a colour shows it, as the table view's number does.
+    const box = row.colour === undefined ? null : swatch(row.colour);
+    if (box !== null) idx.prepend(box);
     tr.append(idx);
     for (const c of row.cells) {
       const td = cell("td", c.text, `rv-val ${fieldClass(c.kind)}`);

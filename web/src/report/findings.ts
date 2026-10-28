@@ -15,6 +15,7 @@
 // beside what the format expects, and a length that does not match shows the
 // stated and the actual end side by side, drawn at one scale.
 
+import { problemGlyph } from "../dom.ts";
 import { checkGap } from "../gapcheck.ts";
 import type { Doc } from "../doc.ts";
 import { formatBytes, formatOffset } from "../format.ts";
@@ -341,14 +342,10 @@ function findingRow(doc: Doc, same: readonly Finding[]): HTMLElement {
   const f = same[0] as Finding;
   const li = document.createElement("li");
   li.className = `rv-find rv-find-${f.kind}`;
-  const mark = document.createElement("span");
   // The glyph every view marks a wrong value with, loud only where the file
   // itself breaks the format.
   const loud = f.kind === "invalid" || f.kind === "refused" || f.kind === "extent";
-  mark.className = `problem-glyph ${loud ? "is-invalid" : "is-undefined"}`;
-  mark.setAttribute("aria-hidden", "true");
-  mark.textContent = "●";
-  li.append(mark);
+  li.append(problemGlyph(loud));
   const what = document.createElement("span");
   what.className = "rv-find-what";
   if (f.name !== null) {

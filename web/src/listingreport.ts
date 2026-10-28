@@ -11,6 +11,7 @@
 // because `spans` is windowed by bit range and cannot say how many rows a file
 // has; a flattened tree is a list with a length, and a list scrolls by index.
 
+import { tagged as el } from "./dom.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
 import { emptyState, flatten, hopPath, OPEN_BUDGET, PAGE, pathKey, refold } from "./flatten.ts";
@@ -22,8 +23,8 @@ import { rememberChoice, storedChoice } from "./stored.ts";
 import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
-import { jpegCardKind } from "./jpegcards.ts";
-import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
+import { formatCardKind } from "./formatcards.ts";
+import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
@@ -398,7 +399,7 @@ export class ListingReport {
       // under one of them puts the middle entry past sixteen bytes.
       saysItself: (node, kids) => FAMILIAR_PICKLE.has(template) && entrySaysItself(node, kids),
       density: (_parent, kids) => (FAMILIAR_PICKLE.has(template) && kids.some((k) => k.type === "entry") ? "rows" : null),
-      formatCard: (node) => jpegCardKind(this.doc, node),
+      formatCard: (node) => formatCardKind(this.doc, node),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,
       hideMachinery: offersSwitch && !this.showMachinery,
