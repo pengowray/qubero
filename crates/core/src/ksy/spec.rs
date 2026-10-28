@@ -1497,7 +1497,7 @@ impl ParamSpec {
 		let doc = DocSpec::from_yaml(node)?;
 		let type_str = opt_str(node, "type")?;
 		let enum_ref = opt_str(node, "enum")?;
-		let ty = param_type_from_str(type_str.as_deref(), &path)?;
+		let ty = param_type_from_str(type_str.as_deref())?;
 		if enum_ref.is_some()
 			&& !matches!(ty, ParamType::Int { .. } | ParamType::Bits { .. })
 		{
@@ -1518,10 +1518,10 @@ impl ParamSpec {
 
 /// The `params` type grammar. Much smaller than the `seq` one: no endianness,
 /// no size, but `bytes`, `bool`, `struct`, `io`, `any` and a `[]` suffix.
-fn param_type_from_str(dt: Option<&str>, path: &str) -> Result<ParamType, KsyError> {
+fn param_type_from_str(dt: Option<&str>) -> Result<ParamType, KsyError> {
 	let Some(dt) = dt else { return Ok(ParamType::Bytes) };
 	if let Some(single) = dt.strip_suffix("[]") {
-		return Ok(ParamType::Array(Box::new(param_type_from_str(Some(single), path)?)));
+		return Ok(ParamType::Array(Box::new(param_type_from_str(Some(single))?)));
 	}
 	Ok(match dt {
 		"bytes" => ParamType::Bytes,

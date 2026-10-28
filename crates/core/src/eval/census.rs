@@ -472,7 +472,7 @@ impl Evaluator {
         // which way can be named: counting it only when the case is known left
         // the box reading "this file has none of these" over a file that takes
         // it on every chunk.
-        let choice = is_choice(&self.template, &declared);
+        let choice = is_choice(&declared);
         if choice {
             if let Some(key) = walk.key(&self.template, &declared) {
                 walk.add_box(&key, weight, path, space);

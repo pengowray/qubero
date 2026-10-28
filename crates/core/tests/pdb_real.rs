@@ -348,7 +348,7 @@ fn a_portable_pdb_says_which_tables_it_has_and_how_many_rows() {
         let strings = named.iter().position(|n| n == "#Strings").unwrap();
         assert_eq!(
             ev.node(&doc, &[9, strings, 0, 0]).unwrap().value,
-            Value::Str(String::new().into()),
+            Value::Str(String::new()),
             "{name}: the string heap opens with the empty string"
         );
     }

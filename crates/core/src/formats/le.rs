@@ -398,7 +398,7 @@ mod tests {
             0, 0, 2, 1, 0, 0, 0, 16, union, 0, 0, 0, 0, 0xc4, 1, 0xdc, 0, 0, 0, names, 0, 0, 0, 0, 0, names + 6, 0,
             0, 0, 0x200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ] {
-            h.extend_from_slice(&(n as u32).to_le_bytes());
+            h.extend_from_slice(&n.to_le_bytes());
         }
         h.extend_from_slice(&[0; 20]);
         assert_eq!(h.len(), 196);

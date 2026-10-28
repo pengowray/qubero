@@ -1243,9 +1243,8 @@ impl<'a> Preprocessor<'a> {
 				let Some((path, path_pos)) = self.take_text(line) else {
 					return Err(self.err(pos, "No file to include given in #include directive."));
 				};
-				let stripped = if path.starts_with('"') && path.ends_with('"') && path.len() >= 2 {
-					&path[1..path.len() - 1]
-				} else if path.starts_with('<') && path.ends_with('>') && path.len() >= 2 {
+				let quoted = path.starts_with('"') && path.ends_with('"') || path.starts_with('<') && path.ends_with('>');
+				let stripped = if quoted && path.len() >= 2 {
 					&path[1..path.len() - 1]
 				} else {
 					return Err(self.err(path_pos, "Invalid file to include given in #include directive."));

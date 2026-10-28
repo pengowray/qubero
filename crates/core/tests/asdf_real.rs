@@ -116,7 +116,7 @@ fn same(value: &Value, e: &Expected) -> bool {
             Ok(x) => x == *f,
         },
         Value::Int(n) => expected.parse::<i128>() == Ok(*n),
-        Value::UInt(n) => expected.parse::<u128>() == Ok(*n as u128),
+        Value::UInt(n) => expected.parse::<u128>() == Ok(*n),
         _ => false,
     }
 }

@@ -74,7 +74,7 @@ fn a_real_message_reads_as_its_grid_and_its_values() {
     assert_eq!(count, ni * nj);
     let values = ev.node(&d, &[0, 1, 4, 5, 2, 5]).unwrap();
     assert_eq!(i128::from(values.child_count), count);
-    assert_eq!(u64::from(values.size_bits), (count * bpv) as u64);
+    assert_eq!(values.size_bits, (count * bpv) as u64);
 }
 
 #[test]
@@ -86,13 +86,13 @@ fn a_grid_this_reads_and_one_it_does_not_both_keep_their_extent() {
     if let Some((d, mut ev)) = read("lambert_bf.grib2") {
         let section = ev.node(&d, &[0, 1, 4, 1]).unwrap();
         let length = ev.node(&d, &[0, 1, 4, 1, 0]).unwrap().value.as_int().unwrap();
-        assert_eq!(u64::from(section.size_bits), length as u64 * 8);
+        assert_eq!(section.size_bits, length as u64 * 8);
         assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5]).unwrap().type_name, "bytes[]");
         assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "bytes[]");
         // And the message is as long as its indicator said.
         let message = ev.node(&d, &[0]).unwrap();
         let total = ev.node(&d, &[0, 1, 3]).unwrap().value.as_int().unwrap();
-        assert_eq!(u64::from(message.size_bits), total as u64 * 8);
+        assert_eq!(message.size_bits, total as u64 * 8);
     }
     // A reduced Gaussian grid packed as JPEG 2000: the grid is template 40,
     // which reads, and the packing is 5.40. The field is a constant, zero
@@ -184,7 +184,7 @@ fn an_operational_forecast_reads_as_three_messages_on_one_grid() {
             let count = ev.node(&d, &[m, 1, 4, 5, 2, 18, g, 1]).unwrap().value.as_int().unwrap();
             let values = ev.node(&d, &[m, 1, 4, 5, 2, 18, g, 2]).unwrap();
             assert_eq!(i128::from(values.child_count), count, "message {m} group {g}");
-            assert_eq!(u64::from(values.size_bits), (count * width) as u64, "message {m} group {g}");
+            assert_eq!(values.size_bits, (count * width) as u64, "message {m} group {g}");
             total += count;
         }
         assert_eq!(total, ni * nj, "message {m}");
@@ -441,7 +441,7 @@ fn a_png_packed_section_opens_as_a_png() {
     let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the codestream opens");
     let space = ev.space(id).expect("just opened");
     assert_eq!(space.template, "png", "section 7 opened as {:?}", space.template);
-    assert_eq!(space.len_bytes() as u64, u64::from(run.size_bits) / 8);
+    assert_eq!(space.len_bytes(), run.size_bits / 8);
 }
 
 /// A section 7 that holds a JPEG 2000 codestream opens as one, and the image
@@ -475,7 +475,7 @@ fn a_jpeg2000_packed_section_opens_as_a_codestream_the_size_of_the_grid() {
     let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the codestream opens");
     let space = ev.space(id).expect("just opened");
     assert_eq!(space.template, "jpeg2000", "section 7 opened as {:?}", space.template);
-    assert_eq!(space.len_bytes(), u64::from(run.size_bits) / 8);
+    assert_eq!(space.len_bytes(), run.size_bits / 8);
 
     // And read with that template, its SIZ is the grid.
     let codestream = Document::new(MemSource(space.bytes().to_vec()));
@@ -512,7 +512,7 @@ fn a_file_of_several_messages_reads_as_all_of_them() {
         // Each ends where the next begins, with nothing between them.
         let message = ev.node(&d, &[m]).unwrap();
         let length = ev.node(&d, &[m, 1, 3]).unwrap().value.as_int().unwrap();
-        assert_eq!(u64::from(message.size_bits), length as u64 * 8);
+        assert_eq!(message.size_bits, length as u64 * 8);
     }
 }
 

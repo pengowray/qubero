@@ -174,7 +174,7 @@ pub fn diagram(t: &Template) -> Diagram {
         // A root that is a choice is a choice: an HDF5 file is a superblock or
         // a user block and then a superblock, and the template says so at the
         // root. Drawn as a structure it drew nothing at all.
-        None => match as_switch(t, &t.root) {
+        None => match as_switch(&t.root) {
             Some(sw) => {
                 let sw = sw.clone();
                 let key = switch_key(&sw);
@@ -260,20 +260,20 @@ fn switch_title(ty: &Ty) -> Option<String> {
     }
 }
 
-fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
+fn as_switch(ty: &Ty) -> Option<&Ty> {
     match ty {
         Ty::Switch { .. } | Ty::Match { .. } => Some(ty),
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::At { inner, .. } => {
-            as_switch(t, inner)
+            as_switch(inner)
         }
-        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(t, inner),
-        Ty::Stitched { inner, .. } => as_switch(t, inner),
-        Ty::Raster { pixel, .. } => as_switch(t, pixel),
+        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(inner),
+        Ty::Stitched { inner, .. } => as_switch(inner),
+        Ty::Raster { pixel, .. } => as_switch(pixel),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
         | Ty::Chain { elem, .. }
-        | Ty::Gather { elem, .. } => as_switch(t, elem),
+        | Ty::Gather { elem, .. } => as_switch(elem),
         _ => None,
     }
 }
@@ -525,8 +525,8 @@ fn lists(t: &Template, ty: &Ty) -> bool {
 
 /// Whether a type is a choice, so that what one of it turns out to be is not
 /// settled by the declaration alone.
-pub(crate) fn is_choice(t: &Template, ty: &Ty) -> bool {
-    as_switch(t, ty).is_some()
+pub(crate) fn is_choice(ty: &Ty) -> bool {
+    as_switch(ty).is_some()
 }
 
 /// A cheap stand-in for [`box_key`], for a caller asking the same question of
@@ -543,7 +543,7 @@ pub(crate) fn is_choice(t: &Template, ty: &Ty) -> bool {
 /// Nothing for a type that is neither, which is the case a caller has to
 /// compute without the cache.
 pub(crate) fn box_identity(t: &Template, ty: &Ty) -> Option<usize> {
-    if let Some(sw) = as_switch(t, ty) {
+    if let Some(sw) = as_switch(ty) {
         return match sw {
             Ty::Switch { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
             Ty::Match { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
@@ -554,7 +554,7 @@ pub(crate) fn box_identity(t: &Template, ty: &Ty) -> Option<usize> {
 }
 
 pub(crate) fn box_key(t: &Template, ty: &Ty) -> Option<String> {
-    if let Some(sw) = as_switch(t, ty) {
+    if let Some(sw) = as_switch(ty) {
         return Some(switch_key(sw));
     }
     as_struct(t, ty).map(struct_key)
@@ -858,7 +858,7 @@ impl<'a> Walk<'a> {
             self.named_drawn += 1;
             return Some(self.struct_box(name.to_string(), None, &sd));
         }
-        if let Some(sw) = as_switch(self.t, ty) {
+        if let Some(sw) = as_switch(ty) {
             if self.boxes.len() >= BOX_CAP {
                 self.capped += 1;
                 return None;
@@ -959,7 +959,7 @@ impl<'a> Walk<'a> {
         // A switch first, since a switch whose cases are structures is both and
         // the choice is what the reader has to see: skipping to the structure
         // would draw one case as though it were the only one.
-        if let Some(sw) = as_switch(self.t, ty) {
+        if let Some(sw) = as_switch(ty) {
             let sw = sw.clone();
             let name = format!("{owner}.{label}");
             let on = match &sw {

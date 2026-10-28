@@ -1074,10 +1074,11 @@ impl Seekable {
                 let mut bytes = Vec::with_capacity(want);
                 let frame_cap = self.limits.span as u64;
                 frames::zstd_walk(&self.packed, self.span_in(k), c.out, frame_cap, &mut TraceBuilder::off(), &mut |_, _| {}, &mut |b| {
-                    match bytes.len() + b.len() > want {
-                        true => Err(Refusal::Failed),
-                        false => Ok(bytes.extend_from_slice(b)),
+                    if bytes.len() + b.len() > want {
+                        return Err(Refusal::Failed);
                     }
+                    bytes.extend_from_slice(b);
+                    Ok(())
                 })?;
                 bytes
             }

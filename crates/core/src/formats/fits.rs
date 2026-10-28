@@ -283,7 +283,7 @@ fn numbered_at(prefix: &str, n: E, field: &[&str]) -> E {
 /// and for the walk to this list on top. So this is here for what it says to a
 /// reader, which is the whole of it.
 fn columns() -> T {
-    T::array(column(), card_value("TFIELDS").at_most(E::lit(COLUMNS as i128)))
+    T::array(column(), card_value("TFIELDS").at_most(E::lit(COLUMNS)))
 }
 
 /// One column of a table, as its cards describe it.

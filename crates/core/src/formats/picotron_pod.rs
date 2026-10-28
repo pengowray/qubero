@@ -123,7 +123,7 @@ fn file() -> T {
 }
 
 /// `--[[pod`, and how wide a read of it is.
-const META_TAG: i128 = 0x2d_2d_5b_5b_70_6f_64;
+const META_TAG: i128 = u64::from_be_bytes(*b"\0--[[pod") as i128;
 const META_BITS: u32 = 56;
 
 /// The metadata: a Lua block comment holding a POD, which is the cartridge's

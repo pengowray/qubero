@@ -120,7 +120,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                 return Err(Refusal::Failed);
             }
             let byte = table[index];
-            grow(&mut out, 1)?;
+            grow(&out, 1)?;
             b.push(start, out.len() as u64, StepKind::Literal(byte));
             out.push(byte);
             table.remove(index);
@@ -147,7 +147,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                         b.push(at, out.len() as u64, StepKind::EndOfBlock);
                         break;
                     }
-                    grow(&mut out, 1)?;
+                    grow(&out, 1)?;
                     b.push(at, out.len() as u64, StepKind::Literal(byte));
                     out.push(byte);
                 }
@@ -167,7 +167,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             if offset as usize > out.len() {
                 return Err(Refusal::Failed);
             }
-            grow(&mut out, len as usize)?;
+            grow(&out, len as usize)?;
             b.push(start, out.len() as u64, StepKind::Match { len, dist: offset });
             let from = out.len() - offset as usize;
             // An overlapping copy is ordinary: an offset of one fills.
@@ -225,13 +225,13 @@ pub fn old(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                 b.push(start, out.len() as u64, StepKind::EndOfBlock);
                 break;
             }
-            grow(&mut out, 1)?;
+            grow(&out, 1)?;
             b.push(start, out.len() as u64, StepKind::Literal(second));
             out.push(second);
         } else if first <= OLD_MAX_INDEX {
             at += 1;
             let byte = OLD_TABLE[first as usize];
-            grow(&mut out, 1)?;
+            grow(&out, 1)?;
             b.push(start, out.len() as u64, StepKind::Literal(byte));
             out.push(byte);
         } else {
@@ -242,7 +242,7 @@ pub fn old(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             if offset == 0 || offset as usize > out.len() {
                 return Err(Refusal::Failed);
             }
-            grow(&mut out, len as usize)?;
+            grow(&out, len as usize)?;
             b.push(start, out.len() as u64, StepKind::Match { len, dist: offset });
             let from = out.len() - offset as usize;
             for k in 0..len as usize {

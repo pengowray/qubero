@@ -698,7 +698,7 @@ impl Evaluator {
 /// first byte, so stripping it leaves nothing there; the shift is done in
 /// u16 because `0xff_u8 >> 8` overflows.
 fn ebml_vint_value(bytes: &[u8], strip_marker: bool) -> u128 {
-    let width = u32::from(bytes[0].leading_zeros() + 1);
+    let width = bytes[0].leading_zeros() + 1;
     let mut value = if strip_marker {
         u128::from(bytes[0]) & (0xff_u16 >> width) as u128
     } else {

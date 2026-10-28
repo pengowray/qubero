@@ -274,7 +274,7 @@ mod tests {
     /// they have, and the rows themselves.
     fn tables_body() -> Vec<u8> {
         let mut v = vec![0, 0, 0, 0, 2, 0, 4, 1];
-        v.extend_from_slice(&(((1u64 << 0x30) | (1 << 0x31)) as u64).to_le_bytes());
+        v.extend_from_slice(&((1u64 << 0x30) | (1 << 0x31)).to_le_bytes());
         v.extend_from_slice(&0u64.to_le_bytes());
         v.extend_from_slice(&2u32.to_le_bytes());
         v.extend_from_slice(&5u32.to_le_bytes());
