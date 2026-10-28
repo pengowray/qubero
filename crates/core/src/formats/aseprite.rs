@@ -5,7 +5,7 @@
 //! size still places the next one correctly, so a newer producer cannot make
 //! the remainder of the file disappear merely by adding a chunk type.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Colour, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T};
 
 const DEPTHS: &[(i128, &str)] = &[(8, "indexed"), (16, "grayscale"), (32, "rgba")];
 const LAYER_TYPES: &[(i128, &str)] = &[(0, "image"), (1, "group"), (2, "tilemap")];
@@ -249,7 +249,8 @@ fn old_palette() -> T {
     let color = T::inline_structure(
         "Rgb",
         vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())],
-    );
+    )
+    .colour(Colour::rgb());
     let packet = T::structure(
         "PalettePacket",
         vec![
@@ -518,7 +519,8 @@ fn palette() -> T {
                 ),
             ),
         ],
-    );
+    )
+    .colour(Colour::rgb().alpha("alpha"));
     T::structure(
         "Palette",
         vec![

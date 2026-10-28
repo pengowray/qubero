@@ -1,7 +1,7 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
 use crate::template::{
-    Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Packing, PngHeader, RasterOrder, Step, StrLen, Template, Ty as T, Until,
+    Check, Checksum, Colour, Covers, Encoding, Endian::*, Expr as E, Packing, PngHeader, RasterOrder, Step, StrLen, Template, Ty as T, Until,
     Valid,
 };
 
@@ -318,14 +318,16 @@ fn pixel() -> T {
     let px = |name: &str, samples: &[&str]| {
         T::structure(name, samples.iter().map(|s| (*s, sample())).collect()).counted_as("pixel")
     };
+    // Each sample is as wide as the depth, so its own width is its range. A
+    // palette index is a colour only by way of PLTE, and is left a number.
     T::switch(
         header("color_type"),
         vec![
-            (0, px("GreyPixel", &["grey"])),
-            (2, px("RgbPixel", &["red", "green", "blue"])),
+            (0, px("GreyPixel", &["grey"]).colour(Colour::grey())),
+            (2, px("RgbPixel", &["red", "green", "blue"]).colour(Colour::rgb())),
             (3, px("IndexedPixel", &["index"])),
-            (4, px("GreyAlphaPixel", &["grey", "alpha"])),
-            (6, px("RgbaPixel", &["red", "green", "blue", "alpha"])),
+            (4, px("GreyAlphaPixel", &["grey", "alpha"]).colour(Colour::grey().alpha("alpha"))),
+            (6, px("RgbaPixel", &["red", "green", "blue", "alpha"]).colour(Colour::rgb().alpha("alpha"))),
         ],
         // A colour type the specification does not define. The scanlines
         // refuse to unpack for it, so no pixel is ever asked to read as this.
@@ -369,16 +371,32 @@ fn idat() -> T {
 
 /// PLTE: the palette, three bytes an entry, as many entries as fit.
 fn plte() -> T {
-    let entry = T::inline_structure("PaletteEntry", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())]).counted_as("entry");
+    let entry = T::inline_structure("PaletteEntry", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())])
+        .counted_as("entry")
+        .colour(Colour::rgb());
     T::structure_named("PLTE", "", "entries", vec![("entries", T::array(entry, E::Remaining.div(E::lit(3))))])
+}
+
+/// One colour written as the image's samples are, whatever the width of the
+/// fields holding it: a grey level, or red, green and blue, each ranging over
+/// the image's bit depth. bKGD and tRNS write sixteen bits a sample in an
+/// image of any depth, so a field's own width is not its range.
+fn sample_colour(name: &str, wide: T, rgb: bool) -> T {
+    let depth = || header_before("bit_depth");
+    if rgb {
+        T::structure(name, vec![("red", wide.clone()), ("green", wide.clone()), ("blue", wide)])
+            .colour(Colour::rgb().depth(depth()))
+    } else {
+        T::structure(name, vec![("grey", wide)]).colour(Colour::grey().depth(depth()))
+    }
 }
 
 /// Three fields that are laid out by the colour type: one grey value, one of
 /// each of red, green and blue, or, for a palette image, something of its own.
 /// `wide` is the type of each value in the first two cases.
 fn by_colour(name: &str, wide: T, palette: T) -> T {
-    let grey = T::structure(&format!("{name}Grey"), vec![("grey", wide.clone())]);
-    let rgb = T::structure(&format!("{name}Rgb"), vec![("red", wide.clone()), ("green", wide.clone()), ("blue", wide)]);
+    let grey = sample_colour(&format!("{name}Grey"), wide.clone(), false);
+    let rgb = sample_colour(&format!("{name}Rgb"), wide, true);
     T::switch(header_before("color_type"), vec![(0, grey.clone()), (2, rgb.clone()), (3, palette), (4, grey), (6, rgb)], T::bytes(E::Remaining))
 }
 
@@ -390,8 +408,8 @@ fn trns() -> T {
     T::switch(
         header_before("color_type"),
         vec![
-            (0, T::structure("tRNSGrey", vec![("grey", T::u16(Big))])),
-            (2, T::structure("tRNSRgb", vec![("red", T::u16(Big)), ("green", T::u16(Big)), ("blue", T::u16(Big))])),
+            (0, sample_colour("tRNSGrey", T::u16(Big), false)),
+            (2, sample_colour("tRNSRgb", T::u16(Big), true)),
             (3, alphas),
         ],
         T::bytes(E::Remaining),
@@ -482,16 +500,24 @@ fn bkgd() -> T {
 }
 
 /// pHYs: how many pixels fit in a unit each way, and whether the unit is the
-/// metre or says only the aspect ratio.
+/// metre or says only the aspect ratio. Pixels to the metre is what the file
+/// says and dots to the inch is what everyone asks, so where the unit is the
+/// metre the two are side by side: 11811 a metre is 300 dpi.
 fn phys() -> T {
+    let metre = || E::field("unit").equal_to(E::lit(1));
+    let dpi = |field: &str| T::when(metre(), T::computed_real(E::field(field).mul(E::real(0.0254))));
     T::structure(
         "pHYs",
         vec![
             ("pixels_per_unit_x", T::u32(Big)),
             ("pixels_per_unit_y", T::u32(Big)),
             ("unit", T::enumeration("PhysUnit", T::u8(), &[(0, "unknown"), (1, "metre")])),
+            ("dpi_x", dpi("pixels_per_unit_x")),
+            ("dpi_y", dpi("pixels_per_unit_y")),
         ],
     )
+    .field_doc("dpi_x", "Dots per inch across, worked out from pixels_per_unit_x. Only where the unit is the metre.")
+    .field_doc("dpi_y", "Dots per inch down, worked out from pixels_per_unit_y. Only where the unit is the metre.")
 }
 
 /// tIME: when the image was last changed, in UTC, as the year and then five
@@ -523,7 +549,8 @@ fn splt() -> T {
         "SuggestedEntry",
         vec![("red", sample()), ("green", sample()), ("blue", sample()), ("alpha", sample()), ("frequency", T::u16(Big))],
     )
-    .counted_as("entry");
+    .counted_as("entry")
+    .colour(Colour::rgb().alpha("alpha"));
     let size = E::cond(E::field("sample_depth").equal_to(E::lit(16)), E::lit(10), E::lit(6));
     T::structure(
         "sPLT",
@@ -580,9 +607,20 @@ fn fctl() -> T {
             ("delay_den", T::u16(Big)),
             ("dispose_op", T::enumeration("DisposeOp", T::u8(), &[(0, "none"), (1, "background"), (2, "previous")])),
             ("blend_op", T::enumeration("BlendOp", T::u8(), &[(0, "source"), (1, "over")])),
+            // A denominator of nought means a hundredth, so that a writer
+            // that leaves it out still means something.
+            (
+                "delay_seconds",
+                T::computed_real(E::field("delay_num").div(E::cond(
+                    E::field("delay_den").equal_to(E::lit(0)),
+                    E::real(100.0),
+                    E::field("delay_den"),
+                ))),
+            ),
         ],
     )
     .field_doc("delay_num", "The frame's delay is delay_num / delay_den seconds, and a delay_den of 0 means 100.")
+    .field_doc("delay_seconds", "How long the frame shows for: delay_num / delay_den, with a delay_den of 0 read as 100.")
 }
 
 /// fdAT: a piece of one animation frame's zlib stream, behind a sequence
@@ -657,5 +695,138 @@ mod tests {
         let color = ev.node(&d, &[1, 0, 2, 3]).unwrap();
         assert_eq!(color.type_name, "ColorType");
         assert_eq!(color.value, Value::Enum { raw: 6, name: Some("rgba".into()), hex: false });
+    }
+
+    fn ihdr(width: u32, height: u32, depth: u8, colour_type: u8) -> Vec<u8> {
+        let mut data = width.to_be_bytes().to_vec();
+        data.extend_from_slice(&height.to_be_bytes());
+        data.extend_from_slice(&[depth, colour_type, 0, 0, 0]);
+        chunk(b"IHDR", &data)
+    }
+
+    /// `raw` as a zlib stream of one stored deflate block: no compression,
+    /// so the test needs no encoder.
+    fn stored(raw: &[u8]) -> Vec<u8> {
+        let mut z = vec![0x78, 0x01, 0x01];
+        let len = raw.len() as u16;
+        z.extend_from_slice(&len.to_le_bytes());
+        z.extend_from_slice(&(!len).to_le_bytes());
+        z.extend_from_slice(raw);
+        z.extend_from_slice(&crate::checksum::adler32(raw).to_be_bytes());
+        z
+    }
+
+
+    fn file(chunks: &[Vec<u8>]) -> Document<MemSource> {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        for c in chunks {
+            b.extend_from_slice(c);
+        }
+        b.extend_from_slice(&chunk(b"IEND", b""));
+        Document::new(MemSource(b))
+    }
+
+    /// The path of a field reached by name from `path`, a step at a time.
+    /// An empty name is the first child, for the steps a stream takes.
+    fn down(ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize], names: &[&str]) -> Vec<usize> {
+        let mut at = path.to_vec();
+        for name in names {
+            if name.is_empty() {
+                at.push(0);
+            } else {
+                at = ev.child_named(d, &at, name).unwrap().unwrap_or_else(|| panic!("no {name} under {at:?}"));
+            }
+        }
+        at
+    }
+
+    #[test]
+    fn palette_entries_and_pixels_are_colours() {
+        let pixels = [0u8, 0xdc, 0xcd, 0x80, 0x00, 0x00, 0xff];
+        let d = file(&[
+            ihdr(2, 1, 8, 2),
+            chunk(b"PLTE", &[0xdc, 0xcd, 0x80, 0x10, 0x20, 0x30]),
+            chunk(b"IDAT", &stored(&pixels)),
+        ]);
+        let mut ev = Evaluator::new(png());
+        // A palette entry is a colour,
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0]).unwrap().colour.as_deref(), Some("#dccd80"));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 1]).unwrap().colour.as_deref(), Some("#102030"));
+        // and that is what it reads as on one line, in a chip or a cell.
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 1]).unwrap().line.as_deref(), Some("#102030"));
+        // A list and a sample are not colours themselves.
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0]).unwrap().colour, None);
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0]).unwrap().colour, None);
+        let px = down(&mut ev, &d, &[2], &["", "compressed", "", "scanlines", "", "pixels"]);
+        // Every case of the pixel switch is a different structure and every
+        // one is counted as a pixel.
+        assert_eq!(ev.node(&d, &px).unwrap().unit.as_deref(), Some("pixel"));
+        assert_eq!(ev.node(&d, &[px.as_slice(), &[0]].concat()).unwrap().colour.as_deref(), Some("#dccd80"));
+        assert_eq!(ev.node(&d, &[px.as_slice(), &[1]].concat()).unwrap().colour.as_deref(), Some("#0000ff"));
+    }
+
+    #[test]
+    fn a_narrow_grey_reaches_white_and_alpha_follows_it() {
+        // Two-bit grey with no alpha: 0, 1, 2, 3 in one byte, filter none.
+        let d = file(&[ihdr(4, 1, 2, 0), chunk(b"IDAT", &stored(&[0, 0b0001_1011]))]);
+        let mut ev = Evaluator::new(png());
+        let px = down(&mut ev, &d, &[2], &["", "compressed", "", "scanlines", "", "pixels"]);
+        let colours: Vec<_> = (0..4).map(|i| ev.node(&d, &[px.as_slice(), &[i]].concat()).unwrap().colour.unwrap()).collect();
+        assert_eq!(colours, ["#000000", "#555555", "#aaaaaa", "#ffffff"]);
+        // Sixteen-bit grey with alpha.
+        let d = file(&[ihdr(1, 1, 16, 4), chunk(b"IDAT", &stored(&[0, 0x80, 0x00, 0xff, 0xff]))]);
+        let mut ev = Evaluator::new(png());
+        let px = down(&mut ev, &d, &[2], &["", "compressed", "", "scanlines", "", "pixels"]);
+        assert_eq!(ev.node(&d, &[px.as_slice(), &[0]].concat()).unwrap().colour.as_deref(), Some("#808080ff"));
+    }
+
+    #[test]
+    fn background_and_transparent_colours_range_over_the_image_depth() {
+        // A four-bit grey image: bKGD and tRNS write sixteen bits, and 15 is
+        // white rather than nearly black.
+        let d = file(&[ihdr(1, 1, 4, 0), chunk(b"bKGD", &[0, 15]), chunk(b"tRNS", &[0, 3])]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(ev.node(&d, &[1, 1, 2]).unwrap().colour.as_deref(), Some("#ffffff"));
+        assert_eq!(ev.node(&d, &[1, 2, 2]).unwrap().colour.as_deref(), Some("#333333"));
+        // Past the depth's range is a wrong file, and no colour is made up.
+        let d = file(&[ihdr(1, 1, 4, 0), chunk(b"bKGD", &[0, 16])]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(ev.node(&d, &[1, 1, 2]).unwrap().colour, None);
+        // An eight-bit RGB image.
+        let d = file(&[ihdr(1, 1, 8, 2), chunk(b"bKGD", &[0, 255, 0, 128, 0, 0])]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(ev.node(&d, &[1, 1, 2]).unwrap().colour.as_deref(), Some("#ff8000"));
+    }
+
+    #[test]
+    fn physical_size_reads_in_dots_per_inch_where_the_unit_is_the_metre() {
+        let mut data = 11811u32.to_be_bytes().to_vec();
+        data.extend_from_slice(&3937u32.to_be_bytes());
+        data.push(1);
+        let d = file(&[ihdr(1, 1, 8, 0), chunk(b"pHYs", &data)]);
+        let mut ev = Evaluator::new(png());
+        let Value::Float(x) = ev.node(&d, &[1, 1, 2, 3]).unwrap().value else { panic!("dpi_x is a real") };
+        let Value::Float(y) = ev.node(&d, &[1, 1, 2, 4]).unwrap().value else { panic!("dpi_y is a real") };
+        assert!((x - 300.0).abs() < 0.01 && (y - 100.0).abs() < 0.01, "{x} {y}");
+        // An aspect ratio alone has no inches in it.
+        *data.last_mut().unwrap() = 0;
+        let d = file(&[ihdr(1, 1, 8, 0), chunk(b"pHYs", &data)]);
+        let mut ev = Evaluator::new(png());
+        assert!(ev.node(&d, &[1, 1, 2, 3]).unwrap().absent);
+    }
+
+    #[test]
+    fn a_frame_delay_reads_in_seconds() {
+        let fctl = |num: u16, den: u16| {
+            let mut data = vec![0; 20];
+            data.extend_from_slice(&num.to_be_bytes());
+            data.extend_from_slice(&den.to_be_bytes());
+            data.extend_from_slice(&[0, 0]);
+            chunk(b"fcTL", &data)
+        };
+        let d = file(&[ihdr(1, 1, 8, 0), fctl(1, 10), fctl(7, 0)]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(ev.node(&d, &[1, 1, 2, 9]).unwrap().value, Value::Float(0.1));
+        assert_eq!(ev.node(&d, &[1, 2, 2, 9]).unwrap().value, Value::Float(0.07));
     }
 }

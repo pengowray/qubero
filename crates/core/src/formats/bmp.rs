@@ -17,7 +17,7 @@
 //! that aligns its pixel data leaves room the table does not fill and that
 //! room reads as what it is. Before, it was counted as part of the table.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Colour, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// How the pixels are stored. The JPEG and PNG cases mean the bitmap is a
 /// whole file of another format, embedded.
@@ -132,11 +132,12 @@ fn quad() -> T {
         vec![("blue", T::u8()), ("green", T::u8()), ("red", T::u8()), ("reserved", T::u8())],
     )
     .counted_as("colour")
+    .colour(Colour::rgb())
 }
 
 /// The three-byte entry the OS/2 header uses, with no fourth byte to spare.
 fn triple() -> T {
-    T::inline_structure("Bgr", vec![("blue", T::u8()), ("green", T::u8()), ("red", T::u8())]).counted_as("colour")
+    T::inline_structure("Bgr", vec![("blue", T::u8()), ("green", T::u8()), ("red", T::u8())]).counted_as("colour").colour(Colour::rgb())
 }
 
 #[cfg(test)]

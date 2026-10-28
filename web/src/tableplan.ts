@@ -52,6 +52,10 @@ export type TableRow = {
    *  channel's path, which is the only thing telling one run of numbers from
    *  the next. Only on the rows of a plan whose `rowNames` is true. */
   readonly name?: string;
+  /** The colour the row's element says it is, where the template calls it
+   *  one: a palette entry, a pixel. The cells are its samples; this is what
+   *  they come to, drawn beside the row's number. */
+  readonly colour?: string;
   /** Where each cell is stored, cell for cell. A table drawn turned has a
    *  record down each column, so a row of it is one field out of every record
    *  and is stored in as many places as there are records; the cell the reader
@@ -635,6 +639,7 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
         sizeBits: element.size_bits,
         path: [...node.path, i],
         ...(name === undefined ? {} : { name }),
+        ...(element.colour === undefined ? {} : { colour: element.colour }),
       };
     },
   };

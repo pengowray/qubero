@@ -10,7 +10,7 @@
 //! `BODY` is either raw planes or ByteRun1, the run-length encoding Electronic
 //! Arts specified alongside the format. Neither is unpacked here.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Colour, Endian::*, Expr as E, Template, Ty as T};
 
 use super::iff::{cc, chunk_text, iff};
 
@@ -82,7 +82,9 @@ fn bmhd() -> T {
 /// the original hardware write the four-bit values in the high nibbles, so a
 /// colour reads as 0x00 to 0xf0 rather than the full range.
 fn cmap() -> T {
-    let colour = T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())]).counted_as("colour");
+    let colour = T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())])
+        .counted_as("colour")
+        .colour(Colour::of(&["r", "g", "b"]));
     T::array(colour, E::Remaining.div(E::lit(3)))
 }
 

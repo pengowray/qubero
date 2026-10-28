@@ -6,8 +6,16 @@
 // neither does a hex triple to most readers. So a field the template typed as
 // a colour gets a square of that colour beside its value.
 //
+// The same square goes beside any structure the template says is a colour: a
+// PNG palette entry or pixel, a GIF colour table entry. The core works out what
+// colour that is (`TemplateNode.colour`), as `#rrggbb` or `#rrggbbaa`, and a
+// colour with an alpha is drawn over a checkerboard so that see-through reads
+// as see-through rather than as pale.
+//
 // Nothing here guesses. A value that is not one of the four syntaxes gets no
-// swatch, which is the honest answer for a colour the file wrote wrongly.
+// swatch, which is the honest answer for a colour the file wrote wrongly, and
+// a structure the template did not call a colour gets none either, whatever
+// its fields are called.
 
 /** The sixteen colours an ANSI name refers to, as the palette xterm uses. */
 const ANSI16: readonly [number, number, number][] = [
@@ -65,7 +73,7 @@ function byName(name: string): [number, number, number] | null {
  */
 export const cssColour = (text: string): string | null => {
   const value = text.trim();
-  const hex = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(value);
+  const hex = /^#([0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})$/i.exec(value);
   if (hex !== null) return value.toLowerCase();
   const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i.exec(value);
   if (rgb !== null) {
@@ -86,6 +94,9 @@ export const cssColour = (text: string): string | null => {
   return null;
 };
 
+/** Whether a colour as CSS writes it has an alpha: `#rgba` or `#rrggbbaa`. */
+const seeThrough = (css: string): boolean => /^#([0-9a-f]{4}|[0-9a-f]{8})$/i.test(css);
+
 /** The square drawn beside a colour's value, or nothing when the text is not
  *  a colour this knows how to read. */
 export const swatch = (text: string): HTMLElement | null => {
@@ -93,12 +104,35 @@ export const swatch = (text: string): HTMLElement | null => {
   if (css === null) return null;
   const box = document.createElement("span");
   box.className = "rp-swatch";
-  box.style.background = css;
+  paint(box, css);
   // The swatch carries no information the value beside it does not, so it is
   // hidden from anything reading the row out.
   box.setAttribute("aria-hidden", "true");
   return box;
 };
 
+/** Fill an element with a colour, over the checkerboard where the colour lets
+ *  some of what is behind it through. */
+export function paint(box: HTMLElement, css: string): void {
+  const clear = seeThrough(css);
+  box.classList.toggle("is-see-through", clear);
+  // The checkerboard is the class's background image, and the shorthand set
+  // inline would wipe it, so a see-through colour goes in by a variable.
+  if (clear) {
+    box.style.removeProperty("background");
+    box.style.setProperty("--see-through", css);
+  } else {
+    box.style.background = css;
+  }
+}
+
 /** The type name a template gives a field whose value is a colour. */
 export const COLOUR_TYPE = "colour";
+
+/** The swatch for a node: the colour a structure says it is, or a field the
+ *  template typed as a colour, read from the text it shows. Null for every
+ *  other node. */
+export function nodeSwatch(n: { readonly type: string; readonly colour?: string }, shown: string): HTMLElement | null {
+  if (n.colour !== undefined) return swatch(n.colour);
+  return n.type === COLOUR_TYPE ? swatch(shown) : null;
+}

@@ -12,13 +12,13 @@ import { bitOrderFigure, type BitPart } from "./bitorder.ts";
 
 /** The names of a code's two kinds of part in the bit-order figure. */
 const BIT_ORDER = { huffman: "Huffman code", extra: "Extra bits" } as const;
-import { address } from "./dom.ts";
+import { address, problemGlyph, tagged as el } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROBLEMS, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -30,6 +30,7 @@ import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, LINE_CHARS, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
 import { fieldClass } from "./fieldstyle.ts";
+import { nodeSwatch, paint } from "./colour.ts";
 import { withPictures } from "./textview.ts";
 import { typePanel } from "./typepanel.ts";
 import { openPlan, type OpenPlan } from "./openplan.ts";
@@ -262,6 +263,9 @@ export class Inspector {
   /** Shift-and-mask for a value that does not start on a byte boundary. */
   private readonly formula: HTMLElement;
   private readonly fieldRow: HTMLElement;
+  /** The colour a structure says it is, as a block wide enough to see, under
+   *  the box that spells it. Hidden for everything that is not a colour. */
+  private readonly colourBlock: HTMLElement;
   private readonly types: HTMLElement;
   /** Human-readable dates and checks derived from format fields. */
   private readonly semantics: HTMLElement;
@@ -494,6 +498,9 @@ export class Inspector {
     this.detail.className = "insp-detail";
     this.fieldRow = document.createElement("div");
     this.fieldRow.className = "insp-fieldrow";
+    this.colourBlock = el("div", "insp-colour");
+    this.colourBlock.hidden = true;
+    this.colourBlock.setAttribute("aria-hidden", "true");
     // What the type permits, under the editor: the values an enum names, the
     // bytes a magic field wanted, the meaning of each bit of a flags field.
     // Absent for a type whose value already says everything.
@@ -578,7 +585,7 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.bitOrder, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    this.fieldRow.append(subhead("Value"), this.field, this.colourBlock, this.area, this.bits, this.bitOrder, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -1764,10 +1771,7 @@ export class Inspector {
     }
     const invalid = problem.tier === "invalid";
     this.problemLine.className = `insp-problem ${invalid ? "is-invalid" : "is-undefined"}`;
-    const glyph = document.createElement("span");
-    glyph.className = `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`;
-    glyph.textContent = PROBLEMS.glyph;
-    glyph.setAttribute("aria-hidden", "true");
+    const glyph = problemGlyph(invalid);
     const text = document.createElement("span");
     text.textContent = problem.text;
     this.problemLine.replaceChildren(glyph, text);
@@ -2881,6 +2885,8 @@ export class Inspector {
     this.field.value = row ?? (n.composite ? "" : n.edit_text);
     this.field.placeholder = n.composite && row === null ? structText(n) : "";
     this.field.setAttribute("aria-label", ariaLabel(n));
+    this.colourBlock.hidden = n.colour === undefined;
+    if (n.colour !== undefined) paint(this.colourBlock, n.colour);
   }
 
   /**
@@ -3198,16 +3204,6 @@ function signed(v: bigint, bits: number): bigint {
   return (v & top) === 0n ? v : v - (1n << BigInt(bits));
 }
 
-/** A tagged element with a class and its text, the way `listpane.ts` and
- *  `listingdraw.ts` each keep one. Three copies of four lines is two too many;
- *  they want collecting into `dom.ts`, whose own `el` takes properties. */
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
 /** A structure's own line in the box the value would have gone in: what it
  *  reads as, where a line says more than a count of its fields, and how many
  *  fields it has where it does not. */
@@ -3254,6 +3250,8 @@ function kidRow(kid: TemplateNode, holds: { readonly text: string; readonly coun
   row.append(el("span", `insp-kid-name ${fieldClass(kid.kind)}`, kid.name));
   const value = el("span", `insp-kid-value${holds.count ? " insp-kid-count" : ""}`, holds.text);
   value.title = holds.text;
+  const box = nodeSwatch(kid, holds.text);
+  if (box !== null) value.prepend(box);
   row.append(value, el("span", "insp-kid-size", bitSizeText(kidSize(kid))));
   return row;
 }

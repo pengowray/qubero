@@ -66,6 +66,8 @@ pub struct Span {
     /// front of them. It is the same question either surface asks, so it is
     /// answered once, here.
     pub opens: bool,
+    /// The colour this structure says it is. See `NodeInfo::colour`.
+    pub colour: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -973,6 +975,10 @@ impl Evaluator {
     /// A structure marked to read on one row, as the one row it reads as.
     fn one_row<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
+        if let Some(colour) = &info.colour {
+            span.line = Some(colour.clone());
+            return Ok(span);
+        }
         // What the format says one of these reads as, where it has said. The
         // same declaration the value table's cells are written from, so the
         // chip beside the bytes and the cell over them say the same thing
@@ -1107,6 +1113,7 @@ impl Evaluator {
             // unpacked off; a template may fold the stream itself away and
             // show only its contents, so both spellings have to be caught.
             opens: (info.decoded && info.refused.is_none()) || info.space_root,
+            colour: info.colour.clone(),
         })
     }
 
@@ -1337,7 +1344,7 @@ impl Evaluator {
 
     /// The structure a type is, following the names in the template's own
     /// table. None for anything that is not one.
-    fn struct_of(&self, ty: &Ty) -> Option<std::sync::Arc<crate::template::StructDef>> {
+    pub(super) fn struct_of(&self, ty: &Ty) -> Option<std::sync::Arc<crate::template::StructDef>> {
         let mut ty = ty.base();
         for _ in 0..8 {
             match ty {

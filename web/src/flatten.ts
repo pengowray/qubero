@@ -1158,7 +1158,10 @@ function child(w: Walk, declared: TemplateNode, depth: number, total: number, re
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null, node.name, open, via);
     return;
   }
-  const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total) && !saidInFull(w, node));
+  // A colour arrives shut as well: its row says `#dccd80`, and the three
+  // samples under it are what anyone opening it wants to check, not read.
+  const shut = node.colour !== undefined || saidInFull(w, node);
+  const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total) && !shut);
   // The children are read before the row is pushed, so the row can say how
   // many of them it is about to draw rather than how many the structure has.
   // Only for a row that is open: reading a closed row's children to correct a

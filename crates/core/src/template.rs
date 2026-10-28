@@ -3535,6 +3535,62 @@ pub struct StructDef {
     /// every structure, which is a thing the format itself names. See
     /// [`EncodingStep`].
     pub encoding: Option<EncodingStep>,
+    /// What colour this structure is, when its fields are the samples of one.
+    /// None for every structure that is not a colour. See [`Colour`].
+    pub colour: Option<Colour>,
+}
+
+/// A structure whose fields are the samples of one colour: which fields they
+/// are, and how large a sample can be.
+///
+/// A palette entry, a pixel and a background colour are each three numbers in
+/// a row, and three numbers are not a colour a reader can see. The template
+/// knows which of its fields are red, green and blue, and nothing else does:
+/// a view guessing from the names would paint every `r`, `g` and `b` in the
+/// world. So the template says so, and every view that shows the structure
+/// shows the colour beside it (see [`crate::eval::NodeInfo::colour`]).
+#[derive(Debug, Clone)]
+pub struct Colour {
+    /// The fields holding the colour: one for grey, or red, green and blue in
+    /// that order.
+    pub channels: Vec<Arc<str>>,
+    /// The field holding how opaque the colour is, where it has one.
+    pub alpha: Option<Arc<str>>,
+    /// How many bits a sample's range is, where that is not the width of the
+    /// field holding it. A PNG background colour is written in sixteen bits
+    /// whatever the image's depth, and a grey of 3 in a four-bit image is
+    /// light grey rather than nearly black. None: each sample's own width.
+    pub depth: Option<Expr>,
+}
+
+impl Colour {
+    /// Red, green and blue, in fields of those names.
+    pub fn rgb() -> Colour {
+        Colour::of(&["red", "green", "blue"])
+    }
+
+    /// One grey level, in a field called `grey`.
+    pub fn grey() -> Colour {
+        Colour::of(&["grey"])
+    }
+
+    /// The colour in the fields named, one for grey or three for red, green
+    /// and blue.
+    pub fn of(channels: &[&str]) -> Colour {
+        debug_assert!(channels.len() == 1 || channels.len() == 3, "a colour is one grey or three channels");
+        Colour { channels: channels.iter().map(|c| Arc::from(*c)).collect(), alpha: None, depth: None }
+    }
+
+    /// With how opaque it is, in the field named.
+    pub fn alpha(self, field: &str) -> Colour {
+        Colour { alpha: Some(field.into()), ..self }
+    }
+
+    /// With every sample ranging over `bits` bits rather than its field's own
+    /// width.
+    pub fn depth(self, bits: Expr) -> Colour {
+        Colour { depth: Some(bits), ..self }
+    }
 }
 
 /// A structure a path can be named through without naming it, because it is
@@ -3744,6 +3800,7 @@ impl Ty {
             payload: Vec::new(),
             line: Vec::new(),
             encoding: None,
+            colour: None,
         }))
     }
     /// A structure that one of its own fields names, and one field that is
@@ -4049,6 +4106,15 @@ impl Ty {
     fn encoding_step(self, step: EncodingStep) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { encoding: Some(step), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Says this structure's fields are the samples of one colour. See
+    /// [`Colour`].
+    pub fn colour(self, colour: Colour) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { colour: Some(colour), ..(*s).clone() })),
             other => other,
         }
     }

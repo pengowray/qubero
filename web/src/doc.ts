@@ -317,6 +317,11 @@ export type TemplateNode = {
    *  the samples of a WAV, the records of a dBase file. `tableShape` says how
    *  many elements make a row and what the columns are called. */
   readonly table?: boolean;
+  /** The colour this structure says it is, as CSS writes one: `#dccd80`, or
+   *  `#dccd8080` with an alpha. Absent for everything that is not a colour.
+   *  Its `line` is the same text, so a view with only words to spend says it
+   *  too. */
+  readonly colour?: string;
 };
 
 /** A field the shape names as describing the table, shown above it with a link
@@ -458,6 +463,8 @@ export type Span = {
    *  the name it gave the structure is its own bookkeeping: `Elsewhere` is not
    *  a word the TIFF specification uses, and nothing shows it to a reader. */
   readonly inline: boolean;
+  /** The colour this structure says it is. See `TemplateNode.colour`. */
+  readonly colour?: string;
   /** What is wrong with this field's value, when something is. The node's own:
    *  a chip that cannot say a signature is wrong is a view the reader has to
    *  leave to find out. */

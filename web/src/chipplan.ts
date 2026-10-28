@@ -311,7 +311,7 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
     const entries = expandRuns(chips);
     const texts = entries.map((c) => chipText(c));
     const { shown, lines } = chipLayout(
-      texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, o.measure)),
+      texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, o.measure, entries[i]?.span.colour !== undefined)),
       o.noteWidth,
       o.maxLines,
     );
@@ -345,7 +345,7 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
     const reaching = carried.filter((c) => spanEnd(c.span) > first);
     const texts = reaching.map((c) => pinnedText(chipText(c), c, o.reading ?? null));
     const { shown } = chipLayout(
-      texts.map((t, i) => chipWidth(carriedName(t.name, reaching[i]), continuedDetail(t.detail), o.measure)),
+      texts.map((t, i) => chipWidth(carriedName(t.name, reaching[i]), continuedDetail(t.detail), o.measure, reaching[i]?.span.colour !== undefined)),
       o.noteWidth,
       o.maxLines,
     );

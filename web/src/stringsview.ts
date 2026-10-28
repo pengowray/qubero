@@ -17,6 +17,7 @@
 // arithmetic, and it is what makes a list of two hundred thousand strings
 // scroll like a list of twenty.
 
+import { tagged as el } from "./dom.ts";
 import type { Doc, StringEncoding, StringHit, StringInsideKind, StringScanOpts } from "./doc.ts";
 import { formatOffset } from "./format.ts";
 import { STRINGSVIEW as SV } from "./strings.ts";
@@ -58,13 +59,6 @@ export const HIDE_INSIDE_KEY = "qubero.strings.hideInside";
 
 /** The readings on offer, in the order the toggles appear. */
 export const ENCODINGS: readonly StringEncoding[] = ["ascii", "utf16le", "utf16be"];
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 export class StringsView {
   readonly el: HTMLElement;

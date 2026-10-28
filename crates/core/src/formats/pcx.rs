@@ -7,7 +7,7 @@
 //! at that palette, so it is read from the tail rather than pointed at, and
 //! only for the files whose depth calls for one.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Colour, Endian::*, Expr as E, Template, Ty as T};
 
 /// PCX versions, which is really a history of what Paintbrush could store.
 const VERSION: &[(i128, &str)] = &[
@@ -52,7 +52,7 @@ pub fn pcx() -> Template {
 }
 
 fn rgb() -> T {
-    T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())])
+    T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())]).colour(Colour::of(&["r", "g", "b"]))
 }
 
 #[cfg(test)]

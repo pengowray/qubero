@@ -551,6 +551,25 @@ of a card's table opens its own bytes underneath. A card is not a heading, so
 like the content card it is out of the outline and off the file map; unlike
 the content card it covers the bytes of the segment it stands for.
 
+A PNG's PLTE chunk has a card of the same kind (`web/src/pngcards.ts`): the
+palette as a grid of its colours, sixteen to a row, with the alphas the tRNS
+chunk gives the first entries laid over a checkerboard, and the chunk's length
+and CRC on the card's line, marked as the listing marks a wrong one. Which
+formats have cards, and which nodes they are for, is `web/src/formatcards.ts`,
+a registry by template that the listing, its report and the drawing all ask;
+the pieces a card is built from (finding fields while their bytes are on the
+way, facts and tables whose every cell is a way to its field) are
+`web/src/cardparts.ts`.
+
+A structure the template says is a colour (see "A picture's pixels, from the
+bytes to the grid") gets a square of that colour wherever it is shown: its
+listing row, which arrives shut since `#dccd80` is what the three samples
+under it are for; the inspector, under the value box and beside each child;
+its chip in the hex view; and the number of its row in a table. A colour with
+an alpha is drawn over a checkerboard. `web/src/colour.ts` draws all of them,
+and draws nothing for a structure the template did not call a colour,
+whatever its fields are called.
+
 The bytes are shown as text as well, but only where they read as text: three
 bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
 invites reading a number as a letter.
@@ -632,13 +651,21 @@ picking one moves the cursor to its first bit, which brings the hex view to
 that row and the listing to that heading.
 
 Beside Contents, a Logical tab for the formats `logicaloutline.ts` has an
-adapter for (HDF5, GGUF, zip, SQLite, ELF, ISO 9660, WAV): the file as its own
+adapter for (HDF5, GGUF, zip, SQLite, ELF, ISO 9660, WAV, PNG): the file as its own
 objects, tables and entries rather than as the stretches they are stored in,
 drawn as a tree because that is what it is. It is the tree the bottom panel's
 Logical mode drew, moved here with its fold state; picking an object goes to
 the field it is stored in, and Ctrl+click on one whose field holds an offset
 goes where the offset points. The tree is drawn only while it is on screen and
 once per timeout however many changes asked, since reading it walks the file.
+
+A PNG's (`web/src/pngoutline.ts`) is the picture in a line, then its chunks
+grouped by the question each answers rather than in the encoder's order:
+palette, colour space, text (named by keyword), animation, the compressed
+pixels, and the rest, with pHYs in dots per inch and tIME as a date. A run of
+IDAT or fdAT chunks one after another is one row, so a picture cut into four
+thousand chunks is not four thousand identical rows, and each animation frame
+keeps its own.
 
 ### The field column
 The hex view's right-hand column shows either the bytes as text or, with a
@@ -3333,6 +3360,23 @@ chunks before them for IHDR, the idiom GWF uses for its own records), gAMA
 and cHRM as the number stored and what it is worth at a hundred-thousandth,
 sRGB's rendering intent, pHYs, tIME, hIST, sPLT, iCCP's profile and zTXt's and
 iTXt's text as zlib streams, and APNG's acTL, fcTL and fdAT.
+
+**Colours.** A structure can say its fields are the samples of a colour
+(`StructDef::colour`, `crate::template::Colour`): which field is grey, or red,
+green and blue, which is alpha, and how many bits a sample ranges over where
+that is not its field's width. The core scales each sample to eight bits and
+hands the colour back as CSS writes one (`NodeInfo::colour`, `#dccd80` or
+`#dccd8080`), and makes it the structure's one-line reading, so a chip, a cell
+and the inspector's child row say the colour rather than three numbers. A
+sample past its range gives no colour at all rather than the nearest one.
+PNG says it of palette entries, every pixel but a palette index, sPLT
+entries, and bKGD and tRNS, whose sixteen-bit samples range over the image's
+bit depth: a background of 15 in a four-bit image is white. GIF, BMP, ILBM,
+PCX, WAD and Aseprite palettes say it too. A palette index is a colour only
+by way of PLTE, which a declaration on the pixel cannot reach, so it is left
+a number. pHYs reads in dots per inch beside the pixels a metre it stores,
+fcTL gives a frame's delay in seconds, and a pixel list counts pixels, since
+a switch whose cases all count themselves by one word now takes that word.
 
 **What is still missing.** An fdAT frame's data is not joined into anything: a
 frame is every fdAT between one fcTL and the next, and no walk can say which

@@ -1,5 +1,6 @@
 import { formatBytes, formatOffset } from "./doc.ts";
 import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
+import { pngOutline } from "./pngoutline.ts";
 import { countText, TEMPLATE_FIELD_MISSING } from "./strings.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
@@ -1518,6 +1519,7 @@ const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
   { matches: (doc) => doc.template === "iso9660", read: isoOutline },
   { matches: (doc) => doc.template === "wav" || doc.template === "w4v", read: (doc) => wavOutline(doc) },
+  { matches: (doc) => doc.isPng, read: (doc) => pngOutline(doc) },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {

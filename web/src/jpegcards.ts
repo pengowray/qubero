@@ -21,14 +21,15 @@
 // set each carry the path of the field they were read from, so clicking one
 // selects that field exactly as clicking a cell of a record table does.
 
-import { formatBytes, formatOffset } from "./doc.ts";
+import { formatBytes } from "./doc.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import type { Item } from "./flatten.ts";
 import { pathKey } from "./flatten.ts";
 import type { DrawContext } from "./listingdraw.ts";
-import { el } from "./listingdraw.ts";
+import { tagged as el } from "./dom.ts";
+import { disclosure, enumName, fieldButton, head, kid, kids, numberOf, row, table } from "./cardparts.ts";
 import { countRestarts, dezigzag, huffmanCodes, subsampling } from "./jpegtables.ts";
-import { bitSizeText, countText, JPEG, REPORT } from "./strings.ts";
+import { countText, JPEG } from "./strings.ts";
 
 /** The four segments a JPEG has a card for, named by what they hold. */
 export type JpegCardKind = "quant" | "huffman" | "frame" | "scan";
@@ -46,7 +47,6 @@ const RESTART_SCAN_LIMIT = 64 * 1024 * 1024;
  * check for that is two string comparisons.
  */
 export function jpegCardKind(doc: Doc, node: TemplateNode): JpegCardKind | null {
-  if (doc.template !== "jpeg") return null;
   if (node.type !== "Segment" || node.child_count < 2) return null;
   const body = kid(doc, node, 1);
   if (body === null) return null;
@@ -65,30 +65,6 @@ export function jpegCardKind(doc: Doc, node: TemplateNode): JpegCardKind | null 
     default:
       return null;
   }
-}
-
-/** One child of a node, or null while its bytes are still on their way. */
-function kid(doc: Doc, node: TemplateNode, at: number): TemplateNode | null {
-  const reply = doc.templateChildren(node.path, at, at + 1);
-  return reply.status === "ok" ? (reply.node[0] ?? null) : null;
-}
-
-/** A run of a node's children, or null while they are being read. */
-function kids(doc: Doc, node: TemplateNode, count = node.child_count): readonly TemplateNode[] | null {
-  if (count === 0) return [];
-  const reply = doc.templateChildren(node.path, 0, count);
-  return reply.status === "ok" ? reply.node : null;
-}
-
-/** What an enumerated field is called, without the raw number the listing's
- *  value column carries: `edit_text` is the name on its own. */
-function enumName(node: TemplateNode | null): string {
-  return node === null ? "" : node.edit_text;
-}
-
-function numberOf(node: TemplateNode | null): number {
-  const n = node === null ? Number.NaN : Number(node.value);
-  return Number.isFinite(n) ? n : Number.NaN;
 }
 
 // ----- drawing -----
@@ -399,90 +375,4 @@ function restartCount(doc: Doc, entropy: TemplateNode): number | null {
   const n = countRestarts(read.bytes);
   known.set(key, n);
   return n;
-}
-
-// ----- the pieces every card is built from -----
-
-/** A table's own line inside a card: what it is, and the one fact worth
- *  putting beside the name. */
-function head(name: string, aside: string): HTMLElement {
-  const line = el("div", "jc-head");
-  line.append(el("b", "jc-title", name));
-  if (aside !== "") line.append(el("span", "jc-aside", aside));
-  return line;
-}
-
-function table(columns: readonly string[]): HTMLTableElement {
-  const grid = document.createElement("table");
-  grid.className = "rec jc-table";
-  const header = document.createElement("tr");
-  for (const name of columns) header.append(el("th", "", name));
-  header.append(el("th", "rec-at", REPORT.storedAt));
-  grid.append(header);
-  return grid;
-}
-
-/** One line of a card's table, standing for one structure in the file: the
- *  same shape a record table's line has, so the same code marks it when the
- *  selection lands inside it. */
-function row(c: DrawContext, node: TemplateNode, cells: readonly (TemplateNode | undefined)[], texts: readonly (string | undefined)[] = []): HTMLTableRowElement {
-  const tr = document.createElement("tr");
-  tr.dataset["at"] = String(node.offset_bits);
-  tr.dataset["size"] = String(node.size_bits);
-  cells.forEach((field, i) => tr.append(cell(c, field, texts[i])));
-  const at = el("td", "rec-at");
-  const link = el("button", "rec-link", formatOffset(node.offset_bits));
-  link.type = "button";
-  link.title = bitSizeText(node.size_bits);
-  const key = `r:${pathKey(node.path)}`;
-  if (c.bytes.has(key)) link.classList.add("is-on");
-  link.addEventListener("click", (e) => {
-    e.stopPropagation();
-    c.toggleBytes(key);
-  });
-  at.append(link);
-  tr.append(at);
-  return tr;
-}
-
-/** One cell of a card's table, which is one field of the file. */
-function cell(c: DrawContext, node: TemplateNode | undefined, text?: string): HTMLElement {
-  const td = el("td", "");
-  if (node === undefined) return td;
-  td.append(fieldButton(c, node, "jc-value", text ?? node.value));
-  return td;
-}
-
-/**
- * Anything on a card that stands for one field, as the control that goes to
- * it. `data-reads` is the route every cross-reference in the listing already
- * takes, so a click here selects the field and every other view follows,
- * exactly as clicking a cell of a record table does.
- */
-function fieldButton(c: DrawContext, node: TemplateNode, className: string, text: string): HTMLButtonElement {
-  const b = el("button", className, text);
-  b.type = "button";
-  b.dataset["reads"] = pathKey(node.path);
-  b.dataset["at"] = String(node.offset_bits);
-  b.dataset["size"] = String(node.size_bits);
-  b.title = `${node.name} · ${formatOffset(node.offset_bits)}`;
-  if (c.selected !== null && c.selected.offsetBits === node.offset_bits && c.selected.sizeBits === node.size_bits) {
-    b.classList.add("is-on");
-  }
-  return b;
-}
-
-/** The control that opens the long half of a card and puts it away again.
- *  The card is measured rather than declared, so opening one has to tell the
- *  listing to lay itself out again, which is what the callback is for. */
-function disclosure(c: DrawContext, key: string, label: string): HTMLElement {
-  const on = c.cards.has(key);
-  const b = el("button", `jc-more${on ? " is-on" : ""}`, label);
-  b.type = "button";
-  b.setAttribute("aria-expanded", String(on));
-  b.addEventListener("click", (e) => {
-    e.stopPropagation();
-    c.toggleCard(key);
-  });
-  return b;
 }

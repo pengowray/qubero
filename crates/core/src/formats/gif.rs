@@ -9,7 +9,7 @@
 //! as sub-blocks: a length byte, that many bytes, repeated until a length of
 //! zero. That is a list whose end is a field value, which the IR already says.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Colour, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What a frame does to what was on screen before it.
 const DISPOSAL: &[(i128, &str)] = &[
@@ -55,7 +55,9 @@ pub fn gif() -> Template {
 /// bits, which gives 0 to 7 for absent and 8 to 15 for present, and the eight
 /// sizes are then written out.
 fn colour_table(packed: &str) -> T {
-    let colour = T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())]).counted_as("colour");
+    let colour = T::inline_structure("Rgb", vec![("r", T::u8()), ("g", T::u8()), ("b", T::u8())])
+        .counted_as("colour")
+        .colour(Colour::of(&["r", "g", "b"]));
     let present = E::field(packed).div(E::lit(128)).mul(E::lit(8));
     let size = E::field(packed).sub(E::field(packed).div(E::lit(8)).mul(E::lit(8)));
     let cases =

@@ -11,15 +11,15 @@
 import { formatAddress, formatBytes, formatOffset, percentText } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
-import { address } from "./dom.ts";
+import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
 import { DUMP_MIN_BYTES, isComputed, pathKey, PAGE } from "./flatten.ts";
 import type { Item } from "./flatten.ts";
 import { fieldClass, sectionColor } from "./fieldstyle.ts";
-import { COLOUR_TYPE, swatch } from "./colour.ts";
+import { nodeSwatch } from "./colour.ts";
 import { byteStrip } from "./bytestrip.ts";
 import { byteDump } from "./bytedump.ts";
 import { drawCard } from "./contentcard.ts";
-import { drawJpegCard } from "./jpegcards.ts";
+import { drawFormatCard as drawCardOf } from "./formatcards.ts";
 import { fileMap } from "./filemap.ts";
 import { recordTable } from "./records.ts";
 import { tablePlan } from "./tableplan.ts";
@@ -68,13 +68,6 @@ export type DrawContext = {
    *  eye, like decoding a picture, waits for this. */
   readonly shown: boolean;
 };
-
-export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 /** `@0x1000 – @0x1fff`, the stretch a heading covers. A part of no bytes has no
  *  range to give, which is what a field placed somewhere else looks like. */
@@ -188,10 +181,9 @@ function drawSwitch(c: DrawContext, item: Extract<Item, { kind: "switch" }>): HT
 }
 
 /** A structure the format keeps in a shape that is not the shape it means,
- *  drawn as that shape. Only JPEG has these; the switch is here rather than
- *  in a registry of one. */
+ *  drawn as that shape. Which formats have these is `formatcards.ts`. */
 function drawFormatCard(c: DrawContext, item: Extract<Item, { kind: "formatcard" }>): HTMLElement {
-  const host = drawJpegCard(c, item);
+  const host = drawCardOf(c, item);
   host.classList.add("rp-block");
   return host;
 }
@@ -277,22 +269,26 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // over two of them is the row disagreeing with itself. `shownChildren` is
   // null whenever the two are the same, and whenever the walk had no grounds
   // to say otherwise.
+  //
+  // A structure that is a colour says which, since `#dccd80` is what three
+  // samples are for and `3 fields` is only how they are kept.
   const said =
     n.refused !== null
       ? (DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER)
-      : says(n)
-        ? n.value
-        : n.composite
-          ? countText(item.shownChildren ?? n.child_count, childWord(n))
-          : n.value;
+      : n.colour !== undefined
+        ? n.colour
+        : says(n)
+          ? n.value
+          : n.composite
+            ? countText(item.shownChildren ?? n.child_count, childWord(n))
+            : n.value;
   const value = el("span", "rp-value", said);
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
-  // square says what it is. Only where the template called the field a colour,
-  // so nothing guesses at text that happens to look like one.
-  if (n.type === COLOUR_TYPE) {
-    const box = swatch(said);
-    if (box !== null) value.prepend(box);
-  }
+  // square says what it is. Only where the template called the field or the
+  // structure a colour, so nothing guesses at text that happens to look like
+  // one.
+  const box = nodeSwatch(n, said);
+  if (box !== null) value.prepend(box);
   if (item.reads !== null) value.append(readsLink(item.reads));
   markProblem(row, value, n, item.open);
   // A row that stands for a pointer and what it points at says so here, and
@@ -357,12 +353,6 @@ function markProblem(row: HTMLElement, value: HTMLElement, n: TemplateNode, open
 
 /** The one mark both tiers wear, which only says look here. Hidden from a
  *  screen reader, which is given the words instead. */
-function glyph(invalid: boolean): HTMLElement {
-  const dot = el("span", `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`, PROBLEMS.glyph);
-  dot.setAttribute("aria-hidden", "true");
-  return dot;
-}
-
 function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElement {
   const row = el("div", "rp-item rp-row rp-gap");
   row.append(el("span", "rp-at", formatOffset(item.offsetBits)));

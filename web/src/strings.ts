@@ -2400,6 +2400,28 @@ export const JPEG = {
   waiting: "Loading the table's bytes…",
 } as const;
 
+/** The PNG cards in the listing and the report (`pngcards.ts`). */
+export const PNG = {
+  /** The palette's own line: how many colours, and how many of them the
+   *  tRNS chunk makes see-through, which is the one thing the grid cannot
+   *  say at a glance about a colour that is only slightly so. */
+  paletteHead: (colours: number): string => countText(colours, "colour"),
+  paletteSeeThrough: (n: number): string => `${n.toLocaleString()} see-through`,
+  /** One swatch, as a tooltip and to a screen reader: which entry it is, its
+   *  colour, and its alpha where tRNS gives it one. A pixel of a palette
+   *  image holds this entry's number. */
+  paletteEntry: (index: number, colour: string, alpha: number | null): string =>
+    `Entry ${index}: ${colour}${alpha === null ? "" : `, alpha ${alpha}`}`,
+  /** What the grid is, for a reader who has not met a palette image. */
+  paletteNote:
+    "Each pixel of a palette image holds the number of one of these colours rather than the colour itself. The tRNS chunk, where there is one, gives the first entries an alpha.",
+  /** The chunk's own fields, which the card stands in for. */
+  chunkLength: (bytes: number): string => `length ${bytes.toLocaleString()}`,
+  chunkCrc: (crc: string): string => `CRC-32 ${crc}`,
+  /** A card whose fields have not been read from the file yet. */
+  waiting: "Loading the palette's bytes…",
+} as const;
+
 /** The table of values beside a folded run in the hex view. A cell says its
  *  value and nothing else; everything about which element it is lives in the
  *  tooltip, since a table of a hundred cells has no room to repeat itself. */

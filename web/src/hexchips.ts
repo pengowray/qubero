@@ -123,7 +123,13 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
   // the chip itself, because this function writes the chip's two children by
   // position and anything appended here is written over on the next redraw.
   if (s.problem !== undefined) cls += s.problem.tier === "invalid" ? " hv-chip-invalid" : " hv-chip-undefined";
+  // A structure that is a colour: the stylesheet draws its square in front of
+  // the value, in the colour this variable carries, for the same reason the
+  // two marks above are the stylesheet's.
+  if (s.colour !== undefined) cls += " hv-chip-colour";
   if (el.className !== cls) el.className = cls;
+  if (s.colour !== undefined) el.style.setProperty("--chip-colour", s.colour);
+  else el.style.removeProperty("--chip-colour");
   setText(el.firstElementChild as HTMLElement, name);
   const shown = extra ? continuedDetail(detail) : detail;
   setText(el.lastElementChild as HTMLElement, shown);

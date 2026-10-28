@@ -289,6 +289,10 @@ struct NodeDto {
     /// True when the template says this field reads as a table: interleaved
     /// samples, a list of records. `table_shape` says what of.
     table: bool,
+    /// The colour this structure says it is, as CSS writes one: `#dccd80`.
+    /// Absent for every structure that is not a colour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    colour: Option<String>,
 }
 
 /// One element of a folded run, as the value table draws it.
@@ -2868,6 +2872,9 @@ struct SpanDto {
     problem: Option<ProblemDto>,
     /// Wrong values found under this span so far: invalid, then undefined.
     problems_within: [u32; 2],
+    /// The colour this structure says it is. Absent for everything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    colour: Option<String>,
 }
 
 /// The bit split of one variable-length number, in the order it is stored.
@@ -2965,6 +2972,7 @@ fn span_dto(s: Span) -> SpanDto {
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
         opens: s.opens,
+        colour: s.colour,
         inline: s.inline,
         bits: s.bits.map(|b| BitRolesDto {
             rule: b.rule,
@@ -3081,6 +3089,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         doc: n.doc,
         line: n.line,
         table: n.table,
+        colour: n.colour,
     }
 }
 

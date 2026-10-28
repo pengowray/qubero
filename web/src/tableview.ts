@@ -45,10 +45,11 @@
 // up, and a click goes to the bytes of the cell that was clicked.
 
 import type { Doc } from "./doc.ts";
-import { el } from "./dom.ts";
+import { el, problemGlyph as glyph } from "./dom.ts";
+import { swatch } from "./colour.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
-import { PROBLEMS, REPORT, TABLE } from "./strings.ts";
+import { REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
 import { cellPlaceIn, drawAddress, fieldWhereLines, rowHasBytes, whatLines, whereLines } from "./tableaddress.ts";
 import { tableBar, type Bar } from "./tablebar.ts";
@@ -86,15 +87,6 @@ export type TablePick = {
  *  use. It only says look here; the words are on the cell's hover and the
  *  colour repeats the tier. Hidden from a screen reader, which gets the
  *  words. See docs/DESIGN-wrong-values.md. */
-function glyph(invalid: boolean): HTMLElement {
-  const dot = el("span", {
-    className: `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`,
-    textContent: PROBLEMS.glyph,
-  });
-  dot.setAttribute("aria-hidden", "true");
-  return dot;
-}
-
 export class TableView {
   readonly el: HTMLElement;
   private readonly plan: TablePlan;
@@ -412,7 +404,10 @@ export class TableView {
 
   private drawRow(i: number, row: TableRow): HTMLElement {
     const element = el("div", { className: this.isOn(i) ? "tbl-row is-on" : "tbl-row" });
-    element.append(el("span", { className: "tbl-cell tbl-index tbl-num", textContent: i.toLocaleString() }));
+    const index = el("span", { className: "tbl-cell tbl-index tbl-num", textContent: i.toLocaleString() });
+    const box = row.colour === undefined ? null : swatch(row.colour);
+    if (box !== null) index.prepend(box);
+    element.append(index);
     if (this.plan.rowNames) {
       const name = el("span", { className: "tbl-cell tbl-name", textContent: row.name ?? "" });
       name.title = row.name ?? "";
