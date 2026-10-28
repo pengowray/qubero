@@ -23,9 +23,13 @@ export const IMAGE_LIMIT_BYTES = 64 * 1024 * 1024;
 
 /** Templates whose file the browser can draw as a picture, and what to tell
  *  it the bytes are. Only formats the browser decodes natively: a TIFF or a
- *  PSD has a template and no card. */
+ *  PSD has a template and no card. A PICO-8 or Picotron cartridge is a PNG
+ *  with a program hidden in its pixels, and the picture is the label on the
+ *  cartridge, so it is drawn as one. */
 const IMAGE_TEMPLATES: ReadonlyMap<string, string> = new Map([
   ["png", "image/png"],
+  ["p8png", "image/png"],
+  ["p64png", "image/png"],
   ["jpeg", "image/jpeg"],
   ["gif", "image/gif"],
   ["bmp", "image/bmp"],

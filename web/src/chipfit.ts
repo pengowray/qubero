@@ -29,6 +29,9 @@ const CHIP_CHAR = 6.7;
 const CHIP_CHROME = 6 + 6 + 3;
 /** The gap between a chip's name and its value (`gap: 6px` in `.hv-chip`). */
 const CHIP_INNER = 6;
+/** The square a colour's chip opens with, and the gap after it: 0.75em of a
+ *  12px chip, its border, and the chip's own gap. See `.hv-chip-colour`. */
+const CHIP_SWATCH = 17;
 /** The gap between two chips side by side (`column-gap: 4px` on `.hv-note`). */
 const CHIP_GAP = 4;
 /** Room kept for the `+3` that counts what did not fit, so the count itself is
@@ -76,12 +79,12 @@ export const GUESS_TEXT: ChipMeasure = {
 /** How wide a chip saying `name` and `detail` will be drawn, near enough to
  *  choose by. Rounded up, since a fraction under the column's own whole
  *  pixels is what makes the difference between three lines and four. */
-export function chipWidth(name: string, detail: string, text: ChipMeasure = GUESS_TEXT): number {
+export function chipWidth(name: string, detail: string, text: ChipMeasure = GUESS_TEXT, colour = false): number {
   // The gap is between the two, so a chip with only one of them has none: an
   // element of an expanded run shows its value and no name at all.
   const gap = name === "" || detail === "" ? 0 : CHIP_INNER;
   const value = detail === "" ? 0 : text.value(detail);
-  return Math.ceil(CHIP_CHROME + (name === "" ? 0 : text.name(name)) + gap + value);
+  return Math.ceil(CHIP_CHROME + (colour ? CHIP_SWATCH : 0) + (name === "" ? 0 : text.name(name)) + gap + value);
 }
 
 export type ChipLayout = {
