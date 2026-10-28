@@ -20,6 +20,7 @@ mod again;
 mod cells;
 mod census;
 mod check;
+mod colour;
 mod deduced;
 mod entryof;
 mod diagram;
@@ -480,6 +481,11 @@ pub struct NodeInfo {
     /// view needs to know whether to offer it. See
     /// [`crate::template::TableShape`].
     pub table: bool,
+    /// The colour this structure says it is, as CSS writes one: `#dccd80`, or
+    /// `#dccd8080` with an alpha. None for every structure that is not a
+    /// colour, and for one whose samples cannot be read as one. See
+    /// [`crate::template::Colour`].
+    pub colour: Option<String>,
 }
 
 /// What an expression reads of a field. See [`Evaluator::value_of`].
@@ -1185,7 +1191,13 @@ impl Evaluator {
         // a panel drawing a row per field would unpack every stream in a
         // record to write a line none of them needs.
         let worth_a_line = matches!(r.ty.base(), Ty::Struct(_)) || matches!(r.ty, Ty::At { .. });
-        let line = self.node_line(doc, path, worth_a_line && !list, child_count)?;
+        // A colour reads as the colour, and its samples are a click further
+        // in: `#dccd80` says what `220 205 128` only spells.
+        let colour = if composite { self.colour_of(doc, path)? } else { None };
+        let line = match &colour {
+            Some(c) => Some(c.clone()),
+            None => self.node_line(doc, path, worth_a_line && !list, child_count)?,
+        };
         // A field read somewhere else covers no bytes where it is written, so
         // the value it holds is the one at the far end: a row saying `0 bytes`
         // beside twenty bytes of text reads as the text not being there.
@@ -1302,6 +1314,7 @@ impl Evaluator {
             absent: matches!(r.ty, Ty::When { .. }),
             doc: self.doc_of(path, &r.ty, size),
             table: self.table_declared(path),
+            colour,
         })
     }
 
@@ -1718,9 +1731,13 @@ impl Evaluator {
                 // when the branches agree: a run of a dozen unrelated shapes
                 // has no word of its own and falls back to items. See
                 // [`Ty::agreed_case`].
+                //
+                // Branches of different shapes can still agree on what one of
+                // them is called: a PNG pixel is a grey, an RGB or an RGBA
+                // structure as the header says, and each of them is a pixel.
                 Ty::Switch { .. } | Ty::Match { .. } => match elem.agreed_case() {
                     Some(ty) => elem = ty.base(),
-                    None => break,
+                    None => return shared_unit(elem),
                 },
                 _ => break,
             }
@@ -3198,4 +3215,29 @@ fn png_scanlines([w, h, depth, colour, interlace]: [i128; 5]) -> Option<crate::c
         return None;
     }
     Some(crate::codec::Codec::PngScanlines { width, height, bits_per_pixel: bits, interlace: interlace == 1 })
+}
+
+/// The word every branch of a choice is counted by, where they all have the
+/// same one: the cases of a PNG pixel are four different structures and every
+/// one of them is a pixel. None when any branch has no word or another word.
+/// The zero-length filler gets no vote, as in [`Ty::agreed_case`].
+fn shared_unit(choice: &Ty) -> Option<&str> {
+    let arms: Vec<&Ty> = match choice {
+        Ty::Switch { cases, default, .. } => cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default)).collect(),
+        Ty::Match { cases, default, .. } => cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default)).collect(),
+        _ => return None,
+    };
+    let mut shared = None;
+    for arm in arms {
+        if matches!(arm, Ty::Bytes(Expr::Lit(0))) {
+            continue;
+        }
+        let Ty::Struct(s) = arm.base() else { return None };
+        let unit = s.unit.as_deref()?;
+        if shared.is_some_and(|u| u != unit) {
+            return None;
+        }
+        shared = Some(unit);
+    }
+    shared
 }

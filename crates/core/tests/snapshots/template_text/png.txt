@@ -25,17 +25,17 @@ root PNG {
         image_data: bytes[remaining]
       }
       'PLTE' => PLTE (contents entries) {
-        entries: PaletteEntry (unit entry, inline) {
+        entries: PaletteEntry (unit entry, inline, colour red green blue) {
           red: u8be
           green: u8be
           blue: u8be
         }[remaining / 3]
       }
       'tRNS' => switch earlier[type = 'IHDR'].data.color_type {
-        0 => tRNSGrey {
+        0 => tRNSGrey (colour grey depth earlier[type = 'IHDR'].data.bit_depth) {
           grey: u16be
         }
-        2 => tRNSRgb {
+        2 => tRNSRgb (colour red green blue depth earlier[type = 'IHDR'].data.bit_depth) {
           red: u16be
           green: u16be
           blue: u16be
@@ -133,10 +133,10 @@ root PNG {
         _ => bytes[remaining]
       }
       'bKGD' => switch earlier[type = 'IHDR'].data.color_type {
-        0 => bKGDGrey {
+        0 => bKGDGrey (colour grey depth earlier[type = 'IHDR'].data.bit_depth) {
           grey: u16be
         }
-        2 => bKGDRgb {
+        2 => bKGDRgb (colour red green blue depth earlier[type = 'IHDR'].data.bit_depth) {
           red: u16be
           green: u16be
           blue: u16be
@@ -144,10 +144,10 @@ root PNG {
         3 => bKGDPalette {
           palette_index: u8be
         }
-        4 => bKGDGrey {
+        4 => bKGDGrey (colour grey depth earlier[type = 'IHDR'].data.bit_depth) {
           grey: u16be
         }
-        6 => bKGDRgb {
+        6 => bKGDRgb (colour red green blue depth earlier[type = 'IHDR'].data.bit_depth) {
           red: u16be
           green: u16be
           blue: u16be
@@ -158,6 +158,12 @@ root PNG {
         pixels_per_unit_x: u32be
         pixels_per_unit_y: u32be
         unit: u8be enum PhysUnit {0 = unknown, 1 = metre}
+        // Dots per inch across, worked out from pixels_per_unit_x. Only where the unit is the
+            metre.
+        dpi_x: optional(when unit == 1) computed real pixels_per_unit_x * 0.0254
+        // Dots per inch down, worked out from pixels_per_unit_y. Only where the unit is the
+            metre.
+        dpi_y: optional(when unit == 1) computed real pixels_per_unit_y * 0.0254
       }
       'tIME' => tIME {
         year: u16be
@@ -173,7 +179,7 @@ root PNG {
       'sPLT' => sPLT {
         palette_name: text until 0x00 latin1
         sample_depth: u8be
-        entries: SuggestedEntry (unit entry, inline) {
+        entries: SuggestedEntry (unit entry, inline, colour red green blue alpha alpha) {
           red: switch sample_depth {16 => u16be, _ => u8be}
           green: switch sample_depth {16 => u16be, _ => u8be}
           blue: switch sample_depth {16 => u16be, _ => u8be}
@@ -236,6 +242,9 @@ root PNG {
         delay_den: u16be
         dispose_op: u8be enum DisposeOp {0 = none, 1 = background, 2 = previous}
         blend_op: u8be enum BlendOp {0 = source, 1 = over}
+        // How long the frame shows for: delay_num / delay_den, with a delay_den of 0 read as
+            100.
+        delay_seconds: computed real delay_num / (delay_den == 0 ? 100.0 : delay_den)
       }
       'fdAT' => fdAT {
         sequence_number: u32be
@@ -264,7 +273,7 @@ root PNG {
               (chunks[type = "IHDR"].data.color_type == 4 ? 2 :
               (chunks[type = "IHDR"].data.color_type == 6 ? 4 : 1))) bits a pixel, adam7) switch
               chunks[type = "IHDR"].data.color_type {
-            0 => GreyPixel (unit pixel) {
+            0 => GreyPixel (unit pixel, colour grey) {
               grey: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -274,7 +283,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            2 => RgbPixel (unit pixel) {
+            2 => RgbPixel (unit pixel, colour red green blue) {
               red: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -310,7 +319,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            4 => GreyAlphaPixel (unit pixel) {
+            4 => GreyAlphaPixel (unit pixel, colour grey alpha alpha) {
               grey: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -328,7 +337,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            6 => RgbaPixel (unit pixel) {
+            6 => RgbaPixel (unit pixel, colour red green blue alpha alpha) {
               red: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -370,7 +379,7 @@ root PNG {
               (chunks[type = "IHDR"].data.color_type == 4 ? 2 :
               (chunks[type = "IHDR"].data.color_type == 6 ? 4 : 1))) bits a pixel, rows) switch
               chunks[type = "IHDR"].data.color_type {
-            0 => GreyPixel (unit pixel) {
+            0 => GreyPixel (unit pixel, colour grey) {
               grey: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -380,7 +389,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            2 => RgbPixel (unit pixel) {
+            2 => RgbPixel (unit pixel, colour red green blue) {
               red: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -416,7 +425,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            4 => GreyAlphaPixel (unit pixel) {
+            4 => GreyAlphaPixel (unit pixel, colour grey alpha alpha) {
               grey: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be
@@ -434,7 +443,7 @@ root PNG {
                 _ => bytes[0]
               }
             }
-            6 => RgbaPixel (unit pixel) {
+            6 => RgbaPixel (unit pixel, colour red green blue alpha alpha) {
               red: switch chunks[type = "IHDR"].data.bit_depth {
                 1 => u1be
                 2 => u2be

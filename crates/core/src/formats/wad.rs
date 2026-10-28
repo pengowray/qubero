@@ -58,7 +58,7 @@
 //! Heretic and Strife use Doom's own widths and read correctly.
 
 use crate::formats::wad_names::{LINE_SPECIALS, SECTOR_SPECIALS, THING_TYPES};
-use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Colour, Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 pub fn wad() -> Template {
     Template::new(
@@ -405,7 +405,7 @@ fn in_lump(inner: T) -> T {
 }
 
 fn rgb() -> T {
-    T::inline_structure("Rgb", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())])
+    T::inline_structure("Rgb", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())]).colour(Colour::rgb())
 }
 
 /// The thirty-four colour maps: for each of them, what each of the 256 palette
