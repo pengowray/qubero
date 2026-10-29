@@ -32,6 +32,9 @@
 // and the count on it (`collapseRuns`): a run of three hundred equal IDAT
 // chunks is one thing to the eye, and drawing it once leaves the room to the
 // records that differ. A record with a wrong value is never folded into a run.
+// Where the records have names and no types, as a WAD's lumps do, the
+// legend's grey ones fold together whatever their names, and such a tile
+// carries its count alone.
 //
 // The records are read a slice at a time with the page given its turn in
 // between (`readahead.ts`); the heading says the list is being read until the
@@ -104,8 +107,12 @@ export type TilesData = {
   readonly largest: number;
   /** Whether every record is the same size, so the fill says nothing. */
   readonly sameSize: boolean;
-  /** One tile per run of records of the same type and size. */
+  /** One tile per run of records of the same type and size, or, where the
+   *  kinds are names, of the same colour and size. */
   readonly cells: Cells;
+  /** The kind every record of a cell has, or null for a run of grey
+   *  records with different names, which is labelled with its count alone. */
+  readonly cellKinds: readonly (string | null)[];
 };
 
 /**
@@ -157,10 +164,25 @@ export async function readTiles(w: Walk, list: TemplateNode): Promise<TilesData 
     if (r.size_bits > (records[largest]?.size_bits ?? 0)) largest = i;
   });
   const sameSize = records.every((r) => r.size_bits === records[0]?.size_bits);
+  const what = decided ? "type" : "name";
+  const categories = assignCategories(kinds);
   // A record with a wrong value inside it keeps a tile of its own, so its red
-  // edge is there to be found.
-  const keys = records.map((r, i) => (hasProblem(r) ? null : `${kinds[i] ?? ""}\u0000${r.size_bits}`));
-  return { list, records, kinds, what: decided ? "type" : "name", categories: assignCategories(kinds), largest, sameSize, cells: collapseRuns(keys) };
+  // edge is there to be found. Where the kinds are only names, the grey ones
+  // fold together too: a WAD's 3,391 grey lumps, each with a name of its own,
+  // are a few long runs rather than three thousand grey squares.
+  const keys = records.map((r, i) => {
+    if (hasProblem(r)) return null;
+    const kind = what === "name" ? String(categories.slot[i] ?? OTHER_SLOT) : (kinds[i] ?? "");
+    return `${kind}\u0000${r.size_bits}`;
+  });
+  const cells = collapseRuns(keys);
+  const cellKinds = cells.first.map((f, c) => {
+    const kind = kinds[f] ?? "";
+    const n = cells.count[c] ?? 1;
+    for (let j = f + 1; j < f + n; j++) if (kinds[j] !== kind) return null;
+    return kind;
+  });
+  return { list, records, kinds, what, categories, largest, sameSize, cells, cellKinds };
 }
 
 function hasProblem(r: TemplateNode): boolean {
@@ -337,7 +359,7 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     key.textContent = data.sameSize
       ? VIZ.tiles.keySameSize(word, data.what, bitSizeText(maxBits))
       : VIZ.tiles.key(word, data.what, data.kinds[data.largest] ?? largest.name, bitSizeText(maxBits));
-    if (cellCount < data.records.length) key.textContent += ` ${VIZ.tiles.keyRuns(word, data.what)}`;
+    if (cellCount < data.records.length) key.textContent += ` ${VIZ.tiles.keyRuns(word, data.what === "type" ? "type" : "colour")}`;
     host.append(key);
   }
 
@@ -424,7 +446,7 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
         let countDone = false;
         if (w >= NAME_FROM_PX && h >= NAME_TALL_PX && vx1 - vx0 >= 12 && ty >= 0 && ty + NAME_PX + 2 <= vy1) {
           const side = count !== "" && !countBelow ? countW + 6 : 0;
-          const text = ellipsise(data.kinds[first] ?? "", vx1 - vx0 - side, NAME_PX, measurer(), 3);
+          const text = ellipsise(data.cellKinds[i] ?? "", vx1 - vx0 - side, NAME_PX, measurer(), 3);
           if (text !== null) labels.push({ x: vx0, y: ty, w: vx1 - vx0 - side, text, px: NAME_PX });
           if (text !== null && side > 0) {
             labels.push({ x: vx1 - countW, y: ty + 1, w: countW, text: count, px: COUNT_PX });
@@ -566,8 +588,9 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     const endBit = last.space === r.space ? last.offset_bits + last.size_bits : r.offset_bits + r.size_bits;
     bus.publish({ hover: { startBit: r.offset_bits, endBit } });
     if (run > 1) {
-      const kind = data.kinds[first] ?? "";
-      const lines = [data.what === "type" ? VIZ.tiles.typeLine(kind) : VIZ.tiles.nameLine(kind), VIZ.tiles.runLine(run, word, bitSizeText(r.size_bits))];
+      const kind = data.cellKinds[i] ?? null;
+      const lines = [VIZ.tiles.runLine(run, word, bitSizeText(r.size_bits))];
+      if (kind !== null) lines.unshift(data.what === "type" ? VIZ.tiles.typeLine(kind) : VIZ.tiles.nameLine(kind));
       return tipCard(VIZ.tiles.runTitle(word, first, first + run - 1), lines, `${formatOffset(r.offset_bits)} · ${bitSizeText(endBit - r.offset_bits)}`);
     }
     return tipCard(r.name, tipLines(data, first), `${formatOffset(r.offset_bits)} · ${bitSizeText(r.size_bits)}`);

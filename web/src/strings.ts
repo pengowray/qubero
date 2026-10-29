@@ -4045,8 +4045,8 @@ export const VIZ = {
     /** The same, when every record is one size and the fill says nothing. */
     keySameSize: (word: string, what: string, size: string): string => `Colour: ${word} ${what}. Every ${word} is ${size}.`,
     /** After the key, when some tiles stand for several records. */
-    keyRuns: (word: string, what: string): string =>
-      `A tile marked with a count, such as ×12, stands for that many ${plural(word)} in a row with the same ${what} and size.`,
+    keyRuns: (word: string, same: "type" | "colour"): string =>
+      `A tile marked with a count, such as ×12, stands for that many ${plural(word)} in a row with the same ${same} and size.`,
     /** The grey legend entry, for the types that had no colour left. */
     otherTypes: (kinds: number, count: number, word: string, what: string): string => `${countText(kinds, `other ${what}`)}, ${countText(count, word)}`,
     /** On a legend entry. */
