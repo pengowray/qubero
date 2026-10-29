@@ -146,7 +146,13 @@ function loadUPlot(): Promise<UPlot> {
   return loading;
 }
 
-type Drawn = { readonly el: HTMLElement; destroy(): void };
+type Drawn = {
+  readonly el: HTMLElement;
+  /** Draw again once the line is back on the page, for a line the listing
+   *  has just put into a new row: the cursor may have moved meanwhile. */
+  refresh(): void;
+  destroy(): void;
+};
 
 /** A `#rrggbb` colour at a third of its strength, for a canvas, which takes
  *  no `color-mix`. */
@@ -316,6 +322,7 @@ export function drawSparkline(doc: Doc, run: Run): Drawn {
   });
   return {
     el: host,
+    refresh: () => requestAnimationFrame(() => u?.redraw(false, false)),
     destroy: () => {
       gone = true;
       stopLinked();
@@ -360,7 +367,10 @@ export function register(): void {
       const key = n.path.join(".");
       const m = memoFor(doc);
       const had = m.lines.get(key);
-      if (had !== undefined) return had.el;
+      if (had !== undefined) {
+        had.refresh();
+        return had.el;
+      }
       if (m.none.has(key)) return null;
       // A checksum's values are meant to look like noise; a line of them
       // says nothing.

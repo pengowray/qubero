@@ -201,7 +201,15 @@ function measurer(): Measure {
 
 // ----- the drawing -----
 
-export type TilesFigure = { readonly el: HTMLElement; readonly board: Board; destroy(): void };
+export type TilesFigure = {
+  readonly el: HTMLElement;
+  readonly board: Board;
+  /** Draw again once the figure is back on the page, for a figure the
+   *  listing has just put into a new heading: the cursor may have moved while
+   *  it was off the page, and its colours are only readable on the page. */
+  refresh(): void;
+  destroy(): void;
+};
 
 /** Draw the grid `width` pixels wide. `word` is what the list calls one
  *  record. */
@@ -494,7 +502,7 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     const next = selectedOf(state.selection?.path);
     if (next === selected) return;
     selected = next;
-    if (host.isConnected) draw();
+    draw();
   });
   const theme = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
   const retheme = (): void => {
@@ -510,6 +518,9 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   return {
     el: host,
     board: zoom,
+    refresh: () => requestAnimationFrame(() => {
+      if (host.isConnected) draw();
+    }),
     destroy: () => {
       zoom.destroy();
       stopTip();
@@ -574,6 +585,7 @@ function cached(doc: Doc, key: string, sig: string, make: () => TilesFigure): HT
     // Most recently used last, so the oldest is the one let go.
     byKey.delete(key);
     byKey.set(key, had);
+    had.fig.refresh();
     return had.fig.el;
   }
   had?.fig.destroy();
@@ -623,10 +635,13 @@ const TILES_INSIDE = "record-tiles-inside";
 
 /** Put the tiles on the listing's headings. */
 export function register(): void {
-  // On a heading that is one element of a list: the list it is in.
+  // On a heading that is one element of a list: the list it is in. Only on a
+  // top-level heading, which is where the listing puts the elements of a list
+  // it has not given a heading of its own; under a list's heading, the list's
+  // heading has the button.
   registerHeadingButton({
     id: TILES_OF_LIST,
-    applies: (c, node) => parentList(c.doc, node) !== null,
+    applies: (c, node, item) => item.level === 0 && parentList(c.doc, node) !== null,
     draw: (c, node) => {
       const list = parentList(c.doc, node) as TemplateNode;
       const word = recordWord(list);

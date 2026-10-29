@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import { assignCategories, fillPx, HUE_SLOTS, OTHER_SLOT, recordWord, tileAt, tileBox, tileGrid } from "../src/viz/tilelayout.ts";
 import { binOf, binRecords, envelope, parseNumber, shortNumber, worthDrawing } from "../src/viz/sparkmath.ts";
+import { figureKey, figureOpenOn, figurePath, isFigureKey } from "../src/viz/headingfigures.ts";
 
 // ----- categories -----
 
@@ -177,4 +178,24 @@ test("a run of the same value, or of fewer than three, is not drawn", () => {
   assert.equal(worthDrawing([1, 1, 1, 1]), false);
   assert.equal(worthDrawing([1, 2]), false);
   assert.equal(worthDrawing([1, 2, 1]), true);
+});
+
+// ----- figures under a heading -----
+
+test("a figure key names its figure and the heading it opens under", () => {
+  const key = figureKey("record-tiles", [1, 0]);
+  assert.equal(isFigureKey(key), true);
+  assert.equal(figurePath(key), "1.0");
+  assert.equal(figurePath(figureKey("record-tiles", [])), "");
+  assert.equal(isFigureKey("ask:struct:1.0"), false);
+  assert.equal(figurePath("ask:struct:1.0"), null);
+});
+
+test("a heading is measured only while a figure is open under it", () => {
+  const cards = new Set([figureKey("record-tiles", [2]), "ask:struct:3"]);
+  assert.equal(figureOpenOn(cards, [2]), true);
+  assert.equal(figureOpenOn(cards, [3]), false);
+  // A heading whose path only starts like an open one's is not it.
+  assert.equal(figureOpenOn(new Set([figureKey("record-tiles", [2, 1])]), [2]), false);
+  assert.equal(figureOpenOn(new Set([figureKey("record-tiles", [12])]), [2]), false);
 });
