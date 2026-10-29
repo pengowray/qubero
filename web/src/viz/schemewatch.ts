@@ -34,6 +34,9 @@ export function onSchemeChange(el: Element, repaint: () => void): () => void {
     listening = true;
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaintAll);
   }
+  // Entries whose element has been collected go now as well as on a change
+  // of theme, so a page that never changes theme does not gather them.
+  for (const old of figures) if (old.deref() === undefined) figures.delete(old);
   const ref = new WeakRef(el);
   repaints.set(el, repaint);
   figures.add(ref);

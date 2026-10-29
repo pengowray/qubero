@@ -336,9 +336,9 @@ export function drawLinePlot(
     const box = document.createElement("div");
     box.className = "vp-failed";
     box.textContent = VIZ.valuePlot.loadFailed;
-    // Not a press on the plot: no pan, no zoom, and no click through to the
-    // bytes.
-    for (const type of ["pointerdown", "mousedown", "click", "wheel"]) box.addEventListener(type, (e) => e.stopPropagation());
+    // Not the plot: no hover card, no pan, no zoom, and no click through to
+    // the bytes.
+    for (const type of ["pointermove", "pointerdown", "mousedown", "click", "wheel"]) box.addEventListener(type, (e) => e.stopPropagation());
     host.append(box);
   });
 
