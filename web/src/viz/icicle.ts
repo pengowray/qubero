@@ -356,7 +356,13 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
         const left = Math.max(0, bar.x0) + LABEL_PAD;
         const right = Math.min(width, bar.x1) - LABEL_PAD;
         if (right - left < LABEL_PX) continue;
-        const text = ellipsise(barText(bar), right - left, LABEL_PX, measurer(), LABEL_MIN_CHARS);
+        // A field with a value of its own is named the way the hex view's
+        // chips name it, `size 32`, where there is room for the name and the
+        // start of the value; otherwise the name alone.
+        const label = barText(bar);
+        const f = bar.field;
+        const valued = f !== undefined && !f.composite && f.value !== "" ? ellipsise(`${label} ${f.value}`, right - left, LABEL_PX, measurer(), label.length + 2) : null;
+        const text = valued ?? ellipsise(label, right - left, LABEL_PX, measurer(), LABEL_MIN_CHARS);
         if (text === null) continue;
         ctx.fillStyle = bar.kind === "gap" ? p.muted : p.fg;
         ctx.fillText(text, left, y + laneH / 2 + 0.5);
