@@ -20,7 +20,8 @@
 // where the next member reaches its natural alignment (a four-byte number at a
 // multiple of four from the start of the record), and is shorter than that
 // alignment, is what a compiler leaves, and is called padding; any other gap
-// is bytes no field describes, called unread. A field the format itself names
+// is bytes no field describes (the piece kind `unread`, shown as "unmapped",
+// the word the hex view uses for them). A field the format itself names
 // as padding (`name_padding` in cpio) stays a field, since the template read
 // it, and is hatched over its colour and counted as padding.
 //
@@ -286,26 +287,59 @@ function gapPiece<N extends NodeLike>(start: number, end: number, next: N | null
   return { kind: padding ? "padding" : "unread", startBit: start, endBit: end, lane: 0, next, owners: [] };
 }
 
-/** What is in a gap's bytes, as far as the rest of the file says: nothing
- *  (`[]`), the names of the parts whose fields are there, or null when that
- *  is not known yet. */
-export type GapCover = (startBit: number, endBit: number) => readonly string[] | null;
+/** A stretch of a gap that a field elsewhere in the file is read from, and
+ *  the name of the part of the file that field belongs to. */
+export type CoverPart = { readonly startBit: number; readonly endBit: number; readonly owner: string };
+
+/** What is in a gap's bytes, as far as the rest of the file says: the
+ *  stretches fields elsewhere are read from (none when nothing is), or null
+ *  when that is not known yet. The stretches may run past the gap and may
+ *  overlap. */
+export type GapCover = (startBit: number, endBit: number) => readonly CoverPart[] | null;
 
 /**
- * The record with each gap that other fields of the file are read from
- * called `other`, with the names of what those fields belong to. A gap
- * inside a record is only bytes no field describes when no field anywhere
- * does; a list placed by offsets has whole other structures between its
- * elements.
+ * The record with each stretch of a gap that other fields of the file are
+ * read from called `other`, with the names of what those fields belong to. A
+ * gap inside a record is only bytes no field describes where no field
+ * anywhere does; a list placed by offsets has whole other structures between
+ * its elements. A gap read only in part is cut where the reading starts and
+ * stops, so the bytes nothing reads keep their own box and count.
  */
 export function coverGaps<N extends NodeLike>(r: StructRecord<N>, cover: GapCover): StructRecord<N> {
   let changed = false;
-  const pieces = r.pieces.map((p): Piece<N> => {
-    if (p.kind === "field") return p;
-    const owners = cover(p.startBit, p.endBit);
-    if (owners === null || owners.length === 0) return p;
+  const widest = Math.max(1, ...r.pieces.map((q) => (q.kind === "field" ? (naturalAlign(q.node) ?? 1) : 1)));
+  const pieces = r.pieces.flatMap((p): Piece<N>[] => {
+    if (p.kind === "field") return [p];
+    const parts = cover(p.startBit, p.endBit);
+    if (parts === null) return [p];
+    // The stretches read, inside the gap, joined where they touch or overlap.
+    const runs: { s: number; e: number; owners: string[] }[] = [];
+    const inside = parts
+      .map((c) => ({ s: Math.max(p.startBit, c.startBit), e: Math.min(p.endBit, c.endBit), owner: c.owner }))
+      .filter((c) => c.e > c.s)
+      .sort((a, b) => a.s - b.s);
+    for (const c of inside) {
+      const last = runs[runs.length - 1];
+      if (last !== undefined && c.s <= last.e) {
+        last.e = Math.max(last.e, c.e);
+        if (!last.owners.includes(c.owner)) last.owners.push(c.owner);
+      } else runs.push({ s: c.s, e: c.e, owners: [c.owner] });
+    }
+    if (runs.length === 0) return [p];
     changed = true;
-    return { ...p, kind: "other", owners };
+    const out: Piece<N>[] = [];
+    let at = p.startBit;
+    for (const run of runs) {
+      // Bytes nothing reads, between two stretches that are read: no member
+      // follows them, so they align nothing and are not padding.
+      if (run.s > at) out.push({ kind: "unread", startBit: at, endBit: run.s, lane: 0, next: null, owners: [] });
+      out.push({ kind: "other", startBit: run.s, endBit: run.e, lane: 0, next: p.next, owners: run.owners });
+      at = run.e;
+    }
+    // What is left before the next member is named again by the same rule as
+    // a whole gap, since only it can align that member.
+    if (at < p.endBit) out.push(gapPiece(at, p.endBit, p.next, r.startBit, widest));
+    return out;
   });
   return changed ? { ...r, pieces } : r;
 }
@@ -452,10 +486,12 @@ export function wrapRows<N extends NodeLike>(records: readonly StructRecord<N>[]
 
 /** The bytes per row a reader is offered, and the one a record starts at:
  *  16 for anything long enough to need the width, 8 otherwise, since most
- *  file headers are written in fields of up to eight bytes. */
+ *  file headers are written in fields of up to eight bytes. On a phone
+ *  (`narrow`) never 16, which leaves a box a byte wide too small for a
+ *  digit. */
 export const ROW_WIDTHS = [4, 8, 16] as const;
-export function defaultRowWidth(bytes: number): number {
-  return bytes > 256 ? 16 : 8;
+export function defaultRowWidth(bytes: number, narrow = false): number {
+  return bytes > 256 && !narrow ? 16 : 8;
 }
 
 const ELLIPSIS = "…";
@@ -500,15 +536,17 @@ export type KeyEntry = { readonly text: string; readonly index: number };
  * which `home` says), what fits there, and the key for the rest. `room` is
  * how many pixels of a cell are on screen at the current zoom. `name` is the
  * label a piece would like; `numberOf` hands out the number a keyed member
- * wears. Two names cut to the same text on one row would read as one field,
- * so both are keyed instead.
+ * wears, given a test of whether a number fits its box, and hands out none
+ * when it would not, so the numbers in the key run without a break. Two names
+ * cut to the same text on one row would read as one field, so both are keyed
+ * instead.
  */
 export function rowLabels<N extends NodeLike>(
   cells: readonly Cell<N>[],
   room: (cell: Cell<N>) => number,
   home: (index: number) => boolean,
   name: (piece: Piece<N>) => { readonly full: string; readonly short: string | null },
-  numberOf: (index: number) => number,
+  numberOf: (index: number, fits: (text: string) => boolean) => number | null,
   opts: { readonly size: number; readonly pad: number; readonly minChars: number; readonly measure: Measure },
 ): { readonly labels: Map<Cell<N>, CellLabel>; readonly key: readonly KeyEntry[] } {
   const labels = new Map<Cell<N>, CellLabel>();
@@ -539,9 +577,9 @@ export function rowLabels<N extends NodeLike>(
     // A gap's label is only ever its byte count, and a gap too narrow for one
     // has nothing a key could add that the hover does not.
     if (cell.piece.kind !== "field") continue;
-    const n = String(numberOf(cell.index));
-    if (opts.measure(n, opts.size) <= shown - 2) {
-      labels.set(cell, { text: n, keyed: true });
+    const n = numberOf(cell.index, (text) => opts.measure(text, opts.size) <= shown - 2);
+    if (n !== null) {
+      labels.set(cell, { text: String(n), keyed: true });
       key.push({ text: `${n} ${want.full}`, index: cell.index });
     } else key.push({ text: want.full, index: cell.index });
   }

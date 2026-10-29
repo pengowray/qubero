@@ -243,6 +243,22 @@ test("a name that does not fit is keyed by number, and the key fits its room", (
   // 54 pixels inside the padding: eight characters and the ellipsis, four
   // from each end.
   assert.deepEqual(texts, ["a_lo…name", "b", "1"]);
+  // A number is handed out only when it fits, so one that would not fit
+  // leaves no hole in the count.
+  let handed = 0;
+  const squeezed = rowLabels(
+    line.cells,
+    (c) => (c.x1 - c.x0) * 120,
+    () => true,
+    (p) => ({ full: p.kind === "field" ? p.node.name : "gap", short: null }),
+    (_i, fits) => (fits(String(handed + 1)) ? ++handed : null),
+    { size: 10, pad: 3, minChars: 4, measure: (t, size) => (/^\d+$/.test(t) ? 1000 : measure(t, size)) },
+  );
+  assert.equal(handed, 0);
+  assert.deepEqual(
+    squeezed.key.map((k) => k.text),
+    ["tiny_but_named"],
+  );
   assert.deepEqual(
     key.map((k) => k.text),
     ["1 tiny_but_named"],
@@ -322,7 +338,7 @@ test("a gap other fields are read from is called other, with what they belong to
   // list's start and its first section, and one byte nothing reads.
   const list = n("sections", "composite", 64, 400, { list: true, type: "offsets → switch", child_count: 2 });
   const r = buildRecord(list, [leaf(n("[1] .init", "bytes", 288, 27)), leaf(n("[2] .text", "bytes", 316, 148))]);
-  const covered = coverGaps(r, (start, end) => (start === 64 * 8 && end === 288 * 8 ? ["program_headers"] : []));
+  const covered = coverGaps(r, (start, end) => (start === 64 * 8 && end === 288 * 8 ? [{ startBit: start, endBit: end, owner: "program_headers" }] : []));
   const gaps = covered.pieces.filter((p) => p.kind !== "field");
   assert.deepEqual(
     gaps.map((g) => [g.kind, (g.endBit - g.startBit) / 8, "owners" in g ? g.owners : []]),
@@ -336,4 +352,34 @@ test("a gap other fields are read from is called other, with what they belong to
   assert.equal(s.unreadBytes, 1);
   // Not known yet: the gap stays as it was.
   assert.equal(coverGaps(r, () => null), r);
+});
+
+test("a gap read only in part is cut where the reading starts and stops", () => {
+  // 40 bytes between two members: bytes 8 to 16 and 20 to 32 are read by
+  // fields elsewhere (two of them overlapping, one running past the gap's
+  // start), and the rest is read by nothing.
+  const s = n("s", "composite", 0, 48, { child_count: 2 });
+  const r = buildRecord(s, [leaf(n("a", "bytes", 0, 4)), leaf(n("b", "bytes", 44, 4))]);
+  const covered = coverGaps(r, () => [
+    { startBit: 0, endBit: 16 * 8, owner: "x" },
+    { startBit: 20 * 8, endBit: 28 * 8, owner: "y" },
+    { startBit: 24 * 8, endBit: 32 * 8, owner: "z" },
+  ]);
+  const gaps = covered.pieces.filter((p) => p.kind !== "field");
+  assert.deepEqual(
+    gaps.map((g) => [g.kind, g.startBit / 8, g.endBit / 8, "owners" in g ? g.owners : []]),
+    [
+      ["other", 4, 16, ["x"]],
+      ["unread", 16, 20, []],
+      ["other", 20, 32, ["y", "z"]],
+      ["unread", 32, 44, []],
+    ],
+  );
+  const sum = summarise(covered);
+  assert.equal(sum.otherBytes, 24);
+  assert.equal(sum.unreadBytes, 16);
+  assert.equal(sum.bytes, 48);
+  // Pieces stay in the order they start.
+  const starts = covered.pieces.map((p) => p.startBit);
+  assert.deepEqual(starts, [...starts].sort((x, y) => x - y));
 });

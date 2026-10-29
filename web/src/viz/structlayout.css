@@ -16,10 +16,15 @@
   white-space: normal;
   font: 12px/1.4 var(--sans);
 }
+/* The heading and the row width control share a line while both fit, and
+   the control goes under the heading when they do not, so a narrow card
+   shows the whole heading. The listing measures a card as drawn, so a line
+   that wraps makes the card taller rather than cutting it. */
 .sl-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 2px 12px;
 }
 .sl-heading {
   font-weight: 600;
@@ -73,9 +78,6 @@
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .sl-frame {
   overflow: hidden;
@@ -83,26 +85,30 @@
   border-radius: 4px;
   background: var(--bg);
 }
+/* The links under the figure wrap onto as many lines as they need: every
+   one is a place to go, and one cut off could not be reached. */
 .sl-foot,
 .sl-note {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  overflow: hidden;
-  white-space: nowrap;
+  gap: 4px 8px;
   color: var(--muted);
   font-size: 12px;
 }
 .sl-foot {
   margin-top: 4px;
 }
+/* 24 pixels tall, the smallest target the app allows. */
 .sl-link {
   font: 12px var(--sans);
-  min-height: 0;
-  padding: 1px 6px;
+  min-height: 24px;
+  padding: 0 6px;
   display: inline-flex;
+  align-items: center;
   gap: 6px;
   flex: none;
+  white-space: nowrap;
 }
 .sl-link-at {
   font: 11px var(--mono);
@@ -190,6 +196,12 @@
 .sl-gapname {
   fill: var(--muted);
   font-style: italic;
+}
+/* The patch behind a gap's label, in the figure's background, so the hatch
+   lines stop short of the letters. */
+.sl-labelback {
+  fill: var(--bg);
+  pointer-events: none;
 }
 .sl-foldname {
   fill: var(--muted);
