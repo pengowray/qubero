@@ -206,7 +206,9 @@ const TAB_PX = 12;
  *  so this is what keeps three stream tabs in view at once. */
 const TAB_ROOM = 300;
 /** Gap and arrow between two crumbs, and the mark for those left out. */
-const SEP = " › ";
+const SEP = "›";
+/** The padding either side of the arrow, `.viz-lineage-sep`. */
+const SEP_PAD = 4;
 const MORE = "…";
 /** Fewer characters than this is not a name worth cutting down to. */
 const MIN_CHARS = 4;
@@ -238,7 +240,7 @@ export function tabTitleText(crumbs: readonly Crumb[]): string {
 export function tabTitleLabel(crumbs: readonly Crumb[], room = TAB_ROOM): HTMLElement {
   const m = measurer();
   const widths = crumbs.map((c) => m(c.label, TAB_PX));
-  const fit = fitCrumbs(widths, room, m(SEP, TAB_PX), () => m(MORE, TAB_PX));
+  const fit = fitCrumbs(widths, room, m(SEP, TAB_PX) + 2 * SEP_PAD, () => m(MORE, TAB_PX));
   const out = document.createElement("span");
   out.className = "viz-lineage-tab";
   fit.forEach((f, i) => {
@@ -255,7 +257,7 @@ export function tabTitleLabel(crumbs: readonly Crumb[], room = TAB_ROOM): HTMLEl
 }
 
 function sep(): HTMLElement {
-  const s = span("viz-lineage-sep", "›");
+  const s = span("viz-lineage-sep", SEP);
   s.setAttribute("aria-hidden", "true");
   return s;
 }
