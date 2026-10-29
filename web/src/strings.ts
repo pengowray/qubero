@@ -2283,12 +2283,6 @@ export const REPORT = {
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
   imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
-  /** The picture is scaled to fit the column, or magnified when it is a few
-   *  pixels across; a click shows it pixel for pixel, and another puts it
-   *  back. "actual" covers both directions where "full" would promise the
-   *  magnified one gets bigger. Tooltips on the picture itself. */
-  imageShowFull: "Show at actual size",
-  imageShowFit: "Scale to fit",
 } as const;
 
 /**
@@ -4014,5 +4008,58 @@ export const VIZ = {
      *  The noun is the structure's own word for them: fields, items, chunks. */
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
+  },
+  /** The picture of an image file in its content card, and in the report's
+   *  JPEG and PNG sections, with what is drawn over it (`viz/pixelgrid.ts`). */
+  pixelGrid: {
+    /** The buttons that choose what is drawn over the picture. */
+    modesLabel: "Show over the picture",
+    modes: {
+      picture: "Picture only",
+      blocks: "Blocks",
+      bits: "Bits per block",
+      restart: "Restart intervals",
+      passes: "Passes",
+    },
+    channel: "Channel",
+    allChannels: "All channels",
+    opacity: "Opacity",
+    /** Zooms so one pixel of the picture is one pixel of the screen. */
+    actualSize: "Actual size",
+    // ----- the hover card -----
+    pixel: (x: number, y: number): string => `Pixel ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    /** A place the JPEG scan codes past the right or bottom edge of the
+     *  picture, which every scan does to make up whole MCUs. */
+    padding: (x: number, y: number): string => `Padding at ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    paddingNote: "Coded to fill the last MCU, not part of the picture",
+    decoded: (hex: string): string => `Colour as the browser decodes it: #${hex}`,
+    samples: (values: readonly string[]): string => `Samples: ${values.join(", ")}`,
+    mcu: (x: number, y: number, bits: string): string => `MCU ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    block: (channel: string, x: number, y: number, bits: string): string => `${channel} block ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    interval: (n: number, of: number): string => `Restart interval ${(n + 1).toLocaleString()} of ${of.toLocaleString()}`,
+    scanline: (pass: number | null, row: number, filter: string): string =>
+      pass === null ? `Scanline ${row.toLocaleString()}, filter ${filter}` : `Pass ${pass}, scanline ${row.toLocaleString()} of the pass, filter ${filter}`,
+    pass: (pass: number): string => `Adam7 pass ${pass}`,
+    /** The foot of a PNG pixel's card: where its samples are. */
+    inUnfiltered: (address: string): string => `${address} in the unfiltered image data`,
+    // ----- the legend under the picture -----
+    heatAll: "Bits per MCU:",
+    heatChannel: (channel: string): string => `Bits per ${channel} block:`,
+    heatClass: (from: number, to: number): string => `${from.toLocaleString()}–${to.toLocaleString()}`,
+    passesLead: "Adam7 pass:",
+    restartLead: (n: number): string => `Restart intervals of ${countText(n, "MCU")}, shaded light and dark in turn`,
+    blocksLead: (channel: string, bw: number, bh: number, mw: number, mh: number): string =>
+      `Thin lines: ${channel} blocks of ${bw} × ${bh} pixels. Thick lines: MCUs of ${mw} × ${mh} pixels.`,
+    /** No channel is subsampled, so a block of any channel is an MCU. */
+    blocksSame: (mw: number, mh: number): string => `Lines: MCUs of ${mw} × ${mh} pixels, each holding one 8 × 8 block of every channel.`,
+    filtersLead: "Scanline filter:",
+    filterItem: (filter: string, n: number): string => `${filter}, ${n.toLocaleString()}`,
+    /** Says what the strip down the left of a PNG is. */
+    stripOne: "The strip on the left shows the filter of each scanline.",
+    stripPasses: "The strip on the left shows the filter of each scanline, in one column for each pass, 1 to 7.",
+    stripCut: (shown: number, total: number): string => `Filters shown for the first ${shown.toLocaleString()} of ${countText(total, "scanline")}.`,
+    /** Over the picture while the trace of the scan or the scanlines is read. */
+    reading: "Reading the scan to draw over the picture…",
+    alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
   },
 } as const;

@@ -1,0 +1,152 @@
+/* ---- the pixel grid (viz/pixelgrid.ts) ---- */
+/* A picture on a canvas that zooms and pans, with what made it drawn over it.
+   Loaded with the module, so the listing's content card and the report's
+   sections get the same rules.
+
+   The canvas paints with the colours below, read off the figure when it
+   paints, so the canvas and the legend under it cannot disagree. */
+.viz-pixgrid {
+  /* Bits per block: the report's sequential blue ramp, seven classes, pale
+     to dark on a light page and dark to pale on a dark one, so a cheap block
+     recedes into the page either way. The same values as `--rv-seq-*` in
+     report/jpeg.css. */
+  --viz-seq-0: #cde2fb;
+  --viz-seq-1: #9ec5f4;
+  --viz-seq-2: #6da7ec;
+  --viz-seq-3: #3987e5;
+  --viz-seq-4: #256abf;
+  --viz-seq-5: #184f95;
+  --viz-seq-6: #0d366b;
+  /* The five PNG filters, in RFC 2083's order: the report's colours for them
+     (`--rv-filter-*` in report/report.css). */
+  --viz-filter-0: #2a78d6;
+  --viz-filter-1: #eb6834;
+  --viz-filter-2: #1baf7a;
+  --viz-filter-3: #eda100;
+  --viz-filter-4: #e87ba4;
+  /* The two greys of the checks behind a transparent pixel. */
+  --viz-check-a: #ffffff;
+  --viz-check-b: #d8dbe0;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  .viz-pixgrid {
+    --viz-seq-0: #0d366b;
+    --viz-seq-1: #184f95;
+    --viz-seq-2: #256abf;
+    --viz-seq-3: #3987e5;
+    --viz-seq-4: #6da7ec;
+    --viz-seq-5: #9ec5f4;
+    --viz-seq-6: #cde2fb;
+    --viz-filter-0: #3987e5;
+    --viz-filter-1: #d95926;
+    --viz-filter-2: #199e70;
+    --viz-filter-3: #c98500;
+    --viz-filter-4: #d55181;
+    --viz-check-a: #2a2c31;
+    --viz-check-b: #3a3d44;
+  }
+}
+/* The controls, in one row over the picture: what to draw over it, then the
+   settings of that overlay, then the zoom buttons at the far end. Wraps on a
+   narrow card rather than running off it. */
+.viz-pixgrid-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+.viz-pixgrid-modes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.viz-pixgrid-modes button {
+  font-size: 12px;
+  padding: 2px 8px;
+  min-height: 24px;
+}
+/* The chosen overlay is marked by its fill, the way the app marks a chosen
+   option, not by bold, which would make the row wider. */
+.viz-pixgrid-modes button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.viz-pixgrid-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+.viz-pixgrid-field select {
+  font-size: 12px;
+}
+.viz-pixgrid-field input[type="range"] {
+  width: 90px;
+}
+.viz-pixgrid-zoom {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.viz-pixgrid-zoom button {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 24px;
+}
+/* Drag pans and the wheel zooms, so the canvas asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.viz-pixgrid-canvas {
+  display: block;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.viz-pixgrid-canvas:active {
+  cursor: grabbing;
+}
+.viz-pixgrid-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.viz-pixgrid-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg);
+}
+.viz-pixgrid-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+.viz-pixgrid-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+/* The content card (contentcard.ts) holding the grid: the grid takes the
+   card's whole width, and the identification sentence goes under it rather
+   than beside it. */
+.rp-card-body.is-grid {
+  flex-direction: column;
+  align-items: stretch;
+}
+.rp-card-grid {
+  width: 100%;
+  min-width: 0;
+}
+.rp-card-body.is-grid .rp-card-id {
+  flex: none;
+}

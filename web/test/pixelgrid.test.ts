@@ -26,6 +26,8 @@ import {
   restartInterval,
   scanlineOf,
   scanlinePixels,
+  viewHeight,
+  viewSize,
   visiblePixels,
   type ScanShape,
 } from "../src/viz/pixelgridmath.ts";
@@ -50,6 +52,30 @@ test("a large picture is scaled down to fit the box", () => {
   const p = placePicture(1000, 500, 400, 300);
   assert.equal(p.scale, 0.4);
   assert.equal(p.y0, (300 - 200) / 2);
+});
+
+test("a view is as tall as the picture first drawn in it, within limits", () => {
+  // 32 pixels magnified 12 times is 384, the most whole times that fits the
+  // tallest view, with 8 pixels clear above and below.
+  assert.equal(viewHeight(32, 32, 1000), 400);
+  // A small photograph is magnified twice.
+  assert.equal(viewHeight(240, 160, 1000), 336);
+  // A wide photograph is as tall as it is once scaled to the width.
+  assert.equal(viewHeight(1000, 250, 516), 141);
+  // A tall one stops at the most a card gives it, a thin strip at the least.
+  assert.equal(viewHeight(500, 4000, 1000), 420);
+  assert.equal(viewHeight(4000, 10, 1000), 120);
+});
+
+test("a view is as wide as its picture, within the card and above a floor", () => {
+  // 96 by 64 magnified 5 times, beside a 34-pixel strip.
+  assert.deepEqual(viewSize(96, 64, 1200, 34), { width: 34 + 480 + 16, height: 336 });
+  // A thin picture is given the narrowest view, 360 pixels.
+  assert.deepEqual(viewSize(16, 400, 1200), { width: 360, height: 416 });
+  // A 4:3 photograph is as wide as it is once scaled to the tallest view.
+  assert.deepEqual(viewSize(4000, 3000, 1200), { width: 555, height: 420 });
+  // A panorama takes the card's width.
+  assert.deepEqual(viewSize(8000, 1000, 900), { width: 900, height: 127 });
 });
 
 test("the pixel under a point, before and after a zoom", () => {
@@ -211,9 +237,9 @@ test("a scanline's pixels are the ones whose pass and row it is", () => {
     [7, 15],
   ] as const) {
     const s = scanlinePixels(w, h, pass, row);
-    assert.ok(s !== null);
+    if (s === null) throw new Error(`pass ${pass} row ${row} has no pixels`);
     for (let i = 0; i < s.count; i++) {
-      const x = s.x0 + i * s.dx;
+      const x: number = s.x0 + i * s.dx;
       assert.equal(passOf(x, s.y), pass);
       assert.deepEqual(scanlineOf(true, x, s.y), { pass, row });
     }

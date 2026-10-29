@@ -41,6 +41,46 @@ export function placePicture(w: number, h: number, boxW: number, boxH: number, m
   return { scale, x0: (boxW - w * scale) / 2, y0: (boxH - h * scale) / 2 };
 }
 
+/** A picture this many pixels across or fewer is magnified to about this
+ *  size, and no further: an icon blown up to fill the card is all edge. */
+const SMALL_TARGET_PX = 512;
+/** The narrowest the view is made, so a thin picture still has room to be
+ *  zoomed into. */
+export const VIEW_MIN_WIDTH_PX = 360;
+/** The tallest and shortest the picture's view is drawn in a card. */
+export const VIEW_MAX_PX = 420;
+export const VIEW_MIN_PX = 120;
+/** Clear space kept round the picture inside its view. */
+export const VIEW_PAD_PX = 8;
+
+/** How much a small picture is magnified at most. */
+export function magnifyCap(w: number, h: number): number {
+  return Math.max(1, Math.floor(SMALL_TARGET_PX / Math.max(1, w, h)));
+}
+
+/** How tall to make the view of a `w` by `h` picture `width` pixels wide,
+ *  with `left` pixels of it taken by a strip beside the picture: tall enough
+ *  for the picture at the size it is first drawn, within the card's limits. */
+export function viewHeight(w: number, h: number, width: number, left = 0): number {
+  const room = Math.max(1, width - left - 2 * VIEW_PAD_PX);
+  const p = placePicture(w, h, room, VIEW_MAX_PX - 2 * VIEW_PAD_PX, magnifyCap(w, h));
+  return Math.round(Math.max(VIEW_MIN_PX, Math.min(VIEW_MAX_PX, h * p.scale + 2 * VIEW_PAD_PX)));
+}
+
+/**
+ * The view for a `w` by `h` picture in a card `width` pixels wide: as tall as
+ * `viewHeight` says, and as wide as the picture drawn at that size, up to the
+ * card's width. A view wider than its picture is empty space to either side,
+ * and a wheel turned over the empty space zooms the picture off the view.
+ */
+export function viewSize(w: number, h: number, width: number, left = 0): { width: number; height: number } {
+  const height = viewHeight(w, h, width, left);
+  const room = Math.max(1, width - left - 2 * VIEW_PAD_PX);
+  const p = placePicture(w, h, room, height - 2 * VIEW_PAD_PX, magnifyCap(w, h));
+  const want = Math.ceil(left + w * p.scale + 2 * VIEW_PAD_PX);
+  return { width: Math.min(width, Math.max(VIEW_MIN_WIDTH_PX, want)), height };
+}
+
 /** How many screen pixels one picture pixel is across. */
 export function cellPx(place: Placement, view: View): number {
   return place.scale * view.k;

@@ -1,21 +1,27 @@
 // The content card: what an image file is a picture of, at the top of its
 // listing, before the parts of the file that encode it.
 //
-// The first step of reading a file for its content rather than its bytes, and
-// an honest one: the browser decodes the whole file and the card shows the
-// result, and that is all. There is no mapping from a pixel back to the bytes
-// that made it, so the card offers none; clicking the picture only changes its
-// size on screen.
+// The first step of reading a file for its content rather than its bytes: the
+// browser decodes the whole file and the card shows the result, in the pixel
+// grid (`viz/pixelgrid.ts`), which zooms and pans. Where the core has traced
+// how the pixels were made, which is a baseline JPEG's scan and a PNG's
+// scanlines, the grid draws that over the picture and a click on a pixel
+// selects the bytes that made it. Any other picture is the browser's decode
+// and nothing more, and its pixels lead nowhere.
 //
 // The decode is asynchronous and the card's element is not: the listing tears
 // its rows down and builds them again on every scroll, so the state of the
-// decode lives here, once per document, and the element is drawn from it.
+// decode, the trace drawn over it, and the reader's zoom and overlay choices
+// live here, once per document, and the element is drawn from them.
 
 import { formatBytes } from "./doc.ts";
 import type { Doc } from "./doc.ts";
 import type { CardKind, Item } from "./flatten.ts";
 import { tagged as el } from "./dom.ts";
 import { REPORT } from "./strings.ts";
+import { WAIT } from "./report/section.ts";
+import { drawPixelGrid, gridArea, gridState, readLayers, stripWidth, type Layers, type PixelGrid, type PixelGridState } from "./viz/pixelgrid.ts";
+import { viewSize } from "./viz/pixelgridmath.ts";
 
 /** The most the card will hand the browser to decode. Past this the picture
  *  is not worth the memory it costs while the reader is looking at bytes. */
@@ -46,25 +52,34 @@ export function cardKind(template: string | null): CardKind | null {
 export type ImageState =
   | { readonly status: "loading" }
   | { readonly status: "decoding" }
-  | { readonly status: "ready"; readonly url: string; readonly width: number; readonly height: number }
+  | {
+      readonly status: "ready";
+      readonly url: string;
+      readonly width: number;
+      readonly height: number;
+      /** The decoded picture, for drawing on a canvas. */
+      readonly image: HTMLImageElement;
+    }
   | { readonly status: "failed" }
   | { readonly status: "too-large"; readonly bytes: number };
-
-/** A picture whose longer side is under this many pixels is magnified until
- *  it reaches it: an icon of eight pixels is a smudge at one screen pixel
- *  each. */
-const TINY_PX = 128;
 
 /** How long an edited file waits before its picture is decoded again. A
  *  typed edit is several changes in a row, and each decode is the whole file. */
 const REDECODE_MS = 300;
+/** How often the card asks again for the trace to draw over the picture
+ *  while its bytes or its decode are on the way. Asking is what carries a
+ *  large inflate on, a go at a time. */
+const LAYERS_RETRY_MS = 150;
 
 class ImageCard {
   state: ImageState = { status: "loading" };
-  /** Whether the picture is shown at every pixel rather than scaled to fit. */
-  full = false;
   /** The identification sentence, once the rules have answered. */
   identity: string | null = null;
+  /** The overlay, channel and zoom the reader chose, kept across redraws. */
+  readonly grid: PixelGridState = gridState();
+  /** What the pixel grid draws over the picture, once it has been read. */
+  layers: Layers | null = null;
+  private layersAsked = false;
   private readonly listeners = new Set<(what: CardChange) => void>();
   private started = false;
   /** The edit the picture was decoded from, so a later one is noticed. */
@@ -90,9 +105,15 @@ class ImageCard {
     this.notify("size");
   }
 
-  toggleFull(): void {
-    if (this.state.status !== "ready") return;
-    this.full = !this.full;
+  /** Read what the grid draws over the picture, asking again until it is
+   *  there; the card is drawn again when it arrives. */
+  private readLayers(): void {
+    const got = readLayers(this.doc);
+    if (got === WAIT) {
+      window.setTimeout(() => this.readLayers(), LAYERS_RETRY_MS);
+      return;
+    }
+    this.layers = got;
     this.notify();
   }
 
@@ -158,7 +179,11 @@ class ImageCard {
     img.src = url;
     try {
       await img.decode();
-      this.set({ status: "ready", url, width: img.naturalWidth, height: img.naturalHeight });
+      this.set({ status: "ready", url, width: img.naturalWidth, height: img.naturalHeight, image: img });
+      // An edit makes a new trace too: the old one is of the old bytes.
+      if (this.layersAsked) this.layers = null;
+      this.layersAsked = true;
+      this.readLayers();
     } catch {
       URL.revokeObjectURL(url);
       this.set({ status: "failed" });
@@ -232,27 +257,33 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
       body.append(el("p", "rp-card-note", REPORT.imageTooLarge(formatBytes(s.bytes), formatBytes(IMAGE_LIMIT_BYTES))));
       break;
     case "ready": {
-      const frame = el("div", `rp-card-pic${card.full ? " is-full" : ""}`);
-      const img = document.createElement("img");
-      img.src = s.url;
-      img.width = s.width;
-      img.height = s.height;
-      // A picture a few pixels across is invisible at its own size, so it is
-      // drawn by a whole number of screen pixels per image pixel, each pixel
-      // square, until a click shows it at its real size like any other.
-      const zoom = card.full ? 1 : Math.max(1, Math.floor(TINY_PX / Math.max(1, s.width, s.height)));
-      if (zoom > 1) {
-        img.style.width = `${s.width * zoom}px`;
-        img.style.imageRendering = "pixelated";
-      }
-      img.alt = REPORT.imagePixels(s.width, s.height);
-      img.title = card.full ? REPORT.imageShowFit : REPORT.imageShowFull;
-      img.addEventListener("click", (e) => {
-        e.stopPropagation();
-        card.toggleFull();
+      // The grid takes the card's width, which is known only once the card
+      // is on the page; it is drawn then, and again if the width changes,
+      // with the reader's zoom and overlay kept in the card.
+      body.classList.add("is-grid");
+      const frame = el("div", "rp-card-grid");
+      let grid: PixelGrid | null = null;
+      let drawnAt = 0;
+      const draw = (width: number): void => {
+        if (width <= 0 || width === drawnAt) return;
+        drawnAt = width;
+        grid?.destroy();
+        const area = gridArea(s.width, s.height, card.layers);
+        const size = viewSize(area.w, area.h, width, stripWidth(card.layers));
+        grid = drawPixelGrid(doc, { width: s.width, height: s.height, image: s.image, layers: card.layers }, { ...size, state: card.grid });
+        frame.replaceChildren(grid.el);
+        card.resized();
+      };
+      const watch = new ResizeObserver((entries) => {
+        if (!frame.isConnected) {
+          watch.disconnect();
+          grid?.destroy();
+          return;
+        }
+        const w = entries[0]?.contentRect.width ?? 0;
+        draw(Math.floor(w));
       });
-      img.addEventListener("load", () => card.resized());
-      frame.append(img);
+      watch.observe(frame);
       body.append(frame);
       break;
     }
