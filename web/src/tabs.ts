@@ -15,6 +15,7 @@
 
 import { el } from "./dom.ts";
 import type { Doc } from "./doc.ts";
+import { hoverTip } from "./viz/tip.ts";
 
 /**
  * What a tab is a tab of. A document is the whole of one: its bytes, its
@@ -32,6 +33,11 @@ export type Tab = {
   readonly title: string;
   /** Where the bytes came from, shown on hover. Null for a file from disk. */
   readonly origin: string | null;
+  /** What the strip draws in place of `title`, and the card shown on hover in
+   *  place of `origin`: a stream's tab is titled by the streams it is inside
+   *  (`viz/lineage.ts`). Null to draw the title as text. */
+  readonly label: (() => Node) | null;
+  readonly tip: (() => Node) | null;
   /** The file the reader opened cannot be closed: closing it would leave the
    *  page showing tabs of bytes with nothing they came out of. Everything
    *  opened out of it can. */
@@ -57,6 +63,8 @@ export type NewTab = {
   doc: Doc;
   title: string;
   origin?: string | null;
+  label?: (() => Node) | null;
+  tip?: (() => Node) | null;
   closable?: boolean;
   /** A document tab unless the caller says otherwise. */
   kind?: TabKind;
@@ -159,6 +167,8 @@ export class Tabs {
       kind: t.kind ?? { view: "document" },
       title: t.title,
       origin: t.origin ?? null,
+      label: t.label ?? null,
+      tip: t.tip ?? null,
       closable: t.closable ?? true,
       page: null,
       shown: () => {},
@@ -244,9 +254,17 @@ export class Tabs {
     this.list.forEach((tab, i) => {
       const here = i === this.at;
       const pick = el("button", { type: "button", className: "tab-pick", textContent: tab.title });
+      if (tab.label !== null) {
+        pick.replaceChildren(tab.label());
+        // The drawn title may leave names out for want of room; the whole
+        // title is what a screen reader reads.
+        pick.setAttribute("aria-label", tab.title);
+      }
       pick.setAttribute("role", "tab");
       pick.setAttribute("aria-selected", String(here));
-      if (tab.origin !== null) pick.title = tab.origin;
+      const tip = tab.tip;
+      if (tip !== null) hoverTip(pick, () => tip());
+      else if (tab.origin !== null) pick.title = tab.origin;
       if (!here) pick.addEventListener("click", () => this.focus(i));
       const item = el("div", { className: here ? "tab is-active" : "tab" }, pick);
       if (tab.closable) {
