@@ -7504,6 +7504,207 @@ table.rec td.is-invalid {
   margin-top: 2px;
 }
 
+/* ---- file offsets against memory addresses (`viz/spacebands.ts`) ---- */
+/* The colours are a stretch's permissions in memory: executable, writable,
+   read-only. Blue, orange and green are the dataviz palette's
+   hues, which its validator passes for colour-blind readers next to each
+   other in both themes; every colour also has its word in the key and in
+   the hover card. Writable code takes the palette's violet, so the one
+   combination a reader is looking for stands apart. Not loaded is a grey. */
+.mmap-panel {
+  --mmap-exec: #2a78d6;
+  --mmap-write: #eb6834;
+  --mmap-read: #1baf7a;
+  --mmap-write-exec: #6250d6;
+  --mmap-unloaded: #8a8f98;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .mmap-panel {
+    --mmap-exec: #3987e5;
+    --mmap-write: #d95926;
+    --mmap-read: #199e70;
+    --mmap-write-exec: #9085e9;
+    --mmap-unloaded: #6f7580;
+  }
+}
+.mmap-exec { --mmap-c: var(--mmap-exec); }
+.mmap-write { --mmap-c: var(--mmap-write); }
+.mmap-read { --mmap-c: var(--mmap-read); }
+.mmap-write-exec { --mmap-c: var(--mmap-write-exec); }
+.mmap-unloaded { --mmap-c: var(--mmap-unloaded); }
+.mmap-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mmap-bar h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+}
+.mmap-summary {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.mmap-note {
+  color: var(--muted);
+}
+.mmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--fg);
+}
+.mmap-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mmap-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--mmap-c);
+}
+/* Only as wide as its words, so the checkbox's target is the label and not
+   the whole width of the window in the full-window mode. */
+.mmap-link {
+  align-self: flex-start;
+  min-height: 24px;
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.mmap-bar .tmp-grow {
+  width: 24px;
+  height: 24px;
+}
+/* Drag pans and the wheel zooms, so the drawing asks for the grab cursor and
+   keeps the page from selecting its text under a drag. */
+.mmap-svg {
+  display: block;
+  user-select: none;
+  touch-action: none;
+}
+.mmap-plot,
+.mmap-head {
+  pointer-events: none;
+}
+.mmap-hit {
+  fill: transparent;
+  cursor: grab;
+}
+.mmap-hit:active {
+  cursor: grabbing;
+}
+.mmap-ground {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.mmap-cut {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.mmap-box {
+  fill: var(--mmap-c);
+}
+/* A surface-coloured edge between two boxes that touch, where a box is tall
+   enough to keep its colour after losing a pixel to it. */
+.mmap-box.has-gap {
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+.mmap-band {
+  fill: var(--mmap-c);
+  fill-opacity: 0.28;
+}
+.mmap-band.is-hover {
+  fill-opacity: 0.5;
+}
+/* The section the cursor is in: the accent outline every view marks the
+   selection with. */
+.mmap-band.is-on {
+  fill-opacity: 0.55;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.mmap-box.is-on,
+.mmap-bracket.is-on {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.mmap-box.is-hover,
+.mmap-bracket.is-hover {
+  stroke: var(--fg);
+  stroke-width: 1;
+}
+.mmap-bracket {
+  fill: var(--mmap-c);
+  fill-opacity: 0.8;
+}
+.mmap-leader {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 0.75;
+  opacity: 0.7;
+}
+.mmap-leader.is-on,
+.mmap-leader.is-hover {
+  stroke: var(--fg);
+  opacity: 1;
+}
+.mmap-name {
+  font: 11px var(--sans);
+  fill: var(--fg);
+}
+.mmap-name.is-cut {
+  fill: var(--muted);
+}
+.mmap-name.is-on {
+  fill: var(--accent);
+}
+/* A band's `rwx` letters, over its fill. */
+.mmap-perms {
+  font: 10px var(--mono);
+  fill: var(--fg);
+}
+.mmap-colhead {
+  font: 600 11px var(--sans);
+  fill: var(--fg);
+}
+.mmap-readout {
+  font: 10px var(--mono);
+  fill: var(--muted);
+}
+/* Over the window, with the same frame the treemap takes there. */
+.mmap-big {
+  position: fixed;
+  inset: 8px;
+  z-index: 40;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+}
+.mmap-big .mmap-figure {
+  flex: 1;
+  min-height: 0;
+}
+.mmap-big .mmap-bar h3 {
+  font-size: 15px;
+}
+
 /* ---- lineage breadcrumb (viz/lineage.ts) ---- */
 /* A stream tab's title: the streams it is inside, muted, then its own in the
    tab's text colour, so the name that tells two tabs apart is the one that
