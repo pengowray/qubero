@@ -442,20 +442,12 @@
   font-size: 13px;
   color: var(--muted);
 }
-.rv-posbar {
-  position: relative;
-  height: 6px;
+/* The position map under a part's range: the file map (`filemap.ts`) with
+   this part's pieces lit. A block of its own, on its own line. */
+.rv-posmap {
+  display: flex;
+  height: 8px;
   margin: 6px 0 10px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  max-width: 520px;
-}
-.rv-posbar-mark {
-  position: absolute;
-  top: -1px;
-  bottom: -1px;
-  border-radius: 1px;
 }
 .rv-doc {
   margin: 4px 0 8px;

@@ -374,7 +374,7 @@ export class ListingReport {
     this.items = flatten(this.src, this.state, this.flatOpts()).items;
     this.segments = this.items
       .filter((i) => i.kind === "heading" && i.level === 0)
-      .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
+      .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section), ...(i.kind === "heading" && i.node !== null ? { name: i.title, path: i.path } : {}) }));
     // A strip that is no longer in the list keeps no height.
     const live = new Set(this.items.map((i) => i.key));
     for (const key of [...this.measured.keys()]) if (!live.has(key)) this.measured.delete(key);

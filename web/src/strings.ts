@@ -4015,4 +4015,25 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** The file map strips (`filemap.ts`), the bars under the inspector's
+   *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`). */
+  locator: {
+    /** Hover card title over bytes between the parts the strip is drawn from. */
+    notInAnyPart: "Bytes not in any part",
+    /** Hover card line: the part's share of the whole file. */
+    shareOfFile: (share: string): string => `${share} of the file`,
+    /** The same on the strip of a compressed stream's unpacked bytes. */
+    shareOfStream: (share: string): string => `${share} of the unpacked stream`,
+    /** Hover card line on a crumb's bar: the field's share of the crumb
+     *  before it, named as that crumb names it. */
+    shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
+    /** The At cursor section heading. */
+    title: "Position in the file",
+    /** Caption of a level of the stack that is a stream's unpacked bytes,
+     *  named after the field holding the packed bytes. */
+    unpacked: (name: string): string => `${name}, unpacked`,
+    /** Under the first strip of a deep path, where the strips of the levels
+     *  between the file and the last few are left out. */
+    levelsLeftOut: (n: number): string => (n === 1 ? "1 level left out here" : `${n} levels left out here`),
+  },
 } as const;

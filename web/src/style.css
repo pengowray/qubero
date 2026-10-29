@@ -3735,6 +3735,50 @@ button.insp-xrow-where:hover {
 .rp-h1 .fmap {
   margin-inline-start: 8px;
 }
+/* A strip that goes to the part clicked. */
+.fmap-live {
+  cursor: pointer;
+}
+/* A field inside a compressed stream: the file's strip with the stream's
+   packed bytes lit, and the stream's own strip under it with the field lit. */
+.fmap-stack {
+  display: inline-flex;
+  flex-direction: column;
+  flex: none;
+  gap: 2px;
+}
+.fmap.fmap-ring {
+  height: 5px;
+}
+/* Under each crumb of the At cursor trail: where that crumb's field is
+   inside the crumb before it. 24 by 4, the size the locator design gives it. */
+.crumb-bar {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 4px;
+  margin-top: 1px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--fg) 14%, var(--bg));
+}
+/* Under the crumb's words, from their left edge, so the separator after the
+   crumb stays on the line. */
+.insp-crumb.has-bar {
+  position: relative;
+  padding-bottom: 6px;
+}
+.insp-crumb.has-bar .crumb-bar {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: 0;
+  margin: 0;
+}
+.crumb-bar i {
+  position: absolute;
+  inset-block: 0;
+  min-width: 1px;
+  background: var(--accent);
+}
 /* Sticky trail: what the top of the window is inside. A listing scrolled past
    its heading stops saying which part of the file it is showing. */
 .report {
@@ -7399,4 +7443,36 @@ table.rec td.is-invalid {
   color: var(--muted);
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* ---- the zoom stack: the file, then each part the path goes through ---- */
+/* Which structure each strip is, over the strip: one line, cut short with an
+   ellipsis, so captions never run into each other. */
+.viz-stack-caption {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viz-stack-svg,
+.viz-stack-lens {
+  display: block;
+}
+/* The strip's own bytes that none of its fields cover. */
+.viz-stack-hole {
+  fill: color-mix(in srgb, var(--fg) 8%, var(--bg));
+}
+/* Joins the part lit in one strip to the strip under it, which is that part
+   drawn the full width. */
+.viz-lens {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1;
+}
+/* The strip under it counts the bytes the stream unpacks to, not the file's:
+   a dashed lens, so the two are not read as one axis. */
+.viz-lens.is-unpacked {
+  stroke-dasharray: 3 2;
 }

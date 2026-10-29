@@ -168,6 +168,8 @@ function stripSegments(parts: readonly Part[]): MapSegment[] {
       offsetBits: first.offsetBits,
       sizeBits: last.offsetBits + last.sizeBits - first.offsetBits,
       color: first.color,
+      // A cell of one part names it on hover and goes to it on a click.
+      ...(per === 1 ? { name: first.name, path: first.path } : {}),
     });
   }
   return out;
