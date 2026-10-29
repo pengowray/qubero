@@ -2550,9 +2550,12 @@ qubero-spinner svg {
     inset 0 0 0 1px var(--bg);
 }
 /* Contents beside Logical. A control rather than a heading, so it sits on a
-   rule like the inspector's mode buttons do. */
+   rule like the inspector's mode buttons do. Other views add tabs here
+   (`viz/overviewtabs.ts`), so the row wraps rather than running past the
+   rail's edge. */
 .ov-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   margin-top: 4px;
   border-bottom: 1px solid var(--line);
