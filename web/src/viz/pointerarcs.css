@@ -1,0 +1,129 @@
+/* The pointer arcs (`pointerarcs.ts`), in the rail's Pointers tab and in a
+   card under a listing heading. Kept beside the piece rather than in
+   style.css, which every piece of the batch would otherwise edit at once. */
+
+.viz-arcs {
+  margin: 0;
+  font: 12px/1.4 var(--sans);
+}
+.viz-arcs-head {
+  margin-bottom: 2px;
+}
+/* The status line and the zoom button under the chips. The button keeps its
+   place at the right whether or not there is a status to show. */
+.viz-arcs-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+  margin-bottom: 2px;
+}
+.viz-arcs-tools .viz-reset {
+  flex: none;
+  white-space: nowrap;
+}
+.viz-arcs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-width: 0;
+}
+/* A role chip is the legend and the filter at once: the role's colour, its
+   word and how many arcs it has. Off, the swatch is an outline and the text
+   goes muted, so the chip still says what it would bring back. No fill on
+   the chip itself: the figure's one filled thing is the arcs. */
+.viz-arcs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.viz-arcs-chip:hover {
+  border-color: var(--line);
+  color: var(--fg);
+}
+.viz-arcs-chip.is-on {
+  color: var(--fg);
+}
+.viz-arcs-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 2px solid var(--role);
+  box-sizing: border-box;
+}
+.viz-arcs-chip.is-on .viz-arcs-swatch {
+  background: var(--role);
+}
+.viz-arcs-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.viz-arcs-status {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+/* Drag pans and the wheel zooms, so the figure asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.viz-arcs-stage {
+  position: relative;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.viz-arcs-stage:active {
+  cursor: grabbing;
+}
+.viz-arcs-canvas,
+.viz-arcs-axis {
+  display: block;
+}
+.viz-arcs-foot {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.viz-arcs-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+/* The same hatching the bar draws over bytes no field covers. */
+.viz-arcs-hatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  background: repeating-linear-gradient(135deg, var(--muted) 0 1px, transparent 1px 4px), color-mix(in srgb, var(--fg) 5%, var(--bg));
+}
+.viz-arcs-empty {
+  color: var(--muted);
+  font-style: italic;
+  margin: 4px 0;
+}
+.viz-arcs-panel {
+  padding: 6px 0;
+}
+/* In the listing, a card standing in for a heading's fields. */
+.viz-arcs-card {
+  padding: 6px 0 10px;
+}
+.viz-arcs-title {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

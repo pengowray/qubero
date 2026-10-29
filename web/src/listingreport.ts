@@ -23,7 +23,7 @@ import { rememberChoice, storedChoice } from "./stored.ts";
 import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
-import { formatCardKind } from "./formatcards.ts";
+import { CARD_RESIZED, formatCardKind } from "./formatcards.ts";
 import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
 import type { GapVerdict } from "./gapcheck.ts";
@@ -289,6 +289,10 @@ export class ListingReport {
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
     this.scroller.addEventListener("keydown", (e) => this.onKey(e));
+    // A card that changed height on its own, after it was measured.
+    this.canvas.addEventListener(CARD_RESIZED, () => {
+      if (this.drawn !== null) this.remeasure(this.drawn.from, this.drawn.to);
+    });
     new ResizeObserver(() => {
       const width = this.scroller.clientWidth;
       // A hidden view has no width and nothing to measure against; what was
