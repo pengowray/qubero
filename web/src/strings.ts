@@ -4193,6 +4193,56 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** The Stride tab in the rail (`viz/strideraster.ts`): the file's bytes as
+   *  a grid of cells, a chosen number of bytes to a row, with the
+   *  autocorrelation line that suggests the number. */
+  stride: {
+    tab: "Stride",
+    tabTitle: "Each byte of the file as one cell of a grid. When bytes per row equals the record size, fixed-size records line up in columns.",
+    perRow: "Bytes per row",
+    perRowTitle: "The up and down arrow keys change the bytes per row by one, in this box or with the grid focused",
+    /** Beside the box while it holds a number the grid cannot be drawn at;
+     *  the grid stays at the last good one. */
+    perRowBad: (max: number): string => `Bytes per row must be a whole number from 1 to ${max.toLocaleString()}.`,
+    larger: "Show larger",
+    close: "Close",
+    /** The canvas, for a screen reader. */
+    rasterLabel: (perRow: number): string => `The file's bytes, ${perRow.toLocaleString()} per row`,
+    colourBy: "Colour the bytes by",
+    byValue: "Value",
+    /** The same names and colours as the rail map's legend (`TREEMAP.classLabel`). */
+    byKind: "Zeros / text / data",
+    zero: "Zeros",
+    text: "Text",
+    other: "Data",
+    unread: "Not read yet",
+    /** The ends of the grey ramp in the legend. */
+    low: "0x00",
+    high: "0xff",
+    autocorrelation: "Autocorrelation",
+    /** Under the line: what its axis counts, read off its highest peak. */
+    lagNote: (lag: number): string => `X axis: lag in bytes. A peak at lag ${lag.toLocaleString()} means the bytes repeat every ${countText(lag, "byte")}.`,
+    /** A second line under it, when the file is longer than what was looked at. */
+    lagWindow: (window: string): string => `Computed from the first ${window}.`,
+    computing: "Computing autocorrelation…",
+    noRepeat: (maxLag: number): string => `No repeat found at any lag up to ${countText(maxLag, "byte")}.`,
+    tooShort: "Too few bytes to look for repeats.",
+    failed: "Could not compute the autocorrelation.",
+    /** Before the buttons that set the row width to a peak of the line. */
+    suggested: "Suggested bytes per row",
+    peakButton: (lag: number): string => lag.toLocaleString(),
+    peakTitle: (lag: number): string => `Set bytes per row to ${lag.toLocaleString()}`,
+    /** The hover card on the line. */
+    lagTitle: (lag: number): string => `Lag ${countText(lag, "byte")}`,
+    lagValue: (r: number): string => `Autocorrelation ${r.toFixed(2)}`,
+    lagClick: (lag: number): string => `Click to set ${lag.toLocaleString()} bytes per row`,
+    /** The hover card on the grid. */
+    oneByte: (hex: string, dec: number): string => `${hex} (${dec})`,
+    manyBytes: (n: number, hex: string): string => `${countText(n, "byte")}, largest value ${hex}`,
+    rowColumn: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    rowColumns: (row: number, from: number, to: number): string => `Row ${row.toLocaleString()}, columns ${from.toLocaleString()} to ${to.toLocaleString()}`,
+    span: (from: string, to: string): string => `${from} to ${to}`,
+  },
   indexLookup: {
     /** The section's heading when the number picks one entry of a table: a
      *  string table, a palette, a list of records. */
