@@ -7467,9 +7467,10 @@ table.rec td.is-invalid {
 .viz-tiles-key:hover {
   border-color: var(--line);
 }
+/* Pressed the way the listing's own heading buttons are (`.rp-bytes.is-on`). */
 .viz-tiles-key.is-on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--line);
+  background: var(--panel);
 }
 .viz-tiles-swatch {
   flex: none;

@@ -524,6 +524,7 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     destroy: () => {
       zoom.destroy();
       stopTip();
+      hideTip();
       stopLinked();
       theme?.removeEventListener("change", retheme);
       canvas.removeEventListener("pointerleave", leave);
@@ -567,50 +568,63 @@ function innerList(doc: Doc, node: TemplateNode): TemplateNode | null {
   return lists.length === 1 && lists[0] !== undefined && (lists[0].contents || kids.node.length <= 4) ? lists[0] : null;
 }
 
-/** The figures drawn, by document and figure key, so a heading built again on
- *  the next paint gets the same figure, zoom and all. */
-const drawn = new WeakMap<Doc, Map<string, { readonly sig: string; readonly fig: TilesFigure }>>();
+/** What was read and drawn for one document: the tiles of each list, read
+ *  once, and the figures drawn from them, by figure key, so a heading built
+ *  again on the next paint gets the same figure, zoom and all. The tiles go
+ *  when the document changes: bytes arriving can finish a list that was cut
+ *  short, and an edit can change any record's type or size. A figure drawn
+ *  from tiles that have gone is drawn again the next time it is asked for. */
+type Memo = {
+  readonly data: Map<string, TilesData>;
+  readonly figures: Map<string, { readonly data: TilesData; readonly width: number; readonly fig: TilesFigure }>;
+};
+const memo = new WeakMap<Doc, Memo>();
 /** Figures kept per document. A reader with more open than this has scrolled
  *  some far away, and those are drawn again when they come back. */
 const KEEP = 8;
 
-function cached(doc: Doc, key: string, sig: string, make: () => TilesFigure): HTMLElement {
-  let byKey = drawn.get(doc);
-  if (byKey === undefined) {
-    byKey = new Map();
-    drawn.set(doc, byKey);
+function memoFor(doc: Doc): Memo {
+  let m = memo.get(doc);
+  if (m === undefined) {
+    const fresh: Memo = { data: new Map(), figures: new Map() };
+    m = fresh;
+    memo.set(doc, fresh);
+    doc.onChange(() => fresh.data.clear());
   }
-  const had = byKey.get(key);
-  if (had !== undefined && had.sig === sig) {
-    // Most recently used last, so the oldest is the one let go.
-    byKey.delete(key);
-    byKey.set(key, had);
-    had.fig.refresh();
-    return had.fig.el;
-  }
-  had?.fig.destroy();
-  const fig = make();
-  byKey.set(key, { sig, fig });
-  while (byKey.size > KEEP) {
-    const oldest = byKey.keys().next().value as string;
-    byKey.get(oldest)?.fig.destroy();
-    byKey.delete(oldest);
-  }
-  return fig.el;
+  return m;
 }
 
 function figureFor(c: DrawContext, key: string, list: TemplateNode, width: number): HTMLElement {
-  const data = tilesData(c.doc, list);
+  const m = memoFor(c.doc);
+  const listKey = list.path.join(".");
+  let data = m.data.get(listKey) ?? null;
+  if (data === null) {
+    data = tilesData(c.doc, list);
+    if (data !== null) m.data.set(listKey, data);
+  }
   if (data === null) {
     const wait = document.createElement("div");
     wait.className = "viz-tiles-note";
     wait.textContent = REPORT.reading;
     return wait;
   }
-  // What the figure was drawn from: a list that has grown, moved or changed
-  // size, or a listing of another width, is drawn again.
-  const sig = `${width}:${list.child_count}:${list.offset_bits}:${list.size_bits}:${data.records.length}:${data.kinds.join("\u0000").length}`;
-  return cached(c.doc, key, sig, () => drawRecordTiles(c.doc, data, { width, word: recordWord(list) }));
+  const had = m.figures.get(key);
+  if (had !== undefined && had.data === data && had.width === width) {
+    // Most recently used last, so the oldest is the one let go.
+    m.figures.delete(key);
+    m.figures.set(key, had);
+    had.fig.refresh();
+    return had.fig.el;
+  }
+  had?.fig.destroy();
+  const fig = drawRecordTiles(c.doc, data, { width, word: recordWord(list) });
+  m.figures.set(key, { data, width, fig });
+  while (m.figures.size > KEEP) {
+    const oldest = m.figures.keys().next().value as string;
+    m.figures.get(oldest)?.fig.destroy();
+    m.figures.delete(oldest);
+  }
+  return fig.el;
 }
 
 /** Open the tiles of `list` under the heading at `path`, and close the tiles
