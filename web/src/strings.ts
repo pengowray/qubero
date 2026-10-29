@@ -4035,6 +4035,51 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  indexLookup: {
+    /** The section's heading when the number picks one entry of a table: a
+     *  string table, a palette, a list of records. */
+    title: (table: string): string => `Lookup in ${table}`,
+    /** The heading when the number is an offset to one structure, which is
+     *  drawn as its own fields. `field` is the full label,
+     *  `entries[5].value.offset`, since a bare `offset` could be any field. */
+    pointsTo: (field: string): string => `Where ${field} points`,
+    previous: "Previous entry (Left arrow)",
+    next: "Next entry (Right arrow)",
+    /** A table entry by its index from 0, in brackets as the listing writes
+     *  it, so `Entry [255] of 256` reads as the last of 256. */
+    entry: (i: number): string => `Entry [${i}]`,
+    entryOf: (i: number, count: number): string => `Entry [${i}] of ${count.toLocaleString()}`,
+    /** Where an entry starts, counted from the start of its table. */
+    offsetIn: (offset: string, table: string): string => `Offset ${offset} in ${table}`,
+    /** A string table's entry that is the empty string, which most of them
+     *  start with. */
+    emptyString: "Empty string",
+    alpha: (a: number): string => `alpha ${a}`,
+    /** A palette entry's three channels, beside its `#rrggbb`. */
+    rgb: (r: number, g: number, b: number): string => `rgb(${r}, ${g}, ${b})`,
+    /** Which fields of the same kind as the one at the cursor land on an
+     *  entry. `scanned` is how many were read, of `total`. */
+    pointedAtBy: (label: string): string => `Pointed at by ${label}`,
+    pointedAtByCount: (n: number, field: string): string => `Pointed at by ${n.toLocaleString()} ${field} fields`,
+    usedBy: (n: number): string => `Used by ${countText(n, "pixel")}`,
+    ofFirst: (scanned: number): string => `(of the first ${scanned.toLocaleString()})`,
+    noPointer: (field: string, scanned: number, total: number): string =>
+      scanned >= total ? `No ${field} field points to this entry` : `None of the first ${scanned.toLocaleString()} ${field} fields point to this entry`,
+    noPixel: (scanned: number, total: number): string =>
+      scanned >= total ? "No pixel uses this entry" : `None of the first ${scanned.toLocaleString()} pixels use this entry`,
+    /** Under the index row after a step, when more than one field points at
+     *  the entry: the row shows the first, this counts the rest. */
+    morePointers: (n: number, field: string): string =>
+      n === 1 ? `1 more ${field} field points to this entry` : `${n.toLocaleString()} more ${field} fields point to this entry`,
+    morePixels: (n: number): string => (n === 1 ? "1 more pixel uses this entry" : `${n.toLocaleString()} more pixels use this entry`),
+    /** Under the strip: what the numbers on the axis count from. */
+    axisFromTable: (table: string): string => `Axis: byte offsets from the start of ${table}`,
+    axisFile: "Axis: file offsets",
+    axisFrom: (address: string): string => `Axis: byte offsets from ${address}`,
+    /** Under the strip, when a large table is read only around the entry. */
+    window: (from: number, to: number, count: number): string =>
+      `Showing entries ${from.toLocaleString()} to ${to.toLocaleString()} of ${count.toLocaleString()}`,
+  },
   /** The rail tab that draws an executable's sections twice, at their file
    *  offsets and at their virtual addresses, joined by bands
    *  (`viz/spacebands.ts`). */
