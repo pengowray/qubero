@@ -7400,3 +7400,92 @@ table.rec td.is-invalid {
   font-size: 11px;
   margin-top: 2px;
 }
+
+/* ---- lineage breadcrumb (viz/lineage.ts) ---- */
+/* A stream tab's title: the streams it is inside, muted, then its own in the
+   tab's text colour, so the name that tells two tabs apart is the one that
+   stands out. */
+.viz-lineage-tab-up,
+.viz-lineage-tab-more {
+  color: var(--muted);
+}
+.viz-lineage-tab-here {
+  color: inherit;
+}
+.viz-lineage-sep {
+  color: var(--muted);
+  padding: 0 4px;
+}
+/* The At cursor section: one row per stream, each indented one step further
+   than the stream it came out of, the file at the left edge. */
+.viz-lineage {
+  margin: 0;
+}
+.viz-lineage-title {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.viz-lineage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.viz-lineage-row {
+  padding: 2px 0 2px calc(var(--depth, 0) * 12px);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.viz-lineage-row + .viz-lineage-row {
+  border-top: 1px solid var(--line);
+}
+.viz-lineage-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+/* The name is a button that brings the stream's tab up: link-coloured like
+   the trail's crumbs, and a full 24px target. */
+.viz-lineage-name,
+.viz-lineage-at {
+  border: 0;
+  background: none;
+  font: inherit;
+  padding: 0;
+  min-height: 24px;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.viz-lineage-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.viz-lineage-name:hover:not(:disabled),
+.viz-lineage-at:hover {
+  text-decoration: underline;
+}
+/* The stream this tab shows, named in plain text. */
+.viz-lineage-name.is-here {
+  color: var(--fg);
+  cursor: default;
+}
+.viz-lineage-note {
+  color: var(--muted);
+  font-size: 11px;
+  flex: none;
+}
+.viz-lineage-how {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.viz-lineage-at {
+  font-family: var(--mono);
+  font-size: 11px;
+  min-height: 0;
+  padding: 2px 0;
+}
