@@ -40,11 +40,18 @@
     --vp-pos: #d95926;
   }
 }
+/* The note wraps above the controls in a narrow pane, rather than being cut
+   off beside them. */
 .vp-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 4px 8px;
   min-height: 22px;
+}
+.vp-head .vp-note.vp-title {
+  white-space: normal;
+  flex: 1 1 14em;
 }
 .vp-title {
   flex: 1;

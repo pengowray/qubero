@@ -43,7 +43,7 @@ import type uPlot from "uplot";
 import type { Doc, FieldPick, SamplesInfo, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { listPaneFor, setPanePlotter, type PaneFigure } from "../listpane.ts";
-import { frameOfSample, samplesNote, showingLine } from "../samplespanel.ts";
+import { frameOfSample, showingLine } from "../samplespanel.ts";
 import { childWord, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { rescaleDomain, type View } from "./boardmath.ts";
@@ -86,8 +86,12 @@ export type RunSource = {
   readonly stride: number;
   /** A name per channel, or one empty name when there is one channel. */
   readonly names: readonly string[];
-  /** What one frame is called: a sample, a value. */
-  readonly rowWord: string;
+  /** What the template calls one frame of a table: a sample. Null for a run
+   *  that is not a table, whose elements are numbered as the listing numbers
+   *  them. */
+  readonly rowWord: string | null;
+  /** What one element is called, for counting them: values, weights. */
+  readonly unit: string;
   /** Frames a second, when the run is spaced in time. */
   readonly rate: number | null;
   /** The run's two dimensions, for a tensor that says it has two: `columns`
@@ -109,7 +113,7 @@ export function runSource(doc: Doc, path: readonly number[]): RunSource | null {
   if (type === null) return null;
   let stride = 1;
   let names: string[] = [""];
-  let rowWord = childWord(node);
+  let rowWord: string | null = null;
   let rate: number | null = null;
   const shape = node.table === true ? doc.tableShape(path) : null;
   if (shape !== null && shape.status === "ok" && shape.node !== null) {
@@ -122,7 +126,7 @@ export function runSource(doc: Doc, path: readonly number[]): RunSource | null {
     if (s.row_word !== null) rowWord = s.row_word;
     if (s.rate !== null && s.rate > 0) rate = s.rate;
   }
-  return { path, node, type, stride, names, rowWord, rate, dims: stride === 1 ? dimsOf(doc, path, node.child_count) : null };
+  return { path, node, type, stride, names, rowWord, unit: childWord(node), rate, dims: stride === 1 ? dimsOf(doc, path, node.child_count) : null };
 }
 
 /**
@@ -235,7 +239,10 @@ export type LineData = {
   readonly channels: readonly Channel[];
   /** A name per channel; one empty name when there is one. */
   readonly names: readonly string[];
-  readonly rowWord: string;
+  /** What a frame is called, or null to number frames as `[31]`. */
+  readonly rowWord: string | null;
+  /** What one element is called, for counting them. */
+  readonly unit: string;
   readonly rate: number | null;
   readonly float: boolean;
   /** Where frame `frame` of channel `channel` is: what a click selects, the
@@ -259,8 +266,9 @@ const PAD_RIGHT_PX = 10;
 const MIN_LANE_PX = 56;
 /** How wide one frame may get at the deepest zoom. */
 const MAX_FRAME_PX = 32;
-/** Fewer frames on screen than this, and each one gets a marker as well. */
-const MARKER_FRAMES_PER_PX = 1 / 8;
+/** Fewer frames a pixel than this (five pixels a frame), and each frame gets
+ *  a marker as well, so a short run reads as the points it is. */
+const MARKER_FRAMES_PER_PX = 1 / 5;
 
 /** Draw the line `width` by `height` pixels. */
 export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: number; readonly height: number }): LinePlot {
@@ -463,10 +471,15 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
     }
     const spot = data.locate(hit.frame, hit.lane);
     bus.publish({ hover: spot.bits });
+    // A run the template calls a table has a word for its rows (a sample),
+    // and the card leads with it; any other run is numbered as the listing
+    // numbers its elements.
     const title =
-      data.rate === null
-        ? VIZ.valuePlot.at(data.rowWord, hit.frame)
-        : VIZ.valuePlot.atTime(data.rowWord, hit.frame, secondsText(hit.frame / data.rate, 1 / data.rate));
+      data.rowWord === null
+        ? VIZ.valuePlot.index(hit.frame)
+        : data.rate === null
+          ? VIZ.valuePlot.at(data.rowWord, hit.frame)
+          : VIZ.valuePlot.atTime(data.rowWord, hit.frame, secondsText(hit.frame / data.rate, 1 / data.rate));
     const lines: string[] = [];
     data.channels.forEach((c, i) => {
       const v = valueText(c.values[hit.frame * c.stride + c.channel] ?? NaN, data.float);
@@ -481,7 +494,7 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       const from = Math.max(0, Math.floor(span[0] + px * per));
       const to = Math.min(frames, Math.floor(span[0] + (px + 1) * per));
       if (to - from > 1) {
-        lines.push(VIZ.valuePlot.inPixel(data.rowWord, from, to - 1));
+        lines.push(VIZ.valuePlot.inPixel(data.rowWord ?? data.unit, from, to - 1));
         data.channels.forEach((c, i) => {
           const r = rangeOf(c, from, to);
           if (r === null) return;
@@ -567,13 +580,18 @@ export function lineFromRun(src: RunSource, run: RunValues): LineData {
     channels,
     names: src.names,
     rowWord: src.rowWord,
+    unit: src.unit,
     rate: src.rate,
     float: src.type.float,
     locate: (frame, channel) => {
       const index = frame * src.stride + channel;
       const startBit = n.offset_bits + index * bits;
       const range = { startBit, endBit: startBit + bits };
-      return { pick: { path: [...runPath, index], ...range }, bits: range, foot: VIZ.valuePlot.element(index, formatOffset(startBit), src.type.name) };
+      // The element's index only where it is not the frame number the card
+      // leads with: interleaved channels.
+      const foot =
+        src.stride > 1 ? VIZ.valuePlot.element(index, formatOffset(startBit), src.type.name) : VIZ.valuePlot.where(formatOffset(startBit), src.type.name);
+      return { pick: { path: [...runPath, index], ...range }, bits: range, foot };
     },
     selected: (s) => {
       if (s === null || s.path.length !== runPath.length + 1 || !runPath.every((step, i) => s.path[i] === step)) return null;
@@ -621,10 +639,15 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
   let drawn: { resize(w: number, h: number): void; destroy(): void; board: Board } | null = null;
   let stopWatch: (() => void) | null = null;
   let frame = 0;
-  /** The head row's height, so the plot under it gets the rest. */
+  /** The head row's height before it is on the page, so the plot under it
+   *  gets the rest. Once it is on the page its own height is used, since its
+   *  note wraps in a narrow pane. This is the figure's own row, not the host. */
   const HEAD_PX = 28;
 
-  const bodySize = (): { width: number; height: number } => ({ width: size.width, height: Math.max(80, size.height - HEAD_PX) });
+  const bodySize = (): { width: number; height: number } => ({
+    width: size.width,
+    height: Math.max(80, size.height - (head.offsetHeight > 0 ? head.offsetHeight + 4 : HEAD_PX)),
+  });
 
   const seg = (choices: { label: string; title: string; on: boolean; press: () => void }[]): HTMLElement => {
     const s = document.createElement("span");
@@ -670,7 +693,13 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
       drawn = g;
       body.replaceChildren(g.el);
     } else {
-      const line = drawLinePlot(doc, lineFromRun(s, r), bodySize());
+      const data = lineFromRun(s, r);
+      // The sentence that goes with the picture: how low and how high the
+      // values go, which the y axis otherwise leaves to be read off.
+      const lo = Math.min(...data.channels.map((c) => rangeOf(c, 0, frameCount(c))?.min ?? Infinity));
+      const hi = Math.max(...data.channels.map((c) => rangeOf(c, 0, frameCount(c))?.max ?? -Infinity));
+      if (lo <= hi) notes.push(VIZ.valuePlot.oneRange(valueText(lo, s.type.float), valueText(hi, s.type.float)));
+      const line = drawLinePlot(doc, data, bodySize());
       drawn = line;
       body.replaceChildren(line.el);
     }
@@ -774,7 +803,11 @@ function samplesSection(doc: Doc, path: readonly number[], width: number): HTMLE
   title.textContent = VIZ.valuePlot.samplesTitle;
   const note = document.createElement("span");
   note.className = "vp-note";
-  note.textContent = showingLine(info) ?? samplesNote(info);
+  // Only when the plot is short of the record: the panel's own heading above
+  // already gives the count.
+  const showing = showingLine(info);
+  note.textContent = showing ?? "";
+  note.hidden = showing === null;
   const reset = document.createElement("button");
   reset.type = "button";
   reset.className = "viz-reset";
@@ -789,6 +822,7 @@ function samplesSection(doc: Doc, path: readonly number[], width: number): HTMLE
     channels: [{ values, stride: 1, channel: 0 }],
     names: [""],
     rowWord: "sample",
+    unit: "sample",
     rate: null,
     float: false,
     locate: (frame) => {

@@ -4040,6 +4040,9 @@ export const VIZ = {
     /** One channel's value, or the one value of a run with one channel. */
     channelValue: (channel: string, value: string): string => `${channel}: ${value}`,
     oneValue: (value: string): string => `Value: ${value}`,
+    /** The card's title over a run that is not a table: the element's index,
+     *  as the listing writes it. */
+    index: (index: number): string => `[${index.toLocaleString()}]`,
     /** When one pixel of the line stands for several elements, the card says
      *  which, and the lowest and highest of them, which is what the line drawn
      *  there shows. */
