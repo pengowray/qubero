@@ -79,6 +79,10 @@ export class TreemapPanel {
    *  for a document change or a resize keeps the reader's zoom. */
   private icicle: Icicle | null = null;
   private icicleKey = "";
+  /** The document changed since the In order picture last read its tree.
+   *  Every other paint (a resize, a step of the listing) redraws it from
+   *  what it has already read. */
+  private docChanged = false;
 
   onPick: (pick: FieldPick) => void = () => {};
   onJump: (startBit: number, endBit: number) => void = () => {};
@@ -187,7 +191,10 @@ export class TreemapPanel {
     this.pick.value = this.mode;
     this.setOpen(storedText(OPEN_KEY) === "open", false);
     this.setBig(false);
-    doc.onChange(() => this.draw());
+    doc.onChange(() => {
+      this.docChanged = true;
+      this.draw();
+    });
   }
 
   /** The listing has walked more of the template. Nothing here is built from
@@ -319,8 +326,10 @@ export class TreemapPanel {
     const order = showing === "order";
     // In order is as tall as its rows, and in the rail that is taller than the
     // treemap's box. Over the window the stylesheet gives the plot the rest.
+    // The picture is only as tall as the rows it has drawn, so in the rail the
+    // plot fits round it rather than leaving the rows it has not used empty.
     const railHeight = order ? ORDER_RAIL_ROWS * ROW_H + (RAIL_HEIGHT - icicleRows(RAIL_HEIGHT) * ROW_H) : RAIL_HEIGHT;
-    this.plot.style.height = this.big ? "" : `${railHeight}px`;
+    this.plot.style.height = this.big ? "" : order ? "auto" : `${railHeight}px`;
     const width = Math.floor(this.plot.clientWidth || this.el.clientWidth);
     const height = this.big ? Math.floor(this.plot.clientHeight) : railHeight;
     this.head.title = order ? VIZ.icicle.what : TREEMAP.what;
@@ -422,7 +431,10 @@ export class TreemapPanel {
     // the end leaves the rest of row 0 hatched, as Structure mode leaves it a
     // box of its own.
     const top = this.crumbs.length === 0;
-    const key = `${path.join(".")}|${node.offset_bits}|${node.size_bits}|${node.child_count}|${top ? this.doc.lengthBits : ""}`;
+    // Not the root's child count: while a file is still arriving that grows,
+    // and a new picture for each step would throw away the reader's zoom.
+    // The picture reads the root again on `refresh` instead.
+    const key = `${path.join(".")}|${node.offset_bits}|${node.size_bits}|${top ? this.doc.lengthBits : ""}`;
     if (this.icicle === null || key !== this.icicleKey) {
       this.dropIcicle();
       this.icicle = drawIcicle(this.doc, node, {
@@ -437,8 +449,10 @@ export class TreemapPanel {
       this.icicleKey = key;
     } else {
       this.icicle.resize(width, height);
-      this.icicle.refresh();
+      if (this.docChanged) this.icicle.refresh(node);
+      else this.icicle.retry();
     }
+    this.docChanged = false;
     if (this.icicle.el.parentElement !== this.plot) this.plot.replaceChildren(this.icicle.el);
   }
 

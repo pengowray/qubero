@@ -193,6 +193,23 @@ function hoist(cache: IcicleCache, parent: IcicleField, kids: readonly IcicleFie
 }
 
 /**
+ * How many bars the row under `node` holds when all of it is drawn: its
+ * children with each `contents` child counted as the children drawn in its
+ * place, and without the ones that have no place on this axis. A PNG chunk is
+ * four fields in the template (length, type, data, crc) and 259 bars when its
+ * data is 256 palette entries, and the hover card has to say the number the
+ * reader can count. Null while the children are being read; a node read by
+ * window is not hoisted, so it is its own count.
+ */
+export function drawnChildCount(cache: IcicleCache, node: IcicleField): number | null {
+  const n = node.child_count;
+  if (!node.composite || n === 0) return 0;
+  if (n > ALL_MAX) return n;
+  const all = cache.range(node, 0, n);
+  return all === null ? null : hoist(cache, node, all).length;
+}
+
+/**
  * The children of `node` that overlap `fromBit` to `toBit`, or null while
  * they are being read. A node with few children is read whole. One with many
  * is searched by offset for the window, which only works while the children

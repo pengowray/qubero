@@ -4027,8 +4027,9 @@ export const VIZ = {
     /** A bar of bytes inside a structure that none of its fields covers. */
     gapDetail: "No field covers these bytes",
     /** A bar standing for neighbouring fields too narrow to draw one by one.
-     *  Its name is the count, in the structure's own word for its children. */
-    foldDetail: "Too narrow to draw one by one. Double-click to zoom in on them.",
+     *  Its name is the count, in the structure's own word for its children,
+     *  and `noun` is that word. */
+    foldDetail: (noun: string): string => `These ${plural(noun)} are too narrow to draw separately. Double-click to zoom in.`,
     /** On a structure with invalid values somewhere under it, which its bar
      *  marks with a red edge. "Invalid" is the listing's word for them. */
     wrongInside: (n: number): string => `${n.toLocaleString()} invalid ${n === 1 ? "value" : "values"} inside`,
@@ -4036,6 +4037,6 @@ export const VIZ = {
      *  all of, so only the first ones are drawn and zooming in will not show
      *  the rest. */
     unread: (shown: number, total: number, noun: string): string =>
-      `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}, because their offsets are not in file order`,
+      `Showing the first ${shown.toLocaleString()} of ${countText(total, noun)}. The ${plural(noun)} are not stored in file order, so the rest are not drawn.`,
   },
 } as const;

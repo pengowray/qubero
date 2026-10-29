@@ -6,7 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ALL_MAX, barAt, barFor, fieldLabel, IcicleCache, layoutIcicle, visibleKids, type IcicleField, type IcicleSource } from "../src/viz/iciclelayout.ts";
+import { readableHexTicks } from "../src/viz/axis.ts";
+import { ALL_MAX, barAt, barFor, drawnChildCount, fieldLabel, IcicleCache, layoutIcicle, visibleKids, type IcicleField, type IcicleSource } from "../src/viz/iciclelayout.ts";
 
 type Spec = { name: string; at: number; size: number; kids?: Spec[]; contents?: boolean; space?: number; framed?: boolean };
 
@@ -110,6 +111,37 @@ test("a contents child is drawn as its children, one level up", () => {
   const l = layoutIcicle(root, new IcicleCache(src), { startBit: 0, endBit: 128, width: 1000, rows: 4 });
   assert.deepEqual(names(l.rows[1] ?? []), ["size", "type", "inner"]);
   assert.deepEqual(l.rows[1]?.[2]?.field?.path, [2, 0]);
+});
+
+test("a structure's count is the bars under it, with its contents child counted as its children", () => {
+  const { src, root } = source({
+    name: "file",
+    at: 0,
+    size: 16,
+    kids: [
+      { name: "size", at: 0, size: 4 },
+      { name: "type", at: 4, size: 4 },
+      { name: "body", at: 8, size: 8, contents: true, kids: [{ name: "a", at: 8, size: 4 }, { name: "b", at: 12, size: 4 }] },
+      { name: "empty", at: 16, size: 0 },
+    ],
+  });
+  const cache = new IcicleCache(src);
+  // Four children in the template (size, type, body, empty) and four bars
+  // under it (size, type, a, b): body is drawn as its own children, and empty
+  // has no bytes to be drawn over.
+  assert.equal(root.child_count, 4);
+  assert.equal(drawnChildCount(cache, root), 4);
+  const l = layoutIcicle(root, cache, { startBit: 0, endBit: 128, width: 1000, rows: 4 });
+  assert.equal(l.rows[1]?.length, drawnChildCount(cache, root));
+});
+
+test("a narrow axis still gets two ticks where two labels fit", () => {
+  // 0xe40 to 0x10c0 across 240 pixels: two ticks a power of two apart is a
+  // step of 0x200, and 0x1000 is the only multiple of that on screen.
+  const domain: [number, number] = [0xe40, 0x10c0];
+  const at = (b: number): number => ((b - domain[0]) / (domain[1] - domain[0])) * 240;
+  const ticks = readableHexTicks(domain, 96, at, 240);
+  assert.ok(ticks.length >= 2, `got ${ticks.length}`);
 });
 
 test("children in another address space and children of no size are left out", () => {

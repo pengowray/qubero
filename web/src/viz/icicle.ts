@@ -32,6 +32,13 @@
 // when they do not fit (`fit.ts`), so two names never meet. Drawn on a canvas:
 // a zoomed-out view of a large file is thousands of bars, redrawn on every
 // step of the wheel.
+//
+// The offset axis is above row 0, where the bars hang from it, and the canvas
+// is only as tall as the rows drawn so far. Most trees are a few rows deep,
+// and a canvas the height of the panel put the axis a window's height under
+// the bars it measures. The canvas grows as zooming in reaches deeper rows
+// and never shrinks while the root is the same, so nothing on it moves under
+// the pointer.
 
 import type { Doc } from "../doc.ts";
 import { formatOffset } from "../format.ts";
@@ -39,9 +46,9 @@ import { fieldClass } from "../fieldstyle.ts";
 import { bitSizeText, childWord, countText, GAP_LABEL, TREEMAP, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { rescaleDomain, type View } from "./boardmath.ts";
-import { hexTicks } from "./childstrip.ts";
-import { canvasMeasure, ellipsise, monoMeasure, type Measure } from "./fit.ts";
-import { barAt, barFor, fieldLabel, IcicleCache, layoutIcicle, type IcicleBar, type IcicleField, type IcicleLayout } from "./iciclelayout.ts";
+import { readableHexTicks } from "./axis.ts";
+import { canvasMeasure, ellipsise, type Measure } from "./fit.ts";
+import { barAt, barFor, drawnChildCount, fieldLabel, IcicleCache, layoutIcicle, type IcicleBar, type IcicleField, type IcicleLayout } from "./iciclelayout.ts";
 import { linkedFor, subscribeWhileConnected } from "./linked.ts";
 import { goToBits, goToField } from "./pick.ts";
 import { hideTip, hoverTip, tipCard } from "./tip.ts";
@@ -62,10 +69,8 @@ const LABEL_MIN_CHARS = 3;
 const MAX_BYTE_PX = 64;
 /** Room per axis tick, so d3 is asked for as many as fit. */
 const TICK_SPACING_PX = 96;
-const TICK_PX = 10;
-const TICK_MEASURE = monoMeasure();
 
-/** The picture's height for a panel this tall, split into its rows. */
+/** The most rows a panel this tall has room for. */
 export function icicleRows(height: number): number {
   return Math.max(1, Math.floor((height - AXIS_H - FOOT_H) / ROW_H));
 }
@@ -86,8 +91,12 @@ export type Icicle = {
   readonly board: Board;
   /** The view is a new size. */
   resize(width: number, height: number): void;
-  /** The document changed: read the tree again and redraw at the same zoom. */
-  refresh(): void;
+  /** The document changed: read the tree again and redraw at the same zoom.
+   *  `root` is the same node read again, when its children have changed. */
+  refresh(root?: IcicleField): void;
+  /** Lay out again from what has been read, for children that were still
+   *  being read last time. Does nothing when none were. */
+  retry(): void;
   destroy(): void;
 };
 
@@ -104,7 +113,15 @@ type Palette = {
 };
 
 let palette: Palette | null = null;
-if (typeof matchMedia === "function") matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => (palette = null));
+/** The icicles on the page, to paint again in the new colours when the page
+ *  goes light or dark. */
+const repaints = new Set<() => void>();
+if (typeof matchMedia === "function") {
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    palette = null;
+    for (const fn of repaints) fn();
+  });
+}
 
 function readPalette(): Palette {
   if (palette !== null) return palette;
@@ -159,7 +176,11 @@ const SVG = "http://www.w3.org/2000/svg";
 
 /** What a fold stands for, in the parent's own word: items, fields, chunks. */
 function foldName(bar: IcicleBar): string {
-  return countText(bar.count ?? 0, bar.parent === undefined ? "field" : childWord(bar.parent));
+  return countText(bar.count ?? 0, foldNoun(bar));
+}
+
+function foldNoun(bar: IcicleBar): string {
+  return bar.parent === undefined ? "field" : childWord(bar.parent);
 }
 
 /** The text drawn on a bar, before fitting. */
@@ -169,14 +190,15 @@ function barText(bar: IcicleBar): string {
   return fieldLabel(bar.field as IcicleField);
 }
 
-/** The hover card for a bar. */
-function barCard(bar: IcicleBar): HTMLElement {
+/** The hover card for a bar. `parts` is how many bars its children are drawn
+ *  as (`drawnChildCount`), which is the count the card gives. */
+function barCard(bar: IcicleBar, parts: number | null): HTMLElement {
   const where = `${formatOffset(bar.startBit)} · ${bitSizeText(bar.endBit - bar.startBit)}`;
   if (bar.kind === "gap") return tipCard(GAP_LABEL, [VIZ.icicle.gapDetail], where);
-  if (bar.kind === "fold") return tipCard(foldName(bar), [VIZ.icicle.foldDetail], where);
+  if (bar.kind === "fold") return tipCard(foldName(bar), [VIZ.icicle.foldDetail(foldNoun(bar))], where);
   const f = bar.field as IcicleField;
   const lines: string[] = [];
-  const value = f.composite ? countText(f.child_count, childWord(f)) : f.value;
+  const value = f.composite ? countText(parts ?? f.child_count, childWord(f)) : f.value;
   lines.push(value === "" ? f.type : `${f.type} · ${value}`);
   if (f.problem !== undefined) lines.push(f.problem.text);
   else if (f.problems_within[0] > 0) lines.push(VIZ.icicle.wrongInside(f.problems_within[0]));
@@ -190,10 +212,14 @@ function barCard(bar: IcicleBar): HTMLElement {
  * The root's bytes fill the width at no zoom; `frame` widens that to the
  * whole file when the root covers less of it.
  */
-export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Icicle {
+export function drawIcicle(doc: Doc, first: IcicleField, opts: IcicleOptions): Icicle {
+  let root = first;
   let width = Math.max(40, Math.floor(opts.width));
   let height = Math.max(ROW_H + AXIS_H + FOOT_H, Math.floor(opts.height));
+  /** The rows there is room for, which is how deep the layout may go. */
   let rows = icicleRows(height);
+  /** The rows the canvas is tall enough for: the deepest drawn so far. */
+  let shown = 1;
   const frame = opts.frame ?? null;
   const d0 = frame?.startBit ?? root.offset_bits;
   const d1 = Math.max(d0 + 8, frame?.endBit ?? root.offset_bits + root.size_bits);
@@ -221,7 +247,7 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
   const axisG = document.createElementNS(SVG, "g");
   axisG.setAttribute("class", "viz-axis");
   axisSvg.append(axisG);
-  stage.append(canvas, axisSvg);
+  stage.append(axisSvg, canvas);
   const foot = document.createElement("div");
   foot.className = "icl-foot";
   const reset = document.createElement("button");
@@ -239,7 +265,7 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
   const bus = linkedFor(doc);
   let selected = bus.state.selection;
 
-  const rowsH = (): number => rows * ROW_H;
+  const rowsH = (): number => shown * ROW_H;
 
   const size = (): void => {
     const dpr = window.devicePixelRatio || 1;
@@ -249,13 +275,33 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
     canvas.style.height = `${rowsH()}px`;
     axisSvg.setAttribute("width", String(width));
     axisSvg.setAttribute("height", String(AXIS_H));
+    axisG.setAttribute("transform", `translate(0,${AXIS_H - 0.5})`);
   };
+
+  /** The deepest zoom: `MAX_BYTE_PX` to a byte at this width. Set again on a
+   *  resize, or a picture made wide over the window would zoom to bytes
+   *  hundreds of pixels across. */
+  const maxScale = (): number => Math.max(1, ((d1 - d0) / 8) * (MAX_BYTE_PX / width));
 
   const visible = (): [number, number] => rescaleDomain(view, [d0, d1], [0, width]);
 
+  /** The board, once `board()` has returned: it lays the picture out once
+   *  while it is being made. */
+  let made: Board | null = null;
   const relayout = (): void => {
     const [a, b] = visible();
     layout = layoutIcicle(root, cache, { startBit: a, endBit: b, width, rows, ...(frame === null ? {} : { frame }) });
+    let deepest = 0;
+    layout.rows.forEach((row, i) => {
+      if (row.length > 0) deepest = i + 1;
+    });
+    if (deepest > shown) {
+      shown = Math.min(rows, deepest);
+      size();
+      // The board is made after the first layout, which sizes the canvas
+      // before it exists.
+      made?.resize(width, AXIS_H + rowsH(), { x0: 0, y0: 0, x1: width, y1: AXIS_H + rowsH() });
+    }
   };
 
   let hatch: CanvasPattern | null = null;
@@ -322,7 +368,10 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
         } else {
           const colour = bar.kind === "fold" ? p.muted : p.field(fieldClass((bar.field as IcicleField).kind));
           ctx.fillStyle = colour;
-          ctx.globalAlpha = thin ? 0.75 : bar.kind === "fold" ? 0.22 : 0.3;
+          // Structures one inside another are one colour, so their fill
+          // alternates by row and two rows of boxes read as two rows.
+          const nested = bar.field?.composite === true && bar.depth % 2 === 1;
+          ctx.globalAlpha = thin ? 0.75 : bar.kind === "fold" ? 0.22 : nested ? 0.18 : 0.3;
           ctx.fillRect(bx, by, bw, bh);
           ctx.globalAlpha = 1;
           if (!thin) {
@@ -358,10 +407,13 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
         if (right - left < LABEL_PX) continue;
         // A field with a value of its own is named the way the hex view's
         // chips name it, `size 32`, where there is room for the name and the
-        // start of the value; otherwise the name alone.
+        // start of the value; otherwise the name alone. Only while the field's
+        // start is on screen: the value of a long run of bytes is its first
+        // bytes, and a bar zoomed into its middle showing them would be
+        // showing bytes from somewhere else.
         const label = barText(bar);
         const f = bar.field;
-        const valued = f !== undefined && !f.composite && f.value !== "" ? ellipsise(`${label} ${f.value}`, right - left, LABEL_PX, measurer(), label.length + 2) : null;
+        const valued = f !== undefined && !f.composite && f.value !== "" && bar.x0 >= 0 ? ellipsise(`${label} ${f.value}`, right - left, LABEL_PX, measurer(), label.length + 2) : null;
         const text = valued ?? ellipsise(label, right - left, LABEL_PX, measurer(), LABEL_MIN_CHARS);
         if (text === null) continue;
         // The hatch runs through a gap's name, so the name sits on a plate of
@@ -382,9 +434,9 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
     const [a, b] = visible();
     const bytes: [number, number] = [a / 8, b / 8];
     const x = axis.scale.scaleLinear().domain(bytes).range([0, width]);
-    const ticks = hexTicks(bytes, Math.max(2, Math.floor(width / TICK_SPACING_PX)), (v) => x(v), width, (v) => TICK_MEASURE(formatOffset(v * 8), TICK_PX));
+    const ticks = readableHexTicks(bytes, TICK_SPACING_PX, (v) => x(v), width);
     const ax = axis.axis
-      .axisBottom(x)
+      .axisTop(x)
       .tickValues(ticks.map((t) => t.byte))
       .tickSize(3)
       .tickFormat((d) => formatOffset(Number(d) * 8));
@@ -404,7 +456,7 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
     width,
     height: rowsH() + AXIS_H,
     xOnly: true,
-    maxScale: Math.max(1, ((d1 - d0) / 8) * (MAX_BYTE_PX / width)),
+    maxScale: maxScale(),
     onZoom: (v) => {
       view = v;
       reset.disabled = v.k === 1 && v.x === 0;
@@ -412,6 +464,8 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
       redraw();
     },
   });
+  made = zoom;
+  repaints.add(paint);
   reset.addEventListener("click", () => zoom.home(true));
   void loadAxis().then((loaded) => {
     axis = loaded;
@@ -430,7 +484,7 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
       paint();
     }
     bus.publish({ hover: bar === null ? null : { startBit: bar.startBit, endBit: bar.endBit } });
-    return bar === null ? null : barCard(bar);
+    return bar === null ? null : barCard(bar, bar.field === undefined ? null : drawnChildCount(cache, bar.field));
   });
   const leave = (): void => {
     bus.publish({ hover: null });
@@ -490,17 +544,24 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
       width = nw;
       height = nh;
       rows = icicleRows(height);
+      shown = Math.min(shown, rows);
       size();
       zoom.resize(width, rowsH() + AXIS_H, { x0: 0, y0: 0, x1: width, y1: rowsH() + AXIS_H });
       const per = width / (d1 - d0);
       if (view.k !== 1 || view.x !== 0) zoom.zoomTo({ x0: (a - d0) * per, y0: 0, x1: (b - d0) * per, y1: rowsH() });
+      zoom.setMaxScale(maxScale());
       redraw();
     },
-    refresh: () => {
+    refresh: (next) => {
+      if (next !== undefined) root = next;
       cache.clear();
       redraw();
     },
+    retry: () => {
+      if (layout.pending) redraw();
+    },
     destroy: () => {
+      repaints.delete(paint);
       zoom.destroy();
       stopTip();
       stopLinked();
