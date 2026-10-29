@@ -41,10 +41,10 @@ import "./indexlookup.css";
 import type { Doc, TemplateNode } from "../doc.ts";
 import { fieldClass } from "../fieldstyle.ts";
 import { formatAddress } from "../format.ts";
-import { bitSizeText, VIZ } from "../strings.ts";
+import { bitSizeText, childWord, countText, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { invertX, rescaleDomain, type View } from "./boardmath.ts";
-import { canvasMeasure, ellipsise, monoMeasure, type Measure } from "./fit.ts";
+import { ellipsise, monoMeasure, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
 import { LOD } from "./lod.ts";
@@ -97,12 +97,32 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text = "
 /** The axis labels' width, estimated from the monospace advance: a tick
  *  label is a few characters and needs no canvas. */
 const MONO = monoMeasure();
-/** Names in cells are drawn in the monospace stack (`.viz-lookup-names`) and
- *  measured in it, so a name that is kept fits its cell. */
+/**
+ * Names in cells are drawn in the monospace stack (`.viz-lookup-names`) and
+ * measured in it at the size they are drawn, so a name that is kept fits its
+ * cell. Not `fit.ts`'s `canvasMeasure`, which measures at 100 pixels and
+ * scales down: at 11 pixels the browser rounds each advance of the fallback
+ * monospace face up to 7 pixels, where the scaled width says 6.6, and a name
+ * measured to fit came out a few pixels too long for its cell.
+ */
 let cellMeasure: Measure | null = null;
 function namesMeasure(): Measure {
+  if (cellMeasure !== null) return cellMeasure;
   const family = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim();
-  cellMeasure ??= family === "" ? MONO : canvasMeasure(family);
+  const ctx = family === "" ? null : document.createElement("canvas").getContext("2d");
+  if (ctx === null) return (cellMeasure = MONO);
+  const cache = new Map<string, number>();
+  cellMeasure = (text, size) => {
+    const key = `${size}|${text}`;
+    let w = cache.get(key);
+    if (w === undefined) {
+      ctx.font = `${size}px ${family}`;
+      w = ctx.measureText(text).width;
+      if (cache.size > 20_000) cache.clear();
+      cache.set(key, w);
+    }
+    return w;
+  };
   return cellMeasure;
 }
 
@@ -129,6 +149,13 @@ function numberText(n: TemplateNode, counts: "bytes" | "entries"): string {
   const v = Number(n.edit_text !== "" ? n.edit_text : n.value);
   if (!Number.isSafeInteger(v)) return n.value;
   return counts === "bytes" && v >= 10 ? `${v} (0x${v.toString(16)})` : String(v);
+}
+
+/** What a field holds, in words: its value, a structure's one-line reading,
+ *  or how many children a list has (`32 items`), never the bare count. */
+function valueText(n: TemplateNode): string {
+  if (!n.composite) return n.value;
+  return n.line ?? countText(n.child_count, childWord(n));
 }
 
 function hexBytes(bytes: readonly number[]): string {
@@ -278,14 +305,17 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     if (extra > 0) indexRow.append(el("span", "viz-lookup-more", T.andMore(extra)));
     markPick(indexRow, { path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits });
     indexNode = n;
+    indexShown = label;
   };
   let indexNode: TemplateNode | null = data.index;
+  /** The index row's name as shown, which its hover card repeats in full. */
+  let indexShown = data.indexLabel;
 
   const showResult = (): void => {
     resultRow.replaceChildren();
     if (focus === WHOLE) {
       const r = data.result;
-      resultRow.append(el("span", "viz-lookup-name", r.name), el("span", "viz-lookup-value", r.composite ? (r.line ?? r.value) : r.value));
+      resultRow.append(el("span", "viz-lookup-name", r.name), el("span", "viz-lookup-value", valueText(r)));
       markPick(resultRow, { path: r.path, startBit: r.offset_bits, endBit: r.offset_bits + r.size_bits });
       resultNode = r;
       return;
@@ -305,7 +335,8 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     }
     const label = table.kind === "records" ? entry.label : T.entry(entry.index);
     resultRow.append(el("span", "viz-lookup-name", label));
-    const value = table.kind === "palette" ? `${entry.colour ?? ""} · ${entry.value}` : entry.value;
+    // A palette entry's channels; its hex is in the row's hover card.
+    const value = entry.value;
     const v = el("span", "viz-lookup-value", table.kind === "strings" && value === "" ? T.emptyString : value);
     if (table.kind === "strings" && value === "") v.classList.add("is-empty");
     resultRow.append(v);
@@ -369,14 +400,17 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
       // field points at this entry.
       if (pointedAt(focus)) {
         const unit = atCursor() || f === undefined ? unitOf(table, data.target, data.hit) : table.counts === "entries" ? focus + 0.5 : unitOf(table, f.entry.startBit, focus);
-        const ax = xOf(unit);
-        if (ax >= 0 && ax <= width) {
+        const at = xOf(unit);
+        if (at >= 0 && at <= width) {
+          // Kept a head's half-width inside the strip, so an arrow at an end
+          // is drawn whole.
+          const ax = Math.max(4, Math.min(width - 4, at));
           marks.push(svg("path", { class: "viz-lookup-arrow", d: `M${ax},0 V${STRIP_TOP - 5}` }));
           marks.push(svg("path", { class: "viz-lookup-head", d: `M${ax - 4},${STRIP_TOP - 6} L${ax + 4},${STRIP_TOP - 6} L${ax},${STRIP_TOP} Z` }));
         } else {
           // Off the strip: a mark at the edge it is past.
-          const e = ax < 0 ? 2 : width - 2;
-          const s = ax < 0 ? 1 : -1;
+          const e = at < 0 ? 2 : width - 2;
+          const s = at < 0 ? 1 : -1;
           marks.push(svg("path", { class: "viz-lookup-head", d: `M${e},${ARROW_H / 2} L${e + s * 7},${ARROW_H / 2 - 5} L${e + s * 7},${ARROW_H / 2 + 5} Z` }));
         }
       }
@@ -415,7 +449,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     drawAxis();
   };
 
-  const want = table.kind === "palette" ? OPEN_SWATCH_PX : Math.min(width * 0.6, measure("m".repeat(OPEN_CHARS), LABEL_PX) + 2 * LABEL_PAD);
+  const want = table.kind === "palette" ? OPEN_SWATCH_PX : Math.min(width * 0.6, measure("m".repeat(OPEN_CHARS), LABEL_PX) + 2 * LABEL_PAD + 2);
   const span = Math.max(1, layout.domain[1] - layout.domain[0]);
   const maxScale = Math.max(1, (span * MAX_UNIT_PX) / width);
   const opening = whole ? openingFromStart(cells, width, want, maxScale) : openingView(byIndex.get(focus)?.cell ?? null, width, want, maxScale);
@@ -482,15 +516,18 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   };
   const entryCard = (entry: TableEntry): HTMLElement => {
     const lines: string[] = [];
-    if (table.kind === "palette") lines.push(`${entry.colour ?? ""} · ${entry.value}`);
+    // A palette entry's card is headed by its colour, with its channels
+    // under it; its place is the line after.
+    if (table.kind === "palette") lines.push(entry.value);
     else if (table.kind === "strings" && entry.label === "") lines.push(T.emptyString);
+    else if (table.kind === "records" && entry.value !== entry.name) lines.push(entry.value);
     if (!table.reached) lines.push(T.entryOf(entry.index, table.count));
     if (table.counts === "bytes") lines.push(T.offsetIn(unitText((entry.startBit - table.node.offset_bits) / 8, "bytes"), tableName));
     const a = table.kind === "palette" ? alphaOf(entry.index) : null;
     if (a !== null) lines.push(T.alpha(a));
     const ps = whole ? null : pointersNow();
     if (ps !== null) lines.push(pointedLine(ps, ps.byEntry.get(entry.index) ?? []));
-    const name = table.kind === "strings" ? entry.label || T.entry(entry.index) : table.kind === "palette" ? T.entry(entry.index) : entry.label;
+    const name = table.kind === "strings" ? entry.label || T.entry(entry.index) : table.kind === "palette" ? (entry.colour ?? T.entry(entry.index)) : entry.name;
     return tipCard(name, lines, `${formatAddress(entry.startBit, entry.space)} · ${bitSizeText(entry.endBit - entry.startBit)}`);
   };
   const pointedLine = (ps: Pointers, here: readonly Pointer[]): string => {
@@ -522,18 +559,19 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   });
 
   // ----- hover and click on the two rows -----
-  const rowCard = (n: TemplateNode, lines: string[]): HTMLElement =>
-    tipCard(n.name, [`${n.type} · ${n.composite ? (n.line ?? n.value) : n.value}`, ...lines], `${formatAddress(n.offset_bits, n.space)} · ${bitSizeText(n.size_bits)}`);
+  const rowCard = (n: TemplateNode, lines: string[], name = n.name): HTMLElement =>
+    tipCard(name, [`${n.type} · ${valueText(n)}`, ...lines], `${formatAddress(n.offset_bits, n.space)} · ${bitSizeText(n.size_bits)}`);
   const stopIndexTip = hoverTip(indexRow, () => {
     if (indexNode === null || indexRow.disabled) return null;
     bus.publish({ hover: rangeOf(nodeRange(indexNode)) });
     const lines = focus === data.hit && data.via !== null ? [data.via.written, `${data.via.substituted} = ${data.via.result}`] : [];
-    return rowCard(indexNode, lines);
+    return rowCard(indexNode, lines, indexShown);
   });
   const stopResultTip = hoverTip(resultRow, () => {
     if (resultNode === null) return null;
     bus.publish({ hover: rangeOf(nodeRange(resultNode)) });
-    return rowCard(resultNode, []);
+    const colour = table.kind === "palette" ? (byIndex.get(focus)?.entry.colour ?? null) : null;
+    return rowCard(resultNode, colour === null ? [] : [colour]);
   });
   const rowLeave = (): void => bus.publish({ hover: null });
   indexRow.addEventListener("pointerleave", rowLeave);

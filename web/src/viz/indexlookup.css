@@ -18,12 +18,16 @@
 }
 
 /* The two rows above and below the strip: the index, and the entry it picks.
-   Each is one line in a fixed slot, as a button since a click goes to the
-   field. Text that does not fit is cut with an ellipsis at the row's end. */
+   Each is a button, since a click goes to the field. Its parts wrap onto a
+   second line rather than being cut, so the whole name and value are always
+   on the row; only a part longer than the row by itself is cut short, and
+   its hover card has it in full. */
 .viz-lookup-box {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 0;
   width: 100%;
   min-height: 26px;
   padding: 3px 8px;
@@ -33,25 +37,22 @@
   color: var(--fg);
   font: 12px var(--sans);
   text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
   cursor: pointer;
 }
 .viz-lookup-box:hover {
   border-color: var(--accent);
 }
 .viz-lookup-box > span {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+  max-width: 100%;
 }
-/* The field's name and the value are what the row is for; the bytes and the
-   type are there to check them against. When the row is too narrow, the bytes give way first, then the name; the
-   value is kept whole while it fits, since it is what the row is for. */
+/* The field's name and its value are what the row is for; the bytes and the
+   alpha are there to check them against, so they are quieter. */
 .viz-lookup-name {
   font-family: var(--mono);
   font-weight: 600;
-  flex: 0 1 auto;
 }
 .viz-lookup-bytes,
 .viz-lookup-detail,
@@ -59,12 +60,13 @@
   font-family: var(--mono);
   color: var(--muted);
   font-size: 11px;
-  flex: 0 1000 auto;
 }
+/* A value longer than the row wraps inside itself: a structure's one-line
+   reading can run to forty characters. */
 .viz-lookup-value {
   font-family: var(--mono);
-  flex: 0 0 auto;
-  max-width: 70%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .viz-lookup-value.is-empty,
 .viz-lookup-none {
@@ -98,6 +100,11 @@
 
 .viz-lookup-svg {
   margin-top: 2px;
+}
+/* The strip takes focus so the arrow keys step through the table. A click
+   or drag focuses it too, and draws no ring for that; the keyboard does. */
+.viz-lookup-svg:focus {
+  outline: none;
 }
 .viz-lookup-svg:focus-visible {
   outline: 2px solid var(--accent);

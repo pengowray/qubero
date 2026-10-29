@@ -369,7 +369,7 @@ test("the window of a large table keeps the entry near the middle and inside the
 });
 
 test("entryAt finds the entry holding a bit, and none in a gap", () => {
-  const e = (index: number, start: number, end: number): TableEntry => ({ index, path: [index], label: "", value: "", startBit: start, endBit: end, colour: null, space: 0 });
+  const e = (index: number, start: number, end: number): TableEntry => ({ index, path: [index], name: "", label: "", value: "", startBit: start, endBit: end, colour: null, space: 0 });
   const es = [e(4, 0, 8), e(5, 8, 24), e(6, 32, 40)];
   assert.equal(entryAt(es, 0), 4);
   assert.equal(entryAt(es, 23), 5);

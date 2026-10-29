@@ -60,6 +60,8 @@ export type TableEntry = {
   /** Its place in the table, from 0. */
   readonly index: number;
   readonly path: readonly number[];
+  /** Its own name, `[3]` or `[0] image width`, for its hover card. */
+  readonly name: string;
   /** What to write inside its cell: the string, or the record's name. */
   readonly label: string;
   /** What its hover card says it holds. */
@@ -145,6 +147,12 @@ export function numberOf(n: TemplateNode): number | null {
 export function entryLabel(name: string, index: number): string {
   const prefix = `[${index}] `;
   return name.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : name;
+}
+
+/** What a cell of a list says: a number's value (a list of strip offsets is
+ *  its offsets), and a record's name. */
+export function cellLabel(n: TemplateNode, index: number): string {
+  return !n.composite && n.name === `[${index}]` ? n.value : entryLabel(n.name, index);
 }
 
 /** `#rrggbb` from three channel values. */
@@ -286,8 +294,8 @@ function readTable(doc: Reads, list: TemplateNode, hit: number): Read<LookupTabl
   const strings = kids.length > 0 && kids.every((k) => k.kind === "str");
   const entries = kids.map((k, i) => {
     const index = first + i;
-    const label = strings ? k.value : entryLabel(k.name, index);
-    return { index, path: k.path, label, value: strings ? k.value : (k.line ?? k.value), startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour: null, space: k.space };
+    const label = strings ? k.value : cellLabel(k, index);
+    return { index, path: k.path, name: k.name, label, value: strings ? k.value : (k.line ?? k.value), startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour: null, space: k.space };
   });
   return { node: list, kind: strings ? "strings" : "records", count: list.child_count, first, entries, counts: "bytes", reached: false };
 }
@@ -301,14 +309,14 @@ function readReached(doc: Reads, s: TemplateNode): Read<LookupTable> {
   const entries: TableEntry[] = [];
   const add = (k: TemplateNode, label: string): void => {
     if (k.size_bits === 0) return;
-    entries.push({ index: entries.length, path: k.path, label, value: k.composite ? (k.line ?? k.value) : k.value, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour: null, space: k.space });
+    entries.push({ index: entries.length, path: k.path, name: k.name, label, value: k.composite ? (k.line ?? k.value) : k.value, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour: null, space: k.space });
   };
   for (const k of kids) {
     if (k.list && k.child_count > 0 && entries.length < WINDOW) {
       const els = children(doc, k.path, 0, Math.min(k.child_count, WINDOW - entries.length));
       if (els === PENDING) return PENDING;
-      for (const [i, e] of (els ?? []).entries()) add(e, entryLabel(e.name, i));
-    } else add(k, k.name);
+      for (const [i, e] of (els ?? []).entries()) add(e, cellLabel(e, i));
+    } else add(k, s.list ? cellLabel(k, entries.length) : k.name);
   }
   if (entries.length === 0) return null;
   return { node: s, kind: "records", count: entries.length, first: 0, entries, counts: "bytes", reached: true };
@@ -346,7 +354,7 @@ export function paletteLookup(doc: Reads, n: TemplateNode): Read<Lookup> {
   for (const [i, k] of kids.entries()) {
     const colour = colourOf(doc, k);
     if (colour === PENDING) return PENDING;
-    entries.push({ index: first + i, path: k.path, label: "", value: k.line ?? k.value, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour, space: k.space });
+    entries.push({ index: first + i, path: k.path, name: k.name, label: "", value: k.line ?? k.value, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, colour, space: k.space });
   }
   const table: LookupTable = { node: palette.chunk, kind: "palette", count: palette.entries.child_count, first, entries, counts: "entries", reached: false };
   const hit = value < table.count ? value : -1;
