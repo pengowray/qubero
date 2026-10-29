@@ -47,6 +47,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   deb: "Debian package",
   dng: "Adobe DNG",
   dtb: "Device tree blob",
+  eml: "Email or newsgroup message",
   gdbm: "GNU dbm",
   godot: "Godot binary resource/scene",
   godottext: "Godot text resource/scene",
