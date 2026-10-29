@@ -96,16 +96,12 @@
   margin-right: 5px;
   vertical-align: -1px;
 }
-/* A toggle that is a button pressed in or out, in the size of the figure's
-   own small text: it changes how the figure reads, and nothing else. */
+/* A button that changes how the figure reads, and nothing else, in the size
+   of the figure's own small text. Its label says what a press does. */
 .vb-toggle {
   font-size: 11px;
   padding: 2px 8px;
   min-height: 24px;
-}
-.vb-toggle[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
 }
 /* Two or three buttons that pick one of a few readings. */
 .vb-seg {

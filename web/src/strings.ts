@@ -4100,6 +4100,8 @@ export const VIZ = {
     titleRecords: (name: string, records: string): string => `${name} in each of ${records}`,
     /** Stacked rows when only some of the list's elements have the field. */
     titleSome: (name: string, shown: number, records: string): string => `${name} in ${shown.toLocaleString()} of the ${records}`,
+    /** Stacked rows when the list is longer than the figure stacks. */
+    titleFirst: (name: string, shown: number, records: string): string => `${name} in the first ${shown.toLocaleString()} of the ${records}`,
     order: "Bit order in each byte",
     highFirst: "7 to 0",
     highFirstTitle: "High bit first, as the hex view shows them",

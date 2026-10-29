@@ -47,7 +47,7 @@ import { bitFormula, bitFormulaLow } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { bitSizeText, countText, VIZ } from "../strings.ts";
 import { bytesOf, fieldValueBits, leadingInteger, rowBitsFor, rulerCells, runsOf, valueBit, wordEndian, type CellOrder, type RulerCell } from "./bitlayout.ts";
-import { canvasMeasure, ellipsise, monoMeasure, type Measure } from "./fit.ts";
+import { canvasMeasure, ellipsise, monoMeasure, thinLabels, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
 import { goToBits, goToField } from "./pick.ts";
@@ -161,7 +161,14 @@ function flagsData(doc: Doc, n: TemplateNode, path: readonly number[]): RulerDat
   }
   const records = aligned ? recordsOf(doc, n, path, byteCount) : null;
   return {
-    title: records === null ? T.titleFlags(n.name) : records.list.length < records.total ? T.titleSome(n.name, records.list.length, records.count) : T.titleRecords(n.name, records.count),
+    title:
+      records === null
+        ? T.titleFlags(n.name)
+        : records.capped
+          ? T.titleFirst(n.name, records.list.length, records.count)
+          : records.list.length < records.total
+            ? T.titleSome(n.name, records.list.length, records.count)
+            : T.titleRecords(n.name, records.count),
     firstByte,
     byteCount,
     bytes: read.bytes,
@@ -184,8 +191,11 @@ function flagsData(doc: Doc, n: TemplateNode, path: readonly number[]): RulerDat
  * elements the list has, and `count` says it in the list's own word, so a
  * list of mixed records (a ZIP's local headers among its central directory
  * entries) says how many of them are stacked and how many there are.
+ * `capped` is set when the stack stopped at `MAX_RECORDS`, or at the elements
+ * looked through, before the end of the list, so the title says these are
+ * the first ones.
  */
-function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount: number): { list: RulerRecord[]; total: number; count: string } | null {
+function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount: number): { list: RulerRecord[]; total: number; count: string; capped: boolean } | null {
   for (let depth = path.length - 2; depth >= 0; depth--) {
     const listPath = path.slice(0, depth);
     const list = doc.templateNode(listPath);
@@ -194,8 +204,12 @@ function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount
     const kids = doc.templateChildren(listPath, 0, Math.min(list.node.child_count, 4 * MAX_RECORDS));
     if (kids.status !== "ok") return null;
     const out: RulerRecord[] = [];
+    let capped = kids.node.length < list.node.child_count;
     for (const kid of kids.node) {
-      if (out.length >= MAX_RECORDS) break;
+      if (out.length >= MAX_RECORDS) {
+        capped = true;
+        break;
+      }
       const r = doc.templateNode([...kid.path, ...rest]);
       if (r.status !== "ok" || r.node.type !== n.type || r.node.size_bits !== n.size_bits || r.node.space !== n.space) continue;
       const bytes = doc.read(r.node.offset_bits / 8, byteCount);
@@ -204,7 +218,7 @@ function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount
     }
     if (out.length < 2) return null;
     const total = list.node.child_count;
-    return { list: out, total, count: recordCount(list.node, total) };
+    return { list: out, total, count: recordCount(list.node, total), capped };
   }
   return null;
 }
@@ -228,7 +242,10 @@ function bytesData(doc: Doc, n: TemplateNode): RulerData | null {
   const fields: RulerField[] = [];
   for (const { node: s, bits } of leaves) {
     const value = s.value;
-    const stored = storedValue(doc, s);
+    // A Huffman code's value is its bits as a string of digits, not a
+    // number, so there is no stored number to set beside it.
+    const isCode = value.length === s.size_bits && /^[01]+$/.test(value);
+    const stored = isCode ? null : storedValue(doc, s);
     const said = leadingInteger(value);
     fields.push({
       name: s.name,
@@ -334,7 +351,9 @@ export function bitRulerData(doc: Doc, n: TemplateNode, path: readonly number[])
  *  any value smaller than a byte or off a byte boundary. A deflate code is
  *  the bit-order ribbon's (`bitpack.ts`) and not drawn here. Only a field in
  *  space 0 is drawn, the bytes `Doc.read` reads: a field of a stream inside
- *  them (a PNG's joined IDAT data) counts its offset from that stream. */
+ *  them (a PNG's joined IDAT data) counts its offset from that stream. In
+ *  the stream's own tab, opened from the listing, the stream is space 0 and
+ *  its fields are drawn there. */
 function rulerApplies(n: TemplateNode): boolean {
   if (n.composite || n.space !== 0 || n.size_bits === 0 || n.kind === "str") return false;
   if (n.kind === "flags") return n.size_bits <= 64;
@@ -354,14 +373,20 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
  *  row of cells (a stacked record's row is shorter), and the gap between
  *  blocks when the word wraps. */
 const NUM_H = 13;
-const BOX_H = 22;
-const CELL_H = 22;
+const BOX_H = 24;
+const CELL_H = 24;
 const REC_H = 18;
 const BLOCK_GAP = 10;
 /** Extra room between two bytes, so a byte reads as one. */
 const BYTE_GAP = 3;
-/** The narrowest and widest a cell is drawn. 13 holds a two-digit bit number
- *  at the ruler's size; past 22 the grid is only getting sparser. */
+/** The size of the bit numbers over the cells (`.br-num` in `bits.css`), and
+ *  the least room between two of them. */
+const NUM_PX = 10;
+const NUM_GAP = 2;
+/** The narrowest and widest a cell is drawn. 13 holds a one-digit bit number
+ *  with room to spare; a two-digit one needs about 14 with its gap, so at
+ *  the narrowest some numbers are left out. Past 22 the grid is only getting
+ *  sparser. */
 const MIN_CELL = 13;
 const MAX_CELL = 22;
 const NAME_PX = 11;
@@ -545,13 +570,27 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     for (let row = 0; row < rows; row++) {
       const top = blockTop(row);
       const g = svg("g");
-      // The ruler: the bit number over each cell.
-      for (const c of cells) {
-        if (c.row !== row) continue;
+      // The ruler: the bit number over each cell. Two-digit numbers are
+      // wider than a narrow cell, so when they would run together the ones
+      // at the ends of each byte are kept first, then the even ones, and the
+      // rest are left out (`thinLabels`); hovering a cell still names its bit.
+      const rowCells = cells.filter((c) => c.row === row);
+      const nums = rowCells.map((c) => data.number(Math.floor(c.bit / 8), c.low));
+      const keep = thinLabels(
+        rowCells.map((c, k) => {
+          const mid = colX(c.col) + pitch / 2;
+          const half = MONO(String(nums[k]), NUM_PX) / 2;
+          const n = nums[k] ?? 0;
+          return { start: mid - half, end: mid + half, priority: n % 8 === 0 || n % 8 === 7 ? 2 : n % 2 === 0 ? 1 : 0 };
+        }),
+        NUM_GAP,
+      );
+      rowCells.forEach((c, k) => {
+        if (keep[k] !== true) return;
         const t = svg("text", { x: colX(c.col) + pitch / 2, y: top + NUM_H - 3, class: "br-num", "text-anchor": "middle" });
-        t.textContent = String(data.number(Math.floor((c.bit) / 8), c.low));
+        t.textContent = String(nums[k]);
         g.append(t);
-      }
+      });
       // The boxes.
       data.fields.forEach((f, i) => {
         const runs = runsByField[i] ?? [];

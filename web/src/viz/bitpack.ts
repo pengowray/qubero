@@ -51,7 +51,7 @@ const MAX_BITS = 64;
 const MAX_DIGIT_PX = 16;
 /** How tall a bit box is drawn, which is also the height of what a pointer
  *  aims at: the boxes of a row touch, so every point along it is one. */
-const BOX_PX = 22;
+const BOX_PX = 24;
 
 /** Whether a field is a code of a deflate stream: its parent counts codes. */
 function isCode(doc: Doc, n: TemplateNode): boolean {
@@ -154,7 +154,6 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "vb-toggle";
-  toggle.title = T.compareTitle;
   head.append(title, toggle);
   const body = document.createElement("div");
   const note = document.createElement("div");
@@ -173,6 +172,7 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
     // The label says what a press does, so it changes with the state and is
     // not also marked pressed.
     toggle.textContent = comparing ? T.compareOff : T.compare;
+    toggle.title = comparing ? "" : T.compareTitle;
     const rib = packRibbon(data, layout);
     const units = rib.top.to;
     const width = Math.max(80, Math.min(opts.width, units * MAX_DIGIT_PX));
