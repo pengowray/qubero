@@ -453,6 +453,10 @@ export function barFor(layout: IcicleLayout, path: readonly number[], startBit: 
       }
     }
   }
+  // An ancestor whose children are drawn stands for none of them: if the
+  // field is not among them it is off screen, and outlining the ancestor
+  // would point at the wrong bytes.
+  if (best !== null && best.kind === "field" && best.field !== undefined && best.field.path.length < path.length && best.more !== true) return null;
   return best;
 }
 

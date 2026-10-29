@@ -161,6 +161,12 @@ test("the selected field lights its own bar, or the fold it is inside", () => {
   const l = layoutIcicle(root, new IcicleCache(src), { startBit: 0, endBit: 8000, width: 1000, rows: 3 });
   assert.equal(barFor(l, [0], 0)?.field?.name, "head");
   assert.equal(barFor(l, [100], (500 + 99) * 8)?.kind, "fold");
+  // Zoomed in on the end, `head` is off screen and nothing is lit for it.
+  const z = layoutIcicle(root, new IcicleCache(src), { startBit: 990 * 8, endBit: 8000, width: 1000, rows: 3 });
+  assert.equal(barFor(z, [0], 0), null);
+  // With room for one row only, the root stands for everything under it.
+  const one = layoutIcicle(root, new IcicleCache(src), { startBit: 0, endBit: 8000, width: 1000, rows: 1 });
+  assert.equal(barFor(one, [0], 0)?.field?.name, "file");
 });
 
 test("a bare index is named with its type", () => {

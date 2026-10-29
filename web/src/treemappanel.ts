@@ -19,10 +19,12 @@
 import type { Doc, FieldPick } from "./doc.ts";
 import type { OutlineHeading } from "./outline.ts";
 import { formatBytes, formatOffset, percentText } from "./doc.ts";
-import { TREEMAP } from "./strings.ts";
+import { REPORT, TREEMAP, VIZ } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
 import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.ts";
-import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.ts";
+import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, readsTemplate, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.ts";
+import { drawIcicle, icicleRows, ROW_H, type Icicle } from "./viz/icicle.ts";
+import { fieldLabel } from "./viz/iciclelayout.ts";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
  *  asks for, so both are answered by one scan: the core keeps one per sheet
@@ -35,6 +37,10 @@ const SCAN_MS = 10;
 /** How tall the map is drawn in the rail, where it shares the column with
  *  everything else. Full screen it takes what it is given. */
 const RAIL_HEIGHT = 168;
+/** The same for In order, which needs a row per level of the tree rather
+ *  than area: ten rows, enough for an MP4's boxes inside boxes down to the
+ *  sample tables. */
+const ORDER_RAIL_ROWS = 10;
 
 /** Whether the reader left the treemap unfolded. Folded until they open it:
  *  it sits at the foot of the rail while it is rough, and a folded map reads
@@ -49,6 +55,7 @@ type Crumb = { readonly name: string; readonly key: string; readonly at: Structu
 export class TreemapPanel {
   readonly el: HTMLElement;
   private readonly pick: HTMLSelectElement;
+  private readonly head: HTMLElement;
   private readonly grow: HTMLButtonElement;
   private readonly trail: HTMLElement;
   private readonly plot: HTMLElement;
@@ -68,6 +75,10 @@ export class TreemapPanel {
   private readonly chevron: HTMLElement;
   private pumping = false;
   private frame = 0;
+  /** The In order picture, kept while its root stays the same, so a redraw
+   *  for a document change or a resize keeps the reader's zoom. */
+  private icicle: Icicle | null = null;
+  private icicleKey = "";
 
   onPick: (pick: FieldPick) => void = () => {};
   onJump: (startBit: number, endBit: number) => void = () => {};
@@ -82,6 +93,7 @@ export class TreemapPanel {
     const bar = document.createElement("div");
     bar.className = "tmp-bar";
     const head = document.createElement("h3");
+    this.head = head;
     this.chevron = document.createElement("span");
     this.chevron.className = "panel-chevron";
     this.chevron.setAttribute("aria-hidden", "true");
@@ -257,7 +269,8 @@ export class TreemapPanel {
    * costs nothing and the two never disagree about how far it has got.
    */
   pump(): void {
-    if (!this.open || this.el.offsetParent === null || this.mode === "structure") return;
+    // The template modes are walks the listing drives, not the byte scan.
+    if (!this.open || this.el.offsetParent === null || this.mode === "structure" || this.mode === "order") return;
     if (this.pumping) return;
     this.pumping = true;
     const until = performance.now() + SCAN_MS;
@@ -292,24 +305,35 @@ export class TreemapPanel {
 
   private paint(): void {
     if (!this.open) return;
-    const width = Math.floor(this.plot.clientWidth || this.el.clientWidth);
-    const height = this.big ? Math.floor(this.plot.clientHeight) : RAIL_HEIGHT;
-    const t = this.zoomed(this.build(width * Math.max(height, 1)));
-    this.tree = t;
     // The picker says what is on screen, which is not always what the reader
-    // chose: without a template two of the modes cannot be drawn, so they are
-    // greyed and the picker moves to the one that is. A picker reading
+    // chose: without a template three of the modes cannot be drawn, so they
+    // are greyed and the picker moves to the one that is. A picker reading
     // "Structure" over a map of byte classes is the panel telling the reader
     // something untrue about its own state.
     const showing = this.showing();
     const noTemplate = this.doc.template === null;
     for (const option of this.pick.options) {
-      option.disabled = noTemplate && (option.value === "structure" || option.value === "kinds");
+      option.disabled = noTemplate && readsTemplate(option.value as TreemapMode);
     }
     if (this.pick.value !== showing) this.pick.value = showing;
+    const order = showing === "order";
+    // In order is as tall as its rows, and in the rail that is taller than the
+    // treemap's box. Over the window the stylesheet gives the plot the rest.
+    const railHeight = order ? ORDER_RAIL_ROWS * ROW_H + (RAIL_HEIGHT - icicleRows(RAIL_HEIGHT) * ROW_H) : RAIL_HEIGHT;
+    this.plot.style.height = this.big ? "" : `${railHeight}px`;
+    const width = Math.floor(this.plot.clientWidth || this.el.clientWidth);
+    const height = this.big ? Math.floor(this.plot.clientHeight) : railHeight;
+    this.head.title = order ? VIZ.icicle.what : TREEMAP.what;
+    if (order) {
+      this.paintOrder(width, height);
+      return;
+    }
+    this.dropIcicle();
+    const t = this.zoomed(this.build(width * Math.max(height, 1)));
+    this.tree = t;
     this.trail.hidden = this.crumbs.length === 0;
     if (!this.trail.hidden) this.drawTrail();
-    this.drawWhere(t.root);
+    this.drawWhere(t.root.name, t.unit === "bits" ? t.root.value : t.root.value * 8, t.root.range?.offsetBits ?? null);
     this.line.textContent = t.none ?? t.progress ?? this.underLine();
     this.line.hidden = this.line.textContent === "";
     this.note.textContent = this.crumbs.length === 0 ? TREEMAP.hint : `${TREEMAP.hint} ${TREEMAP.hintBack}`;
@@ -348,21 +372,80 @@ export class TreemapPanel {
    * the file that part is and where it starts, which is what connects the
    * zoomed picture back to the one it came out of.
    */
-  private drawWhere(root: TreeNode): void {
-    if (this.crumbs.length === 0 || root.value <= 0) {
+  private drawWhere(name: string, bits: number, offsetBits: number | null): void {
+    if (this.crumbs.length === 0 || bits <= 0) {
       this.where.hidden = true;
       return;
     }
     const whole = this.doc.lengthBits;
-    const bits = this.tree?.unit === "bits" ? root.value : root.value * 8;
     const size = formatBytes(Math.ceil(bits / 8));
     // Counted in bytes or in bits, a box is still some share of the file, and
     // the share is the number that says whether a zoomed picture is most of
     // the file or a corner of it.
     const share = whole > 0 ? percentText(bits, whole) : null;
-    const at = root.range === undefined ? null : formatOffset(root.range.offsetBits);
-    this.where.textContent = TREEMAP.zoomedTo(root.name, size, share, at);
+    const at = offsetBits === null ? null : formatOffset(offsetBits);
+    this.where.textContent = TREEMAP.zoomedTo(name, size, share, at);
     this.where.hidden = false;
+  }
+
+  /**
+   * The In order picture: the template's tree in file order, one row per
+   * depth, rooted where the trail says.
+   *
+   * Kept from one paint to the next while its root is the same node at the
+   * same size, so a document change or a resize redraws it at the reader's
+   * zoom. A new root (a double-click, a crumb, Backspace) is a new picture
+   * starting from the whole of that root, which is what opening a box means
+   * in the other modes too.
+   */
+  private paintOrder(width: number, height: number): void {
+    this.tree = null;
+    this.trail.hidden = this.crumbs.length === 0;
+    if (!this.trail.hidden) this.drawTrail();
+    this.note.textContent = this.crumbs.length === 0 ? VIZ.icicle.hint : `${VIZ.icicle.hint} ${TREEMAP.hintBack}`;
+    const path = this.rootedAt()?.path ?? [];
+    const r = this.doc.templateNode(path);
+    if (r.status !== "ok" || width < 8 || height < 8) {
+      this.dropIcicle();
+      this.plot.replaceChildren();
+      this.where.hidden = true;
+      this.line.textContent = r.status === "error" ? TREEMAP.failed(r.message) : r.status === "ok" ? "" : REPORT.reading;
+      this.line.hidden = this.line.textContent === "";
+      this.note.hidden = true;
+      return;
+    }
+    const node = r.node;
+    this.line.hidden = true;
+    this.note.hidden = false;
+    this.drawWhere(fieldLabel(node), node.size_bits, node.offset_bits);
+    // At the top the picture is the file, so a template that stops short of
+    // the end leaves the rest of row 0 hatched, as Structure mode leaves it a
+    // box of its own.
+    const top = this.crumbs.length === 0;
+    const key = `${path.join(".")}|${node.offset_bits}|${node.size_bits}|${node.child_count}|${top ? this.doc.lengthBits : ""}`;
+    if (this.icicle === null || key !== this.icicleKey) {
+      this.dropIcicle();
+      this.icicle = drawIcicle(this.doc, node, {
+        width,
+        height,
+        frame: top ? { startBit: 0, endBit: Math.max(this.doc.lengthBits, node.offset_bits + node.size_bits) } : null,
+        onOpen: (chain) => {
+          for (const f of chain) this.crumbs.push({ name: fieldLabel(f), key: f.path.join("."), at: { path: f.path } });
+          this.draw();
+        },
+      });
+      this.icicleKey = key;
+    } else {
+      this.icicle.resize(width, height);
+      this.icicle.refresh();
+    }
+    if (this.icicle.el.parentElement !== this.plot) this.plot.replaceChildren(this.icicle.el);
+  }
+
+  private dropIcicle(): void {
+    this.icicle?.destroy();
+    this.icicle = null;
+    this.icicleKey = "";
   }
 
   /** The line under a map that has finished: what two boxes cannot say. */
@@ -392,7 +475,7 @@ export class TreemapPanel {
    * later brings their mode back with it.
    */
   private showing(): TreemapMode {
-    const needsTemplate = this.mode === "structure" || this.mode === "kinds";
+    const needsTemplate = readsTemplate(this.mode);
     return this.doc.template === null && needsTemplate ? "classes" : this.mode;
   }
 
@@ -496,6 +579,9 @@ export class TreemapPanel {
   /** A press goes to the bytes and marks the box; a second press makes it the
    *  whole picture. */
   private hit(e: MouseEvent, into: boolean): void {
+    // In order answers its own clicks; a click that reaches here landed on
+    // its axis or under it.
+    if (this.showing() === "order") return;
     const t = this.tree;
     if (t === null) return;
     const key = boxAt(e.target);
