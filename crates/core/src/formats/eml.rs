@@ -171,10 +171,13 @@ const FIELDS_WITHOUT_A_NAME: usize = 3;
 ///
 /// `cut` says the window stops before the file does, so a last line with no
 /// colon may be a field the window cut in half rather than a damaged one.
+/// `envelope` lets the first line be an mbox `From ` line, which some programs
+/// keep when they save one message out of a mailbox. Thunderbird's mailboxes
+/// separate messages with `From - ` and a date.
 ///
 /// Returns how many fields were read, and whether one of them is a field only a
 /// message has.
-fn header_fields(head: &[u8], cut: bool) -> Option<(usize, bool)> {
+fn header_fields(head: &[u8], cut: bool, envelope: bool) -> Option<(usize, bool)> {
     let blank = blank_line_at(head);
     let header = &head[..blank.unwrap_or(head.len())];
     if header.iter().any(|b| (*b < 0x20 && !matches!(b, b'\t' | b'\r' | b'\n')) || *b == 0x7f) {
@@ -192,6 +195,9 @@ fn header_fields(head: &[u8], cut: bool) -> Option<(usize, bool)> {
             continue;
         }
         if line.first().is_some_and(|b| matches!(b, b' ' | b'\t')) && i > 0 {
+            continue;
+        }
+        if i == 0 && envelope && line.starts_with(b"From ") {
             continue;
         }
         let name_len = line.iter().position(|b| NOT_NAME.contains(b)).unwrap_or(line.len());
@@ -218,17 +224,19 @@ fn blank_line_at(head: &[u8]) -> Option<usize> {
 }
 
 /// Whether a file called `.eml` or `.nws` is the message its name says: it
-/// opens with a header field, and every line up to the blank line is one.
+/// opens with a header field, or an mbox `From ` line and then a header field,
+/// and every line up to the blank line is one.
 pub fn is_named_message(head: &[u8], len: u64) -> bool {
-    len > 0 && header_fields(head, (head.len() as u64) < len).is_some()
+    len > 0 && header_fields(head, (head.len() as u64) < len, true).is_some()
 }
 
 /// Whether a file nothing names is a message: its header has at least
 /// [`FIELDS_WITHOUT_A_NAME`] fields and one of them is in [`MESSAGE_FIELDS`].
 /// What finds a mail server's spool files and a maildir's messages, which have
-/// no extension.
+/// no extension. A file opening with an mbox `From ` line is left alone here:
+/// without a name saying it is one message, it is a mailbox of many.
 pub fn is_message(head: &[u8], len: u64) -> bool {
-    len > 0 && matches!(header_fields(head, (head.len() as u64) < len), Some((n, true)) if n >= FIELDS_WITHOUT_A_NAME)
+    len > 0 && matches!(header_fields(head, (head.len() as u64) < len, false), Some((n, true)) if n >= FIELDS_WITHOUT_A_NAME)
 }
 
 #[cfg(test)]
@@ -313,6 +321,15 @@ Body text.\r\nSecond line.\r\n";
         let binary = b"From: a\nPath: b\nXref: c\x00\x01\n\n";
         assert!(!is_message(binary, binary.len() as u64));
         assert!(!is_named_message(b"", 0));
+    }
+
+    #[test]
+    fn a_message_exported_from_a_mailbox_keeps_its_from_line() {
+        let text = b"From - Mon Oct 12 08:14:02 2026\r\nFrom: a@example.org\r\nNewsgroups: alt.test\r\nMessage-ID: <1@example.org>\r\n\r\nhi\r\n";
+        // Called `.eml`, it is one message.
+        assert!(is_named_message(text, text.len() as u64));
+        // With no name, the same opening is a mailbox of many messages.
+        assert!(!is_message(text, text.len() as u64));
     }
 
     #[test]
