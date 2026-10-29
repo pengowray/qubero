@@ -58,7 +58,7 @@ import { headingButton, registerHeadingButton } from "./headingbuttons.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
 import { registerOverviewTab, type OverviewTabPanel } from "./overviewtabs.ts";
 import { goToBits, goToField } from "./pick.ts";
-import { fileParts, PointerWalk, type FilePart } from "./pointerwalk.ts";
+import { fileParts, partName, PointerWalk, type FilePart } from "./pointerwalk.ts";
 import { hideTip, hoverTip, tipCard } from "./tip.ts";
 import "./pointerarcs.css";
 
@@ -471,7 +471,7 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
   const withinName = (): string => {
     if (opts.within === null) return "";
     const r = doc.templateNode(opts.within);
-    return r.status === "ok" ? r.node.name : "";
+    return r.status === "ok" ? partName(r.node) : "";
   };
 
   /** The arcs to draw brighter than the rest, or an empty set when none is. */
