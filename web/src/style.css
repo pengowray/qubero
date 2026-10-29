@@ -7572,6 +7572,12 @@ table.rec td.is-invalid {
   margin-inline: 16px 12px;
   cursor: pointer;
 }
+/* One line high, so a line with no room beside the value drops onto a second
+   line that is cut off, rather than making the cell two lines tall and
+   drawing over the rows above and below. The value is what the row is for. */
+.rp-value:has(> .viz-spark) {
+  height: 1lh;
+}
 .viz-spark-end {
   min-width: 5ch;
   color: var(--muted);
