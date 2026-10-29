@@ -74,6 +74,7 @@ mod dos;
 mod dtb;
 mod draco;
 mod dv;
+mod eml;
 mod elf;
 mod machine;
 mod macho;
@@ -245,6 +246,7 @@ pub use dos::{com, dos};
 pub use dtb::dtb;
 pub use draco::draco;
 pub use dv::dv;
+pub use eml::eml;
 pub use eps::eps;
 pub use fits::fits;
 pub use elf::{bpf, elf};
@@ -558,6 +560,9 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("psd", |_| psd()),
     ("eps", |_| eps()),
     ("rtf", |_| rtf()),
+    // One email or newsgroup post: `.eml`, and `.nws` from Outlook Express
+    // and Windows Live Mail.
+    ("eml", |_| eml()),
     ("utmp", |_| utmp()),
     ("unityassets", |_| unity_assets()),
     ("unitybundle", |_| unity_bundle()),

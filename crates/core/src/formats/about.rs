@@ -97,6 +97,8 @@ static ABOUT: &[(&str, About)] = &[
         "NPY stores one NumPy array: a short header, written as a Python dictionary, that gives the element type, the shape, and the order, followed by the array's raw data.")),
     ("parquet", a("Parquet", Some("Apache Parquet"),
         "Parquet stores tables by column rather than by row, so each column compresses well and a reader can load only the columns it needs. The metadata, in a footer at the end of the file, gives the position of each column's data.")),
+    ("eml", a("Email or newsgroup message", Some("Email#Message format"),
+        "An .eml file stores one email and an .nws file stores one newsgroup post, both as text, in the form a mail or news server sends them. The header comes first, one field per line (From:, Subject:, Date:), each a name, a colon and a value; a long value continues on following lines that start with a space or a tab. A blank line ends the header, and everything after it is the body. A message with attachments, or with both a plain and an HTML copy of its text, uses MIME: the Content-Type field says multipart and gives a boundary line that divides the body into parts, each with its own small header. Attachments and non-ASCII text in those parts are usually encoded as base64 or quoted-printable.")),
     ("json", a("JSON", Some("JSON"),
         "JSON stores data as text: objects of named values, arrays, strings, numbers, true, false, and null.")),
     ("pickle", a("pickle", Some("Serialization#Pickle"),
