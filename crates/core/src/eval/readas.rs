@@ -149,7 +149,7 @@ fn packs(codec: &Packing) -> bool {
     use crate::codec::Codec;
     !matches!(
         codec,
-        Packing::Fixed(Codec::Stored | Codec::CfbWorkbook | Codec::Latin1Text | Codec::EscapedLatin1Text)
+        Packing::Fixed(Codec::Stored | Codec::CfbWorkbook | Codec::Latin1Text | Codec::EscapedLatin1Text | Codec::QuotedPrintable)
     )
 }
 

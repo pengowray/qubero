@@ -590,6 +590,8 @@ export const UNPACKED = {
     ac: "AC coefficient",
     zrl: "ZRL, 16 zero coefficients",
     eob: "EOB, the rest of the block is zero",
+    base64: "base64 group",
+    ignored: "ignored",
   } as Readonly<Record<string, string>>,
   /**
    * The named fields a deflate header and its code tables are made of, keyed by

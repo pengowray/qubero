@@ -14,39 +14,76 @@
 //! RFC 5322 calls taking them out "unfolding", and a reader comparing the
 //! value with the bytes needs them in.
 //!
+//! The body is read as MIME says it is (RFC 2045 and 2046), from the header
+//! fields that describe it:
+//!
+//! - `Content-Type:` is read as its media type, `multipart/mixed`, and its
+//!   parameters, `boundary="b1_9f3c"`, each a field of its own.
+//! - A `multipart` body is its parts, each its own small header and body
+//!   between two lines that start with `--` and the boundary. A part may be
+//!   `multipart` itself: an email with an attachment and an HTML copy of its
+//!   text is `multipart/mixed` holding a `multipart/alternative`. What comes
+//!   before the first boundary line and after the last is kept as the
+//!   preamble and the epilogue. A message that stops before its closing
+//!   boundary line has the parts it wrote, the last running to the end.
+//! - A body or a part whose `Content-Transfer-Encoding:` is `base64` or
+//!   `quoted-printable` is decoded, and what it holds is read from the bytes
+//!   that come out, which open as a document of their own.
+//! - `text` is read in the `charset` the type names where Qubero has that
+//!   encoding: `utf-8`, `us-ascii`, `iso-8859-1` and `ibm437`. Any other, and a
+//!   body with no `Content-Type:`, is read as UTF-8 if it is valid UTF-8 and as
+//!   Latin-1 otherwise. A `message/rfc822` part is read as the message it is.
+//!   Anything else is bytes.
+//!
+//! Names are compared without regard to case, as the RFCs say they are, so
+//! `Content-type:` and `BOUNDARY=` are read as the field and the parameter
+//! they name.
+//!
 //! What this does not read yet:
 //!
-//! - MIME parts. A message with an attachment or an HTML copy of its text is
-//!   `multipart`, and its parts are separated by a boundary line whose text
-//!   is a parameter of `Content-Type`. Finding the parts needs a search for
-//!   bytes read out of the file, and `Expr::Find` only searches for bytes the
-//!   template fixes.
-//! - base64 and quoted-printable bodies, which need codecs of their own.
 //! - Encoded words in header values (`=?UTF-8?B?...?=`, RFC 2047). They read
 //!   as the ASCII they are written in.
-//!
-//! The body is one run of text, read as UTF-8 if it is valid UTF-8 and as
-//! Latin-1 otherwise. The charset `Content-Type` names is not consulted.
+//! - Parameters split into pieces or given a charset (`filename*0=`,
+//!   `filename*=utf-8''...`, RFC 2231). Each piece reads as a parameter of
+//!   its own.
+//! - A backslash escaping a quote inside a quoted parameter value. The value
+//!   stops at the first quote.
+//! - Comments in parentheses in a structured value. What comes after the
+//!   parameters is kept as text.
+//! - Charsets Qubero has no encoding for, such as `windows-1252` and
+//!   `iso-8859-15`, which read as the fallback above says.
 
+use crate::codec::Codec;
 use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T, Until};
 
 pub fn eml() -> Template {
-    Template::new(
-        "eml",
-        T::structure(
-            "Message",
-            vec![
-                ("header", T::repeat(T::Named("HeaderLine".into()), Until::While(more_header()))),
-                // The blank line, which is absent only when the file ends
-                // inside the header.
-                ("separator", T::when(E::Remaining.greater_than(E::lit(0)), T::text(StrLen::Fixed(blank_line()), Encoding::Ascii))),
-                ("body", T::text(StrLen::Fixed(E::Remaining), Encoding::Unknown)),
-            ],
-        )
-        .machinery(&["separator"])
-        .payload(&["body"]),
+    Template::new("eml", T::Named("Message".into()))
+        .with_type("Message", entity("Message"))
+        .with_type("HeaderLine", line())
+        .with_type("Body", body())
+        .with_type("Part", part())
+        .with_type("Parameter", parameter())
+}
+
+/// A message, or a message inside one: a header, the blank line, and the
+/// body the header describes.
+fn entity(name: &str) -> T {
+    T::structure(
+        name,
+        vec![
+            ("header", header()),
+            // The blank line, which is absent only when the file ends
+            // inside the header.
+            ("separator", T::when(E::Remaining.greater_than(E::lit(0)), T::text(StrLen::Fixed(blank_line()), Encoding::Ascii))),
+            ("body", T::Named("Body".into())),
+        ],
     )
-    .with_type("HeaderLine", line())
+    .machinery(&["separator"])
+    .payload(&["body"])
+}
+
+fn header() -> T {
+    T::repeat(T::Named("HeaderLine".into()), Until::While(more_header()))
 }
 
 fn byte(c: u8) -> E {
@@ -101,16 +138,251 @@ fn field() -> T {
             // and RFC 5322 counts it as part of the value. Kept out of the
             // value here so the value reads as what a mail program shows.
             ("space", T::text(StrLen::Fixed(E::run(b" \t")), Encoding::Ascii)),
-            // UTF-8 because RFC 6532 allows it in a header, and RFC 5322
-            // allows only ASCII. A Latin-1 byte in a header is a mistake, and
-            // the value is marked as not valid UTF-8.
-            ("value", T::text(StrLen::Fixed(E::Remaining.sub(line_end())), Encoding::Utf8)),
+            ("value", T::sized(E::Remaining.sub(line_end()), value())),
             ("end", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii)),
         ],
     )
     .machinery(&["colon", "space", "end"])
     .payload(&["value"])
     .counted_as("header field")
+}
+
+/// A field's value: text, except for the two MIME fields written as a word
+/// and parameters, which are read as those.
+///
+/// UTF-8 because RFC 6532 allows it in a header, and RFC 5322 allows only
+/// ASCII. A Latin-1 byte in a header is a mistake, and the value is marked as
+/// not valid UTF-8.
+fn value() -> T {
+    T::matches(
+        E::lower(E::field("name")),
+        vec![("content-type", media_type()), ("content-disposition", disposition())],
+        T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8),
+    )
+}
+
+/// `multipart/alternative; boundary="b1_9f3c"`: a type, a subtype, and the
+/// parameters after them.
+///
+/// Read by what ends each piece rather than by what may be in it, so a value
+/// written wrong still reads as far as it goes: a type with no `/` is a type
+/// with no subtype, and whatever follows the last parameter is kept as text.
+fn media_type() -> T {
+    let slash = E::Remaining.greater_than(E::lit(0)).both(E::peek(8, Big).equals(byte(b'/')));
+    T::structure(
+        "MediaType",
+        vec![
+            ("type", T::text(StrLen::Fixed(E::run_except(b"/;( \t\r\n")), Encoding::Ascii)),
+            ("slash", T::when(slash, T::magic(b"/"))),
+            ("subtype", T::text(StrLen::Fixed(E::run_except(b";( \t\r\n")), Encoding::Ascii)),
+            ("parameters", T::repeat(T::Named("Parameter".into()), Until::While(another_parameter()))),
+            ("rest", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+        ],
+    )
+    .machinery(&["slash"])
+}
+
+/// `attachment; filename="counts.csv"`: whether a part is shown in the message
+/// or kept as a file (RFC 2183), and the parameters after it, read the way a
+/// media type's are.
+fn disposition() -> T {
+    T::structure(
+        "Disposition",
+        vec![
+            ("type", T::text(StrLen::Fixed(E::run_except(b";( \t\r\n")), Encoding::Ascii)),
+            ("parameters", T::repeat(T::Named("Parameter".into()), Until::While(another_parameter()))),
+            ("rest", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+        ],
+    )
+}
+
+/// Blanks and line breaks, which a folded value puts between its parameters.
+const FOLD: &[u8] = b" \t\r\n";
+
+/// Whether a parameter comes next: a `;` after whatever blanks and line
+/// breaks there are.
+fn another_parameter() -> E {
+    let gap = E::run(FOLD);
+    E::Remaining.greater_than(gap.clone()).both(E::peek_at(gap.mul(E::lit(8)), 8, Big).equals(byte(b';')))
+}
+
+/// `; charset="iso-8859-1"`: a name and a value, which may be quoted.
+///
+/// Named by its name and read as its value, the way a header field is. The
+/// quotes are fields of their own, so the value is what is inside them, which
+/// is the text a boundary line is written with. Each quote is one byte or
+/// none, rather than a field that is there or not, so that whether the value
+/// is quoted can be asked of it.
+fn parameter() -> T {
+    let more = || E::Remaining.greater_than(E::lit(0));
+    let at = |c: u8| more().both(E::peek(8, Big).equals(byte(c)));
+    let quoted = || E::size_of("open").greater_than(E::lit(0));
+    let quote = |present: E| T::text(StrLen::Fixed(E::cond(present, E::lit(1), E::lit(0))), Encoding::Ascii);
+    T::structure_named(
+        "Parameter",
+        "name",
+        "value",
+        vec![
+            // The `;`, and the line break and indent of a folded line around it.
+            ("separator", T::text(StrLen::Fixed(E::run(b" \t\r\n;")), Encoding::Ascii)),
+            ("name", T::text(StrLen::Fixed(E::run_except(b"=; \t\r\n")), Encoding::Ascii)),
+            ("equals", T::when(at(b'='), T::magic(b"="))),
+            ("open", quote(at(b'"'))),
+            ("value", T::text(StrLen::Fixed(E::cond(quoted(), E::run_except(b"\""), E::run_except(b"; \t\r\n"))), Encoding::Utf8)),
+            ("close", quote(quoted().both(at(b'"')))),
+        ],
+    )
+    .machinery(&["separator", "equals", "open", "close"])
+    .payload(&["value"])
+    .counted_as("parameter")
+}
+
+/// A header field of the nearest header above, found by its name in any case.
+///
+/// The nearest header is the one this body belongs to. A part's body is read
+/// inside the part, where its own header is the nearest; the list of parts is
+/// read outside every part, where the nearest is the header of the message
+/// the parts are in. That is what lets a part be `multipart` with a boundary
+/// of its own while the parts around it end at the boundary of the message.
+fn header_field(name: &str, field: &[&str]) -> E {
+    E::tagged_text_any_case(E::field("header"), &["name"], name, field)
+}
+
+/// The value of one parameter of the nearest `Content-Type:`, by its name in
+/// any case. Nothing when there is no such field or no such parameter.
+fn parameter_value(name: &str) -> E {
+    E::tagged_text_any_case(header_field("content-type", &["value", "parameters"]), &["name"], name, &["value"])
+}
+
+/// The nearest `Content-Type:`'s type or subtype, in lower case.
+fn media(piece: &str) -> E {
+    E::lower(header_field("content-type", &["value", piece]))
+}
+
+/// What a body holds, as its header says.
+fn body() -> T {
+    T::matches(media("type"), vec![("multipart", multipart())], content())
+}
+
+/// A body that is not parts: decoded first if its transfer encoding says it
+/// was encoded, and then read as its type.
+fn content() -> T {
+    let decoded = |codec| T::decoded(E::Remaining, codec, payload());
+    T::matches(
+        E::lower(header_field("content-transfer-encoding", &["value"])),
+        vec![("base64", decoded(Codec::Base64)), ("quoted-printable", decoded(Codec::QuotedPrintable))],
+        payload(),
+    )
+}
+
+/// The bytes of a body once any transfer encoding is off them.
+///
+/// Text when the type says it is, and when there is no type at all, which RFC
+/// 2045 says means `text/plain`.
+fn payload() -> T {
+    let message = T::matches(media("subtype"), vec![("rfc822", T::Named("Message".into())), ("global", T::Named("Message".into()))], T::bytes(E::Remaining));
+    T::matches(media("type"), vec![("text", text()), ("", text()), ("message", message)], T::bytes(E::Remaining))
+}
+
+/// Text in the charset `Content-Type:` names, where there is an encoding for
+/// it.
+fn text() -> T {
+    let read = |enc| T::text(StrLen::Fixed(E::Remaining), enc);
+    T::matches(
+        E::lower(parameter_value("charset")),
+        vec![
+            ("utf-8", read(Encoding::Utf8)),
+            ("utf8", read(Encoding::Utf8)),
+            ("us-ascii", read(Encoding::Ascii)),
+            ("ascii", read(Encoding::Ascii)),
+            ("iso-8859-1", read(Encoding::Latin1)),
+            ("iso8859-1", read(Encoding::Latin1)),
+            ("latin1", read(Encoding::Latin1)),
+            ("ibm437", read(Encoding::Cp437)),
+            ("cp437", read(Encoding::Cp437)),
+        ],
+        read(Encoding::Unknown),
+    )
+}
+
+/// The text a boundary line is made of, from the nearest `Content-Type:`.
+fn boundary() -> E {
+    parameter_value("boundary")
+}
+
+/// How far it is to the `\n` that ends the line before the next boundary
+/// line, or to the end when there is none. RFC 2046 says a boundary line
+/// starts a line, so the search is for a line break and then the line.
+fn to_boundary_line() -> E {
+    E::to_text(b"\n--", boundary(), b"")
+}
+
+/// Whether a boundary line starts here.
+fn boundary_here() -> E {
+    E::Remaining.greater_than(E::lit(0)).both(E::to_text(b"--", boundary(), b"").equals(E::lit(0)))
+}
+
+/// Whether the boundary line starting here is the last, which has `--` after
+/// the boundary as well as before it.
+fn closing_here() -> E {
+    E::to_text(b"--", boundary(), b"--").equals(E::lit(0))
+}
+
+/// A `multipart` body: what comes before the first boundary line, the parts,
+/// the closing boundary line, and what comes after it.
+///
+/// A part runs from its boundary line to the line break before the next one,
+/// and that break is the part's last field. RFC 2046 says the break belongs to
+/// the boundary line after it, which is why it is not in the part's body.
+fn multipart() -> T {
+    let to_next = || to_boundary_line().add(E::lit(1)).at_most(E::Remaining);
+    T::structure(
+        "Multipart",
+        vec![
+            ("preamble", T::when(boundary_here().negate(), T::sized(to_next(), lines("Preamble")))),
+            ("parts", T::repeat(T::sized(to_next(), T::Named("Part".into())), Until::While(boundary_here().both(closing_here().negate())))),
+            ("closing", T::when(E::Remaining.greater_than(E::lit(0)), T::sized(line_length(), lines("BoundaryLine")))),
+            ("epilogue", T::text(StrLen::Fixed(E::Remaining), Encoding::Unknown)),
+        ],
+    )
+    .machinery(&["closing"])
+}
+
+/// One part of a `multipart` body: the boundary line that starts it, its own
+/// header and body, and the line break before the next boundary line.
+fn part() -> T {
+    T::structure(
+        "Part",
+        vec![
+            ("boundary", T::sized(line_length(), lines("BoundaryLine"))),
+            ("header", header()),
+            ("separator", T::when(E::Remaining.greater_than(E::lit(0)), T::text(StrLen::Fixed(blank_line()), Encoding::Ascii))),
+            ("body", T::sized(E::Remaining.sub(line_end()), T::Named("Body".into()))),
+            ("end", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii)),
+        ],
+    )
+    .machinery(&["boundary", "separator", "end"])
+    .payload(&["body"])
+    .counted_as("part")
+}
+
+/// How long the line starting here is, its line break included.
+fn line_length() -> E {
+    E::to_bytes(b"\n").add(E::lit(1)).at_most(E::Remaining)
+}
+
+/// Lines of text read as one, and the line break at the end of them.
+fn lines(name: &str) -> T {
+    T::structure_named(
+        name,
+        "",
+        "text",
+        vec![
+            ("text", T::text(StrLen::Fixed(E::Remaining.sub(line_end())), Encoding::Unknown)),
+            ("end", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii)),
+        ],
+    )
+    .machinery(&["end"])
 }
 
 /// A line in the header that is not a field, read as the text it is.

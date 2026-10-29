@@ -256,7 +256,7 @@ pub(super) fn reads_besides(e: &Expr, name: &str) -> bool {
 /// Whether an expression looks at the bytes directly.
 fn peeks(e: &Expr) -> bool {
     match e {
-        Expr::Peek { .. } | Expr::PeekAt { .. } | Expr::PeekIn { .. } | Expr::Find { .. } | Expr::Run { .. } | Expr::ToMarker { .. } | Expr::StreamLen(_) => true,
+        Expr::Peek { .. } | Expr::PeekAt { .. } | Expr::PeekIn { .. } | Expr::Find { .. } | Expr::FindText(_) | Expr::Run { .. } | Expr::ToMarker { .. } | Expr::StreamLen(_) => true,
         Expr::Add(a, c)
         | Expr::Sub(a, c)
         | Expr::Mul(a, c)
@@ -280,7 +280,7 @@ fn peeks(e: &Expr) -> bool {
         | Expr::Min(a, c)
         | Expr::Max(a, c) => peeks(a) || peeks(c),
         Expr::Cond { when, then, otherwise } => peeks(when) || peeks(then) || peeks(otherwise),
-        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) | Expr::Words { value: a, .. } => peeks(a),
+        Expr::Not(a) | Expr::BitNot(a) | Expr::Log2(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) | Expr::Bit(a, _) | Expr::Words { value: a, .. } | Expr::Lower(a) => peeks(a),
         Expr::PadTo { n, .. } => peeks(n),
         _ => false,
     }
