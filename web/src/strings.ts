@@ -590,6 +590,8 @@ export const UNPACKED = {
     ac: "AC coefficient",
     zrl: "ZRL, 16 zero coefficients",
     eob: "EOB, the rest of the block is zero",
+    base64: "base64 group",
+    ignored: "ignored",
   } as Readonly<Record<string, string>>,
   /**
    * The named fields a deflate header and its code tables are made of, keyed by
@@ -4212,6 +4214,139 @@ export const VIZ = {
     readingScan: "Reading the scan to draw over the picture…",
     readingScanlines: "Reading the scanlines to draw over the picture…",
     alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
+  },
+  /** A run of numbers as a plot (`viz/valueplot.ts`): a line per channel, or
+   *  a grid of colours for a run with two dimensions. */
+  valuePlot: {
+    /** The listing heading's button, and what it does. */
+    button: "Plot",
+    buttonTitle: (count: number, unit: string): string => `Plot all ${countText(count, unit)} in the pane beside the listing`,
+    /** The list pane's two ways of showing its list. */
+    paneRows: "List",
+    paneRowsTitle: (unit: string): string => `Show one row per ${unit}`,
+    panePlot: "Plot",
+    panePlotTitle: "Show the values as a plot",
+    /** While the bytes of the run are still arriving. */
+    reading: "Reading the values…",
+    /** In place of the plot when uPlot's module did not arrive (a dropped
+     *  connection, or a chunk gone after a deploy). No Try again button:
+     *  Chrome keeps a failed module import and answers a second import of it
+     *  with the same failure, so only a reload asks the server again. */
+    loadFailed: "Couldn't load the plotting library. Reload the page to try again.",
+    /** A run longer than the plot reads. */
+    firstOf: (shown: number, total: number, unit: string): string =>
+      `Plotting the first ${shown.toLocaleString()} of ${countText(total, unit)}`,
+    /** Hover card over the line. The title is the element's number in its run,
+     *  counted from 0 as the listing counts, and its time when the run has a
+     *  rate. */
+    at: (word: string, index: number): string => `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()}`,
+    atTime: (word: string, index: number, seconds: string): string =>
+      `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()} at ${seconds}`,
+    /** One channel's value, or the one value of a run with one channel. */
+    channelValue: (channel: string, value: string): string => `${channel}: ${value}`,
+    oneValue: (value: string): string => `Value: ${value}`,
+    /** The card's title over a run that is not a table: the element's index,
+     *  as the listing writes it. */
+    index: (index: number): string => `[${index.toLocaleString()}]`,
+    /** When one pixel of the line stands for several elements, the card says
+     *  which, and the lowest and highest of them, which is what the line drawn
+     *  there shows. */
+    inPixel: (word: string, from: number, to: number): string =>
+      `In this pixel, ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}:`,
+    channelRange: (channel: string, low: string, high: string): string => `${channel}: ${low} to ${high}`,
+    oneRange: (low: string, high: string): string => `Lowest ${low}, highest ${high}`,
+    /** The muted foot of the card: where the element is and what type. */
+    where: (offset: string, type: string): string => `${offset} · ${type}`,
+    /** A miniSEED record's decoded samples in the At cursor panel. A sample of
+     *  a Steim record is a sum of differences, so it is at no one place; the
+     *  card names the 64-byte frame its difference was read from, which is
+     *  what a click selects, and the offset is where that frame starts.
+     *  Sample 0 is stored whole, as the forward integration constant in the
+     *  second word of frame 0, and its card says so ("forward integration
+     *  constant" is the samples panel's name for it). */
+    samplesTitle: "Decoded samples",
+    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()}, which starts at ${offset}`,
+    fromConstant: (offset: string): string => `Read from the forward integration constant at ${offset}`,
+    /** The choice over a run with two dimensions. */
+    grid: "Grid",
+    gridTitle: "Show the values as a grid of colours, one cell per value",
+    line: "Line",
+    lineTitle: "Show the values as one line, in the order they are stored",
+    /** Over the grid: its shape, in the order the values are stored. */
+    shape: (rows: number, columns: number): string =>
+      `${countText(rows, "row")} of ${countText(columns, "value")}`,
+    /** Over the grid when it is drawn smaller than one pixel a value. `n` is
+     *  the most values any one pixel averages; a pixel at the grid's edge, or
+     *  where the cells do not divide evenly, averages fewer. */
+    meanOf: (n: number): string => `Each pixel shows the mean of up to ${n.toLocaleString()} values`,
+    /** The colour scale's range. */
+    rangeFull: "Full range",
+    rangeFullTitle: "Colours run from the lowest value to the highest",
+    rangeClip: "Middle 99%",
+    rangeClipTitle: "Colours run over the middle 99% of values; values outside that take the end colours",
+    /** Hover card over the grid. */
+    cell: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    /** The foot of a card over one element: its index in the run, counted
+     *  from 0 as the listing counts, where it is, and its type. */
+    element: (index: number, offset: string, type: string): string => `[${index.toLocaleString()}] · ${offset} · ${type}`,
+    cellMean: (n: number, value: string): string => `Mean of ${n.toLocaleString()} values: ${value}`,
+  },
+  structLayout: {
+    /** The listing heading's button, beside `bytes`, `list` and `table`. */
+    button: "layout",
+    buttonTitle: (name: string): string => `Show the byte layout of ${name}: each field at its offset, gaps between fields marked`,
+    buttonTitleOn: (name: string): string => `Show the fields of ${name} as a list again`,
+    /** The figure's heading. A struct layout is what pahole prints. */
+    title: (name: string): string => `Struct layout of ${name}`,
+    rowWidth: "Bytes per row",
+    rowWidthTitle: (n: number): string => `${n} bytes per row`,
+    /** The summary line under the heading, its parts joined with ` · `. */
+    size: (bytes: number, fields: number): string => `${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    /** For a list whose elements are all one size: `4 segments, each 56
+     *  bytes in 8 fields`. */
+    elementsEach: (count: number, noun: string, bytes: number, fields: number): string =>
+      `${countText(count, noun)}, each ${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    padding: (bytes: number): string => `${countText(bytes, "byte")} padding`,
+    /** Bytes no field anywhere covers, in the word the hex view and the
+     *  listing use for them (`GAP_LABEL`). */
+    unmapped: (bytes: number): string => `${countText(bytes, "byte")} ${GAP_LABEL}`,
+    noGaps: "no gaps between fields",
+    misaligned: (n: number): string => countText(n, "misaligned number"),
+    /** Inside a gap's box: the full label, and the one used when it does not
+     *  fit. */
+    gapShort: (bytes: number): string => `${bytes} B`,
+    gapPaddingNext: (next: string, align: number): string => `No field covers these bytes. After them, ${next} starts at a multiple of ${align} bytes.`,
+    gapPaddingTail: (name: string, align: number): string => `No field covers these bytes. They make ${name} a multiple of ${align} bytes long.`,
+    gapUnread: "No field covers these bytes.",
+    /** A gap in this structure that fields elsewhere in the file are read
+     *  from: `224 bytes of program_headers`. */
+    gapOf: (bytes: number, owner: string): string => `${countText(bytes, "byte")} of ${owner}`,
+    gapOfOthers: (bytes: number): string => `${countText(bytes, "byte")} of other parts of the file`,
+    gapOther: (name: string, owners: readonly string[]): string => `Not part of ${name}. Fields of ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""} are read from these bytes.`,
+    /** In the summary line, for those gaps. Not "in other fields", which
+     *  reads as more fields of this structure and invites adding the count to
+     *  the size before it. */
+    other: (bytes: number): string => `${countText(bytes, "byte")} belong to other parts of the file`,
+    /** On a field the format itself calls padding. */
+    namedPadding: "The format calls this field padding",
+    /** Hover card lines for a field. `rel` is an offset like `+0x08`, and
+     *  `record` is the name of the structure the rows count from. */
+    fromStart: (rel: string, record: string, size: string): string => `${rel} from the start of ${record} · ${size}`,
+    /** For a member of a structure inside the record: its offset in that
+     *  structure as well. */
+    inGroup: (rel: string, group: string): string => `${rel} from the start of ${group}`,
+    aligned: (align: number): string => `Aligned to ${align} bytes`,
+    notAligned: (bytes: number, rel: string): string => `Not aligned: ${bytes}-byte number at ${rel}`,
+    /** A break standing for rows that are wholly one field. */
+    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "more row")} of ${name} (${countText(bytes, "byte")})`,
+    /** The same for rows that are wholly one gap, whose box says what it is. */
+    foldedGap: (rows: number, bytes: number): string => `${countText(rows, "more row")} (${countText(bytes, "byte")})`,
+    /** A row's key, when more names are keyed than fit beside it. */
+    keyMore: (n: number): string => `+${n} more`,
+    /** Under the figure: fields of the structure stored somewhere else. */
+    placed: "Fields read from elsewhere in the file:",
+    reading: "Reading the fields…",
+    tooLarge: (size: string, limit: string): string => `Too large to draw as rows of bytes: ${size} (the limit is ${limit})`,
   },
   icicle: {
     /** The treemap heading's tooltip while the panel shows In order, where

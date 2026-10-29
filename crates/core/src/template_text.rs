@@ -894,6 +894,9 @@ pub(crate) fn tag_text(t: &Tag, probes: bool) -> Option<String> {
         Tag::Computed(e) => spelled(e, probes)?,
         Tag::ComputedText(e) => format!("text {}", spelled(e, probes)?),
         Tag::Text(s) => format!("{s:?}"),
+        // The case is the one thing the reader has to be told, since the
+        // label is written in lower case whatever the file wrote.
+        Tag::TextAnyCase(s) => format!("{s:?} in any case"),
     })
 }
 
@@ -1357,6 +1360,9 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         // number is worked out from stay where a reader can see them:
         // `words("page {}", index + 2)`.
         Expr::Words { pattern, value } => format!("words({pattern:?}, {})", write_expr(value, 0, false, leaf)?),
+        // A call for the same reason: the field the word is read from stays
+        // where a reader can see it.
+        Expr::Lower(a) => format!("lower({})", write_expr(a, 0, false, leaf)?),
         Expr::Bit(a, i) => format!("bit({}, {i})", write_expr(a, 0, false, leaf)?),
         Expr::Mod(a, b) => two(a, b, "%", leaf)?,
         Expr::Eq(a, b) => two(a, b, "==", leaf)?,
@@ -1417,6 +1423,7 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::PeekAt { .. }
         | Expr::ToMarker { .. }
         | Expr::Find { .. }
+        | Expr::FindText(..)
         | Expr::Run { .. }
         | Expr::StreamLen(..)
         | Expr::Prev(..)
@@ -1541,6 +1548,19 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::Find { needle, last } if probes => {
             let word = if *last { "findlast" } else { "find" };
             format!("{word}({})", bytes_lit(needle))
+        }
+        // The needle in its three pieces, the file's text between the
+        // template's bytes, joined the way they are joined to search.
+        Expr::FindText(f) if probes => {
+            let mut pieces = Vec::new();
+            if !f.before.is_empty() {
+                pieces.push(bytes_lit(&f.before));
+            }
+            pieces.push(spelled(&f.text, probes)?);
+            if !f.after.is_empty() {
+                pieces.push(bytes_lit(&f.after));
+            }
+            format!("find({})", pieces.join(" + "))
         }
         Expr::Run { chars, negate } if probes => {
             format!("run({}{})", if *negate { "not " } else { "" }, bytes_hex(chars))

@@ -478,7 +478,10 @@ pub(super) fn from_end(e: &Expr) -> bool {
         Expr::PadTo { n, .. } => from_end(n),
         Expr::PeekAt { skip, .. } => from_end(skip),
         Expr::PeekIn { at, .. } => from_end(at),
-        Expr::StartOf(a) | Expr::Placer(a) | Expr::RealText(a) | Expr::Words { value: a, .. } => from_end(a),
+        Expr::StartOf(a) | Expr::Placer(a) | Expr::RealText(a) | Expr::Words { value: a, .. } | Expr::Lower(a) => from_end(a),
+        // Searched for from here onwards, whatever the text it is made of was
+        // read from: it is the first place the needle is written, never the last.
+        Expr::FindText(_) => false,
         _ => false,
     }
 }

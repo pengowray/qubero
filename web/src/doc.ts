@@ -2053,7 +2053,9 @@ export type MapStep = {
     | "dc"
     | "ac"
     | "zrl"
-    | "eob";
+    | "eob"
+    | "base64"
+    | "ignored";
   /** Which named field, for a header or a table step. */
   readonly field?: string;
   /** What that field said, or the byte a literal is; a JPEG DC difference or
