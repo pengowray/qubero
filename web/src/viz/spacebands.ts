@@ -448,7 +448,7 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       const text = ellipsise(b.value.name, room, NAME_PX, measurer(), NAME_MIN_CHARS);
       if (text === null) return;
       const at = visible(b.y0, b.y1);
-      namesL.push({ x0: cols.namesL.start, x1: cols.file.start, y0: row - ROW_H / 2, y1: row + ROW_H / 2, value: b.value });
+      namesL.push({ x0: cols.namesL.start, x1: cols.stripL.start, y0: row - ROW_H / 2, y1: row + ROW_H / 2, value: b.value });
       parts.push(svg("path", { d: `M${cols.namesL.end + 2},${row}L${cols.stripL.start - 1},${at}L${cols.file.start},${at}`, class: `sb-leader${state(b.value)}` }));
       const t = svg("text", { x: cols.namesL.end, y: row, "text-anchor": "end", "dominant-baseline": "central", class: `sb-name${state(b.value)}` });
       t.textContent = text;
@@ -597,10 +597,13 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     if (y < top || y > bottom) return null;
     const near = <T>(targets: readonly HitTarget<T>[]): T | null => nearestTarget(targets, x, y)?.value ?? null;
     if (x < cols.file.start) {
+      // The brackets first, over their own lane; then a name, on its row.
+      if (x >= cols.stripL.start - 2) {
+        const seg = near(bracketBoxes.filter((b) => b.x1 <= cols.file.start));
+        if (seg !== null) return { kind: "segment", region: seg };
+      }
       const named = near(namesL.filter((n) => y >= n.y0 && y <= n.y1));
-      if (named !== null) return { kind: "region", region: named, side: "file" };
-      const seg = near(bracketBoxes.filter((b) => b.x1 <= cols.file.start));
-      return seg === null ? null : { kind: "segment", region: seg };
+      return named === null ? null : { kind: "region", region: named, side: "file" };
     }
     if (x <= cols.file.end) {
       const r = near(fileBoxes);
