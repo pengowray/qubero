@@ -57,6 +57,12 @@ const KIND_CARDS = new Registry<KindCard>("card by node kind");
  *  be mistaken for a template reader's own. */
 const KIND_PREFIX = "kind:";
 
+/** The event a kind card sends, bubbling from its element, when its height
+ *  changes after the listing placed it: the pointer arcs' card, cut to its
+ *  arcs once the walk it waited on ends. The listing measures what it has on
+ *  screen again and keeps the reader's place. */
+export const CARD_RESIZED = "rp-card-resized";
+
 export function registerKindCard(card: KindCard): void {
   KIND_CARDS.add(card);
 }
