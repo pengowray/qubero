@@ -74,6 +74,22 @@ export function askedCardKey(id: string, path: readonly number[]): string {
   return `ask:${id}:${path.join(".")}`;
 }
 
+/** Ask for a kind card on a node, or stop asking. Only one card can stand in
+ *  for a node's fields, so asking for one stops asking for any other kind
+ *  card on the same node; otherwise the first in registry order would show
+ *  while both heading buttons read pressed. */
+export function toggleAskedCard(cards: Set<string>, key: string): void {
+  if (cards.has(key)) {
+    cards.delete(key);
+    return;
+  }
+  const path = key.slice(key.lastIndexOf(":") + 1);
+  for (const k of [...cards]) {
+    if (k.startsWith("ask:") && k.slice(k.lastIndexOf(":") + 1) === path) cards.delete(k);
+  }
+  cards.add(key);
+}
+
 /** Which card a node is drawn as, or null for every node drawn as its fields,
  *  which is nearly all of them. The format's own cards come first; then any
  *  kind card that offers itself and was asked for in `asked`, the listing's

@@ -23,7 +23,7 @@ import { rememberChoice, storedChoice } from "./stored.ts";
 import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
-import { CARD_RESIZED, formatCardKind } from "./formatcards.ts";
+import { CARD_RESIZED, formatCardKind, toggleAskedCard } from "./formatcards.ts";
 import { figureOpenOn, isFigureKey } from "./viz/headingfigures.ts";
 import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
@@ -760,15 +760,16 @@ export class ListingReport {
    *  different height now and its height is measured rather than declared,
    *  so the measurement goes and the list is laid out again. */
   private toggleCard(key: string): void {
-    if (this.cards.has(key)) this.cards.delete(key);
-    else this.cards.add(key);
     // A card asked for by kind replaces the fields under a heading, which is a
     // different list of items, so the tree is walked again rather than the one
     // card measured again. See `askedCardKey` in `formatcards.ts`.
     if (key.startsWith("ask:")) {
+      toggleAskedCard(this.cards, key);
       this.rebuild();
       return;
     }
+    if (this.cards.has(key)) this.cards.delete(key);
+    else this.cards.add(key);
     // A figure under a heading makes the heading a different height, measured
     // where it stands; one closed leaves its measured height behind, which has
     // to go before the heading is placed again at its fixed one.
