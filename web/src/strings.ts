@@ -4015,4 +4015,37 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  indexLookup: {
+    /** The section's heading when the number picks one entry of a table: a
+     *  string table, a palette, a list of records. */
+    title: (table: string): string => `Lookup in ${table}`,
+    /** The heading when the number is an offset to one structure, which is
+     *  drawn as its own fields. */
+    pointsTo: (field: string): string => `Where ${field} points`,
+    previous: "Previous entry (Left arrow)",
+    next: "Next entry (Right arrow)",
+    /** A table entry by its place, from 0, as the table counts them. */
+    entry: (i: number): string => `Entry ${i.toLocaleString()}`,
+    entryOf: (i: number, count: number): string => `Entry ${i.toLocaleString()} of ${count.toLocaleString()}`,
+    /** Where an entry starts, counted from the start of its table. */
+    offsetIn: (offset: string, table: string): string => `Offset ${offset} in ${table}`,
+    /** A string table's entry that is the empty string, which most of them
+     *  start with. */
+    emptyString: "Empty string",
+    alpha: (a: number): string => `alpha ${a}`,
+    /** Which fields of the same kind as the one at the cursor land on an
+     *  entry. `scanned` is how many were read, of `total`. */
+    pointedAtBy: (label: string): string => `Pointed at by ${label}`,
+    pointedAtByCount: (n: number, field: string): string => `Pointed at by ${n.toLocaleString()} ${field} fields`,
+    usedBy: (n: number): string => `Used by ${countText(n, "pixel")}`,
+    ofFirst: (scanned: number): string => `(of the first ${scanned.toLocaleString()})`,
+    noPointer: (field: string, scanned: number, total: number): string =>
+      scanned >= total ? `No ${field} field points to this entry` : `None of the first ${scanned.toLocaleString()} ${field} fields point to this entry`,
+    noPixel: (scanned: number, total: number): string =>
+      scanned >= total ? "No pixel uses this entry" : `None of the first ${scanned.toLocaleString()} pixels use this entry`,
+    andMore: (n: number): string => `and ${n.toLocaleString()} more`,
+    /** Under the strip, when a large table is read only around the entry. */
+    window: (from: number, to: number, count: number): string =>
+      `Showing entries ${from.toLocaleString()} to ${to.toLocaleString()} of ${count.toLocaleString()}`,
+  },
 } as const;

@@ -1,0 +1,174 @@
+/* The index-lookup figure (`indexlookup.ts`): the field holding a number,
+   the table it picks from, and the entry it picks. It shares the example
+   piece's heading, strip and note rules (`.viz-strip*` in style.css); these
+   are only what it adds. Its own file, so the batch agents adding pieces at
+   the same time do not all append to the end of style.css. */
+
+.viz-lookup-tools {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+/* The step buttons are one character each; the minimum width keeps them a
+   target a pointer can hit (24px). */
+.viz-lookup-step {
+  min-width: 24px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* The two rows above and below the strip: the index, and the entry it picks.
+   Each is one line in a fixed slot, as a button since a click goes to the
+   field. Text that does not fit is cut with an ellipsis at the row's end. */
+.viz-lookup-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--fg);
+  font: 12px var(--sans);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.viz-lookup-box:hover {
+  border-color: var(--accent);
+}
+.viz-lookup-box > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* The field's name and the value are what the row is for; the bytes and the
+   type are there to check them against. When the row is too narrow, the bytes give way first, then the name; the
+   value is kept whole while it fits, since it is what the row is for. */
+.viz-lookup-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  flex: 0 1 auto;
+}
+.viz-lookup-bytes,
+.viz-lookup-detail,
+.viz-lookup-more {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 1000 auto;
+}
+.viz-lookup-value {
+  font-family: var(--mono);
+  flex: 0 0 auto;
+  max-width: 70%;
+}
+.viz-lookup-value.is-empty,
+.viz-lookup-none {
+  color: var(--muted);
+  font-family: var(--sans);
+}
+.viz-lookup-box.is-none {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+/* A palette entry's colour beside its numbers, ringed so a white or black
+   entry still shows as a swatch against the panel. */
+.viz-lookup-chip {
+  flex: none;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+/* The working for the address, as the core writes it. Wraps rather than
+   being cut: every term of it is needed to check the sum. */
+.viz-lookup-via {
+  margin: 2px 0 0 8px;
+  color: var(--muted);
+  font: 11px var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.viz-lookup-svg {
+  margin-top: 2px;
+}
+.viz-lookup-svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Entries other than the one looked up are faint, so the lit one is the
+   first thing seen; hovering one brings it up. */
+.viz-lookup-cell {
+  fill: var(--field-color, var(--muted));
+  fill-opacity: 0.14;
+  stroke: var(--muted);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+/* A structure a pointer reached is lit whole until a step picks one field. */
+.viz-lookup-svg.is-whole .viz-lookup-cell {
+  fill: var(--accent);
+  fill-opacity: 0.16;
+  stroke: var(--accent);
+  stroke-opacity: 0.7;
+}
+.viz-lookup-cell.is-empty {
+  fill-opacity: 0;
+  stroke-dasharray: 2 2;
+}
+.viz-lookup-cell.is-hover {
+  fill-opacity: 0.3;
+  stroke-opacity: 1;
+}
+.viz-lookup-cell.is-on {
+  fill: var(--accent);
+  fill-opacity: 0.22;
+  stroke: var(--accent);
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+/* A palette's cells are its colours, drawn as they are: fading them would
+   show the wrong colour. The lit one gets the accent ring instead. */
+.viz-lookup-swatch {
+  stroke: none;
+}
+.viz-lookup-swatch.is-hover {
+  stroke: var(--fg);
+  stroke-width: 1;
+}
+.viz-lookup-swatch.is-on {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.viz-lookup-names text {
+  font: 11px var(--mono);
+  fill: var(--muted);
+}
+.viz-lookup-names text.is-on {
+  fill: var(--fg);
+  font-weight: 600;
+}
+.viz-lookup-arrow,
+.viz-lookup-bracket {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.viz-lookup-head {
+  fill: var(--accent);
+}
+/* The number the index holds, as a tick on the axis. */
+.viz-axis .tick.is-hit text {
+  fill: var(--accent);
+  font-weight: 600;
+}
+.viz-axis .tick.is-hit line {
+  stroke: var(--accent);
+}
