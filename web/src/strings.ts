@@ -4036,6 +4036,10 @@ export const VIZ = {
     /** The same in one string, for the hover card. */
     unpacked: (inBits: number, codec: string, at: string, outBits: number): string =>
       `${bitSizeText(inBits)} of ${codec} at ${at} unpacks to ${bitSizeText(outBits)}`,
+    /** In place of those for a run stored without compression (a zip entry's
+     *  `stored` method), which is the same bytes out as in. */
+    storedBefore: (bits: number): string => `${bitSizeText(bits)} stored at `,
+    stored: (bits: number, at: string): string => `${bitSizeText(bits)} stored at ${at}`,
     /** The line under a joined stream's name. `parts` is null when the core
      *  has not said how many. */
     joined: (outBits: number, parts: number | null): string =>

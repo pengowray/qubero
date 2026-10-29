@@ -150,7 +150,15 @@ function partsOf(c: Crumb): { readonly count: number; readonly first: string } |
 function howText(c: Crumb): string {
   if (c.step === null) return bitSizeText(c.sizeBits);
   if (c.step.joined) return VIZ.lineage.joined(c.step.outBits, partsOf(c)?.count ?? null);
-  return VIZ.lineage.unpacked(c.step.inBits, c.step.codec, formatOffset(c.step.atBits), c.step.outBits);
+  const at = formatOffset(c.step.atBits);
+  return isStored(c.step) ? VIZ.lineage.stored(c.step.inBits, at) : VIZ.lineage.unpacked(c.step.inBits, c.step.codec, at, c.step.outBits);
+}
+
+/** A run kept as it is, whose bytes are the stream's: nothing to say about
+ *  unpacking. Recognised by the codec's name and by the sizes agreeing, so a
+ *  codec that only happens to be called that is still worded as unpacked. */
+function isStored(step: SpaceStep): boolean {
+  return step.codec === "stored" && step.inBits === step.outBits;
 }
 
 /** The hover card of one crumb. `parent` is the crumb one up, whose bytes or
@@ -316,7 +324,8 @@ export function drawLineage(doc: Doc, path: readonly number[]): HTMLElement | nu
         hideTip();
         goToRun(c);
       });
-      how.append(VIZ.lineage.unpackedBefore(c.step.inBits, c.step.codec), run, VIZ.lineage.unpackedAfter(c.step.outBits));
+      if (isStored(c.step)) how.append(VIZ.lineage.storedBefore(c.step.inBits), run);
+      else how.append(VIZ.lineage.unpackedBefore(c.step.inBits, c.step.codec), run, VIZ.lineage.unpackedAfter(c.step.outBits));
     } else how.textContent = howText(c);
     li.append(top, how);
     list.append(li);

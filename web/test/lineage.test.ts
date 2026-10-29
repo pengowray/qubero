@@ -5,6 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { fitCrumbs, spaceSteps, type StepNode } from "../src/viz/lineagemath.ts";
+import { fieldLineage, noteOpened, tabLineage, tabTitleText, titleCrumbs } from "../src/viz/lineage.ts";
+import type { Doc } from "../src/doc.ts";
 
 /** A node with only what a step reads. */
 function node(name: string, type: string, extra: Partial<StepNode> = {}): StepNode {
@@ -169,4 +171,81 @@ test("the drawn row is never wider than the room", () => {
     assert.ok(total <= room, `room ${room}: drawn ${total}`);
     assert.equal(fit[fit.length - 1]?.kind, "crumb", "the last crumb is always drawn");
   }
+});
+
+// ----- a tab's lineage, over stand-in documents -----
+
+/** A document with only what the lineage asks of one. */
+function fakeDoc(opts: {
+  name?: string;
+  isFile?: boolean;
+  recognised?: boolean;
+  origin?: number[];
+  nodes?: (path: readonly number[]) => StepNode | null;
+}): Doc {
+  const nodes = opts.nodes ?? (() => null);
+  return {
+    name: opts.name ?? "file.png",
+    isFile: opts.isFile ?? false,
+    recognised: opts.recognised ?? false,
+    lengthBits: 159 * 8,
+    spaceOrigin: () => opts.origin ?? [],
+    templateNode: (p: readonly number[]) => {
+      const n = nodes(p);
+      return n === null ? { status: "pending" } : { status: "ok", node: n };
+    },
+  } as unknown as Doc;
+}
+
+test("a stream opened from a joined stream's tab is walked in the file's reading", () => {
+  const file = fakeDoc({ isFile: true, nodes: png });
+  // The joined IDAT stream as a tab, and the scanlines opened from that tab.
+  // The scanlines' origin in the tab it was opened from is [6, 0, 0]; in the
+  // file's reading it is [2, 0, 6, 0, 0], which is what the editor keeps.
+  const image = fakeDoc({ origin: [2] });
+  const scanlines = fakeDoc({ origin: [2, 0, 6, 0, 0] });
+  noteOpened(image, file);
+  noteOpened(scanlines, image);
+  const crumbs = tabLineage(scanlines);
+  assert.deepEqual(crumbs?.map((c) => c.label), ["file.png", "image", "compressed", "scanlines"]);
+  assert.ok(crumbs?.slice(1).every((c) => c.from === file), "every stream opens from the file's tab");
+  assert.equal(tabTitleText(crumbs ?? []), "file.png › image › compressed › scanlines");
+  assert.deepEqual(titleCrumbs(crumbs ?? [], file).map((c) => c.label), ["image", "compressed", "scanlines"]);
+});
+
+test("a stream tab nobody said was opened has no lineage", () => {
+  assert.equal(tabLineage(fakeDoc({ origin: [2] })), null);
+});
+
+test("a field of the file inside streams lists them after the file", () => {
+  const file = fakeDoc({ isFile: true, nodes: png });
+  assert.deepEqual(fieldLineage(file, [2, 0, 6, 0, 0, 0, 0])?.map((c) => c.label), ["file.png", "image", "compressed", "scanlines"]);
+});
+
+test("a recognised stream's own streams are walked in its own reading", () => {
+  const file = fakeDoc({
+    isFile: true,
+    nodes: reading({
+      "": node("file", "Gzip"),
+      "1": node("decoded", "joined → DecodedText"),
+      "1.0": node("decoded", "DecodedText", { space_root: true }),
+    }),
+  });
+  const tar = fakeDoc({
+    recognised: true,
+    origin: [1],
+    nodes: reading({
+      "": node("file", "TarArchive"),
+      "0": node("entries", "Entry[]", { list: true }),
+      "0.2": node("[2] inner.gz", "Entry"),
+      "0.2.4": node("data", "deflate", { decoded: true }),
+      "0.2.4.0": node("data", "Inflated", { space_root: true }),
+    }),
+  });
+  const inner = fakeDoc({ origin: [0, 2, 4] });
+  noteOpened(tar, file);
+  noteOpened(inner, tar);
+  const crumbs = tabLineage(inner);
+  assert.deepEqual(crumbs?.map((c) => c.label), ["file.png", "decoded", "inner.gz"]);
+  assert.equal(crumbs?.[2]?.from, tar);
 });
