@@ -1138,7 +1138,7 @@ class StridePanel implements OverviewTabPanel {
       const text = this.input.value.trim();
       if (text === "") return markBad(false);
       const n = Number(text);
-      const ok = Number.isInteger(n) && n >= 1;
+      const ok = Number.isInteger(n) && n >= 1 && n <= MAX_STRIDE;
       markBad(!ok);
       if (ok) this.state.setStride(n, "reader");
     });

@@ -43,6 +43,9 @@
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+  /* The grid sets the width to its own; a grid narrower than the buttons
+     still has room for them. */
+  min-width: max-content;
 }
 .sr-large-title {
   font-weight: 600;
