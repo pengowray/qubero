@@ -40,7 +40,7 @@ import { bitSizeText, VIZ } from "../strings.ts";
 import { bitCount } from "../report/jpegtext.ts";
 import { ok } from "../report/model.ts";
 import { FILTERS, numberOf, pictureRow, type Scanline } from "../report/pngpasses.ts";
-import { readScanlines, type Header } from "../report/pngscanlines.ts";
+import { readScanlines, type Found, type Header } from "../report/pngscanlines.ts";
 import { WAIT } from "../report/section.ts";
 import { RV } from "../report/text.ts";
 import { walkTemplate } from "../report/walk.ts";
@@ -124,18 +124,22 @@ export function readLayers(doc: Doc): Layers | typeof WAIT {
   } else if (doc.template === "png") {
     const found = readScanlines(doc);
     if (found === WAIT) return WAIT;
-    if (found.kind === "read") {
-      const byKey = new Map<string, Scanline>();
-      const byPath = new Map<string, Scanline>();
-      for (const l of found.lines) {
-        byKey.set(scanlineKey(l.pass, l.row), l);
-        byPath.set(l.path.join("."), l);
-      }
-      layers = { jpeg: null, png: { header: found.header, lines: found.lines, total: found.total, pixels: found.pixels, byKey, byPath } };
-    }
+    if (found.kind === "read") layers = { jpeg: null, png: pngLayer(found) };
   }
   layerCache.set(doc, { at: doc.pieceCount, layers });
   return layers;
+}
+
+/** A PNG's scanlines as the grid draws them, indexed by pass and row and by
+ *  path. For the report, which has read them already. */
+export function pngLayer(found: Extract<Found, { kind: "read" }>): PngLayer {
+  const byKey = new Map<string, Scanline>();
+  const byPath = new Map<string, Scanline>();
+  for (const l of found.lines) {
+    byKey.set(scanlineKey(l.pass, l.row), l);
+    byPath.set(l.path.join("."), l);
+  }
+  return { header: found.header, lines: found.lines, total: found.total, pixels: found.pixels, byKey, byPath };
 }
 
 export type PixelGridData = {
@@ -746,7 +750,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       const { mw, mh } = mcuSize(jpeg.scan);
       ctx.globalAlpha = 0.35;
       if (bw !== mw || bh !== mh) lines(bw, bh, p.fg, 1);
-      ctx.globalAlpha = 0.8;
+      ctx.globalAlpha = 0.6;
       lines(mw, mh, p.fg, 1);
       ctx.globalAlpha = 1;
       // The edge of the picture, where the coded padding starts.
@@ -762,10 +766,17 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     drawLabels(ctx, c, p);
 
     // The field selected elsewhere, and what the pointer is on.
+    // Each outline has a ring of the page's own colour round it, so it shows
+    // on a pixel of any colour, the accent's own included.
     if (lit.length > 0) {
-      ctx.strokeStyle = p.accent;
-      ctx.lineWidth = 2;
-      for (const r of lit) ctx.strokeRect(sx(r.x), sy(r.y), Math.max(2, r.w * c), Math.max(2, r.h * c));
+      for (const [colour, w] of [
+        [p.bg, 4],
+        [p.accent, 2],
+      ] as const) {
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = w;
+        for (const r of lit) ctx.strokeRect(sx(r.x), sy(r.y), Math.max(2, r.w * c), Math.max(2, r.h * c));
+      }
     }
     if (hover !== null) {
       ctx.strokeStyle = p.bg;
@@ -824,9 +835,14 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
             ink = lum > 140 ? "#000" : "#fff";
           }
         }
-        ctx.fillStyle = ink;
         const cx = sx(x) + c / 2;
         const top = sy(y) + c / 2 - ((lines.length - 1) * LABEL_LINE_PX) / 2;
+        // A value is written whole or not at all: one that would run under
+        // the filter strip or off the edge of the view is left to the card.
+        const half = (digits * LABEL_PX * 0.6) / 2;
+        if (cx - half < (strip === 0 ? 0 : strip + 1) || cx + half > width) continue;
+        if (top - LABEL_LINE_PX / 2 < 0 || top + (lines.length - 0.5) * LABEL_LINE_PX > height) continue;
+        ctx.fillStyle = ink;
         lines.forEach((t, i) => ctx.fillText(t, cx, top + i * LABEL_LINE_PX));
       }
     }

@@ -265,7 +265,7 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
       let grid: PixelGrid | null = null;
       let drawnAt = 0;
       const draw = (width: number): void => {
-        if (width <= 0 || width === drawnAt) return;
+        if (width <= 0) return;
         drawnAt = width;
         grid?.destroy();
         const area = gridArea(s.width, s.height, card.layers);
@@ -280,8 +280,12 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
           grid?.destroy();
           return;
         }
-        const w = entries[0]?.contentRect.width ?? 0;
-        draw(Math.floor(w));
+        const box = entries[0]?.contentRect;
+        const w = Math.floor(box?.width ?? 0);
+        if (w !== drawnAt) draw(w);
+        // The legend under the grid changes with the overlay chosen, and
+        // the card with it; the listing lays out what follows again.
+        else card.resized();
       });
       watch.observe(frame);
       body.append(frame);

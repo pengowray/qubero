@@ -8,8 +8,8 @@
 .viz-pixgrid {
   /* Bits per block: the report's sequential blue ramp, seven classes, pale
      to dark on a light page and dark to pale on a dark one, so a cheap block
-     recedes into the page either way. The same values as `--rv-seq-*` in
-     report/jpeg.css. */
+     recedes into the page either way. The values the report's map of bits
+     per MCU had before it became this grid. */
   --viz-seq-0: #cde2fb;
   --viz-seq-1: #9ec5f4;
   --viz-seq-2: #6da7ec;
@@ -125,11 +125,13 @@
   gap: 4px;
   color: var(--fg);
 }
+/* A ring round each swatch, since the palest class is close to the page. */
 .viz-pixgrid-swatch {
   display: inline-block;
   width: 12px;
   height: 12px;
   border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 25%, transparent);
 }
 .viz-pixgrid-note {
   margin: 4px 0 0;

@@ -4058,6 +4058,10 @@ export const VIZ = {
     stripOne: "The strip on the left shows the filter of each scanline.",
     stripPasses: "The strip on the left shows the filter of each scanline, in one column for each pass, 1 to 7.",
     stripCut: (shown: number, total: number): string => `Filters shown for the first ${shown.toLocaleString()} of ${countText(total, "scanline")}.`,
+    /** The caption of the picture in the report's PNG section. */
+    pngFigureLead: (interlaced: boolean): string =>
+      interlaced ? "The picture, with the Adam7 pass that stores each pixel shaded over it." : "The picture, pixel for pixel.",
+    pngFigureCaption: "Hover a pixel for its stored samples and its scanline, and click it to show the pixel in the listing.",
     /** Over the picture while the trace of the scan or the scanlines is read. */
     reading: "Reading the scan to draw over the picture…",
     alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,

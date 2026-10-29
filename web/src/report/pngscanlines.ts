@@ -12,6 +12,10 @@
 // not yet share a code's bits out over the bytes it wrote.
 
 import type { Doc, TemplateNode } from "../doc.ts";
+import { cardState, watchCard } from "../contentcard.ts";
+import { VIZ } from "../strings.ts";
+import { drawPixelGrid, gridState, pngLayer, stripWidth, type Layers, type PixelGrid, type PixelGridState } from "../viz/pixelgrid.ts";
+import { viewSize } from "../viz/pixelgridmath.ts";
 import { ok } from "./model.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { RV } from "./text.ts";
@@ -83,7 +87,7 @@ export const pngScanlinesSection: Section = {
       p.textContent = RV.pngAdam7Intro;
       sec.append(p, passesFigure(header, lines));
     }
-    sec.append(stripFigure(ctx, header, lines, counts, total));
+    sec.append(pictureFigure(ctx, found), stripFigure(ctx, header, lines, counts, total));
     return sec;
   },
 };
@@ -260,6 +264,84 @@ function passesFigure(header: Header, lines: readonly Scanline[]): HTMLElement {
   lead.textContent = RV.pngPassesLead(header.width, header.height);
   cap.append(lead, ` ${RV.pngPassesCaption}`);
   fig.append(body2, cap);
+  return fig;
+}
+
+/** The widest the picture is drawn: the width of the report's other wide
+ *  figures. */
+const PICTURE_PX = 904;
+
+/** The reader's overlay and zoom on the picture, kept while the report draws
+ *  its sections again. */
+const pictureStates = new WeakMap<Doc, PixelGridState>();
+
+/**
+ * The picture in the pixel grid (`viz/pixelgrid.ts`), with the pass that
+ * stores each pixel shaded over it and the filter of each scanline down its
+ * left: the tile and the strip of this section, drawn where the pixels are.
+ * Drawn once the browser has decoded the picture; empty until then, and for
+ * good when it cannot.
+ */
+function pictureFigure(ctx: ReportCtx, found: Extract<Found, { kind: "read" }>): HTMLElement {
+  const fig = document.createElement("figure");
+  fig.className = "rv-figure rv-png-picture";
+  const holder = document.createElement("div");
+  const layers: Layers = { jpeg: null, png: pngLayer(found) };
+  let state = pictureStates.get(ctx.doc);
+  if (state === undefined) {
+    state = gridState();
+    pictureStates.set(ctx.doc, state);
+  }
+  const keep = state;
+  const { width, height, interlaced } = found.header;
+  let grid: PixelGrid | null = null;
+  const draw = (image: HTMLImageElement): void => {
+    grid?.destroy();
+    const size = viewSize(width, height, PICTURE_PX, stripWidth(layers));
+    grid = drawPixelGrid(
+      ctx.doc,
+      { width, height, image, layers },
+      {
+        ...size,
+        state: keep,
+        defaultMode: interlaced ? "passes" : "picture",
+        onPick: (hit) => {
+          const list = found.pixels;
+          if (list === null || !hit.inPicture) return;
+          const r = ok(ctx.doc.templateChildren(list.path, hit.y * width + hit.x, hit.y * width + hit.x + 1));
+          const n = r === WAIT || r === null ? undefined : r[0];
+          if (n !== undefined) ctx.host.showInListing(n.path);
+        },
+      },
+    );
+    holder.replaceChildren(grid.el);
+  };
+  // The browser's picture, or null when there is none of this size to draw,
+  // or undefined while it is still being decoded.
+  const picture = (): HTMLImageElement | null | undefined => {
+    const s = cardState(ctx.doc);
+    if (s === null || s.status === "failed" || s.status === "too-large") return null;
+    if (s.status !== "ready") return undefined;
+    return s.width === width && s.height === height ? s.image : null;
+  };
+  const cap = document.createElement("figcaption");
+  const lead = document.createElement("b");
+  lead.textContent = VIZ.pixelGrid.pngFigureLead(interlaced);
+  cap.append(lead, ` ${VIZ.pixelGrid.pngFigureCaption}`);
+  const now = picture();
+  if (now === null) return fig;
+  fig.append(holder, cap);
+  if (now !== undefined) draw(now);
+  else {
+    const stop = watchCard(ctx.doc, (what) => {
+      if (what !== "state") return;
+      const p = picture();
+      if (p === undefined) return;
+      stop();
+      if (p === null) fig.replaceChildren();
+      else draw(p);
+    });
+  }
   return fig;
 }
 
