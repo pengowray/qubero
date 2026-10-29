@@ -437,6 +437,11 @@ const PROBES: &[Probe] = &[
     // lengths have to agree with each other, with the 0x0D that ends the
     // column list, and with the length of the file.
     Probe::Is("dbf", dbf::is_dbf),
+    // An email or a newsgroup post with no name to say so: a mail spool file
+    // or a maildir message. Text that opens with `Name: value` lines is common,
+    // so this asks for three of them and one name only a message uses, and
+    // comes after every format with a header of its own.
+    Probe::Is("eml", eml::is_message),
     // A raw LZMA file, which has no magic number either: a settings byte, a
     // dictionary size, a length and the nought every LZMA1 stream opens with,
     // all four agreeing. xz and lzip are the same coder behind a signature and
@@ -503,6 +508,11 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("avro", "avro", avro::is_alert),
     ("exp", "exp", is_melco_exp),
     ("tga", "tga", is_tga),
+    // One email or newsgroup post. `._nws` is the name Windows Live Mail
+    // gives a post dragged out of it onto the desktop.
+    ("eml", "eml", eml::is_named_message),
+    ("nws", "eml", eml::is_named_message),
+    ("_nws", "eml", eml::is_named_message),
 ];
 
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the
