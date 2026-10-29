@@ -4006,6 +4006,94 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
 export const VIZ = {
   /** Shared by every zoomable piece: puts the picture back as first drawn. */
   resetZoom: "Reset zoom",
+  /** The bit-order ribbon (`viz/bitpack.ts`): a field packed from the low
+   *  end of each byte, its bits as stored against the number they are read
+   *  as. The deflate wording moved here from `bitorder.ts`, where it was
+   *  reviewed. */
+  bitPack: {
+    title: (name: string): string => `Bit order of ${name}`,
+    label: "How this field's bits are reordered between the bytes and the value",
+    stored: (from: string, to: string): string => (from === to ? `As stored: byte ${from}, high bit first` : `As stored: bytes ${from} to ${to}, each high bit first`),
+    read: "As read: each part as the number it is",
+    readOne: "As read: the number, high digit first",
+    /** The bottom row while the comparison is on. */
+    readHex: "Wrong reading: high bit first, as the hex view shows the bits",
+    compare: "Compare with high bit first",
+    compareTitle: "Show the number these bits make when read high bit first, as the hex view shows them",
+    caption: "Deflate takes each byte's bits from the low end. A Huffman code is read in that order, so its digits come out mirrored; extra bits are a number stored low bit first, so their digits keep the byte's order.",
+    captionNumber: "Packed low bit first: the bits in the first byte are the number's lowest digits, and each later byte adds higher ones.",
+    huffman: "Huffman code",
+    extra: "Extra bits",
+    lengthCode: "Length code",
+    lengthExtra: "Length extra bits",
+    distanceCode: "Distance code",
+    distanceExtra: "Distance extra bits",
+    /** A legend entry for a part that is a number, with what it reads as. */
+    partValue: (label: string, value: string): string => `${label} = ${value}`,
+    partCompare: (label: string, right: string, wrong: string): string => `${label} = ${right} (high bit first: ${wrong})`,
+    /** The hover card on one bit of the field. */
+    digit: (part: string, digit: number, of: number): string => `${part}: digit ${digit} of ${of}`,
+    bitValue: (v: number): string => `Bit value: ${v}`,
+    storedAs: (low: number): string => `Stored as bit ${low} of its byte (bit 0 is the lowest)`,
+    /** The hover card on a bit of the same bytes that belongs to another field. */
+    otherBit: "Bit of a neighbouring field",
+    goToOther: "Click to go to that field",
+    keys: "Left and right arrow keys move to the previous and next field",
+  },
+  /** The varint figure (`viz/varintfigure.ts`): a variable-length number's
+   *  bytes split into framing and value bits, and the value bits joined. */
+  varint: {
+    title: (type: string, name: string): string => `${type} bytes of ${name}`,
+    stored: (from: string, to: string): string => (from === to ? `As stored: byte ${from}, high bit first` : `As stored: bytes ${from} to ${to}, each high bit first`),
+    number: (width: number): string => `The number: ${width === 1 ? "1 value bit" : `${width} value bits`}, high bit first`,
+    /** How the value bits of several bytes join, by the order the type uses. */
+    joinLowFirst: "The first byte's value bits are the lowest bits of the number; each later byte's go above them.",
+    joinHighFirst: "The first byte's value bits are the highest bits of the number; each later byte's go below them.",
+    joinSevenZip: "The first byte's value bits are the highest bits of the number; the bytes after it follow, lowest first.",
+    value: (v: string): string => `Value: ${v}`,
+    valueSigned: (v: string, raw: string): string => `Value: ${v} (signed; ${raw} unsigned)`,
+    valueZigzag: (v: string, raw: string): string => `Value: ${v} (zigzag; ${raw} before decoding)`,
+    /** The legend, one entry per role. */
+    payload: "value bits",
+    continuation: "continuation bit",
+    marker: "length marker",
+    /** Hover cards. */
+    groupTitle: (byte: number): string => `Value bits from byte ${byte}`,
+    groupBits: (bits: string): string => `Bits ${bits}`,
+    shifted: (by: number, value: string): string => `Shifted left by ${by}: ${value}`,
+    more: "Continuation bit: 1",
+    moreLine: "Another byte follows",
+    stop: "Continuation bit: 0",
+    stopLine: "Last byte of the number",
+    unmatched: (value: string): string => `Couldn't match these bits to the value ${value}, so only the bytes are drawn.`,
+    /** The row glyph's hover card. */
+    glyphTitle: (bytes: number, width: number): string => `${bytes === 1 ? "1 byte" : `${bytes} bytes`}, ${width === 1 ? "1 value bit" : `${width} value bits`}`,
+  },
+  /** The bit ruler (`viz/bitruler.ts`): a word's bits in rows, as an RFC
+   *  draws a header, with each field or flag boxed over its bits. */
+  bitRuler: {
+    titleFlags: (name: string): string => `Bits of ${name}`,
+    titleBytes: (from: string, to: string): string => (from === to ? `Fields in byte ${from}` : `Fields in bytes ${from} to ${to}`),
+    titleRecords: (name: string, records: string): string => `${name} in each of ${records}`,
+    order: "Bits in each byte",
+    highFirst: "7 to 0",
+    highFirstTitle: "High bit first, as the hex view shows them",
+    lowFirst: "0 to 7",
+    lowFirstTitle: "Low bit first, the order a stream packed from the low end of each byte reads them",
+    perRow: "Bits per row",
+    set: "Set",
+    clear: "Clear",
+    setUnnamed: "Set, but the format gives this bit no name",
+    unnamedSet: "unnamed bit, set",
+    bit: (n: number): string => `Bit ${n}`,
+    bitRange: (lo: number, hi: number): string => (lo === hi ? `Bit ${lo} of the value` : `Bits ${lo} to ${hi} of the value`),
+    mask: (hex: string): string => `Mask ${hex}`,
+    byteBit: (addr: string, low: number): string => `${addr}, bit ${low} of the byte (bit 0 is the lowest)`,
+    bitValue: (v: number): string => `Bit value: ${v}`,
+    setIn: (n: number, of: number): string => (n === of ? `set in all ${of}` : n === 0 ? `clear in all ${of}` : `set in ${n} of ${of}`),
+    showClear: (n: number): string => (n === 1 ? "Show the 1 clear bit" : `Show the ${n} clear bits`),
+    hideClear: (n: number): string => (n === 1 ? "Hide the 1 clear bit" : `Hide the ${n} clear bits`),
+  },
   childStrip: {
     /** The section's heading in the At cursor panel: the structure the
      *  cursor is in, with its fields drawn where their bytes are. */

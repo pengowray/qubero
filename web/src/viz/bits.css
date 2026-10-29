@@ -1,0 +1,336 @@
+/* The bit-scale pieces: the bit-order ribbon (`bitpack.ts`), the varint
+   figure (`varintfigure.ts`) and the bit ruler (`bitruler.ts`), with their
+   row glyphs. In a file of their own, imported by the three modules, so the
+   pieces' look sits beside them and not at the foot of style.css where every
+   other piece of the batch is adding its own.
+
+   The hues are the dataviz palette's, as `roleColor` in fieldstyle.ts has
+   them, in both themes: blue for bits read high bit first (a Huffman code,
+   a varint's value bits), orange for a number stored low bit first (extra
+   bits, any field packed from the bottom of each byte), purple for EBML's
+   length marker, and grey for framing. Red is left out: it means a wrong
+   value on this screen. Fills are tints of the hue with the text in the
+   page's own colour on top, so a digit reads at 4.5:1 in either theme. */
+
+:root {
+  --vb-code: #2a78d6;
+  --vb-extra: #eb6834;
+  --vb-marker: #6250d6;
+  --vb-frame: #8a8f98;
+  --vb-set: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vb-code: #3987e5;
+    --vb-extra: #d95926;
+    --vb-marker: #9085e9;
+    --vb-frame: #7d838c;
+    --vb-set: #3987e5;
+  }
+}
+
+/* ---- shared by the three figures ---- */
+.vb-fig {
+  margin: 0;
+  outline: none;
+}
+.vb-fig:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.vb-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+.vb-title {
+  font-weight: 600;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.vb-row {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 1px 0;
+}
+.vb-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+  max-width: 52ch;
+}
+.vb-value {
+  font-size: 12px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.vb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.vb-legend > span {
+  white-space: nowrap;
+}
+.vb-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+/* A toggle that is a button pressed in or out, in the size of the figure's
+   own small text: it changes how the figure reads, and nothing else. */
+.vb-toggle {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 0;
+}
+.vb-toggle[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+/* Two or three buttons that pick one of a few readings. */
+.vb-seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.vb-seg button {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 0;
+}
+.vb-seg button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.vb-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 4px;
+}
+.vb-svg {
+  display: block;
+  max-width: 100%;
+  user-select: none;
+  overflow: visible;
+}
+
+/* ---- the bit-order ribbon ---- */
+/* The ribbon's own label colour is white on a strong fill; here the fills
+   are tints and the digits are in the page's colour. */
+.vb-pack .rv-rb-label {
+  fill: var(--fg);
+}
+.vb-pack .rv-rb-band {
+  opacity: 0.5;
+}
+.vb-pack .rv-ribbon.is-lit .rv-rb-band {
+  opacity: 0.12;
+}
+.vb-pack .rv-ribbon .rv-rb-band.is-on {
+  opacity: 0.8;
+}
+.vb-pack .rv-rb-box {
+  cursor: pointer;
+}
+
+/* ---- the varint figure ---- */
+.vg-hex {
+  font: 11px var(--mono);
+  fill: var(--muted);
+}
+.vg-cell {
+  stroke: none;
+  cursor: pointer;
+}
+.vg-cell.is-payload {
+  fill: color-mix(in srgb, var(--vb-code) 30%, var(--bg));
+}
+.vg-cell.is-more,
+.vg-cell.is-stop {
+  fill: color-mix(in srgb, var(--vb-frame) 28%, var(--bg));
+}
+.vg-cell.is-width {
+  fill: color-mix(in srgb, var(--vb-marker) 30%, var(--bg));
+}
+.vg-digit {
+  font: 11px var(--mono);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.vg-digit.is-frame {
+  fill: var(--muted);
+}
+.vg-band {
+  fill: var(--vb-code);
+  opacity: 0.35;
+  transition: opacity 0.12s;
+  cursor: pointer;
+}
+.vg-fig.is-lit .vg-band {
+  opacity: 0.08;
+}
+.vg-fig.is-lit .vg-cell {
+  opacity: 0.4;
+}
+.vg-fig .vg-band.is-on {
+  opacity: 0.75;
+}
+.vg-fig .vg-cell.is-on {
+  opacity: 1;
+  stroke: var(--fg);
+  stroke-width: 1px;
+}
+.vg-result {
+  font: 600 12px var(--mono);
+  fill: var(--fg);
+}
+
+/* ---- the bit ruler ---- */
+.br-num {
+  font: 10px var(--mono);
+  fill: var(--muted);
+}
+.br-addr {
+  font: 10px var(--mono);
+  fill: var(--addr);
+}
+.br-cell {
+  fill: color-mix(in srgb, var(--fg) 5%, var(--bg));
+  stroke: var(--line);
+  stroke-width: 1;
+  cursor: pointer;
+}
+.br-cell.is-set {
+  fill: color-mix(in srgb, var(--vb-set) 55%, var(--bg));
+}
+/* A set bit the format has no name for: hatched, so it reads as set and as
+   something else at once, without leaning on colour alone. */
+.br-cell.is-unnamed {
+  fill: url(#br-hatch);
+}
+.br-hatch-line {
+  stroke: var(--vb-extra);
+  stroke-width: 2;
+}
+.br-cell.is-lit {
+  stroke: var(--fg);
+  stroke-width: 1.5;
+}
+.br-digit {
+  font: 11px var(--mono);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.br-digit.is-clear {
+  fill: var(--muted);
+}
+.br-box {
+  fill: color-mix(in srgb, var(--field-color, var(--vb-code)) 16%, var(--bg));
+  stroke: color-mix(in srgb, var(--field-color, var(--vb-code)) 70%, var(--bg));
+  stroke-width: 1;
+  cursor: pointer;
+}
+.br-box.is-on {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.br-box.is-lit {
+  fill: color-mix(in srgb, var(--field-color, var(--vb-code)) 34%, var(--bg));
+}
+.br-name {
+  font: 11px var(--sans);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.br-key {
+  font: 10px var(--mono);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.br-rec {
+  font: 11px var(--sans);
+  fill: var(--muted);
+  cursor: pointer;
+}
+.br-rec.is-on {
+  fill: var(--fg);
+  font-weight: 600;
+}
+.br-legend {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 1px 6px;
+  font-size: 11px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.br-legend li {
+  display: contents;
+}
+.br-legend .br-legend-key {
+  font-family: var(--mono);
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.br-legend .is-clear {
+  color: var(--muted);
+}
+.br-legend .is-on {
+  font-weight: 600;
+}
+
+/* ---- row glyphs: word sized, inside the listing's value cell ---- */
+.vb-glyph {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 6px;
+  vertical-align: middle;
+  height: 10px;
+}
+.vb-glyph i {
+  display: block;
+  width: 5px;
+  height: 10px;
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg));
+}
+.vb-glyph i.is-set {
+  background: color-mix(in srgb, var(--vb-set) 70%, var(--bg));
+}
+.vb-glyph i.is-in {
+  background: color-mix(in srgb, var(--vb-extra) 55%, var(--bg));
+}
+.vb-glyph i.is-gap {
+  width: 3px;
+  background: none;
+}
+/* The varint glyph: one cell per byte, the continuation bit a notch at its
+   left end, dark where another byte follows. */
+.vb-glyph.is-varint i {
+  width: 12px;
+  background: color-mix(in srgb, var(--vb-code) 30%, var(--bg));
+  border-left: 3px solid color-mix(in srgb, var(--vb-frame) 40%, var(--bg));
+}
+.vb-glyph.is-varint i.is-more {
+  border-left-color: var(--fg);
+}
