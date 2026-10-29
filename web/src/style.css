@@ -7291,3 +7291,35 @@ table.rec td.is-invalid {
   margin-top: 2px;
   max-width: 44ch;
 }
+
+/* ---- diagram pieces (src/viz/) ---- */
+/* The one hover card every picture shows its values in (`viz/tip.ts`), and
+   the report too. Here and not in report.css, which loads only with the
+   report: a card from the rail would otherwise be unstyled until the report
+   had been opened once. Never takes the pointer, so moving onto it does not
+   take the hover off what it describes. */
+.viz-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(480px, calc(100vw - 24px));
+  pointer-events: none;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  padding: 8px 10px;
+  font: 13px/1.45 var(--sans);
+}
+.viz-tip[hidden] {
+  display: none;
+}
+.viz-tip-title {
+  display: block;
+  font-weight: 600;
+}
+.viz-tip-where {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

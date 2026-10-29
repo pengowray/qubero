@@ -567,23 +567,9 @@
   margin: 0;
 }
 
-/* The one hover box: bytes behind a reference, a part of the map, a band. */
-.rv-tip {
-  position: fixed;
-  z-index: 1000;
-  max-width: min(480px, calc(100vw - 24px));
-  pointer-events: none;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
-  padding: 8px 10px;
-  font: 13px/1.45 var(--sans);
-}
-.rv-tip[hidden] {
-  display: none;
-}
+/* The one hover box: bytes behind a reference, a part of the map, a band. The
+   box itself is `.viz-tip` in style.css, shared with every diagram piece;
+   these are the parts the report puts inside it. */
 .rv-tip-where {
   color: var(--muted);
   font-size: 12px;

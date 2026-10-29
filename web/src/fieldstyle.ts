@@ -102,3 +102,57 @@ export function byteClassColor(cls: number): string {
   const all = byteClassColors();
   return all[cls] ?? all[3] ?? "#888";
 }
+
+/**
+ * What one field decided about another, as a colour: the arrows and arcs of a
+ * dependency, wherever one is drawn.
+ *
+ * A fifth palette, and the only one about connections rather than bytes. The
+ * pointer arcs, the dependency graph, the what-decides-what matrix, the hex
+ * view's arrows and the Diagram view's arrows all draw these, and a reader
+ * should learn the colours once, so they are kept here and not by each piece.
+ * The role word is still on every arrow's hover; the colour is only how a
+ * reader tells a page full of lengths from one full of positions at a glance.
+ *
+ * The roles are the core's (`Origin.role` and its relatives in `doc.ts`). Ten
+ * roles in eight hues, so two pairs share: `points` is the other end of a
+ * `position` (this field says where that one is), and `case` is the switch
+ * value that picks a `type`, so each pair is one idea seen from either side.
+ * The hues are the dataviz skill's validated categorical palette, in both
+ * themes. Its red is left out, since red on this screen means a wrong value;
+ * `name`, the rarest role, takes a grey that is not `UNMAPPED_COLOR`.
+ */
+const ROLE_LIGHT: Readonly<Record<string, string>> = {
+  length: "#2a78d6",
+  position: "#eb6834",
+  points: "#eb6834",
+  count: "#1baf7a",
+  condition: "#eda100",
+  type: "#e87ba4",
+  case: "#e87ba4",
+  value: "#008300",
+  width: "#6250d6",
+  name: "#6f7887",
+};
+const ROLE_DARK: Readonly<Record<string, string>> = {
+  length: "#3987e5",
+  position: "#d95926",
+  points: "#d95926",
+  count: "#199e70",
+  condition: "#c98500",
+  type: "#d55181",
+  case: "#d55181",
+  value: "#008300",
+  width: "#9085e9",
+  name: "#a3abb8",
+};
+
+/** Every role there is a colour for, in the order a legend lists them. */
+export const ROLES: readonly string[] = ["length", "count", "width", "position", "points", "type", "case", "condition", "value", "name"];
+
+/** The colour of a dependency of this role, in the theme on screen. A role
+ *  the core adds later and this table has not heard of is drawn grey. Read
+ *  afresh each time, as `byteClassColors` is. */
+export function roleColor(role: string, dark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches): string {
+  return (dark ? ROLE_DARK : ROLE_LIGHT)[role] ?? UNMAPPED_COLOR;
+}

@@ -39,6 +39,15 @@ export function takesWheel(sinceScroll: number, zoomingOut: boolean, fullyOut: b
   return true;
 }
 
+/** Whether a figure should take this wheel event, by the rules above, for a
+ *  figure that does its own zooming. The pan and zoom board (`viz/board.ts`)
+ *  asks this from inside d3-zoom's filter. */
+export function figureTakesWheel(e: WheelEvent, fullyOut: boolean): boolean {
+  listen();
+  const out = (e.deltaY || e.deltaX) > 0;
+  return takesWheel(e.timeStamp - pageScrolled, out, fullyOut);
+}
+
 /**
  * Give `el` wheel zoom. `zoom` is called with each event the figure takes;
  * `fullyOut` says whether the figure is zoomed all the way out.
@@ -49,8 +58,7 @@ export function wheelZoom(el: Element, zoom: (e: WheelEvent) => void, fullyOut: 
     "wheel",
     (ev) => {
       const e = ev as WheelEvent;
-      const out = (e.deltaY || e.deltaX) > 0;
-      if (!takesWheel(e.timeStamp - pageScrolled, out, fullyOut())) return;
+      if (!figureTakesWheel(e, fullyOut())) return;
       e.preventDefault();
       zoom(e);
     },
