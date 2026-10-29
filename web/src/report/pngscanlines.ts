@@ -310,7 +310,9 @@ function pictureFigure(ctx: ReportCtx, found: Extract<Found, { kind: "read" }>):
           if (list === null || !hit.inPicture) return;
           const r = ok(ctx.doc.templateChildren(list.path, hit.y * width + hit.x, hit.y * width + hit.x + 1));
           const n = r === WAIT || r === null ? undefined : r[0];
-          if (n !== undefined) ctx.host.showInListing(n.path);
+          // As a click on the JPEG section's picture does: the report stays,
+          // and the At cursor panel shows the pixel's samples.
+          if (n !== undefined) ctx.host.pick({ path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits });
         },
       },
     );

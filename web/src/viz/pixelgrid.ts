@@ -11,9 +11,15 @@
 // - a PNG's Adam7 pass as a tint over each pixel, and the filter of every
 //   scanline in a strip down the left, a column per pass.
 // Hovering a pixel says where it is, what it holds and what coded it; a click
-// selects the bytes that made it (the JPEG block, the PNG pixel's samples),
-// and a field selected anywhere else is outlined where it lands in the
-// picture. At a zoom where a pixel is big enough, each one shows its value.
+// selects the bytes that made it (the JPEG MCU, or the block whose bits are
+// shown; the PNG pixel's samples), and a field of the JPEG scan selected
+// anywhere else is outlined where it lands in the picture. At a zoom where a
+// pixel is big enough, each one shows its value.
+//
+// A PNG's pixels and scanlines are fields of the unfiltered image data, not
+// of the file, and the page does not yet tell the shared selection
+// (`linked.ts`) about a field outside the file. Until it does, the outline of
+// a PNG selection made elsewhere (`light` below) is never drawn.
 //
 // It replaces three figures that each did part of this: the content card
 // (`contentcard.ts`), which showed the picture with no zoom and no way back to
@@ -167,7 +173,7 @@ export type PixelGridState = {
 };
 
 export function gridState(): PixelGridState {
-  return { mode: null, channel: null, opacity: 0.75, view: null };
+  return { mode: null, channel: null, opacity: 1, view: null };
 }
 
 /** The overlays that make sense for these layers, in the order offered. */
@@ -189,8 +195,9 @@ export type PixelHit = {
   /** False for the padding a JPEG codes past the picture's edge. */
   readonly inPicture: boolean;
   readonly mcu: number | null;
-  /** The block of the channel being shown, or the MCU's first block when
-   *  every channel is. */
+  /** The block under the pointer of the channel whose bits are shown, in
+   *  Bits mode with one channel picked; null otherwise, where a click is on
+   *  the whole MCU. */
   readonly block: number | null;
 };
 
@@ -271,9 +278,29 @@ function palette(el: Element): Palette {
   };
 }
 
+type Rgb = readonly [number, number, number];
+
 function rgb(hex: string): [number, number, number] {
   const n = parseInt(hex.replace("#", ""), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Colour `a` drawn at opacity `alpha` over colour `b`. */
+function mix(a: Rgb, b: Rgb, alpha: number): Rgb {
+  return [a[0] * alpha + b[0] * (1 - alpha), a[1] * alpha + b[1] * (1 - alpha), a[2] * alpha + b[2] * (1 - alpha)];
+}
+
+/** Black or white, whichever has the more contrast with colour `c`, by the
+ *  WCAG relative luminance. */
+function inkOn(c: Rgb): string {
+  const lin = (v: number): number => {
+    const x = v / 255;
+    return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  };
+  const l = 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+  // Against white (1.05 / (l + 0.05)) and black ((l + 0.05) / 0.05), equal
+  // where l + 0.05 is the square root of 0.0525.
+  return l + 0.05 > Math.sqrt(0.0525) ? "#000" : "#fff";
 }
 
 /** The class colour of the pass that stores a pixel: earlier passes darker,
@@ -645,7 +672,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     // The sentence under the legend says what the strip is, and what was
     // left out of it; or that the overlays are still being read.
     let text = "";
-    if (layers === null) text = VIZ.pixelGrid.reading;
+    if (layers === null) text = doc.template === "png" ? VIZ.pixelGrid.readingScanlines : VIZ.pixelGrid.readingScan;
     else if (png !== null) {
       text = png.header.interlaced ? VIZ.pixelGrid.stripPasses : VIZ.pixelGrid.stripOne;
       if (png.lines.length < png.total) text += ` ${VIZ.pixelGrid.stripCut(png.lines.length, png.total)}`;
@@ -727,18 +754,21 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       const vis = visiblePixels(place, view, width, height, areaW, areaH);
       const lines = (stepX: number, stepY: number, colour: string, lineW: number): void => {
         if (stepX * c < GRID_MIN_PX || stepY * c < GRID_MIN_PX) return;
+        // An odd width is centred on a half pixel, an even one on a whole
+        // one, so that either covers whole screen pixels and stays sharp.
+        const half = lineW % 2 === 1 ? 0.5 : 0;
         ctx.beginPath();
         const top = sy(0);
         const bottom = sy(coded.h);
         const leftX = sx(0);
         const rightX = sx(coded.w);
         for (let x = Math.floor(vis.x0 / stepX) * stepX; x <= Math.min(coded.w, vis.x1); x += stepX) {
-          const X = Math.round(sx(x)) + 0.5;
+          const X = Math.round(sx(x)) + half;
           ctx.moveTo(X, Math.max(0, top));
           ctx.lineTo(X, Math.min(height, bottom));
         }
         for (let y = Math.floor(vis.y0 / stepY) * stepY; y <= Math.min(coded.h, vis.y1); y += stepY) {
-          const Y = Math.round(sy(y)) + 0.5;
+          const Y = Math.round(sy(y)) + half;
           ctx.moveTo(Math.max(0, leftX), Y);
           ctx.lineTo(Math.min(width, rightX), Y);
         }
@@ -748,10 +778,12 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       };
       const { bw, bh } = blockSize(jpeg.scan, gridChannel());
       const { mw, mh } = mcuSize(jpeg.scan);
+      // Blocks in thin lines and MCUs in thick ones, as the legend says.
+      const split = bw !== mw || bh !== mh;
       ctx.globalAlpha = 0.35;
-      if (bw !== mw || bh !== mh) lines(bw, bh, p.fg, 1);
+      if (split) lines(bw, bh, p.fg, 1);
       ctx.globalAlpha = 0.6;
-      lines(mw, mh, p.fg, 1);
+      lines(mw, mh, p.fg, split ? 2 : 1);
       ctx.globalAlpha = 1;
       // The edge of the picture, where the coded padding starts.
       if (coded.w > picW || coded.h > picH) {
@@ -791,6 +823,31 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     if (png !== null) drawStrip(ctx, c, p);
   };
 
+  /** The overlay's colour at picture pixel (x, y) as the current mode paints
+   *  it, or null where nothing is painted over the pixel. */
+  let seqRgb: Rgb[] | null = null;
+  const overlayAt = (x: number, y: number): Rgb | null => {
+    const p = pal;
+    if (p === null) return null;
+    seqRgb ??= p.seq.map(rgb);
+    const seq = seqRgb;
+    if (state.mode === "bits" && jpeg !== null && heat !== null) {
+      const s = jpeg.scan;
+      if (state.channel === null) {
+        const m = mcuAt(s, x, y);
+        return m === null ? null : (seq[heatClass(s.mcu_bits[m] ?? 0, heat.step)] ?? null);
+      }
+      const i = blockAt(s, jpeg.index, state.channel, x, y);
+      return i === null ? null : (seq[heatClass(s.block_bits[i] ?? 0, heat.step)] ?? null);
+    }
+    if (state.mode === "restart" && jpeg !== null) {
+      const m = mcuAt(jpeg.scan, x, y);
+      return m === null ? null : (seq[(restartInterval(jpeg.scan, m) ?? 0) % 2 === 0 ? 1 : 5] ?? null);
+    }
+    if (state.mode === "passes" && png !== null) return seq[passClass(scanlineOf(true, x, y).pass ?? 7)] ?? null;
+    return null;
+  };
+
   const drawLabels = (ctx: CanvasRenderingContext2D, c: number, p: Palette): void => {
     const vis = visiblePixels(place, view, width, height, picW, picH);
     const count = (vis.x1 - vis.x0) * (vis.y1 - vis.y0);
@@ -823,18 +880,18 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
           const k = ((y - vis.y0) * across + (x - vis.x0)) * 4;
           lines = [hex2(decoded[k] ?? 0), hex2(decoded[k + 1] ?? 0), hex2(decoded[k + 2] ?? 0)];
         } else continue;
-        // Dark text on a light pixel and light on a dark one, by the pixel
-        // as drawn; a mostly transparent pixel shows the checks, so the
-        // page's own text colour.
-        let ink = p.fg;
+        // Dark text on a light cell and light on a dark one, by the colour
+        // the cell was painted: the pixel with the overlay mixed over it at
+        // the overlay's opacity. A mostly transparent pixel shows the checks,
+        // so the page's own text colour, unless the overlay mostly hides them.
+        let under: Rgb | null = null;
         if (decoded !== null) {
           const k = ((y - vis.y0) * across + (x - vis.x0)) * 4;
-          const a = decoded[k + 3] ?? 255;
-          if (a >= 128) {
-            const lum = 0.2126 * (decoded[k] ?? 0) + 0.7152 * (decoded[k + 1] ?? 0) + 0.0722 * (decoded[k + 2] ?? 0);
-            ink = lum > 140 ? "#000" : "#fff";
-          }
+          if ((decoded[k + 3] ?? 255) >= 128) under = [decoded[k] ?? 0, decoded[k + 1] ?? 0, decoded[k + 2] ?? 0];
         }
+        const over = state.opacity > 0 ? overlayAt(x, y) : null;
+        const cell = over === null ? under : under === null ? (state.opacity >= 0.5 ? over : null) : mix(over, under, state.opacity);
+        const ink = cell === null ? p.fg : inkOn(cell);
         const cx = sx(x) + c / 2;
         const top = sy(y) + c / 2 - ((lines.length - 1) * LABEL_LINE_PX) / 2;
         // A value is written whole or not at all: one that would run under
@@ -902,7 +959,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     if (jpeg === null) return inPicture ? { kind: "pixel", hit: { ...at, inPicture, mcu: null, block: null } } : null;
     const mcu = mcuAt(jpeg.scan, at.x, at.y);
     if (mcu === null) return inPicture ? { kind: "pixel", hit: { ...at, inPicture, mcu: null, block: null } } : null;
-    const block = state.channel !== null && state.mode === "bits" ? blockAt(jpeg.scan, jpeg.index, state.channel, at.x, at.y) : mcu * jpeg.index.perMcu;
+    const block = state.channel !== null && state.mode === "bits" ? blockAt(jpeg.scan, jpeg.index, state.channel, at.x, at.y) : null;
     return { kind: "pixel", hit: { ...at, inPicture, mcu, block } };
   };
 
@@ -930,7 +987,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     if (h === null) return null;
     if (h.kind === "line") {
       const l = h.line;
-      return tipCard(RV.pngLineTitle(l.pass, l.row, FILTERS[l.filter] ?? ""), png?.header.interlaced === true ? [RV.pngLinePictureRow(pictureRow(l))] : [], RV.pngLineBytes(l.bytes));
+      return tipCard(VIZ.pixelGrid.scanline(l.pass, l.row, FILTERS[l.filter] ?? "?"), png?.header.interlaced === true ? [RV.pngLinePictureRow(pictureRow(l))] : [], RV.pngLineBytes(l.bytes));
     }
     const { x, y, inPicture } = h.hit;
     const lines: string[] = [];
@@ -942,7 +999,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
     if (inPicture && list !== null) {
       const s = pngSamples(doc, list, y * picW + x, samples);
       if (s !== null) {
-        lines.push(VIZ.pixelGrid.samples(s.names.map((n, i) => `${n} ${(s.values[i] ?? 0).toLocaleString()}`)));
+        lines.push(VIZ.pixelGrid.samples(s.names.map((n, i) => `${n} ${s.values[i] ?? 0}`)));
         where = VIZ.pixelGrid.inUnfiltered(formatAddress(s.offsetBits, s.space));
       }
     } else if (inPicture && read !== null) {
@@ -968,10 +1025,12 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       }
       const n = restartInterval(s, m);
       if (n !== null) lines.push(VIZ.pixelGrid.interval(n, Math.ceil(s.mcu_bits.length / s.restart_interval)));
-      const b = h.hit.block !== null && state.mode === "bits" && state.channel !== null ? blockBits(s, jpeg.index, h.hit.block) : mb;
-      // In bits, as the lines above count them, even when they come to a
-      // whole number of bytes.
-      where = `${formatOffset(b.startBit)} · ${bitCount(b.endBit - b.startBit)}`;
+      // Where the bits a click selects start: the block's whose bits are
+      // shown, or else the MCU's. Their count is on the line above.
+      if (h.hit.block !== null) {
+        const c = s.block_channel[h.hit.block] ?? 0;
+        where = VIZ.pixelGrid.blockStarts(s.channels[c]?.name ?? "", formatOffset(blockBits(s, jpeg.index, h.hit.block).startBit));
+      } else where = VIZ.pixelGrid.mcuStarts(formatOffset(mb.startBit));
     }
     const title = inPicture ? VIZ.pixelGrid.pixel(x, y) : VIZ.pixelGrid.padding(x, y);
     return tipCard(title, lines, where);
@@ -980,7 +1039,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
   /** The bits the pointer is over, in the file, for the hex view to mark. */
   const hoverBits = (h: Hit): { startBit: number; endBit: number } | null => {
     if (h === null || h.kind !== "pixel" || jpeg === null || h.hit.mcu === null || jpeg.node.space !== 0) return null;
-    if (h.hit.block !== null && state.mode === "bits" && state.channel !== null) return blockBits(jpeg.scan, jpeg.index, h.hit.block);
+    if (h.hit.block !== null) return blockBits(jpeg.scan, jpeg.index, h.hit.block);
     return mcuBits(jpeg.index, h.hit.mcu);
   };
 
@@ -1005,12 +1064,21 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
 
   const goToPixel = (hit: PixelHit): void => {
     if (jpeg !== null && hit.mcu !== null) {
-      const i = hit.block ?? hit.mcu * jpeg.index.perMcu;
-      const b = ok(doc.jpegBlock(jpeg.node.path, i));
+      // The block whose bits are shown, or else the whole MCU: the bits the
+      // hover card's last line counts and the hex view marked under the
+      // pointer.
+      if (hit.block === null) {
+        const bits = mcuBits(jpeg.index, hit.mcu);
+        const b = ok(doc.jpegBlock(jpeg.node.path, hit.mcu * jpeg.index.perMcu));
+        if (b !== null && b !== WAIT) goToField(doc, { path: b.mcu_path, ...bits });
+        else goToBits(doc, [bits]);
+        return;
+      }
+      const b = ok(doc.jpegBlock(jpeg.node.path, hit.block));
       const first = b !== null && b !== WAIT ? b.codes[0] : undefined;
       const last = b !== null && b !== WAIT ? b.codes[b.codes.length - 1] : undefined;
       if (b !== null && b !== WAIT && first !== undefined && last !== undefined) goToField(doc, { path: b.path, startBit: first.start_bit, endBit: last.end_bit });
-      else goToBits(doc, [blockBits(jpeg.scan, jpeg.index, i)]);
+      else goToBits(doc, [blockBits(jpeg.scan, jpeg.index, hit.block)]);
       return;
     }
     const list = png?.pixels ?? null;
@@ -1104,6 +1172,7 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       return;
     }
     pal = null;
+    seqRgb = null;
     heat = null;
     restart = null;
     passes = null;

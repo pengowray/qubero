@@ -80,6 +80,13 @@ class ImageCard {
   /** What the pixel grid draws over the picture, once it has been read. */
   layers: Layers | null = null;
   private layersAsked = false;
+  /** Counts the decodes, so that asking again for the trace of an edit's
+   *  old bytes stops once a new decode has begun. */
+  private layersFor = 0;
+  /** The grids of this card that have been drawn, while any is on the page.
+   *  Asking again stops when none is, and starts again when one is drawn. */
+  private readonly frames = new Set<HTMLElement>();
+  private layersPaused = false;
   private readonly listeners = new Set<(what: CardChange) => void>();
   private started = false;
   /** The edit the picture was decoded from, so a later one is noticed. */
@@ -107,14 +114,26 @@ class ImageCard {
 
   /** Read what the grid draws over the picture, asking again until it is
    *  there; the card is drawn again when it arrives. */
-  private readLayers(): void {
+  private readLayers(gen = this.layersFor): void {
+    if (gen !== this.layersFor) return;
     const got = readLayers(this.doc);
     if (got === WAIT) {
-      window.setTimeout(() => this.readLayers(), LAYERS_RETRY_MS);
+      for (const f of this.frames) if (!f.isConnected) this.frames.delete(f);
+      if (this.frames.size === 0) this.layersPaused = true;
+      else window.setTimeout(() => this.readLayers(gen), LAYERS_RETRY_MS);
       return;
     }
     this.layers = got;
     this.notify();
+  }
+
+  /** A grid of this card is on the page: go on asking for its trace if
+   *  asking stopped while there was none. */
+  shown(frame: HTMLElement): void {
+    this.frames.add(frame);
+    if (!this.layersPaused) return;
+    this.layersPaused = false;
+    this.readLayers();
   }
 
   /** Begin the decode, once. Drawing the card asks for this rather than the
@@ -183,6 +202,8 @@ class ImageCard {
       // An edit makes a new trace too: the old one is of the old bytes.
       if (this.layersAsked) this.layers = null;
       this.layersAsked = true;
+      this.layersFor++;
+      this.layersPaused = false;
       this.readLayers();
     } catch {
       URL.revokeObjectURL(url);
@@ -280,6 +301,7 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
           grid?.destroy();
           return;
         }
+        card.shown(frame);
         const box = entries[0]?.contentRect;
         const w = Math.floor(box?.width ?? 0);
         if (w !== drawnAt) draw(w);
