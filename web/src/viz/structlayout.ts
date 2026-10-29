@@ -733,7 +733,9 @@ function summaryText(data: Extract<StructLayoutData, { status: "ok" }>): string 
   if (padding > 0) parts.push(S.padding(padding));
   if (unread > 0) parts.push(S.unread(unread));
   if (other > 0) parts.push(S.other(other));
-  if (gaps === 0) parts.push(S.noGaps);
+  // Only when nothing above said padding: a field the format calls padding
+  // is no gap, but "no gaps" beside "17 bytes padding" reads as two answers.
+  if (gaps === 0 && padding === 0) parts.push(S.noGaps);
   if (off > 0) parts.push(S.misaligned(off));
   return parts.join(" · ");
 }
