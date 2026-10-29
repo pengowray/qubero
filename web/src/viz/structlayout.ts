@@ -270,7 +270,10 @@ export function viewHeight(height: number): number {
 type Hit =
   | { readonly kind: "piece"; readonly block: number; readonly piece: Piece<N> }
   | { readonly kind: "group"; readonly block: number; readonly node: N; readonly startBit: number; readonly endBit: number }
-  | { readonly kind: "title"; readonly block: number };
+  | { readonly kind: "title"; readonly block: number }
+  /** The `+n more` at the end of a row's key, standing for the names that
+   *  did not fit; the first of them is where a click goes. */
+  | { readonly kind: "more"; readonly block: number; readonly names: readonly string[]; readonly first: Piece<N> | null };
 
 export type StructLayoutFigure = {
   readonly el: SVGSVGElement;
@@ -444,9 +447,19 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
         kx += w + KEY_GAP;
       }
       if (fitted.rest > 0) {
+        const label = VIZ.structLayout.keyMore(fitted.rest);
         const t = svg("text", { x: kx, y: ky, class: "sl-key sl-key-more", "dominant-baseline": "central" });
-        t.textContent = VIZ.structLayout.keyMore(fitted.rest);
+        t.textContent = label;
         side.push(t);
+        const hidden = entries.slice(fitted.shown.length);
+        const firstField = hidden.find((e) => e.index >= 0);
+        hits.push({
+          x0: kx,
+          y0: ky - 8,
+          x1: kx + measure(label, LABEL_PX),
+          y1: ky + 8,
+          value: { kind: "more", block: line.block, names: hidden.map((e) => e.text), first: firstField === undefined ? null : (record.pieces[firstField.index] as Piece<N>) },
+        });
       }
     }
 
@@ -552,6 +565,7 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
   const bitsOf = (hit: Hit): { startBit: number; endBit: number } => {
     if (hit.kind === "piece") return { startBit: hit.piece.startBit, endBit: hit.piece.endBit };
     if (hit.kind === "group") return { startBit: hit.startBit, endBit: hit.endBit };
+    if (hit.kind === "more" && hit.first !== null) return { startBit: hit.first.startBit, endBit: hit.first.endBit };
     const r = records[hit.block] as StructRecord<N>;
     return { startBit: r.startBit, endBit: r.endBit };
   };
@@ -570,11 +584,11 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
     e.stopPropagation();
     const hit = hitAt(e);
     if (hit === null) return;
-    if (hit.kind === "piece") {
-      const p = hit.piece;
-      if (p.kind === "field") goToField(doc, { path: p.node.path, startBit: p.startBit, endBit: p.endBit });
-      else goToBits(doc, [{ startBit: p.startBit, endBit: p.endBit }]);
-    } else {
+    const piece = hit.kind === "piece" ? hit.piece : hit.kind === "more" ? hit.first : null;
+    if (piece !== null) {
+      if (piece.kind === "field") goToField(doc, { path: piece.node.path, startBit: piece.startBit, endBit: piece.endBit });
+      else goToBits(doc, [{ startBit: piece.startBit, endBit: piece.endBit }]);
+    } else if (hit.kind !== "more") {
       const n = hit.kind === "group" ? hit.node : (records[hit.block] as StructRecord<N>).node;
       const b = bitsOf(hit);
       goToField(doc, { path: n.path, startBit: b.startBit, endBit: b.endBit });
@@ -652,6 +666,7 @@ function linesOf(lines: readonly Line<N>[], block: number, rel0: number, rel1: n
 /** The hover card for whatever the pointer is on. */
 function tipFor(hit: Hit, record: StructRecord<N>): HTMLElement {
   const S = VIZ.structLayout;
+  if (hit.kind === "more") return tipCard(S.keyMore(hit.names.length), hit.names);
   if (hit.kind === "title") {
     const n = record.node;
     const sum = summarise(record);

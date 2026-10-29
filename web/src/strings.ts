@@ -4023,7 +4023,7 @@ export const VIZ = {
     /** The figure's heading. A struct layout is what pahole prints. */
     title: (name: string): string => `Struct layout of ${name}`,
     rowWidth: "Bytes per row",
-    rowWidthTitle: (n: number): string => `Draw ${n} bytes on each row`,
+    rowWidthTitle: (n: number): string => `${n} bytes per row`,
     /** The summary line under the heading, its parts joined with ` · `. */
     size: (bytes: number, fields: number): string => `${countText(bytes, "byte")} in ${countText(fields, "field")}`,
     /** For a list whose elements are all one size: `4 segments, each 56
@@ -4048,13 +4048,13 @@ export const VIZ = {
     /** In the summary line, for those gaps. */
     other: (bytes: number): string => `${countText(bytes, "byte")} in other fields`,
     /** On a field the format itself calls padding. */
-    namedPadding: "Padding: the format names these bytes as filler",
+    namedPadding: "The format calls this field padding",
     /** Hover card lines for a field. `rel` is an offset like `+0x08`. */
     fromStart: (rel: string, size: string): string => `${rel} from the start of the structure · ${size}`,
     aligned: (align: number): string => `Aligned to ${align} bytes`,
-    notAligned: (bytes: number, rel: string): string => `Not aligned: a ${bytes}-byte number at ${rel}`,
+    notAligned: (bytes: number, rel: string): string => `Not aligned: ${bytes}-byte number at ${rel}`,
     /** A break standing for rows that are wholly one field. */
-    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "row")} of ${name} (${countText(bytes, "byte")})`,
+    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "more row")} of ${name} (${countText(bytes, "byte")})`,
     /** The same for rows that are wholly one gap, whose box says what it is. */
     foldedGap: (rows: number, bytes: number): string => `${countText(rows, "more row")} (${countText(bytes, "byte")})`,
     /** A row's key, when more names are keyed than fit beside it. */

@@ -516,7 +516,8 @@ export function rowLabels<N extends NodeLike>(
   const fitted = new Map<Cell<N>, string | null>();
   const seen = new Map<string, number>();
   for (const cell of cells) {
-    if (!home(cell.index)) continue;
+    // A box panned out of sight is not named, in it or in the key.
+    if (!home(cell.index) || room(cell) <= 0) continue;
     const inside = room(cell) - 2 * opts.pad;
     const want = name(cell.piece);
     // A gap's label says how many bytes, and a cut one would not: it is drawn

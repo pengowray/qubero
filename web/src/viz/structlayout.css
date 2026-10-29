@@ -48,11 +48,13 @@
   font-size: 11px;
   margin-right: 6px;
 }
+/* 24 pixels square at least, the smallest target the app allows, and as
+   tall as the heading row it sits in. */
 .sl-seg {
   font: 11px var(--mono);
-  min-height: 0;
+  min-height: 24px;
   min-width: 26px;
-  padding: 2px 6px;
+  padding: 0 7px;
   border-radius: 0;
   margin-left: -1px;
 }
