@@ -130,6 +130,7 @@ class ImageCard {
   /** A grid of this card is on the page: go on asking for its trace if
    *  asking stopped while there was none. */
   shown(frame: HTMLElement): void {
+    for (const f of this.frames) if (!f.isConnected) this.frames.delete(f);
     this.frames.add(frame);
     if (!this.layersPaused) return;
     this.layersPaused = false;
