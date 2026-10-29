@@ -20,6 +20,7 @@ import {
   OTHER,
   pixelColumns,
   pixelValue,
+  rangeOutline,
   rasterGeometry,
   rasterHeight,
   rowAt,
@@ -30,7 +31,7 @@ import {
   TEXT,
   ZERO,
 } from "../src/viz/stridemath.ts";
-import { autocorrelation, fft, findPeaks, noiseFloor, periodicity } from "../src/viz/periodicity.ts";
+import { autocorrelation, commonStep, fft, findPeaks, noiseFloor, periodicity } from "../src/viz/periodicity.ts";
 
 // ----- rows and the two zooms -----
 
@@ -149,6 +150,20 @@ test("zero is the background grey in either theme, and 0xff is far from it", () 
   assert.equal(greyLevel(255, true, 23), 240);
 });
 
+test("a range in one row is a box, and one across rows is one outline", () => {
+  assert.deepEqual(rangeOutline(16, 18, 20), [
+    { col: 2, row: 1 },
+    { col: 4, row: 1 },
+    { col: 4, row: 2 },
+    { col: 2, row: 2 },
+  ]);
+  const across = rangeOutline(16, 10, 40);
+  assert.equal(across.length, 8);
+  assert.deepEqual(across[0], { col: 10, row: 0 });
+  assert.deepEqual(across[3], { col: 8, row: 2 });
+  assert.deepEqual(rangeOutline(16, 5, 5), []);
+});
+
 // ----- the row width a template suggests -----
 
 test("the widest run of equal records gives the row width", () => {
@@ -253,6 +268,41 @@ test("sector-shaped bytes give the sector size", () => {
   const r = autocorrelation(bytes, 8192);
   const peaks = findPeaks(r, { floor: noiseFloor(bytes.length) });
   assert.equal(peaks[0]?.lag, sector);
+});
+
+test("blocks whose headers come every two or three blocks give the block size", () => {
+  // A tar: 512-byte blocks, a header (a name, and "ustar" at 257) then one
+  // or two data blocks of text padded with zeros, so headers are 1,024 or
+  // 1,536 bytes apart and never 512.
+  const block = 512;
+  const plan = [2, 3, 2, 2, 3, 3, 2, 3, 2, 2, 3, 2, 3, 3, 2, 2, 3, 2, 3, 2];
+  const total = plan.reduce((a, b) => a + b, 0);
+  const bytes = new Uint8Array(total * block);
+  let x = 7;
+  let at = 0;
+  for (const blocks of plan) {
+    for (let i = 0; i < 100; i++) bytes[at + i] = 0x61 + (i % 26);
+    bytes.set([0x75, 0x73, 0x74, 0x61, 0x72], at + 257);
+    x = (x * 1103515245 + 12345) >>> 0;
+    const text = 200 + ((x >>> 16) % ((blocks - 1) * block - 200));
+    for (let i = 0; i < text; i++) {
+      x = (x * 1103515245 + 12345) >>> 0;
+      bytes[at + block + i] = 0x20 + ((x >>> 16) % 95);
+    }
+    at += blocks * block;
+  }
+  const { peaks } = periodicity({ id: 1, bytes, maxLag: 8192 });
+  assert.equal(peaks[0]?.lag, block);
+});
+
+test("the common step is the shortest lag, or a fraction of it that fits", () => {
+  assert.equal(commonStep([2352, 4704, 7056]), 2352);
+  assert.equal(commonStep([1024, 1536, 2560, 3584]), 512);
+  // A peak a byte off among many is still on the step.
+  assert.equal(commonStep([8, 16, 24, 32, 41]), 8);
+  // 8 does not split into steps of 3, and steps under 16 are not offered.
+  assert.equal(commonStep([8, 12]), null);
+  assert.equal(commonStep([]), null);
 });
 
 test("the noise floor rises for a short sample", () => {

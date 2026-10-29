@@ -271,3 +271,35 @@ export function columnTicks(candidates: readonly number[], at: (c: number) => nu
   }
   return out;
 }
+
+/**
+ * The outline of the bytes [a, b) on the grid, as the corners of one polygon
+ * in columns and rows, the shape a text editor draws round a selection
+ * across lines: from the first byte to the end of its row, every row between
+ * in full, and the last row up to the last byte. One outline and not a box
+ * per row, which on a grid of rows a pixel high would be a solid block.
+ */
+export function rangeOutline(stride: number, a: number, b: number): { readonly col: number; readonly row: number }[] {
+  if (b <= a || stride <= 0) return [];
+  const r0 = Math.floor(a / stride);
+  const c0 = a - r0 * stride;
+  const r1 = Math.floor((b - 1) / stride);
+  const c1 = b - r1 * stride;
+  if (r0 === r1)
+    return [
+      { col: c0, row: r0 },
+      { col: c1, row: r0 },
+      { col: c1, row: r0 + 1 },
+      { col: c0, row: r0 + 1 },
+    ];
+  return [
+    { col: c0, row: r0 },
+    { col: stride, row: r0 },
+    { col: stride, row: r1 },
+    { col: c1, row: r1 },
+    { col: c1, row: r1 + 1 },
+    { col: 0, row: r1 + 1 },
+    { col: 0, row: r0 + 1 },
+    { col: c0, row: r0 + 1 },
+  ];
+}

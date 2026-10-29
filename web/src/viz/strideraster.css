@@ -1,0 +1,188 @@
+/* The Stride tab (`strideraster.ts`). Its own file, loaded with the piece, so
+   the shared style.css is not a file every batch piece appends to. The tokens
+   (--bg, --fg, --muted, --line, --accent, --mono) are style.css's. */
+
+.sr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.sr-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sr-perrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Wide enough for 65536 and the browser's spinner, in the digits the
+   addresses are written in, so the number does not shift as it changes. */
+.sr-input {
+  width: 8ch;
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+}
+.sr-grow {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 0;
+}
+.sr-controls .sr-grow {
+  margin-left: auto;
+}
+/* Reset zoom and Show larger, over the grid's right-hand end. */
+.sr-grid-head {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.sr-large-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* The autocorrelation line. */
+.sr-lag-head {
+  font-weight: 600;
+}
+.sr-lag-plot {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.sr-lag-plot:active {
+  cursor: grabbing;
+}
+/* uPlot's own stylesheet sets a font and a margin on its root; the line sits
+   in the rail's text, so it takes the rail's. */
+.sr-lag-plot .uplot {
+  font-family: var(--sans);
+  width: auto !important;
+}
+.sr-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* The peaks, as buttons: one press sets the row width to a peak. */
+.sr-peaks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.sr-peaks[hidden] {
+  display: none;
+}
+.sr-peaks-lead {
+  color: var(--muted);
+}
+.sr-peak {
+  font: 11px var(--mono);
+  padding: 1px 6px;
+  min-height: 0;
+}
+/* The peak in use: the selection colour, as `.seg` marks its choice. */
+.sr-peak[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* The grid. Drag pans and the wheel zooms, so it asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.sr-grid {
+  display: flex;
+  flex-direction: column;
+}
+.sr-grid-body {
+  display: flex;
+}
+.sr-cols,
+.sr-rows {
+  display: block;
+  overflow: visible;
+}
+.sr-canvas {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  outline: 1px solid var(--line);
+}
+.sr-canvas:active {
+  cursor: grabbing;
+}
+.sr-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.sr-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sr-mode button {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.sr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sr-mono {
+  font-family: var(--mono);
+}
+.sr-ramp {
+  width: 80px;
+  height: 10px;
+  border: 1px solid var(--line);
+  margin: 0 -6px;
+}
+.sr-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sr-swatch {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--line);
+}
+/* The hatching unread bytes get on the grid. */
+.sr-swatch.is-unread {
+  background: repeating-linear-gradient(0deg, var(--muted) 0 2px, var(--bg) 2px 4px);
+}
+
+/* Show larger: the same panel over the window. */
+.sr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgb(0 0 0 / 35%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sr-overlay-box {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgb(0 0 0 / 25%);
+  padding: 16px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}

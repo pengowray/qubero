@@ -4015,4 +4015,49 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** The Stride tab in the rail (`viz/strideraster.ts`): the file's bytes as
+   *  a grid of cells, a chosen number of bytes to a row, with the
+   *  autocorrelation line that suggests the number. */
+  stride: {
+    tab: "Stride",
+    tabTitle: "Each byte of the file as one cell of a grid. Set the bytes per row to the record size and fixed-size records line up in columns.",
+    perRow: "Bytes per row",
+    perRowTitle: "Up and down arrow keys change it by one, with the grid or this box focused",
+    larger: "Show larger",
+    close: "Close",
+    /** The canvas, for a screen reader. */
+    rasterLabel: (perRow: number): string => `The file's bytes, ${perRow.toLocaleString()} per row`,
+    colourBy: "Colour the bytes by",
+    byValue: "Value",
+    byKind: "Zero / text / other",
+    zero: "Zero",
+    text: "Text",
+    other: "Other",
+    unread: "Not read yet",
+    /** The ends of the grey ramp in the legend. */
+    low: "0x00",
+    high: "0xff",
+    autocorrelation: "Autocorrelation",
+    /** Under the line: what its axis counts, and how much of the file it
+     *  looked at when that is not all of it. */
+    lagNote: (window: string | null): string =>
+      window === null ? "Lag in bytes. Peaks are where the bytes repeat." : `Lag in bytes, over the first ${window}. Peaks are where the bytes repeat.`,
+    computing: "Computing autocorrelation…",
+    noRepeat: (maxLag: number): string => `No repeat found at any lag up to ${countText(maxLag, "byte")}.`,
+    tooShort: "Too few bytes to look for repeats.",
+    /** Before the buttons that set the row width to a peak of the line. */
+    suggested: "Suggested bytes per row",
+    peakButton: (lag: number): string => lag.toLocaleString(),
+    peakTitle: (lag: number): string => `Set bytes per row to ${lag.toLocaleString()}`,
+    /** The hover card on the line. */
+    lagTitle: (lag: number): string => `Lag ${countText(lag, "byte")}`,
+    lagValue: (r: number): string => `Autocorrelation ${r.toFixed(2)}`,
+    lagClick: (lag: number): string => `Click to set ${lag.toLocaleString()} bytes per row`,
+    /** The hover card on the grid. */
+    oneByte: (hex: string, dec: number): string => `${hex} (${dec})`,
+    manyBytes: (n: number, hex: string): string => `${countText(n, "byte")}, largest value ${hex}`,
+    rowColumn: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    rowColumns: (row: number, from: number, to: number): string => `Row ${row.toLocaleString()}, columns ${from.toLocaleString()} to ${to.toLocaleString()}`,
+    span: (from: string, to: string): string => `${from} to ${to}`,
+  },
 } as const;
