@@ -68,31 +68,43 @@ function half(h: number): number {
   return sign * (1 + frac / 1024) * 2 ** (exp - 15);
 }
 
+/** How to read one number of each type at a byte offset. Chosen once per run
+ *  by `decode`, so the loop over a run's elements does not look at the type's
+ *  name for every one of them. */
+function reader(v: DataView, name: string, le: boolean): ((at: number) => number) | null {
+  switch (name) {
+    case "u8": return (at) => v.getUint8(at);
+    case "i8": return (at) => v.getInt8(at);
+    case "u16": return (at) => v.getUint16(at, le);
+    case "i16": return (at) => v.getInt16(at, le);
+    case "u32": return (at) => v.getUint32(at, le);
+    case "i32": return (at) => v.getInt32(at, le);
+    case "u64": return (at) => Number(v.getBigUint64(at, le));
+    case "i64": return (at) => Number(v.getBigInt64(at, le));
+    case "f16": return (at) => half(v.getUint16(at, le));
+    case "bf16": {
+      // bfloat16 is the top half of a binary32.
+      const word = new Uint32Array(1);
+      const float = new Float32Array(word.buffer);
+      return (at) => {
+        word[0] = v.getUint16(at, le) << 16;
+        return float[0] ?? NaN;
+      };
+    }
+    case "f32": return (at) => v.getFloat32(at, le);
+    case "f64": return (at) => v.getFloat64(at, le);
+  }
+  return null;
+}
+
 /** Decode `count` numbers of type `t` from the front of `bytes`. A 64-bit
  *  integer past 2^53 comes back rounded, which a plot cannot show anyway. */
 export function decode(bytes: Uint8Array, t: NumType, count: number): Float64Array {
   const n = Math.max(0, Math.min(count, Math.floor(bytes.length / t.bytes)));
   const out = new Float64Array(n);
-  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const le = t.le;
-  const name = t.name.split(" ")[0];
-  for (let i = 0, at = 0; i < n; i++, at += t.bytes) {
-    switch (name) {
-      case "u8": out[i] = v.getUint8(at); break;
-      case "i8": out[i] = v.getInt8(at); break;
-      case "u16": out[i] = v.getUint16(at, le); break;
-      case "i16": out[i] = v.getInt16(at, le); break;
-      case "u32": out[i] = v.getUint32(at, le); break;
-      case "i32": out[i] = v.getInt32(at, le); break;
-      case "u64": out[i] = Number(v.getBigUint64(at, le)); break;
-      case "i64": out[i] = Number(v.getBigInt64(at, le)); break;
-      case "f16": out[i] = half(v.getUint16(at, le)); break;
-      // bfloat16 is the top half of a binary32.
-      case "bf16": out[i] = new Float32Array(new Uint32Array([v.getUint16(at, le) << 16]).buffer)[0] ?? NaN; break;
-      case "f32": out[i] = v.getFloat32(at, le); break;
-      case "f64": out[i] = v.getFloat64(at, le); break;
-    }
-  }
+  const read = reader(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), t.name.split(" ")[0] ?? "", t.le);
+  if (read === null) return out;
+  for (let i = 0, at = 0; i < n; i++, at += t.bytes) out[i] = read(at);
   return out;
 }
 
@@ -202,6 +214,12 @@ export function envelope(c: Channel, from: number, to: number, buckets: number):
 /** A finite low and high to scale a set of channels to, padded so a flat run
  *  still has some height. */
 export function extentOf(channels: readonly Channel[]): [number, number] {
+  return paddedExtent(finiteRange(channels));
+}
+
+/** The lowest and highest finite value over every channel, or null when none
+ *  is finite: what the plot's note states. */
+export function finiteRange(channels: readonly Channel[]): { readonly min: number; readonly max: number } | null {
   let min = Infinity;
   let max = -Infinity;
   for (const c of channels) {
@@ -210,7 +228,14 @@ export function extentOf(channels: readonly Channel[]): [number, number] {
     min = Math.min(min, r.min);
     max = Math.max(max, r.max);
   }
-  if (min > max) return [-1, 1];
+  return min > max ? null : { min, max };
+}
+
+/** The y range for `range`: as it is, or widened round a run of one value so
+ *  the line is drawn across the middle of the lane, and -1 to 1 for none. */
+export function paddedExtent(range: { readonly min: number; readonly max: number } | null): [number, number] {
+  if (range === null) return [-1, 1];
+  const { min, max } = range;
   if (min === max) {
     const pad = min === 0 ? 1 : Math.abs(min) * 0.1;
     return [min - pad, max + pad];

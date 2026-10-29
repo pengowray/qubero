@@ -25,7 +25,8 @@ import { valueText } from "./decimate.ts";
 import { colourRange, parseHex, pixelBlock, ramp, rampIndex, sampleGrid, type Rgb } from "./gridmath.ts";
 import { linkedFor, subscribeWhileConnected } from "./linked.ts";
 import { goToField } from "./pick.ts";
-import { hideTip, hoverTip, tipCard } from "./tip.ts";
+import { onSchemeChange } from "./schemewatch.ts";
+import { hideTip, hoverTip, tipAt, tipCard } from "./tip.ts";
 import type { RunSource, RunValues } from "./valueplot.ts";
 
 type Axis = {
@@ -34,8 +35,16 @@ type Axis = {
   readonly selection: typeof import("d3-selection");
 };
 let axisLoading: Promise<Axis> | null = null;
+/** A load that fails is not kept, so the next grid asks for it again. A grid
+ *  whose load failed is drawn without axes. */
 function loadAxis(): Promise<Axis> {
-  axisLoading ??= Promise.all([import("d3-scale"), import("d3-axis"), import("d3-selection")]).then(([scale, axis, selection]) => ({ scale, axis, selection }));
+  if (axisLoading === null) {
+    const loading = Promise.all([import("d3-scale"), import("d3-axis"), import("d3-selection")]).then(([scale, axis, selection]) => ({ scale, axis, selection }));
+    loading.catch(() => {
+      if (axisLoading === loading) axisLoading = null;
+    });
+    axisLoading = loading;
+  }
   return axisLoading;
 }
 
@@ -109,6 +118,10 @@ export function drawGridPlot(
   let view: View = { k: 1, x: 0, y: 0 };
   let axis: Axis | null = null;
   let per = 1;
+  /** Where the pointer is while it is over the grid with no button down, so
+   *  a zoom by the wheel can redo the hover card: the block of cells a pixel
+   *  averages changes with the scale. */
+  let pointer: { readonly clientX: number; readonly clientY: number } | null = null;
   const bus = linkedFor(doc);
   const runPath = src.path;
   const elementBits = src.type.bytes * 8;
@@ -261,16 +274,24 @@ export function drawGridPlot(
     onZoom: (v) => {
       view = v;
       paint();
+      if (pointer !== null) {
+        const c = card(pointer);
+        if (c === null) hideTip();
+        else tipAt(c, pointer.clientX, pointer.clientY);
+      }
     },
   });
-  void loadAxis().then((loaded) => {
-    axis = loaded;
-    drawAxes();
-  });
+  loadAxis().then(
+    (loaded) => {
+      axis = loaded;
+      drawAxes();
+    },
+    () => {},
+  );
   paintBar();
 
   /** The cell under a pointer event, and the block of cells its pixel shows. */
-  const under = (e: MouseEvent): { row: number; column: number; block: { rows: [number, number]; cols: [number, number] } } | null => {
+  const under = (e: { readonly clientX: number; readonly clientY: number }): { row: number; column: number; block: { rows: [number, number]; cols: [number, number] } } | null => {
     const r = canvas.getBoundingClientRect();
     const px = Math.floor(e.clientX - r.left);
     const py = Math.floor(e.clientY - r.top);
@@ -282,7 +303,7 @@ export function drawGridPlot(
     return { row, column, block: { rows: pixelBlock(v.r0, v.r1, gh, py, rows), cols: pixelBlock(v.c0, v.c1, gw, px, columns) } };
   };
 
-  const stopTip = hoverTip(canvas, (e) => {
+  const card = (e: { readonly clientX: number; readonly clientY: number }): HTMLElement | null => {
     const hit = under(e);
     if (hit === null) {
       bus.publish({ hover: null });
@@ -308,8 +329,20 @@ export function drawGridPlot(
       if (k > 0) lines.push(VIZ.valuePlot.cellMean(n, valueText(sum / k, true)));
     }
     return tipCard(VIZ.valuePlot.cell(hit.row, hit.column), lines, VIZ.valuePlot.element(index, formatOffset(startBit), src.type.name));
-  });
-  const leave = (): void => bus.publish({ hover: null });
+  };
+  const stopTip = hoverTip(canvas, card);
+  const move = (e: PointerEvent): void => {
+    pointer = e.buttons === 0 ? { clientX: e.clientX, clientY: e.clientY } : null;
+  };
+  const press = (): void => {
+    pointer = null;
+  };
+  const leave = (): void => {
+    pointer = null;
+    bus.publish({ hover: null });
+  };
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerdown", press);
   canvas.addEventListener("pointerleave", leave);
   const click = (e: MouseEvent): void => {
     const hit = under(e);
@@ -326,12 +359,10 @@ export function drawGridPlot(
     paintMarker();
   });
 
-  const scheme = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
-  const repaint = (): void => {
+  const stopScheme = onSchemeChange(host, () => {
     paintBar();
     paint();
-  };
-  scheme?.addEventListener("change", repaint);
+  });
 
   return {
     el: host,
@@ -351,7 +382,9 @@ export function drawGridPlot(
       stopTip();
       stopLinked();
       hideTip();
-      scheme?.removeEventListener("change", repaint);
+      stopScheme();
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerdown", press);
       canvas.removeEventListener("pointerleave", leave);
       canvas.removeEventListener("click", click);
     },

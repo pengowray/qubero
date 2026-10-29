@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { decode, elementType, envelope, extentOf, frameCount, nearestFrame, numType, rangeOf, valueText } from "../src/viz/decimate.ts";
+import { decode, elementType, envelope, extentOf, finiteRange, frameCount, nearestFrame, numType, paddedExtent, rangeOf, valueText } from "../src/viz/decimate.ts";
 import { colourRange, mix, parseHex, pixelBlock, ramp, rampIndex, sampleGrid } from "../src/viz/gridmath.ts";
 import { frameOfSample } from "../src/samplespanel.ts";
 import type { SamplesInfo } from "../src/doc.ts";
@@ -83,6 +83,24 @@ test("a flat run still has some height, and an empty one a range", () => {
   assert.deepEqual(extentOf([mono([0, 0])]), [-1, 1]);
   assert.deepEqual(extentOf([mono([NaN])]), [-1, 1]);
   assert.equal(rangeOf(mono([NaN, NaN]), 0, 2), null);
+});
+
+test("the note states the values as they are, while the y scale is padded", () => {
+  const stereo = { values: [5, -7, 5, 9], stride: 2, channel: 0 };
+  const other = { ...stereo, channel: 1 };
+  assert.deepEqual(finiteRange([stereo, other]), { min: -7, max: 9 });
+  assert.equal(finiteRange([mono([NaN])]), null);
+  assert.deepEqual(paddedExtent(finiteRange([stereo])), [4.5, 5.5]);
+  assert.deepEqual(paddedExtent(null), [-1, 1]);
+});
+
+test("every integer width decodes, signed and not, in both orders", () => {
+  const bytes = Uint8Array.from([0xff, 0xff, 0xff, 0xfe, 0x00, 0x00, 0x00, 0x00]);
+  assert.deepEqual([...decode(bytes, numType("i8")!, 2)], [-1, -1]);
+  assert.deepEqual([...decode(bytes, numType("u16 be")!, 2)], [0xffff, 0xfffe]);
+  assert.deepEqual([...decode(bytes, numType("i32 le")!, 1)], [-0x1000001]);
+  assert.deepEqual([...decode(bytes, numType("u64 le")!, 1)], [0xfeffffff]);
+  assert.deepEqual([...decode(bytes, numType("i64 be")!, 1)], [-0x200000000]);
 });
 
 test("the nearest frame is kept inside the run", () => {

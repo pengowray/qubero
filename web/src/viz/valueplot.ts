@@ -38,6 +38,7 @@
 // `fieldBytes`. Steim samples come decoded from the core (`SamplesInfo`),
 // which gives the first 32 of them.
 
+import "../toggleseg.css";
 import "./valueplot.css";
 import type uPlot from "uplot";
 import type { Doc, FieldPick, SamplesInfo, TemplateNode } from "../doc.ts";
@@ -47,12 +48,13 @@ import { frameOfSample, showingLine } from "../samplespanel.ts";
 import { childWord, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { rescaleDomain, type View } from "./boardmath.ts";
-import { decode, elementType, envelope, extentOf, frameCount, nearestFrame, numType, rangeOf, valueText, type Channel, type NumType } from "./decimate.ts";
+import { decode, elementType, envelope, extentOf, finiteRange, frameCount, nearestFrame, numType, paddedExtent, rangeOf, valueText, type Channel, type NumType } from "./decimate.ts";
 import { headingButton, registerHeadingButton } from "./headingbuttons.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
 import { goToBits, goToField } from "./pick.ts";
-import { hideTip, hoverTip, tipCard } from "./tip.ts";
+import { onSchemeChange } from "./schemewatch.ts";
+import { hideTip, hoverTip, tipAt, tipCard } from "./tip.ts";
 import { drawGridPlot } from "./valuegrid.ts";
 
 // ----- the run -----
@@ -222,9 +224,18 @@ function cssVar(el: Element, name: string, fallback: string): string {
 }
 
 let uplotLoading: Promise<typeof uPlot> | null = null;
-/** uPlot and its stylesheet, once, the first time a plot is drawn. */
+/** uPlot and its stylesheet, once, the first time a plot is drawn. A load
+ *  that fails is not kept, so the next plot asks again: Firefox fetches the
+ *  module again, while Chrome answers with the failure it already has until
+ *  the page is reloaded, which is what the plot then says. */
 function loadUPlot(): Promise<typeof uPlot> {
-  uplotLoading ??= Promise.all([import("uplot"), import("uplot/dist/uPlot.min.css")]).then(([m]) => m.default);
+  if (uplotLoading === null) {
+    const loading = Promise.all([import("uplot"), import("uplot/dist/uPlot.min.css")]).then(([m]) => m.default);
+    loading.catch(() => {
+      if (uplotLoading === loading) uplotLoading = null;
+    });
+    uplotLoading = loading;
+  }
   return uplotLoading;
 }
 
@@ -270,8 +281,16 @@ const MAX_FRAME_PX = 32;
  *  a marker as well, so a short run reads as the points it is. */
 const MARKER_FRAMES_PER_PX = 1 / 5;
 
-/** Draw the line `width` by `height` pixels. */
-export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: number; readonly height: number }): LinePlot {
+/** A pointer position, from a pointer event or remembered from the last one. */
+type Pointer = { readonly clientX: number; readonly clientY: number };
+
+/** Draw the line `width` by `height` pixels. `range` is the lowest and
+ *  highest finite value, for a caller that has already worked it out. */
+export function drawLinePlot(
+  doc: Doc,
+  data: LineData,
+  opts: { readonly width: number; readonly height: number; readonly range?: { readonly min: number; readonly max: number } | null },
+): LinePlot {
   const lanes = Math.max(1, data.channels.length);
   const frames = Math.max(1, ...data.channels.map(frameCount));
   let width = Math.max(120, opts.width);
@@ -281,7 +300,7 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
   const totalH = (): number => laneH * lanes + X_AXIS_PX;
   // A little room above the highest value and below the lowest, so a peak is
   // not drawn on the edge of the lane.
-  const [lowest, highest] = extentOf(data.channels);
+  const [lowest, highest] = opts.range === undefined ? extentOf(data.channels) : paddedExtent(opts.range);
   const pad = (highest - lowest) * 0.04;
   const [y0, y1] = [lowest - pad, highest + pad];
 
@@ -299,6 +318,9 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
   const plots: uPlot[] = [];
   const nameEls: HTMLElement[] = [];
   let destroyed = false;
+  /** Where the pointer is while it is over the plot with no button down, so
+   *  a zoom by the wheel can redo the hover card for the new scale. */
+  let pointer: Pointer | null = null;
 
   data.names.forEach((name, i) => {
     if (name === "") return;
@@ -355,6 +377,15 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       }
     }
     ctx.restore();
+  };
+
+  /** uPlot's crosshair is an element over the canvas, so where it stands on
+   *  the cursor's marker it would hide it: there it takes the marker's
+   *  colour. */
+  const markCursor = (u: uPlot): void => {
+    const left = u.cursor.left ?? -1;
+    const on = sel !== null && left >= 0 && Math.abs(u.valToPos(sel.frame, "x") - left) < 1.5;
+    u.root.classList.toggle("is-on-marker", on);
   };
 
   const laneData = (lane: number): uPlot.AlignedData => {
@@ -418,7 +449,7 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
             },
           ],
           cursor: { drag: { x: false, y: false, setScale: false }, points: { show: false }, y: false, sync: { key: syncKey } },
-          hooks: { draw: [(self) => paintMarker(self, lane)] },
+          hooks: { draw: [(self) => paintMarker(self, lane)], setCursor: [markCursor] },
         },
         laneData(lane),
         el,
@@ -448,13 +479,31 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       const [a, b] = rescaleDomain(v, [0, frames - 1], [plotLeft, plotLeft + plotW]);
       span = [a, b];
       redrawAll();
+      // The card under a still pointer described the old scale: how many
+      // frames the pixel holds, and their range.
+      if (pointer !== null) {
+        const c = card(pointer);
+        if (c === null) hideTip();
+        else tipAt(c, pointer.clientX, pointer.clientY);
+      }
     },
   });
 
-  void loadUPlot().then((U) => build(U));
+  // uPlot is loaded the first time a plot is drawn. If it does not arrive,
+  // the plot says so in place of the lanes.
+  loadUPlot().then(build, () => {
+    if (destroyed) return;
+    const box = document.createElement("div");
+    box.className = "vp-failed";
+    box.textContent = VIZ.valuePlot.loadFailed;
+    // Not a press on the plot: no pan, no zoom, and no click through to the
+    // bytes.
+    for (const type of ["pointerdown", "mousedown", "click", "wheel"]) box.addEventListener(type, (e) => e.stopPropagation());
+    host.append(box);
+  });
 
-  /** The frame and lane under a pointer event, or null off the plot. */
-  const under = (e: MouseEvent): { frame: number; lane: number; x: number } | null => {
+  /** The frame and lane under a pointer, or null off the plot. */
+  const under = (e: Pointer): { frame: number; lane: number; x: number } | null => {
     const r = host.getBoundingClientRect();
     const x = e.clientX - r.left - plotLeft;
     const y = e.clientY - r.top;
@@ -463,7 +512,7 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
     return { frame: nearestFrame(at, frames), lane: Math.max(0, Math.min(lanes - 1, Math.floor(y / laneH))), x };
   };
 
-  const stopTip = hoverTip(host, (e) => {
+  const card = (e: Pointer): HTMLElement | null => {
     const hit = under(e);
     if (hit === null) {
       bus.publish({ hover: null });
@@ -506,8 +555,20 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       }
     }
     return tipCard(title, lines, spot.foot);
-  });
-  const leave = (): void => bus.publish({ hover: null });
+  };
+  const stopTip = hoverTip(host, card);
+  const move = (e: PointerEvent): void => {
+    pointer = e.buttons === 0 ? { clientX: e.clientX, clientY: e.clientY } : null;
+  };
+  const press = (): void => {
+    pointer = null;
+  };
+  const leave = (): void => {
+    pointer = null;
+    bus.publish({ hover: null });
+  };
+  host.addEventListener("pointermove", move);
+  host.addEventListener("pointerdown", press);
   host.addEventListener("pointerleave", leave);
   const click = (e: MouseEvent): void => {
     const hit = under(e);
@@ -528,16 +589,17 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       const half = width / (2 * view.k);
       zoom.zoomTo({ x0: lx - half, x1: lx + half, y0: 0, y1: totalH() }, true);
     }
-    for (const u of plots) u.redraw(false);
+    for (const u of plots) {
+      u.redraw(false);
+      markCursor(u);
+    }
   });
 
   // The canvas takes its colours from the stylesheet when it paints; a change
   // of theme is a repaint.
-  const scheme = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
-  const repaint = (): void => {
+  const stopScheme = onSchemeChange(host, () => {
     for (const u of plots) u.redraw(false, true);
-  };
-  scheme?.addEventListener("change", repaint);
+  });
 
   return {
     el: host,
@@ -562,7 +624,9 @@ export function drawLinePlot(doc: Doc, data: LineData, opts: { readonly width: n
       stopTip();
       stopLinked();
       hideTip();
-      scheme?.removeEventListener("change", repaint);
+      stopScheme();
+      host.removeEventListener("pointermove", move);
+      host.removeEventListener("pointerdown", press);
       host.removeEventListener("pointerleave", leave);
       host.removeEventListener("click", click);
       for (const u of plots) u.destroy();
@@ -616,14 +680,19 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
   head.className = "vp-head";
   const note = document.createElement("span");
   note.className = "vp-note vp-title";
+  // The choices and Reset zoom stay together on one line, which goes under
+  // the note when the pane is too narrow for both.
+  const tools = document.createElement("span");
+  tools.className = "vp-tools";
   const controls = document.createElement("span");
-  controls.className = "vp-head";
+  controls.className = "vp-controls";
   const reset = document.createElement("button");
   reset.type = "button";
   reset.className = "viz-reset";
   reset.textContent = VIZ.resetZoom;
   reset.disabled = true;
-  head.append(note, controls, reset);
+  tools.append(controls, reset);
+  head.append(note, tools);
   const body = document.createElement("div");
   const reading = document.createElement("div");
   reading.className = "vp-reading";
@@ -634,6 +703,9 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
   let size = { width, height };
   let src = runSource(doc, path);
   let run: RunValues | null = null;
+  /** The run's lowest and highest value, worked out once when it is read:
+   *  the line's y scale, and the note over it. */
+  let range: { readonly min: number; readonly max: number } | null = null;
   let mode: "line" | "grid" = src?.dims !== null && src?.dims !== undefined ? "grid" : "line";
   let clip = false;
   let drawn: { resize(w: number, h: number): void; destroy(): void; board: Board } | null = null;
@@ -651,7 +723,7 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
 
   const seg = (choices: { label: string; title: string; on: boolean; press: () => void }[]): HTMLElement => {
     const s = document.createElement("span");
-    s.className = "vp-seg";
+    s.className = "toggle-seg";
     for (const c of choices) {
       const b = document.createElement("button");
       b.type = "button";
@@ -696,10 +768,9 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
       const data = lineFromRun(s, r);
       // The sentence that goes with the picture: how low and how high the
       // values go, which the y axis otherwise leaves to be read off.
-      const lo = Math.min(...data.channels.map((c) => rangeOf(c, 0, frameCount(c))?.min ?? Infinity));
-      const hi = Math.max(...data.channels.map((c) => rangeOf(c, 0, frameCount(c))?.max ?? -Infinity));
-      if (lo <= hi) notes.push(VIZ.valuePlot.oneRange(valueText(lo, s.type.float), valueText(hi, s.type.float)));
-      const line = drawLinePlot(doc, data, bodySize());
+      range ??= finiteRange(data.channels);
+      if (range !== null) notes.push(VIZ.valuePlot.oneRange(valueText(range.min, s.type.float), valueText(range.max, s.type.float)));
+      const line = drawLinePlot(doc, data, { ...bodySize(), range });
       drawn = line;
       body.replaceChildren(line.el);
     }
@@ -726,6 +797,7 @@ export function paneFigure(doc: Doc, path: readonly number[], width: number, hei
     if (src === null) return;
     run = readRun(doc, src);
     if (run === null) return;
+    range = null;
     stopWatch?.();
     stopWatch = null;
     draw();
@@ -824,7 +896,11 @@ function samplesSection(doc: Doc, path: readonly number[], width: number): HTMLE
   reset.className = "viz-reset";
   reset.textContent = VIZ.resetZoom;
   head.append(title, reset);
+  /** Sample 0 is the forward integration constant, the second 32-bit word of
+   *  frame 0; every other sample is lit by the frame its difference is in. */
+  const constant = info.steim && info.x0 !== null && start !== null;
   const frameBits = (frame: number): BitRange | null => {
+    if (frame === 0 && constant && start !== null) return { startBit: start + 32, endBit: start + 64 };
     const f = info.steim ? frameOfSample(info, frame) : null;
     if (f === null || start === null) return null;
     return { startBit: start + f * STEIM_FRAME_BITS, endBit: start + (f + 1) * STEIM_FRAME_BITS };
@@ -839,7 +915,8 @@ function samplesSection(doc: Doc, path: readonly number[], width: number): HTMLE
     locate: (frame) => {
       const bits = frameBits(frame) ?? { startBit: start ?? 0, endBit: (start ?? 0) + info.bytes * 8 };
       const f = info.steim ? frameOfSample(info, frame) : null;
-      const foot = f === null ? formatOffset(bits.startBit) : VIZ.valuePlot.fromFrame(f, formatOffset(bits.startBit));
+      const at = formatOffset(bits.startBit);
+      const foot = frame === 0 && constant ? VIZ.valuePlot.fromConstant(at) : f === null ? at : VIZ.valuePlot.fromFrame(f, at);
       return { pick: null, bits, foot };
     },
     // A sample is not a field of its own, so no selection is one.

@@ -4028,6 +4028,11 @@ export const VIZ = {
     panePlotTitle: "Show the values as a plot",
     /** While the bytes of the run are still arriving. */
     reading: "Reading the values…",
+    /** In place of the plot when uPlot's module did not arrive (a dropped
+     *  connection, or a chunk gone after a deploy). No Try again button:
+     *  Chrome keeps a failed module import and answers a second import of it
+     *  with the same failure, so only a reload asks the server again. */
+    loadFailed: "Couldn't load the plotting library. Reload the page to try again.",
     /** A run longer than the plot reads. */
     firstOf: (shown: number, total: number, unit: string): string =>
       `Plotting the first ${shown.toLocaleString()} of ${countText(total, unit)}`,
@@ -4055,9 +4060,13 @@ export const VIZ = {
     /** A miniSEED record's decoded samples in the At cursor panel. A sample of
      *  a Steim record is a sum of differences, so it is at no one place; the
      *  card names the 64-byte frame its difference was read from, which is
-     *  what a click selects. */
+     *  what a click selects, and the offset is where that frame starts.
+     *  Sample 0 is stored whole, as the forward integration constant in the
+     *  second word of frame 0, and its card says so ("forward integration
+     *  constant" is the samples panel's name for it). */
     samplesTitle: "Decoded samples",
-    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()} · ${offset}`,
+    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()}, which starts at ${offset}`,
+    fromConstant: (offset: string): string => `Read from the forward integration constant at ${offset}`,
     /** The choice over a run with two dimensions. */
     grid: "Grid",
     gridTitle: "Show the values as a grid of colours, one cell per value",
@@ -4066,8 +4075,10 @@ export const VIZ = {
     /** Over the grid: its shape, in the order the values are stored. */
     shape: (rows: number, columns: number): string =>
       `${countText(rows, "row")} of ${countText(columns, "value")}`,
-    /** Over the grid when it is drawn smaller than one pixel a value. */
-    meanOf: (n: number): string => `Each pixel shows the mean of ${n.toLocaleString()} values`,
+    /** Over the grid when it is drawn smaller than one pixel a value. `n` is
+     *  the most values any one pixel averages; a pixel at the grid's edge, or
+     *  where the cells do not divide evenly, averages fewer. */
+    meanOf: (n: number): string => `Each pixel shows the mean of up to ${n.toLocaleString()} values`,
     /** The colour scale's range. */
     rangeFull: "Full range",
     rangeFullTitle: "Colours run from the lowest value to the highest",

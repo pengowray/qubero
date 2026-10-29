@@ -19,6 +19,8 @@
 // does not import the piece). The plot is drawn the first time it is asked
 // for, at the size the pane measures, and kept until the list changes.
 
+import "./listpane.css";
+import "./toggleseg.css";
 import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
@@ -123,7 +125,7 @@ export class ListPane {
     this.scroller.tabIndex = 0;
     this.canvas = el("div", "lp-canvas");
     this.scroller.append(this.canvas);
-    this.modes = el("span", "vp-seg lp-modes");
+    this.modes = el("span", "toggle-seg lp-modes");
     const modeButton = (mode: PaneMode, label: string, title: string): HTMLButtonElement => {
       const b = el("button", "", label);
       b.type = "button";
@@ -140,7 +142,11 @@ export class ListPane {
     this.modes.hidden = true;
     this.plotHost = el("div", "lp-plot");
     this.plotHost.hidden = true;
-    // Escape closes the pane from the plot too, as it does from the rows.
+    // Escape closes the pane from the plot too, as it does from the rows. For
+    // that the key has to reach the plot, so the plot takes focus whenever it
+    // is pressed, wherever in it the pointer went down.
+    this.plotHost.tabIndex = 0;
+    this.plotHost.addEventListener("pointerdown", () => this.plotHost.focus({ preventScroll: true }), { capture: true });
     this.plotHost.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       e.preventDefault();

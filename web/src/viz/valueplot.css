@@ -53,6 +53,18 @@
   white-space: normal;
   flex: 1 1 14em;
 }
+/* The choices and Reset zoom, kept on one line together. */
+.vp-tools {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.vp-controls {
+  display: contents;
+}
 .vp-title {
   flex: 1;
   min-width: 0;
@@ -70,35 +82,6 @@
   color: var(--muted);
   font-style: italic;
   padding: 8px 0;
-}
-/* Two or three choices side by side, one of them pressed: List or Plot in
-   the pane's bar, Grid or Line over a two-dimensional run, the colour range.
-   The pressed one wears the accent fill the app gives a selection. */
-.vp-seg {
-  display: inline-flex;
-  flex: none;
-}
-.vp-seg button {
-  min-height: 0;
-  padding: 1px 8px;
-  font-size: 11px;
-  border-radius: 0;
-}
-.vp-seg button:first-child {
-  border-start-start-radius: 4px;
-  border-end-start-radius: 4px;
-}
-.vp-seg button:last-child {
-  border-start-end-radius: 4px;
-  border-end-end-radius: 4px;
-}
-.vp-seg button + button {
-  margin-inline-start: -1px;
-}
-.vp-seg button[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--fg);
 }
 /* The lanes, one per channel, over one x axis. Drag pans and the wheel
    zooms, so the lanes ask for the grab cursor and keep a drag from selecting
@@ -131,9 +114,27 @@
   vertical-align: middle;
 }
 /* uPlot draws its own crosshair as a dashed line; the app's hairlines are
-   solid, and the crosshair is the muted ink. */
+   solid, and the crosshair is the muted ink. On the cursor's marker it is an
+   element over the marker, so there it takes the marker's accent. */
 .vp .u-cursor-x {
   border-right: 1px solid var(--muted) !important;
+}
+.vp .is-on-marker .u-cursor-x {
+  border-right-color: var(--accent) !important;
+}
+/* In place of the lanes when uPlot did not load. */
+.vp-failed {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
+  cursor: default;
 }
 .vp .u-over,
 .vp .uplot {
@@ -151,16 +152,4 @@
 }
 .vp-bar {
   display: block;
-}
-/* The list pane holds a plot in place of its rows: the plot takes the pane's
-   height, and the pane's bar keeps the choice between them. */
-.lp-plot {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  padding: 6px 8px;
-  font-family: var(--sans);
-}
-.lp-plot[hidden] {
-  display: none;
 }
