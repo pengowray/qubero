@@ -30,6 +30,7 @@ import {
   rowHeight,
   ROW_MAX_PX,
   strideRows,
+  templateRuns,
   templateStride,
   TEXT,
   ZERO,
@@ -215,6 +216,33 @@ test("the widest run of equal records gives the row width", () => {
   assert.equal(templateStride([{ sizes: [512 * 8], bits: 512 * 8 }]), null);
   assert.equal(templateStride([{ sizes: [12, 12], bits: 24 }]), null);
   assert.equal(templateStride([{ sizes: [16, 16, 16], bits: 48 }]), null);
+});
+
+test("a list of records after many header fields is still found", () => {
+  // SQLite: 27 header fields of unequal sizes, then 73 pages of 512 bytes.
+  type N = { composite: boolean; child_count: number; size_bits: number; path: number[] };
+  const header: N[] = Array.from({ length: 27 }, (_, i) => ({ composite: false, child_count: 0, size_bits: [128, 16, 8, 32][i % 4] as number, path: [i] }));
+  const pages: N = { composite: true, child_count: 73, size_bits: 73 * 512 * 8, path: [27] };
+  const root: N = { composite: true, child_count: 28, size_bits: 100 * 8 + pages.size_bits, path: [] };
+  const asked: string[] = [];
+  const children = (path: readonly number[], from: number, to: number): N[] | null => {
+    asked.push(`${path.join(".")}:${from}-${to}`);
+    if (path.length === 0) return [...header, pages].slice(from, to);
+    if (path[0] === 27) return Array.from({ length: to - from }, (_, i) => ({ composite: false, child_count: 0, size_bits: 4096, path: [27, from + i] }));
+    return null;
+  };
+  const runs = templateRuns(root, children);
+  assert.notEqual(runs, "pending");
+  assert.equal(templateStride(runs === "pending" ? [] : runs), 512);
+  // Only the sample of the pages is asked for, not all 73.
+  assert.ok(asked.includes("27:0-16"));
+});
+
+test("a template still being read is guessed again later", () => {
+  const root = { composite: true, child_count: 3, size_bits: 3 * 64, path: [] };
+  assert.equal(templateRuns(root, () => "pending"), "pending");
+  const kids = [{ composite: true, child_count: 4, size_bits: 64, path: [0] }];
+  assert.equal(templateRuns(root, (p) => (p.length === 0 ? kids : "pending")), "pending");
 });
 
 test("column ticks keep inside the row and clear of each other", () => {

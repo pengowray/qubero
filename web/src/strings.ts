@@ -4040,31 +4040,36 @@ export const VIZ = {
    *  autocorrelation line that suggests the number. */
   stride: {
     tab: "Stride",
-    tabTitle: "Each byte of the file as one cell of a grid. Set the bytes per row to the record size and fixed-size records line up in columns.",
+    tabTitle: "Each byte of the file as one cell of a grid. When bytes per row equals the record size, fixed-size records line up in columns.",
     perRow: "Bytes per row",
     perRowTitle: "The up and down arrow keys change the bytes per row by one, in this box or with the grid focused",
+    /** Beside the box while it holds a number the grid cannot be drawn at;
+     *  the grid stays at the last good one. */
+    perRowBad: (max: number): string => `Bytes per row must be a whole number from 1 to ${max.toLocaleString()}.`,
     larger: "Show larger",
     close: "Close",
     /** The canvas, for a screen reader. */
     rasterLabel: (perRow: number): string => `The file's bytes, ${perRow.toLocaleString()} per row`,
     colourBy: "Colour the bytes by",
     byValue: "Value",
-    byKind: "Zero / text / other",
-    zero: "Zero",
+    /** The same names and colours as the rail map's legend (`TREEMAP.classLabel`). */
+    byKind: "Zeros / text / data",
+    zero: "Zeros",
     text: "Text",
-    other: "Other",
+    other: "Data",
     unread: "Not read yet",
     /** The ends of the grey ramp in the legend. */
     low: "0x00",
     high: "0xff",
     autocorrelation: "Autocorrelation",
-    /** Under the line: what its axis counts, and how much of the file it
-     *  looked at when that is not all of it. */
-    lagNote: (window: string | null): string =>
-      window === null ? "Lag in bytes. Peaks are where the bytes repeat." : `Lag in bytes, over the first ${window}. Peaks are where the bytes repeat.`,
+    /** Under the line: what its axis counts, read off its highest peak. */
+    lagNote: (lag: number): string => `X axis: lag in bytes. A peak at lag ${lag.toLocaleString()} means the bytes repeat every ${countText(lag, "byte")}.`,
+    /** A second line under it, when the file is longer than what was looked at. */
+    lagWindow: (window: string): string => `Computed from the first ${window}.`,
     computing: "Computing autocorrelation…",
     noRepeat: (maxLag: number): string => `No repeat found at any lag up to ${countText(maxLag, "byte")}.`,
     tooShort: "Too few bytes to look for repeats.",
+    failed: "Could not compute the autocorrelation.",
     /** Before the buttons that set the row width to a peak of the line. */
     suggested: "Suggested bytes per row",
     peakButton: (lag: number): string => lag.toLocaleString(),

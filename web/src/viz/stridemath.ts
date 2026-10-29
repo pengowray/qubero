@@ -250,6 +250,47 @@ export function templateStride(runs: readonly { readonly sizes: readonly number[
   return best?.stride ?? null;
 }
 
+/** A node of the template as `templateRuns` needs it. */
+export type RunNode = { readonly composite: boolean; readonly child_count: number; readonly size_bits: number; readonly path: readonly number[] };
+
+/** How many of the root's children `templateRuns` reads: every field of a
+ *  file header and the list after it. SQLite's pages are the root's 28th
+ *  child, after 27 header fields. */
+export const RUN_ROOT_KIDS = 256;
+/** How many composites among them it looks inside. */
+export const RUN_COMPOSITES = 64;
+/** How many children of a list it compares: enough to tell a run of equal
+ *  records from a few that happen to match. */
+export const RUN_SAMPLE = 16;
+
+/**
+ * The candidate lists for `templateStride`: the root's own children, and
+ * the children of each composite among them. `children(path, from, to)`
+ * answers the template's children, null where it cannot, or "pending" while
+ * the template is still being read, which makes the whole answer "pending"
+ * so the guess is made again later rather than settled on half the tree.
+ */
+export function templateRuns(
+  root: RunNode,
+  children: (path: readonly number[], from: number, to: number) => readonly RunNode[] | null | "pending",
+): { sizes: number[]; bits: number }[] | "pending" {
+  const runs: { sizes: number[]; bits: number }[] = [];
+  if (root.child_count < 1) return runs;
+  const top = children(root.path, 0, Math.min(RUN_ROOT_KIDS, root.child_count));
+  if (top === "pending") return "pending";
+  if (top === null) return runs;
+  if (top.length >= 2) runs.push({ sizes: top.slice(0, RUN_SAMPLE).map((k) => k.size_bits), bits: root.size_bits });
+  let looked = 0;
+  for (const k of top) {
+    if (!k.composite || k.child_count < 2) continue;
+    if (looked++ >= RUN_COMPOSITES) break;
+    const kids = children(k.path, 0, Math.min(RUN_SAMPLE, k.child_count));
+    if (kids === "pending") return "pending";
+    if (kids !== null) runs.push({ sizes: kids.map((c) => c.size_bits), bits: k.size_bits });
+  }
+  return runs;
+}
+
 /**
  * The ticks to label along the row, from the candidates d3's scale offers:
  * each label centred on its tick, or running inward from it by an edge so

@@ -204,3 +204,14 @@
   max-height: calc(100vh - 48px);
   overflow: hidden;
 }
+
+/* A row width the grid cannot be drawn at: the box and the line that says so. */
+.sr-input.is-invalid {
+  border-color: var(--warn);
+  outline: 1px solid var(--warn);
+}
+.sr-bad {
+  flex-basis: 100%;
+  color: var(--warn);
+  font-size: 11px;
+}

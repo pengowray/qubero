@@ -31,7 +31,9 @@
 // - the line is uPlot, with the same board over it for wheel and drag;
 // - hover goes through `tip.ts` and the shared bus, so the hex view marks the
 //   bytes under the pointer; a click goes to those bytes (`pick.ts`); the
-//   field the cursor is in is outlined on the grid from the bus.
+//   field the cursor is in is outlined on the grid from the bus;
+// - `draw` and `drawLag` give the grid and the line on their own, at a size
+//   the caller picks (design section 3.8), sharing the tab's row width.
 
 import type { Doc } from "../doc.ts";
 import { byteClassColor } from "../fieldstyle.ts";
@@ -69,6 +71,7 @@ import {
   rowAt,
   rowHeight,
   rowY,
+  templateRuns,
   templateStride,
   TEXT,
   type RasterGeometry,
@@ -123,6 +126,8 @@ type LagState =
   | { readonly status: "idle" }
   | { readonly status: "short" }
   | { readonly status: "computing" }
+  /** The bytes could not be read, or the worker failed. */
+  | { readonly status: "failed" }
   | { readonly status: "done"; readonly r: Float32Array; readonly peaks: readonly Peak[]; readonly sample: number };
 
 /** Where the row width came from. Only a width the reader chose is never
@@ -201,7 +206,7 @@ class StrideState {
         else this.changed();
       })
       .catch(() => {
-        this.lag = { status: "short" };
+        this.lag = { status: "failed" };
         this.changed();
       });
   }
@@ -218,48 +223,55 @@ function stateFor(doc: Doc): StrideState {
 }
 
 /**
- * The record size of the template's widest run of equal-sized records: the
- * file's own structure and the structures directly in it, the first few
- * children of each. "pending" while the template is still being read.
+ * The record size of the template's widest run of equal-sized records: among
+ * the file's own structure and the structures directly in it
+ * (`templateRuns`). "pending" while the template is still being read.
  */
 function templateGuess(doc: Doc): number | null | "pending" {
   const root = doc.templateNode([]);
   if (root.status !== "ok") return root.status === "error" ? null : "pending";
-  const runs: { sizes: number[]; bits: number }[] = [];
-  const look = (path: readonly number[], count: number, bits: number): readonly { readonly composite: boolean; readonly child_count: number; readonly size_bits: number; readonly path: readonly number[] }[] | null => {
-    if (count < 2) return null;
-    const kids = doc.templateChildren(path, 0, Math.min(16, count));
-    if (kids.status !== "ok") return null;
-    runs.push({ sizes: kids.node.map((k) => k.size_bits), bits });
-    return kids.node;
-  };
-  const top = look([], root.node.child_count, root.node.size_bits);
-  for (const k of (top ?? []).slice(0, 8)) if (k.composite) look(k.path, k.child_count, k.size_bits);
-  return templateStride(runs);
+  const runs = templateRuns({ ...root.node, path: [] }, (path, from, to) => {
+    const kids = doc.templateChildren(path, from, to);
+    if (kids.status === "ok") return kids.node;
+    return kids.status === "error" ? null : "pending";
+  });
+  return runs === "pending" ? "pending" : templateStride(runs);
 }
 
-/** The autocorrelation, in a worker where there is one. */
+/** The autocorrelation, in a worker where there is one. A worker that fails
+ *  to load, or throws, fails every request waiting on it, and the next
+ *  request starts a new one. */
 let worker: Worker | null = null;
 let nextId = 1;
-const waiting = new Map<number, (r: PeriodicityResult) => void>();
+const waiting = new Map<number, { resolve: (r: PeriodicityResult) => void; reject: (e: unknown) => void }>();
 function runPeriodicity(req: PeriodicityRequest): Promise<PeriodicityResult> {
   if (typeof Worker === "undefined") return Promise.resolve(periodicity(req));
   try {
     if (worker === null) {
-      worker = new Worker(new URL("./periodicityworker.ts", import.meta.url), { type: "module" });
-      worker.onmessage = (e: MessageEvent<PeriodicityResult>) => {
+      const w = new Worker(new URL("./periodicityworker.ts", import.meta.url), { type: "module" });
+      const fail = (e: unknown): void => {
+        if (worker === w) worker = null;
+        w.terminate();
+        const all = [...waiting.values()];
+        waiting.clear();
+        for (const p of all) p.reject(e);
+      };
+      w.onmessage = (e: MessageEvent<PeriodicityResult>) => {
         const done = waiting.get(e.data.id);
         waiting.delete(e.data.id);
-        done?.(e.data);
+        done?.resolve(e.data);
       };
+      w.onerror = fail;
+      w.onmessageerror = fail;
+      worker = w;
     }
   } catch {
     return Promise.resolve(periodicity(req));
   }
   const id = nextId++;
   const w = worker;
-  return new Promise((resolve) => {
-    waiting.set(id, resolve);
+  return new Promise((resolve, reject) => {
+    waiting.set(id, { resolve, reject });
     w.postMessage({ ...req, id }, [req.bytes.buffer]);
   });
 }
@@ -358,12 +370,23 @@ export type StrideGrid = {
   destroy(): void;
 };
 
+export type StrideGridOptions = {
+  readonly width: number;
+  readonly height: number;
+  readonly rowAxis: boolean;
+  readonly onZoomed?: (zoomed: boolean) => void;
+  readonly onWaiting?: (waiting: boolean) => void;
+  /** The width the grid takes, row addresses and cells, after each layout:
+   *  less than `width` when the row is narrow. */
+  readonly onLayout?: (width: number) => void;
+};
+
 /**
  * Draw the grid `width` by `height` CSS pixels, at the row width and colours
  * in `state`, which it follows. `rowAxis` puts the address of each row down
  * the left, when there is room for it. The grid never measures its host.
  */
-function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: number; rowAxis: boolean; onZoomed?: (zoomed: boolean) => void; onWaiting?: (waiting: boolean) => void }): StrideGrid {
+function drawGrid(doc: Doc, state: StrideState, opts: StrideGridOptions): StrideGrid {
   const host = el("div", "sr-grid");
   const axisSvg = svg("svg", { class: "viz-axis sr-cols", height: AXIS_H });
   const body = el("div", "sr-grid-body");
@@ -439,6 +462,7 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
     canvas.style.width = `${cw}px`;
     canvas.style.height = `${height}px`;
     canvas.setAttribute("aria-label", S.rasterLabel(g.stride));
+    opts.onLayout?.(leftW + cw);
   };
 
   /** A new board for a new geometry: its zoom limits are fixed when made. */
@@ -601,12 +625,17 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
         const l = v === 0 ? zeroCell : greyLevel(v, c.dark, c.bg[0]);
         return [l, l, l];
       };
-      const c0 = Math.max(0, Math.floor(columnAt(g, view, 0)));
-      const c1 = Math.min(g.stride, Math.ceil(columnAt(g, view, g.width)));
+      // Only the cells wholly inside the canvas: half a cell's digits at an
+      // edge would be cut and read as one token with the row address beside
+      // them.
+      const c0 = Math.max(0, Math.ceil(columnAt(g, view, 0) - 1e-6));
+      const c1 = Math.min(g.stride, Math.floor(columnAt(g, view, g.width) + 1e-6));
       for (let r = firstRow; r <= lastRow; r++) {
+        const top = rowY(rowH, topRow, r);
+        if (top < -1e-6 || top + rowH > g.height + 1e-6) continue;
         const got = row(r);
         if (!got.complete) continue;
-        const y = rowY(rowH, topRow, r) + rowH / 2;
+        const y = top + rowH / 2;
         for (let col = c0; col < Math.min(c1, got.bytes.length); col++) {
           const v = got.bytes[col] as number;
           ctx.fillStyle = inkOn(cellColour(v)) === "black" ? "#000" : "#fff";
@@ -903,11 +932,16 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
       teardown();
       plotHost.style.height = lag.status === "computing" ? `${opts.height}px` : "0px";
       reset.hidden = lag.status !== "computing";
-      note.textContent = lag.status === "computing" ? S.computing : lag.status === "short" ? S.tooShort : "";
+      note.textContent = lag.status === "computing" ? S.computing : lag.status === "short" ? S.tooShort : lag.status === "failed" ? S.failed : "";
       return;
     }
     const maxLag = lag.r.length - 1;
-    note.textContent = lag.peaks.length === 0 ? S.noRepeat(maxLag) : S.lagNote(lag.sample < state.length ? formatBytes(lag.sample) : null);
+    // What the axis counts, read off the best peak; then how much of the
+    // file was looked at, on its own line, when that is not all of it.
+    const best = lag.peaks[0];
+    const lines = [el("div", "", best === undefined ? S.noRepeat(maxLag) : S.lagNote(best.lag))];
+    if (lag.sample < state.length) lines.push(el("div", "", S.lagWindow(formatBytes(lag.sample))));
+    note.replaceChildren(...lines);
     if (drawn === lag.r && plot !== null) {
       plot.redraw(false, false);
       return;
@@ -984,6 +1018,9 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
     const over = u.over;
     const plotW = (): number => u.bbox.width / devicePixelRatio;
     const logDomain: [number, number] = [0, Math.log10(maxLag)];
+    // The lag the card last named, so a click where the pointer stopped sets
+    // that lag, and not a neighbour half a pixel away.
+    let shown: { x: number; lag: number } | null = null;
     zoom = board(over, {
       width: plotW(),
       height: u.bbox.height / devicePixelRatio,
@@ -991,6 +1028,10 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
       minScale: 1,
       maxScale: Math.max(1, Math.log10(maxLag) * 40),
       onZoom: (v) => {
+        // The lag under the pointer is a different one now; the next move
+        // says which.
+        shown = null;
+        hideTip();
         reset.disabled = v.k <= 1 + 1e-9 && Math.abs(v.x) < 0.5;
         const [a, b] = rescaleDomain(v, logDomain, [0, plotW()]);
         u.setScale("x", { min: Math.pow(10, Math.max(0, a)), max: Math.pow(10, Math.min(logDomain[1], b)) });
@@ -1008,9 +1049,6 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
       for (let l = lo; l <= hi; l++) if ((lag.r[l] as number) > (lag.r[best] as number)) best = l;
       return best;
     };
-    // The lag the card last named, so a click where the pointer stopped sets
-    // that lag, and not a neighbour half a pixel away.
-    let shown: { x: number; lag: number } | null = null;
     stopTip = hoverTip(over, (e) => {
       const l = lagAt(e);
       shown = l === null ? null : { x: e.clientX, lag: l };
@@ -1043,6 +1081,9 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
 
 // ----- the panel: the controls, the line and the grid -----
 
+/** Ids for the message beside the row width box, one per panel. */
+let nextBadId = 1;
+
 /** The Stride panel at a size: the rail's, or the window's in the large
  *  view. */
 class StridePanel implements OverviewTabPanel {
@@ -1053,6 +1094,7 @@ class StridePanel implements OverviewTabPanel {
   private readonly modeSeg: HTMLElement;
   private readonly legend: HTMLElement;
   private readonly reset: HTMLButtonElement;
+  private readonly gridHead: HTMLElement;
   private readonly grid: StrideGrid;
   private readonly line: LagLine;
   private readonly stop: () => void;
@@ -1061,7 +1103,7 @@ class StridePanel implements OverviewTabPanel {
   constructor(
     private readonly doc: Doc,
     private width: number,
-    private readonly large: { height: number; onClose: () => void } | null,
+    private readonly large: { height: number; readonly onClose: () => void } | null,
   ) {
     this.state = stateFor(doc);
     this.el = el("div", large === null ? "sr-panel" : "sr-panel is-large");
@@ -1075,15 +1117,41 @@ class StridePanel implements OverviewTabPanel {
     this.input.max = String(MAX_STRIDE);
     this.input.step = "1";
     this.input.title = S.perRowTitle;
+    // A number the grid cannot be drawn at is said so beside the box, and
+    // the grid stays at the last good one. An empty box is a number still
+    // being typed; leaving the box puts the width in use back in it.
+    const bad = el("span", "sr-bad", S.perRowBad(MAX_STRIDE));
+    bad.id = `sr-bad-${nextBadId++}`;
+    bad.hidden = true;
+    const markBad = (on: boolean): void => {
+      bad.hidden = !on;
+      this.input.classList.toggle("is-invalid", on);
+      if (on) {
+        this.input.setAttribute("aria-invalid", "true");
+        this.input.setAttribute("aria-describedby", bad.id);
+      } else {
+        this.input.removeAttribute("aria-invalid");
+        this.input.removeAttribute("aria-describedby");
+      }
+    };
     this.input.addEventListener("input", () => {
-      const n = Number(this.input.value);
-      if (Number.isFinite(n) && n >= 1) this.state.setStride(n, "reader");
+      const text = this.input.value.trim();
+      if (text === "") return markBad(false);
+      const n = Number(text);
+      const ok = Number.isInteger(n) && n >= 1;
+      markBad(!ok);
+      if (ok) this.state.setStride(n, "reader");
+    });
+    this.input.addEventListener("change", () => {
+      markBad(false);
+      this.input.value = String(this.state.stride);
     });
     label.append(labelText, this.input);
-    controls.append(label);
+    controls.append(label, bad);
     // Above the grid, beside the picture they act on: put the zoom back, and
     // in the rail, show the same panel over the window.
     const gridHead = el("div", "sr-grid-head");
+    this.gridHead = gridHead;
     if (large === null) {
       const grow = el("button", "sr-grow", S.larger);
       grow.type = "button";
@@ -1110,6 +1178,10 @@ class StridePanel implements OverviewTabPanel {
       height: this.gridHeight(),
       rowAxis: large !== null,
       onWaiting: () => this.drawLegend(),
+      // Reset zoom over the grid's own right-hand end, not the panel's.
+      onLayout: (w) => {
+        gridHead.style.width = `${w}px`;
+      },
       onZoomed: (z) => {
         this.reset.disabled = !z;
       },
@@ -1213,6 +1285,15 @@ class StridePanel implements OverviewTabPanel {
     this.shown = shown;
   }
 
+  /** The large view at the window's new size. */
+  resizeLarge(width: number, height: number): void {
+    if (this.large === null || (Math.floor(width) === Math.floor(this.width) && Math.floor(height) === Math.floor(this.large.height))) return;
+    this.large.height = height;
+    this.width = width;
+    this.line.resize(this.contentWidth());
+    this.grid.resize(this.contentWidth(), this.gridHeight());
+  }
+
   resize(width: number): void {
     if (!Number.isFinite(width) || width <= 0 || Math.floor(width) === Math.floor(this.width)) return;
     this.width = width;
@@ -1241,14 +1322,24 @@ function openLarge(doc: Doc): void {
   const box = el("div", "sr-overlay-box");
   back.append(box);
   const pad = 24;
-  const w = window.innerWidth - 2 * pad - 32;
+  const width = (): number => window.innerWidth - 2 * pad - 32;
   // The controls, the line and its note, the peaks, the zoom buttons, the
   // column ticks and the foot take about this much.
-  const h = window.innerHeight - 2 * pad - 32 - (LINE_H_LARGE + 230);
+  const height = (): number => window.innerHeight - 2 * pad - 32 - (LINE_H_LARGE + 230);
+  let frame = 0;
+  const resized = (): void => {
+    if (frame !== 0) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      panel.resizeLarge(width(), height());
+    });
+  };
   const close = (): void => {
+    cancelAnimationFrame(frame);
     panel.destroy();
     back.remove();
     window.removeEventListener("keydown", key, true);
+    window.removeEventListener("resize", resized);
   };
   const key = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
@@ -1256,14 +1347,35 @@ function openLarge(doc: Doc): void {
       close();
     }
   };
-  const panel = new StridePanel(doc, w, { height: h, onClose: close });
+  const panel = new StridePanel(doc, width(), { height: height(), onClose: close });
   box.append(panel.el);
   back.addEventListener("click", (e) => {
     if (e.target === back) close();
   });
   window.addEventListener("keydown", key, true);
+  window.addEventListener("resize", resized);
   document.body.append(back);
   (panel.el.querySelector(".sr-canvas") as HTMLElement | null)?.focus();
+}
+
+/**
+ * The grid on its own, `width` by `height`, for another piece to draw inside
+ * itself (design section 3.8). It shares the document's row width and colour
+ * mode with the Stride tab, so the two show the same rows, and starts the
+ * same guesses at the row width the tab would.
+ */
+export function draw(doc: Doc, opts: StrideGridOptions): StrideGrid {
+  const state = stateFor(doc);
+  state.guessFromTemplate();
+  state.startLag();
+  return drawGrid(doc, state, opts);
+}
+
+/** The autocorrelation line on its own, the same way as `draw`. */
+export function drawLag(doc: Doc, opts: { width: number; height: number }): LagLine {
+  const state = stateFor(doc);
+  state.startLag();
+  return drawLagLine(state, opts);
 }
 
 /** The Stride tab in the rail, for any file with bytes in it. */
