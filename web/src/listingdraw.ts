@@ -23,6 +23,8 @@ import { drawFormatCard as drawCardOf } from "./formatcards.ts";
 import { fileMap } from "./filemap.ts";
 import { recordTable } from "./records.ts";
 import { tablePlan } from "./tableplan.ts";
+import { headingButtonsFor } from "./viz/headingbuttons.ts";
+import { rowGlyphsFor } from "./viz/rowglyphs.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
@@ -227,6 +229,9 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   // the records they are. The two are different questions about one list, so
   // both are offered rather than one replacing the other.
   offerTable(c, row, item.node);
+  // And whatever the diagram pieces offer for this heading
+  // (`viz/headingbuttons.ts`), after the listing's own.
+  row.append(...headingButtonsFor(c, item));
   // The facts about the part's place in the file sit together at the right:
   // how big it is, how much of the file that is, and where.
   const share = space === 0 ? shareText(item.sizeBits, fileBits) : "";
@@ -290,6 +295,12 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   const box = nodeSwatch(n, said);
   if (box !== null) value.prepend(box);
   if (item.reads !== null) value.append(readsLink(item.reads));
+  // The glyphs diagram pieces draw beside a value (`viz/rowglyphs.ts`): a
+  // sub-byte field's bits, a varint's bytes. Word sized, inside the value.
+  for (const glyph of rowGlyphsFor(c.doc, n)) {
+    const drawn = glyph.draw(c.doc, n);
+    if (drawn !== null) value.append(drawn);
+  }
   markProblem(row, value, n, item.open);
   // A row that stands for a pointer and what it points at says so here, and
   // only here: `at → ObjectHeader` names the thing and says it was reached

@@ -7291,3 +7291,112 @@ table.rec td.is-invalid {
   margin-top: 2px;
   max-width: 44ch;
 }
+
+/* ---- diagram pieces (src/viz/) ---- */
+/* The one hover card every picture shows its values in (`viz/tip.ts`), and
+   the report too. Here and not in report.css, which loads only with the
+   report: a card from the rail would otherwise be unstyled until the report
+   had been opened once. Never takes the pointer, so moving onto it does not
+   take the hover off what it describes. */
+.viz-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(480px, calc(100vw - 24px));
+  pointer-events: none;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  padding: 8px 10px;
+  font: 13px/1.45 var(--sans);
+}
+.viz-tip[hidden] {
+  display: none;
+}
+.viz-tip-title {
+  display: block;
+  font-weight: 600;
+}
+.viz-tip-where {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* Ticks drawn by d3-axis. Its own attributes say `currentColor` and a 10px
+   sans; these make that the muted colour and the face the addresses are
+   written in everywhere else. */
+.viz-axis {
+  color: var(--muted);
+}
+.viz-axis text {
+  font: 10px var(--mono);
+}
+/* Puts a zoomed picture back. Small and quiet: it is the one control on a
+   figure, beside the figure's name, and is greyed out while there is no zoom
+   to undo, so the heading row never changes shape. */
+.viz-reset {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 0;
+}
+/* The diagram sections at the foot of the At cursor panel. */
+.insp-viz-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* ---- the example piece: a structure's fields over its bytes ---- */
+.viz-strip {
+  margin: 0;
+}
+.viz-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.viz-strip-title {
+  font-weight: 600;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Drag pans and the wheel zooms, so the strip asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.viz-strip-svg {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.viz-strip-svg:active {
+  cursor: grabbing;
+}
+.viz-strip-bar {
+  fill: var(--field-color);
+  fill-opacity: 0.35;
+  stroke: var(--field-color);
+  stroke-width: 1;
+}
+/* The field the cursor is in: the accent outline every view marks the
+   selection with, and a solid fill. */
+.viz-strip-bar.is-on {
+  fill-opacity: 0.7;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.viz-strip-names text {
+  font: 11px var(--sans);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.viz-strip-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}

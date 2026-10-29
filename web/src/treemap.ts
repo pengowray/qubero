@@ -31,6 +31,7 @@
  */
 
 import { hierarchy, treemap, treemapBinary, treemapSquarify, type HierarchyRectangularNode } from "d3-hierarchy";
+import { fitLabel, freeRect, monoMeasure, type LabelFit, type Rect } from "./viz/fit.ts";
 
 /** One box. `value` is in whatever unit the caller is counting, and only its
  *  share of the total matters here. A node with children is drawn as a frame
@@ -352,11 +353,9 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
   return layer;
 }
 
-type Rect = { x0: number; y0: number; x1: number; y1: number };
-
-/** A name that fits: how big, which way up, and the two widths the caller
- *  places it by. */
-type Fit = { size: number; sideways: boolean; wanted: number; lineH: number };
+/** How a name is measured: the monospace stack is one width per character,
+ *  so a ratio places it exactly and no canvas is needed. */
+const MEASURE = monoMeasure(CHAR_RATIO);
 
 /**
  * The biggest size a name fits at, upright if it can be and turned on its side
@@ -367,25 +366,25 @@ type Fit = { size: number; sideways: boolean; wanted: number; lineH: number };
  * a hundred pixels wide holding `field-number` does not fit at seventeen point
  * and fits perfectly at eleven, and refusing to shrink left the outermost
  * boxes, the ones most worth naming, as the only unlabelled ones on the map.
+ *
+ * A tall narrow box has the room, only the other way up. Turning the name on
+ * its side is what fills the column down the side of a treemap that would
+ * otherwise be a stack of unlabelled slivers. The three pixels of slack are
+ * the plate and the pixel of box either side of it: without them a name whose
+ * box was two pixels short of holding it was drawn and then cut off, which for
+ * `0x8d` means showing a different byte value. The arithmetic is `viz/fit.ts`.
  */
-function fits(text: string, depth: number, w: number, h: number): Fit | null {
-  const start = Math.min(depth - 1, LABEL_SIZES.length - 1);
-  for (let i = start; i < LABEL_SIZES.length; i++) {
-    const size = LABEL_SIZES[i] ?? 10;
-    const lineH = size + 2 * LABEL_PAD_Y + 2;
-    // Room for the plate and the pixel of box either side of it. Without the
-    // slack a name whose box was two pixels short of holding it was drawn and
-    // then cut off, which for `0x8d` means showing a different byte value.
-    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
-    const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
-    if (h >= lineH && w >= need) return { size, sideways: false, wanted, lineH };
-    // A tall narrow box has the room, only the other way up. Turning the name
-    // on its side is what fills the column down the side of a treemap that
-    // would otherwise be a stack of unlabelled slivers, and a reader tilting
-    // their head is still a reader who can tell which box is which.
-    if (w >= lineH && h >= need) return { size, sideways: true, wanted, lineH };
-  }
-  return null;
+function fits(text: string, depth: number, w: number, h: number): LabelFit | null {
+  return fitLabel(text, w, h, {
+    sizes: LABEL_SIZES,
+    start: depth - 1,
+    minChars: MIN_CHARS,
+    padX: LABEL_PAD_X,
+    padY: LABEL_PAD_Y,
+    slack: 3,
+    sideways: true,
+    measure: MEASURE,
+  });
 }
 
 /**
@@ -396,27 +395,11 @@ function fits(text: string, depth: number, w: number, h: number): Fit | null {
  * same corner. Refusing every name but the outermost would hide exactly the
  * chain a reader needs, which is what says how the box they have opened sits
  * inside the one they came from, so a name that lands on one already down is
- * dropped a line and tried again. A few lines in it has run out of box, and
- * then it is genuinely not drawn.
+ * dropped a line and tried again (`freeRect`). A few lines in it has run out
+ * of box, and then it is genuinely not drawn.
  */
 function free(want: Rect, placed: readonly Rect[], far: number, sideways = false): Rect | null {
-  const height = want.y1 - want.y0;
-  const width = want.x1 - want.x0;
-  let rect = want;
-  for (let tries = 0; tries < STACKED_NAMES; tries++) {
-    // Out of its own box before it is out of the way. `far` is the box's far
-    // edge in whichever direction this name steps, and a name that has walked
-    // past it is not this box's name any more.
-    if ((sideways ? rect.x1 : rect.y1) > far) return null;
-    const hit = placed.find((p) => p.x0 < rect.x1 && rect.x0 < p.x1 && p.y0 < rect.y1 && rect.y0 < p.y1);
-    if (hit === undefined) return rect;
-    // A name running down the side steps sideways out of the way rather than
-    // down, since down is the direction it is already using.
-    rect = sideways
-      ? { ...rect, x0: hit.x1, x1: hit.x1 + width }
-      : { ...rect, y0: hit.y1, y1: hit.y1 + height };
-  }
-  return null;
+  return freeRect(want, placed, far, sideways, STACKED_NAMES);
 }
 
 /** How many names may stack down one corner. Four levels of containment is

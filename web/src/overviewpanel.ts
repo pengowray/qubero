@@ -29,6 +29,7 @@ import type { OutlineHeading, Viewport } from "./outline.ts";
 import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.ts";
 import { rememberChoice, storedText } from "./stored.ts";
 import type { LogicalNode, LogicalOutline } from "./logicaloutline.ts";
+import { overviewTabs, type OverviewTab, type OverviewTabPanel } from "./viz/overviewtabs.ts";
 
 /** What a note offers to do about what it says: one button after the words.
  *  A note that only reports something has none. */
@@ -81,7 +82,18 @@ type Part = { readonly head: OutlineHeading; readonly subs: readonly OutlineHead
  *  inside one of those. */
 type Place = { readonly part: number; readonly sub: number };
 
-type Tab = "contents" | "logical" | "btrees";
+/** The rail's own three tabs, and the ones diagram pieces register
+ *  (`viz/overviewtabs.ts`), which are named `viz:` and their id. */
+type Tab = "contents" | "logical" | "btrees" | `viz:${string}`;
+
+/** A registered tab in this rail: its button, the element its panel goes in,
+ *  and the panel once the tab has first been shown. */
+type VizTab = {
+  readonly tab: OverviewTab;
+  readonly button: HTMLButtonElement;
+  readonly host: HTMLElement;
+  panel: OverviewTabPanel | null;
+};
 
 function pathKey(path: readonly number[]): string {
   return path.join("/");
@@ -180,6 +192,9 @@ export class OverviewPanel {
   /** The third tab's whole panel: one B-tree drawn in the shape the file gives
    *  it. A panel of its own rather than a list, the way the treemap is. */
   private readonly btrees: BTreePanel;
+  /** The tabs diagram pieces registered, by tab name, in the order they were
+   *  registered. Each makes its panel the first time it is shown. */
+  private readonly vizTabs = new Map<Tab, VizTab>();
   /** The two pictures of the file, in the order the questions come: where the
    *  bytes of each kind are, then how much of the file each part is. */
   private readonly minimap: MinimapPanel;
@@ -279,6 +294,17 @@ export class OverviewPanel {
     this.btreesTab = this.tabButton(BTREES_TAB, "btrees");
     this.btreesTab.title = BTREES.what;
     this.tabs.append(this.contentsTab, this.logicalTab, this.btreesTab);
+    for (const tab of overviewTabs()) {
+      const name: Tab = `viz:${tab.id}`;
+      const button = this.tabButton(tab.label, name);
+      button.title = tab.title;
+      const host = document.createElement("div");
+      host.className = "ov-viz";
+      host.setAttribute("role", "tabpanel");
+      host.hidden = true;
+      this.tabs.append(button);
+      this.vizTabs.set(name, { tab, button, host, panel: null });
+    }
     this.contentsEl = document.createElement("div");
     this.contentsEl.className = "ov-parts";
     this.contentsEl.setAttribute("role", "tabpanel");
@@ -326,6 +352,7 @@ export class OverviewPanel {
       this.contentsEl,
       this.logicalEl,
       this.btrees.el,
+      ...[...this.vizTabs.values()].map((v) => v.host),
       this.treemap.el,
     );
     this.el.append(header, this.body);
@@ -352,7 +379,12 @@ export class OverviewPanel {
     });
 
     const savedTab = storedText("qubero.rail.tab");
-    this.tab = savedTab === "logical" || savedTab === "btrees" ? savedTab : "contents";
+    this.tab =
+      savedTab === "logical" || savedTab === "btrees"
+        ? savedTab
+        : savedTab !== null && this.vizTabs.has(savedTab as Tab)
+          ? (savedTab as Tab)
+          : "contents";
     this.syncTabs();
 
     this.logicalEl.addEventListener("click", (e) => this.onLogicalClick(e));
@@ -362,6 +394,7 @@ export class OverviewPanel {
     new ResizeObserver(() => {
       this.drawFacts();
       this.minimap.relayout();
+      for (const v of this.vizTabs.values()) v.panel?.resize?.(this.vizWidth());
     }).observe(this.body);
     doc.onChange(() => {
       this.logical = null;
@@ -464,6 +497,7 @@ export class OverviewPanel {
   reveal(path: readonly number[]): void {
     const k = pathKey(path);
     if (k === this.selectedPath) return;
+    for (const v of this.vizTabs.values()) v.panel?.reveal?.(path);
     this.selectedPath = k;
     this.selectedLogicalId = null;
     if (this.logical !== null) {
@@ -510,6 +544,15 @@ export class OverviewPanel {
     if (this.logicalStale && this.tab === "logical") this.scheduleLogical();
     this.btrees.setShown(this.tab === "btrees" && !this.body.hidden);
     this.btrees.pump();
+    // The rail may have been unfolded since the tabs were last synced.
+    this.showVizTabs();
+    this.vizTabs.get(this.tab)?.panel?.pump?.();
+  }
+
+  /** The width a registered tab's panel has: the rail's, inside its padding. */
+  private vizWidth(): number {
+    const style = getComputedStyle(this.body);
+    return Math.max(0, this.body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
   }
 
   private drawFacts(): void {
@@ -634,11 +677,20 @@ export class OverviewPanel {
     this.btreesTab.hidden = !hasTrees;
     if (!hasLogical && this.tab === "logical") this.tab = "contents";
     if (!hasTrees && this.tab === "btrees") this.tab = "contents";
-    for (const [button, panel, tab] of [
+    // A registered tab is offered by its own predicate, asked again whenever
+    // the document changes, like the two above.
+    for (const [name, v] of this.vizTabs) {
+      const offered = v.tab.offers(this.doc);
+      v.button.hidden = !offered;
+      if (!offered && this.tab === name) this.tab = "contents";
+    }
+    const all: [HTMLButtonElement, HTMLElement, Tab][] = [
       [this.contentsTab, this.contentsEl, "contents"],
       [this.logicalTab, this.logicalEl, "logical"],
       [this.btreesTab, this.btrees.el, "btrees"],
-    ] as const) {
+      ...[...this.vizTabs].map(([name, v]): [HTMLButtonElement, HTMLElement, Tab] => [v.button, v.host, name]),
+    ];
+    for (const [button, panel, tab] of all) {
       const on = this.tab === tab;
       button.classList.toggle("is-on", on);
       button.setAttribute("aria-selected", String(on));
@@ -647,6 +699,21 @@ export class OverviewPanel {
     // The panel walks the tree only while it can be seen, so it has to be told
     // both ways round rather than working it out from its own visibility.
     this.btrees.setShown(this.tab === "btrees" && !this.body.hidden);
+    this.showVizTabs();
+  }
+
+  /** Tell each registered tab's panel whether it can be seen, making it the
+   *  first time it can. Made then and not before: a panel built behind a
+   *  hidden tab, or in a folded rail, would read the file for nobody. */
+  private showVizTabs(): void {
+    for (const [name, v] of this.vizTabs) {
+      const shown = this.tab === name && !this.body.hidden;
+      if (shown && v.panel === null) {
+        v.panel = v.tab.mount(this.doc, this.vizWidth());
+        v.host.replaceChildren(v.panel.el);
+      }
+      v.panel?.setShown?.(shown);
+    }
   }
 
   // ----- the contents -----

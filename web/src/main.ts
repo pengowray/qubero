@@ -48,6 +48,10 @@ import { gearIcon } from "./icons.ts";
 import { SettingsDialog, type ExtraTemplate } from "./settingsdialog.ts";
 import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
 import { templateExtensions } from "./identity.ts";
+import { linkedFor } from "./viz/linked.ts";
+import { setPickRoute } from "./viz/pick.ts";
+// Every diagram piece registers itself with its host views from here, once.
+import "./viz/register.ts";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -490,6 +494,25 @@ function buildDocument(tab: Tab): Page {
    *  is showing. */
   let linkPath: readonly number[] | null = null;
 
+  /** The one hover and one selection every diagram piece of this document
+   *  shares (`viz/linked.ts`). A hover from any piece, or from a row of the
+   *  inspector, is marked over the bytes here. */
+  const linked = linkedFor(doc);
+  tab.release.push(
+    linked.subscribe((state, changed) => {
+      if (changed === "hover") view.markHover(state.hover);
+    }),
+  );
+  const publishSelection = (): void => {
+    const n = linkPath === null ? null : doc.templateNode(linkPath);
+    linked.publish({
+      selection:
+        linkPath === null || n === null || n.status !== "ok"
+          ? null
+          : { path: linkPath, startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits },
+    });
+  };
+
   /**
    * Work out what the overlay should draw for the field the panels are on.
    *
@@ -502,6 +525,10 @@ function buildDocument(tab: Tab): Page {
    * byte of the file with the same number would point at some other field.
    */
   const refreshLinks = (): void => {
+    // The field the arrows are drawn for is the one the cursor is in, so this
+    // is also where every diagram piece is told what is selected
+    // (`viz/linked.ts`), whether or not the arrows are on.
+    publishSelection();
     if (!view.links.enabled) return;
     const path = linkPath;
     if (path === null || !inFile(path)) {
@@ -694,17 +721,13 @@ function buildDocument(tab: Tab): Page {
   // Pointing at a row in the properties list marks that field over the bytes.
   // The sidebar names the field and the grid says where it is; between them
   // that is the whole answer, and neither has to be clicked for it.
+  // Through the shared hover (`linked` above), so the diagram pieces light the
+  // same field the hex view marks.
   inspector.onHoverField = (path) => {
-    if (path === null || !inFile(path)) {
-      view.markHover(null);
-      return;
-    }
-    const n = doc.templateNode(path);
-    if (n.status !== "ok") {
-      view.markHover(null);
-      return;
-    }
-    view.markHover({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
+    const n = path === null || !inFile(path) ? null : doc.templateNode(path);
+    linked.publish({
+      hover: n === null || n.status !== "ok" ? null : { startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits },
+    });
   };
   inspector.onOpenTab = openEmbedded;
   /** The stream Open unpacked is waiting on while a large one is unpacked
@@ -2141,6 +2164,31 @@ function buildDocument(tab: Tab): Page {
     inspector.setPath(path);
     structure.reveal(path);
   };
+  // Where a click in any diagram piece goes (`viz/pick.ts`): the same move as
+  // picking a part in the rail, with the place being left kept for Back, and
+  // the field made the one the arrows and the pieces' selection are drawn for.
+  // A field out of a compressed stream has no bit of the file to put the
+  // cursor on, so it moves the inspector and the listing and nothing else.
+  tab.release.push(
+    setPickRoute(doc, {
+      field: (pick) => {
+        if (!inFile(pick.path)) {
+          inspector.setPath(pick.path);
+          structure.reveal(pick.path);
+          return;
+        }
+        nav.recordJump(view.cursorState.bitOffset, pick.startBit);
+        overview.onPick(pick);
+        overview.reveal(pick.path);
+        linkPath = pick.path;
+        refreshLinks();
+      },
+      bits: (ranges) => {
+        const first = ranges[0];
+        if (first !== undefined) jumpToBit(first.startBit, ranges);
+      },
+    }),
+  );
   // The listing works out what the parts of the file are; the rail lists them
   // and the hex view draws their headings. The rail says whether they changed,
   // so a walk that named the same parts again redraws nothing.

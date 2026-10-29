@@ -3999,3 +3999,20 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
   const word = unit ?? "record";
   return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
 }
+
+/** The diagram pieces in `viz/`, starting with the example piece every batch
+ *  piece is modelled on (`viz/childstrip.ts`). Each piece adds its own block
+ *  of words under its own key, so two pieces never edit the same lines. */
+export const VIZ = {
+  /** Shared by every zoomable piece: puts the picture back as first drawn. */
+  resetZoom: "Reset zoom",
+  childStrip: {
+    /** The section's heading in the At cursor panel: the structure the
+     *  cursor is in, with its fields drawn where their bytes are. */
+    title: (name: string): string => `Byte layout of ${name}`,
+    /** Under the strip, when a structure has more children than are drawn.
+     *  The noun is the structure's own word for them: fields, items, chunks. */
+    firstOf: (shown: number, total: number, noun: string): string =>
+      `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
+  },
+} as const;
