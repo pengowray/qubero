@@ -789,6 +789,16 @@ const RAIL_MAX_H = 900;
 /** Room kept under the drawing, in the rail. */
 const RAIL_FOOT_PX = 12;
 
+/** Where the part of the window `el` can be seen in ends: the bottom of the
+ *  nearest ancestor that scrolls, or of the window. */
+function viewBottom(el: HTMLElement): number {
+  for (let at = el.parentElement; at !== null; at = at.parentElement) {
+    const y = getComputedStyle(at).overflowY;
+    if (y === "auto" || y === "scroll") return Math.min(window.innerHeight, at.getBoundingClientRect().bottom);
+  }
+  return window.innerHeight;
+}
+
 class SpaceBandsPanel implements OverviewTabPanel {
   readonly el: HTMLElement;
   private readonly figure: HTMLElement;
@@ -926,7 +936,7 @@ class SpaceBandsPanel implements OverviewTabPanel {
     let width = this.width;
     const wanted = pic.regions.length * ROW_H * 1.6 + HEAD_H + FOOT_H;
     // The figure is in the page by now, with the summary and key over it.
-    const room = this.figure.isConnected ? window.innerHeight - this.figure.getBoundingClientRect().top - RAIL_FOOT_PX : RAIL_MAX_H;
+    const room = this.figure.isConnected ? viewBottom(this.figure) - this.figure.getBoundingClientRect().top - RAIL_FOOT_PX : RAIL_MAX_H;
     let height = Math.max(RAIL_MIN_H, Math.min(RAIL_MAX_H, wanted, room));
     if (this.big) {
       width = Math.floor(this.figure.clientWidth);
