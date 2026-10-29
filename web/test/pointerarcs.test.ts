@@ -252,7 +252,7 @@ test("the walk finds the xref's arc to each object, once each, named from the tr
   assert.deepEqual(first.to.path, [1, 0], "the field end replaced the bare bit");
   assert.equal(first.to.label, "objects[0]");
   assert.equal(first.from.label, "xref.entries[0].offset");
-  assert.equal(first.value, "10", "the value the bare bit had is kept");
+  assert.equal(first.value, "10", "the offset field's own value");
   assert.equal(isForward(first), false);
 });
 
@@ -314,7 +314,50 @@ test("file parts open out a part that takes most of the file", () => {
   const zparts = fileParts(fakeDoc(zip), 300 * 8);
   assert.deepEqual(
     zparts?.map((p) => p.name),
-    ["a.txt", "b.txt"],
+    ["[0] a.txt", "[1] b.txt"],
+    "the listing's name, index and all, so two parts of one name differ",
+  );
+  assert.deepEqual(
+    zparts?.map((p) => p.label),
+    ["records[0]", "records[1]"],
+    "named as the arcs name them",
   );
   assert.equal(fileParts(fakeDoc(pdfLike(), 1), 400 * 8), null, "null while the tree is read");
+});
+
+test("an arc says what its field holds, from the tree, and a field only measured is no arc", () => {
+  // `tail` is placed at `at + sizeof(at)`: `at` holds 30, and is 4 bytes
+  // long, which the core answers with as the value of `size of at`.
+  const root = withPaths(
+    field("file", 0, 40, {}, [
+      field("at", 0, 4, { value: "30" }),
+      field("list", 4, 20, { list: true }, [field("[0]", 4, 20)]),
+      field("tail", 30, 10, { origins: [origin("position", [0], "at", "30"), origin("position", [0], "size of at", "4"), origin("position", [1], "size of list", "20")] }),
+    ]),
+    [],
+  );
+  const walk = new PointerWalk(fakeDoc(root));
+  walk.step(Number.POSITIVE_INFINITY, () => 0);
+  assert.equal(walk.arcs.length, 1, "the two sizeof origins draw nothing");
+  assert.equal(walk.arcs[0]?.from.label, "at");
+  assert.equal(walk.arcs[0]?.value, "30");
+  // A count read from a list says nothing as a value: the listing's value of
+  // a structure is how many fields it has.
+  const counted = withPaths(field("file", 0, 40, {}, [field("list", 0, 20, { list: true, value: "1" }, [field("[0]", 0, 20)]), field("tail", 30, 10, { origins: [origin("count", [0], "list", "7")] })]), []);
+  const w2 = new PointerWalk(fakeDoc(counted));
+  w2.step(Number.POSITIVE_INFINITY, () => 0);
+  assert.equal(w2.arcs[0]?.value, "");
+});
+
+test("file parts open a structure that is most of the file, among small fields", () => {
+  // An ELF: the identification bytes, then a header spanning the rest of the
+  // file with its tables inside, beside a field of no bytes.
+  const elf = withPaths(
+    field("file", 0, 100, {}, [field("magic", 0, 4), field("class", 4, 1), field("header", 5, 95, {}, [field("entry", 5, 8), field("sections", 13, 87)]), field("arch", 0, 0)]),
+    [],
+  );
+  assert.deepEqual(
+    fileParts(fakeDoc(elf), 100 * 8)?.map((p) => p.label),
+    ["magic", "class", "header.entry", "header.sections"],
+  );
 });

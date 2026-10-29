@@ -34,9 +34,14 @@
 //   for it with the values put in, and how far it reaches (`tip.ts`), and
 //   publishes the end under the pointer so the hex view marks it
 //   (`linked.ts`); a click on an end goes to that field, and on the curve to
-//   the field it points to (`pick.ts`);
+//   the field it points to (`pick.ts`). A click goes by what the last hover
+//   found, so the card on screen is always what the click acts on;
+// - hover on a part of the bar, away from the arcs, gives its whole name
+//   (the bar cuts names short), its type and where it is, and a click goes
+//   to it;
 // - the field the cursor is in lights its own arcs and dims the rest, as
-//   does a hover from any other view;
+//   does a hover from any other view, and the lit arcs' ends are outlined on
+//   the bar;
 // - chips above the figure turn each role on and off, and are its legend:
 //   each says the role's word, its count and its colour (`roleColor`).
 //
@@ -47,8 +52,8 @@
 import type { Doc, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { ROLES, roleColor } from "../fieldstyle.ts";
-import { ROLE_GROUP, VIZ } from "../strings.ts";
-import { askedCardKey, registerKindCard } from "../formatcards.ts";
+import { bitSizeText, childWord, countText, ROLE_GROUP, VIZ } from "../strings.ts";
+import { askedCardKey, CARD_RESIZED, registerKindCard } from "../formatcards.ts";
 import { arcShapes, arcsTouching, sideRoom, arcOverlaps, arcTouches, nearestArc, reach, roleCounts, uncovered, type ArcEnd, type ArcHit, type ArcShape, type PointerArc } from "./arcmath.ts";
 import { board, type Board } from "./board.ts";
 import { applyX, invertX, rescaleDomain, type View } from "./boardmath.ts";
@@ -179,6 +184,9 @@ export function pointersFor(doc: Doc): Pointers {
 
 /** The bar the arcs stand on. */
 const BAR_H = 16;
+/** How far into the bar from its edge an arc's end is still picked before
+ *  the part the pointer is on. */
+const BAR_EDGE_PX = 4;
 /** The offsets axis under the figure. */
 const AXIS_H = 18;
 /** Names on the bar, the size of the listing's small text less one. */
@@ -195,6 +203,9 @@ const TICK_MEASURE = monoMeasure();
  *  value, a name worked out from another field) are dependencies but not
  *  pointers, and drawn only when asked for. */
 const DEFAULT_ROLES: ReadonlySet<string> = new Set(["position", "length", "count"]);
+/** Ends outlined on the bar for the field the cursor is in, at most. A table
+ *  of a thousand pointers outlines nothing useful. */
+const MAX_LIT_ENDS = 64;
 /** Roles in the order the chips list them. `points` is folded into
  *  `position` by the walk. */
 const CHIP_ORDER = ROLES.filter((r) => r !== "points");
@@ -206,14 +217,32 @@ export type ArcFigureOptions = {
   /** Only the arcs with an end inside this field, for a card under its
    *  heading. Null for every arc in the file. */
   readonly within: readonly number[] | null;
-  /** Keep the full `arcPx` on both sides whatever the arcs need, for a host
-   *  that measures the figure once and expects it to stay that height. */
+  /** Keep the room for arcs the figure was first drawn with, for a host
+   *  that measures it: the full `arcPx` on both sides while the walk runs,
+   *  cut to the arcs once when it finishes, and the same after that, so the
+   *  chips do not change the height. */
   readonly fixedRoom?: boolean;
   /** Where the reader left the zoom last time this figure was drawn, as a
    *  share of the file's width, and where to say when it moves. A card is
    *  built again on every paint of the listing, so it keeps this outside. */
   readonly zoom?: { readonly get: () => readonly [number, number] | null; readonly set: (range: readonly [number, number] | null) => void };
 };
+
+/** What the pointer is on: an arc, a part of the bar, or bytes of the bar no
+ *  part covers. */
+type Under =
+  | { readonly kind: "arc"; readonly hit: ArcHit }
+  | { readonly kind: "part"; readonly part: FilePart; readonly startBit: number; readonly endBit: number }
+  | { readonly kind: "gap"; readonly startBit: number; readonly endBit: number };
+
+/** True when two hovers are on the same thing. Shapes are made again on
+ *  every paint, so an arc is told by the arcs it draws rather than by the
+ *  shape. */
+function sameUnder(a: Under | null, b: Under | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind === "arc" || b.kind === "arc") return a.kind === "arc" && b.kind === "arc" && a.hit.shape.arcs[0] === b.hit.shape.arcs[0] && a.hit.shape.arcs.length === b.hit.shape.arcs.length;
+  return a.kind === b.kind && a.startBit === b.startBit;
+}
 
 export type ArcFigure = {
   readonly el: HTMLElement;
@@ -370,15 +399,22 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
   let arcs: readonly PointerArc[] = [];
   let shown: readonly PointerArc[] = [];
   let shapes: ArcShape[] = [];
+  /** The arc under the pointer. */
   let hover: ArcHit | null = null;
+  /** Whatever the last hover found, arc or part, which a click acts on.
+   *  `pointed` says whether there has been a hover to go by since the
+   *  pointer came in or the view moved. */
+  let under: Under | null = null;
+  let pointed = false;
   let myHover: BitRange | null = null;
   let view: View = { k: 1, x: 0, y: 0 };
   let axis: Axis | null = null;
   let ink: Ink | null = null;
   let chipsKey = "";
   let zoom: Board | null = null;
-  /** True once the room above and below may no longer change. */
-  let fixed = opts.fixedRoom === true && source.state !== "done";
+  /** True once a figure that keeps its height has been cut to the arcs of a
+   *  finished walk, which it is only once. */
+  let settled = false;
   /** The bits of the field a card is about. */
   const withinSpan = ((): { startBit: number; endBit: number } | null => {
     if (opts.within === null) return null;
@@ -405,10 +441,14 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
   const refilter = (): void => {
     arcs = opts.within === null ? source.arcs : arcsTouching(source.arcs, opts.within, withinSpan ?? undefined);
     shown = arcs.filter((a) => enabled.has(a.role));
-    const room = fixed ? { up: arcPx, down: arcPx } : sideRoom(shown, fileBits(), arcPx);
-    // A figure that must keep its height is still cut to its arcs when they
-    // are all known before it is first drawn.
-    if (opts.fixedRoom === true) fixed = true;
+    if (opts.fixedRoom === true) {
+      // Cut to the arcs once, when the walk has found them all: before the
+      // figure is first drawn, or later, when the walk it waited on ends.
+      // Never again after that, so the chips do not change its height.
+      if (settled || source.state !== "done") return;
+      settled = true;
+    }
+    const room = sideRoom(shown, fileBits(), arcPx);
     if (room.up === upH && room.down === downH) return;
     upH = room.up;
     downH = room.down;
@@ -474,12 +514,17 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
     return r.status === "ok" ? partName(r.node) : "";
   };
 
+  /** The arcs of the field the cursor is in. */
+  const selected = (): PointerArc[] => {
+    const sel = bus.state.selection;
+    return sel === null || sel.path.length === 0 ? [] : shown.filter((a) => arcTouches(a, sel.path, sel));
+  };
+
   /** The arcs to draw brighter than the rest, or an empty set when none is. */
   const emphasis = (): Set<PointerArc> => {
     const out = new Set<PointerArc>();
     if (hover !== null) for (const a of hover.shape.arcs) out.add(a);
-    const sel = bus.state.selection;
-    if (sel !== null && sel.path.length > 0) for (const a of shown) if (arcTouches(a, sel.path, sel)) out.add(a);
+    for (const a of selected()) out.add(a);
     const h = bus.state.hover;
     if (h !== null && h !== myHover) for (const a of shown) if (arcOverlaps(a, h.startBit, h.endBit)) out.add(a);
     return out;
@@ -512,7 +557,8 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
       c.fillStyle = k.fg;
       c.fillText(text, left + NAME_PAD, barTop + BAR_H / 2);
     });
-    // The field this card is about, and the ends of the arc under the
+    // The field this card is about, the ends of the arc under the pointer
+    // and of the arcs of the field the cursor is in, and the part under the
     // pointer, marked on the bar in the accent the cursor is drawn in.
     const lit: { startBit: number; endBit: number }[] = [];
     if (opts.within !== null) {
@@ -523,6 +569,9 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
       const a = hover.shape.arcs[0] as PointerArc;
       lit.push(a.from, a.to);
     }
+    const sel = selected();
+    if (sel.length * 2 <= MAX_LIT_ENDS) for (const a of sel) lit.push(a.from, a.to);
+    if (under !== null && under.kind !== "arc") lit.push(under);
     c.strokeStyle = k.accent;
     c.lineWidth = 2;
     for (const s of lit) {
@@ -601,6 +650,8 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
       reset.disabled = v.k === 1 && v.x === 0;
       opts.zoom?.set(v.k === 1 && v.x === 0 ? null : [invertX(v, 0) / width, invertX(v, width) / width]);
       hover = null;
+      under = null;
+      pointed = false;
       paint();
     },
   });
@@ -608,15 +659,31 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
   reset.addEventListener("click", () => pan.home(true));
   if (kept !== null) pan.zoomTo({ x0: kept[0] * width, y0: 0, x1: kept[1] * width, y1: height + AXIS_H });
 
-  /** What is under a pointer event. */
-  const hitAt = (e: MouseEvent): ArcHit | null => {
+  /** What is under a pointer event. On the middle of the bar, where the
+   *  names are, the part there; elsewhere an arc in reach, which an end on
+   *  the bar's edge is from inside the bar too; and else the part. */
+  const hitAt = (e: MouseEvent): Under | null => {
     const r = stage.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
     if (y > height) return null;
+    const bit = (invertX(view, x) / width) * fileBits();
+    if (y >= barTop + BAR_EDGE_PX && y <= barBottom - BAR_EDGE_PX) return onBar(bit);
     const above = y < (barTop + barBottom) / 2;
     const side = shapes.filter((s) => s.up === above);
-    return nearestArc(side, x, y, above ? barTop : barBottom);
+    const arc = nearestArc(side, x, y, above ? barTop : barBottom);
+    if (arc !== null) return { kind: "arc", hit: arc };
+    if (y < barTop || y > barBottom) return null;
+    return onBar(bit);
+  };
+
+  /** The part of the bar at `bit`, or the run of bytes no part covers. */
+  const onBar = (bit: number): Under | null => {
+    if (bit < 0 || bit >= fileBits()) return null;
+    const parts = source.parts ?? [];
+    for (const p of parts) if (p.startBit <= bit && bit < p.endBit) return { kind: "part", part: p, startBit: p.startBit, endBit: p.endBit };
+    for (const g of uncovered(parts, fileBits())) if (g.startBit <= bit && bit < g.endBit) return { kind: "gap", startBit: g.startBit, endBit: g.endBit };
+    return null;
   };
 
   /** The end a hit stands for: the one under the pointer, or the field the
@@ -627,31 +694,43 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
     return h.at === "from" ? a.from : a.to;
   };
 
+  /** The bytes a hover or a click stands for. */
+  const targetOf = (u: Under): ArcEnd | null => {
+    if (u.kind === "arc") return endOf(u.hit);
+    if (u.kind === "part") return { path: u.part.path, startBit: u.startBit, endBit: u.endBit, label: u.part.label };
+    return { path: [], startBit: u.startBit, endBit: u.endBit, label: "" };
+  };
+
   const stopTip = hoverTip(stage, (e) => {
-    const h = hitAt(e);
-    // Shapes are made again on every paint, so the same arc is told by what
-    // it draws rather than by the object.
-    const changed = h?.shape.arcs[0] !== hover?.shape.arcs[0] || h?.shape.arcs.length !== hover?.shape.arcs.length;
+    const u = hitAt(e);
+    const h = u?.kind === "arc" ? u.hit : null;
+    const changed = !sameUnder(u, under);
     hover = h;
-    const end = h === null ? null : endOf(h);
+    under = u;
+    pointed = true;
+    const end = u === null ? null : targetOf(u);
     myHover = end === null ? null : { startBit: end.startBit, endBit: Math.max(end.endBit, end.startBit + 8) };
     bus.publish({ hover: myHover });
     if (changed) paint();
-    return h === null ? null : card(h);
+    return u === null ? null : u.kind === "arc" ? card(u.hit) : barCard(u);
   });
   const leave = (): void => {
-    if (hover !== null) {
-      hover = null;
-      paint();
-    }
+    const had = hover !== null || under !== null;
+    hover = null;
+    under = null;
+    pointed = false;
+    if (had) paint();
     myHover = null;
     bus.publish({ hover: null });
   };
   stage.addEventListener("pointerleave", leave);
   const click = (e: MouseEvent): void => {
-    const h = hitAt(e);
-    if (h === null) return;
-    const end = endOf(h);
+    // What the card on screen is about, rather than a second hit test: the
+    // click's whole-pixel position can fall just outside the reach the
+    // hover's fractional one was inside.
+    const u = pointed ? under : hitAt(e);
+    if (u === null) return;
+    const end = targetOf(u);
     if (end === null) return;
     if (end.path.length > 0) goToField(doc, { path: end.path, startBit: end.startBit, endBit: end.endBit });
     else goToBits(doc, [{ startBit: end.startBit, endBit: Math.max(end.endBit, end.startBit + 8) }]);
@@ -665,16 +744,31 @@ export function drawPointerArcs(doc: Doc, source: Pointers, opts: ArcFigureOptio
     if (s.arcs.length > 1) {
       const from = s.arcs.map((a) => a.from.startBit);
       const to = s.arcs.map((a) => a.to.startBit);
-      const where = T.bundleWhere(formatOffset(Math.min(...from)), formatOffset(Math.max(...from)), formatOffset(Math.min(...to)), formatOffset(Math.max(...to)));
-      return tipCard(T.bundleTitle(s.arcs.length, word.toLowerCase()), [where], T.bundleHint);
+      const lines = [T.bundleFrom(formatOffset(Math.min(...from)), formatOffset(Math.max(...from))), T.bundleTo(formatOffset(Math.min(...to)), formatOffset(Math.max(...to)))];
+      return tipCard(T.bundleTitle(s.arcs.length, word.toLowerCase()), lines, T.bundleHint);
     }
     const a = s.arcs[0] as PointerArc;
-    // The core leaves the value out where it could not read it.
+    // No value for a structure, or where the field could not be read.
     const lines = [a.value === "" ? a.from.label : T.holds(a.from.label, a.value)];
     const worked = workedOut(doc, a);
     if (worked !== null) lines.push(worked);
     const r = reach(a);
     return tipCard(T.arcTitle(word, a.to.label), lines, T.reach(formatOffset(a.from.startBit), formatOffset(a.to.startBit), r.bytes, r.forward));
+  };
+
+  /** The hover card for a part of the bar, or the bytes no part covers,
+   *  laid out as the byte layout strip's (`childstrip.ts`). The part's
+   *  name on the bar is often cut short; this is where it is whole. */
+  const barCard = (u: Exclude<Under, { kind: "arc" }>): HTMLElement => {
+    const where = `${formatOffset(u.startBit)} · ${bitSizeText(u.endBit - u.startBit)}`;
+    if (u.kind === "gap") return tipCard(T.unclaimed, [], where);
+    const n = u.part.node;
+    const lines: string[] = [];
+    // The name the arcs' cards use for the same part, when it is not the one
+    // on the bar: `records[4]` for `[4] measurements.csv`.
+    if (u.part.label !== u.part.name) lines.push(u.part.label);
+    lines.push(`${n.type} · ${n.composite ? countText(n.child_count, childWord(n)) : n.value}`);
+    return tipCard(u.part.name, lines, where);
   };
 
   const stopLinked = subscribeWhileConnected(bus, host, (state, changed) => {
@@ -813,7 +907,10 @@ function drawCard(doc: Doc, node: TemplateNode): HTMLElement {
   const key = node.path.join(".");
   // Drawn whole before the listing places it, since the listing measures a
   // card's height as soon as it is up, and at a fixed height (`fixedRoom`),
-  // so arcs found after that do not make it taller than it was measured.
+  // so arcs found after that do not make it taller than it was measured. It
+  // still changes height when its chips arrive and when the walk ends and
+  // the room is cut to the arcs, and says so (`CARD_RESIZED`), so the
+  // listing measures it again.
   const fig = drawPointerArcs(doc, pointersFor(doc), {
     width: lastCardWidth,
     arcPx: CARD_ARC_PX,
@@ -824,6 +921,7 @@ function drawCard(doc: Doc, node: TemplateNode): HTMLElement {
   el.append(fig.el);
   // The listing does not say how wide its cards are, so the card asks its
   // own box once it is on the page, and again when that changes.
+  let drawnHeight: number | null = null;
   const watch = new ResizeObserver((entries) => {
     if (!el.isConnected) {
       watch.disconnect();
@@ -831,8 +929,12 @@ function drawCard(doc: Doc, node: TemplateNode): HTMLElement {
       return;
     }
     // The content box: the listing indents its items with padding.
-    const w = Math.floor(entries[0]?.contentRect.width ?? 0);
+    const box = entries[0]?.contentRect;
+    const w = Math.floor(box?.width ?? 0);
     if (w <= 0) return;
+    const h = Math.ceil(box?.height ?? 0);
+    if (drawnHeight !== null && h !== drawnHeight) el.dispatchEvent(new CustomEvent(CARD_RESIZED, { bubbles: true }));
+    drawnHeight = h;
     lastCardWidth = w;
     fig.resize(w);
   });

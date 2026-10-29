@@ -4048,8 +4048,9 @@ export const VIZ = {
     buttonTitle: "Show the offsets, lengths and counts that point into or out of this part",
     /** The figure's name for a screen reader. */
     figureLabel: "Pointers in this file, drawn as arcs over the file's bytes",
-    /** The line under the figure that says how to read it. */
-    legend: "Each arc joins a field holding an offset, length or count to the field that number refers to. Arcs above the bar point forward in the file, and arcs below point back.",
+    /** The key under the figure. What an arc joins is said by the tab's and
+     *  the heading button's hover text, so this is only the two sides. */
+    legend: "Above the bar: arcs pointing forward. Below: arcs pointing back.",
     /** Beside the hatched swatch, under the figure. */
     unclaimed: "Bytes no field covers",
     /** Hover text of a role chip. `word` is the role's name, lower case. */
@@ -4070,7 +4071,10 @@ export const VIZ = {
       `From ${from} to ${to}, ${countText(bytes, "byte")} ${forward ? "forward" : "back"}`,
     /** Hover card of a bundle: arcs too close together to draw apart. */
     bundleTitle: (n: number, role: string): string => countText(n, `${role} arc`),
-    bundleWhere: (fromA: string, fromB: string, toA: string, toB: string): string => `From ${fromA} – ${fromB} to ${toA} – ${toB}`,
+    /** Where the bundle's arcs leave and land, one range a line, with the
+     *  listing's spaced en dash. */
+    bundleFrom: (a: string, b: string): string => `From ${a} – ${b}`,
+    bundleTo: (a: string, b: string): string => `To ${a} – ${b}`,
     bundleHint: "Zoom in to see each arc. Click to go to the first one.",
   },
   /** The rail tab that draws an executable's sections twice, at their file

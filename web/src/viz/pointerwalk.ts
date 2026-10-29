@@ -24,6 +24,18 @@
 // so a file of a million records costs a bounded walk and the picture says
 // how much of the file it covers.
 //
+// Each arc says what the deciding field holds, read from the tree rather
+// than from the core's answer. The core's answer is what the field came to in
+// the expression that used it, which is the field's value for a plain name
+// but its size for `sizeof(xref_offset)` and a sum for `sum(entries.len)`;
+// the hover card's `xref_offset = 6` would then misstate the bytes. The
+// expression with its numbers is shown on its own line (`workedOut`).
+//
+// An origin that only measured its field (`sizeof`, `bitsof`) is no arc at
+// all. The field does not hold an offset, a length or a count: the field
+// after it starts where it ends, which is the layout every field has, and on
+// a PDF it drew the xref's entries pointing at the trailer that follows them.
+//
 // Only the root's own address space is walked (the file's, unless the
 // document is a stream opened on its own). A field inside a decoded stream
 // has an offset counted from the front of what the stream unpacked to, which
@@ -31,6 +43,7 @@
 
 import type { Origin, TemplateNode, TemplateReply } from "../doc.ts";
 import type { ArcEnd, PointerArc } from "./arcmath.ts";
+import { fieldLabel } from "./iciclelayout.ts";
 
 /** The part of `Doc` the walk reads. A test passes a small fake. */
 export type WalkDoc = {
@@ -74,6 +87,20 @@ export function childLabel(parent: TemplateNode, parentLabel: string, child: Tem
  *  its bytes are, so it is no end for an arc. */
 function isWrapper(n: TemplateNode): boolean {
   return n.composite && n.size_bits === 0 && n.child_count > 0;
+}
+
+/** What a field holds, for the hover card: its value as the listing shows
+ *  it, or nothing for a structure, whose listing value is how many fields it
+ *  has. */
+function heldValue(n: TemplateNode): string {
+  return n.composite ? "" : n.value;
+}
+
+/** True for an origin that only measured its field. The core names those
+ *  `size of {name}` (`from_expr` in crates/core/src/eval/origin.rs), and
+ *  says nothing else to tell them apart. */
+function onlyMeasured(o: Origin): boolean {
+  return o.label.startsWith("size of ");
 }
 
 function pathKey(path: readonly number[]): string {
@@ -167,10 +194,10 @@ export class PointerWalk {
       if (o.role === "points") {
         // This field holds the offset; the core says the bit it lands on.
         if (o.target_bits === null || node.size_bits === 0 || isWrapper(node)) continue;
-        this.add("position", target, { path: [], startBit: o.target_bits, endBit: o.target_bits, label: o.label }, o.value);
+        this.add("position", target, { path: [], startBit: o.target_bits, endBit: o.target_bits, label: o.label }, heldValue(node));
         continue;
       }
-      if (o.path.length === 0 || isWrapper(node)) continue;
+      if (o.path.length === 0 || isWrapper(node) || onlyMeasured(o)) continue;
       this.resolve({ origin: o, target });
     }
   }
@@ -190,7 +217,7 @@ export class PointerWalk {
     }
     if (src === null || src.space !== this.space || src.size_bits === 0) return true;
     const from: ArcEnd = { path: src.path, startBit: src.offset_bits, endBit: src.offset_bits + src.size_bits, label: this.labelOf(src.path) ?? u.origin.label };
-    this.add(u.origin.role, from, u.target, u.origin.value);
+    this.add(u.origin.role, from, u.target, heldValue(src));
     return true;
   }
 
@@ -248,7 +275,18 @@ export class PointerWalk {
 }
 
 /** A top-level part of the file, for the bar the arcs stand on. */
-export type FilePart = { readonly path: readonly number[]; readonly name: string; readonly startBit: number; readonly endBit: number };
+export type FilePart = {
+  readonly path: readonly number[];
+  /** What the bar says: the name the listing gives the part, list index and
+   *  all (`[4] measurements.csv`), so two parts of the same name differ and
+   *  the index matches the arcs' `records[4]`. */
+  readonly name: string;
+  /** The part named the way the arcs name it (`childLabel`). */
+  readonly label: string;
+  readonly node: TemplateNode;
+  readonly startBit: number;
+  readonly endBit: number;
+};
 
 /** Parts drawn on the bar at most. */
 const MAX_PARTS = 4096;
@@ -262,11 +300,13 @@ export function partName(n: TemplateNode): string {
 
 /**
  * The parts of the file to draw the bar from: the root's children, with a
- * field placed elsewhere replaced by the field it wraps, and any part that
- * takes up half the file or more and is a list, or is the only part (a ZIP's
- * one list of records, a PDF's objects), opened out into its own children,
- * up to three levels down. Null
- * while the tree is still being read.
+ * field placed elsewhere replaced by the field it wraps, and any structure
+ * that takes up half the file or more (a ZIP's one list of records, a PDF's
+ * objects, an ELF's header with its tables inside) opened out into its own
+ * children, up to three levels down, so the bar shows what is inside the
+ * part that is most of the file. An element of a list stays whole however
+ * big it is: a ZIP entry is a part the reader knows, and its fields are not.
+ * Null while the tree is still being read.
  */
 export function fileParts(doc: WalkDoc, fileBits: number): FilePart[] | null {
   const kids = (n: TemplateNode): TemplateNode[] | null => {
@@ -282,25 +322,41 @@ export function fileParts(doc: WalkDoc, fileBits: number): FilePart[] | null {
   const root = doc.templateNode([]);
   if (root.status === "pending" || root.status === "working") return null;
   if (root.status !== "ok") return [];
-  let parts = kids(root.node);
+  const space = root.node.space;
+  /** Each part's name as the arcs give it, by path. A wrapped field is named
+   *  as its wrapper is, which `childLabel` also does. */
+  const labels = new Map<string, string>([["", ""]]);
+  const named = (parent: TemplateNode, kid: TemplateNode, unwrapped: TemplateNode): TemplateNode => {
+    const label = childLabel(parent, labels.get(pathKey(parent.path)) ?? "", kid);
+    labels.set(pathKey(kid.path), label);
+    labels.set(pathKey(unwrapped.path), label);
+    return unwrapped;
+  };
+  /** The parts that are elements of a list, by path. */
+  const elements = new Set<string>();
+  const open = (parent: TemplateNode): TemplateNode[] | null => {
+    const k = kids(parent);
+    if (k === null) return null;
+    const out: TemplateNode[] = [];
+    for (const c of k) {
+      const u = unwrap(c);
+      if (u === null) return null;
+      if (parent.list) elements.add(pathKey(u.path));
+      out.push(named(parent, c, u));
+    }
+    return out;
+  };
+  let parts = open(root.node);
   if (parts === null) return null;
   for (let round = 0; round < 3; round++) {
     const next: TemplateNode[] = [];
     let opened = false;
-    for (const p of parts) {
-      const u = unwrap(p);
-      if (u === null) return null;
-      // A list, or the one part there is: one big record among small ones is
-      // a part of its own, not a list to open.
-      const big = (u.list || parts.length === 1) && u.composite && u.child_count > 0 && !u.decoded && u.size_bits * 2 >= fileBits;
+    for (const u of parts) {
+      const big = u.composite && u.child_count > 0 && !u.decoded && u.size_bits * 2 >= fileBits && !elements.has(pathKey(u.path));
       if (big && next.length + u.child_count <= MAX_PARTS) {
-        const k = kids(u);
+        const k = open(u);
         if (k === null) return null;
-        for (const c of k) {
-          const uc = unwrap(c);
-          if (uc === null) return null;
-          next.push(uc);
-        }
+        next.push(...k);
         opened = true;
       } else next.push(u);
     }
@@ -308,7 +364,7 @@ export function fileParts(doc: WalkDoc, fileBits: number): FilePart[] | null {
     if (!opened) break;
   }
   return parts
-    .filter((p) => p.space === root.node.space && p.size_bits > 0)
+    .filter((p) => p.space === space && p.size_bits > 0)
     .sort((a, b) => a.offset_bits - b.offset_bits)
-    .map((p) => ({ path: p.path, name: partName(p), startBit: p.offset_bits, endBit: p.offset_bits + p.size_bits }));
+    .map((p) => ({ path: p.path, name: fieldLabel(p), label: labels.get(pathKey(p.path)) ?? p.name, node: p, startBit: p.offset_bits, endBit: p.offset_bits + p.size_bits }));
 }
