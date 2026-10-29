@@ -364,6 +364,12 @@ export function drawIcicle(doc: Doc, root: IcicleField, opts: IcicleOptions): Ic
         const valued = f !== undefined && !f.composite && f.value !== "" ? ellipsise(`${label} ${f.value}`, right - left, LABEL_PX, measurer(), label.length + 2) : null;
         const text = valued ?? ellipsise(label, right - left, LABEL_PX, measurer(), LABEL_MIN_CHARS);
         if (text === null) continue;
+        // The hatch runs through a gap's name, so the name sits on a plate of
+        // the page's own background.
+        if (bar.kind === "gap") {
+          ctx.fillStyle = p.bg;
+          ctx.fillRect(left - 2, y + 2, measurer()(text, LABEL_PX) + 4, laneH - 4);
+        }
         ctx.fillStyle = bar.kind === "gap" ? p.muted : p.fg;
         ctx.fillText(text, left, y + laneH / 2 + 0.5);
       }
