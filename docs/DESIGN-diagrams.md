@@ -8,8 +8,11 @@ or inside another piece. The aim is many overlapping pieces first (forty-odd
 candidates here, twenty or so built) and a cull later once they have been
 used on real files.
 
-State of this document: research and design only, 2026-10-29. Nothing here is
-built. Section 5 is the batch to build first.
+State, 2026-10-29: section 3 (the shared infrastructure in `web/src/viz/`) and
+the whole of section 5.3 (agents A to N) are built and on main. Each piece's
+header comment says what of its candidate it covers and what it leaves out.
+How to add a piece is in the header of `web/src/viz/register.ts`. Section 6 is
+what comes next.
 
 ## 1. Purpose and the two hard rules
 
