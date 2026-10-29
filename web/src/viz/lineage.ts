@@ -15,8 +15,10 @@
 //   was made and its sizes, in the file's tab as much as in a stream's. The
 //   cursor on a pixel of a PNG's own tab already shows all three, none of
 //   them opened yet. A stream's name brings up its tab, opening it when it is
-//   not open yet; a run's address goes to the run's bytes in the tab one row
-//   up. Hovering a run of the file marks its bytes in the hex view.
+//   not open yet; a run's address goes to the run's bytes in the tab of the
+//   stream one row up, opening that one the same way. The run's offsets are
+//   bits of that stream, so no other tab has bytes to put the cursor on.
+//   Hovering a run of the file marks its bytes in the hex view.
 //
 // The component diagram the design draws around this (a box per stream, to
 // scale, with a strip of where it sat in its parent) is the later part of the
@@ -35,9 +37,9 @@
 import type { Doc, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { bitSizeText, VIZ } from "../strings.ts";
-import { canvasMeasure, ellipsise, type Measure } from "./fit.ts";
+import { canvasMeasure, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
-import { fitCrumbs, spaceSteps, type SpaceStep } from "./lineagemath.ts";
+import { cutMiddle, fitCrumbs, spaceSteps, type SpaceStep } from "./lineagemath.ts";
 import { linkedFor } from "./linked.ts";
 import { goToField } from "./pick.ts";
 import { hideTip, hoverTip, tipCard } from "./tip.ts";
@@ -67,16 +69,22 @@ export function noteOpened(child: Doc, parent: Doc): void {
 export type LineageRoutes = {
   /** Bring the tab showing `doc` to the front. False when it is not open. */
   readonly focus: (doc: Doc) => boolean;
+  /** The documents of the open document tabs. */
+  readonly open: () => readonly Doc[];
 };
-let routes: LineageRoutes = { focus: () => false };
+let routes: LineageRoutes = { focus: () => false, open: () => [] };
 export function setLineageRoutes(r: LineageRoutes): void {
   routes = r;
 }
 
 /** Each document tab's Open unpacked, which opens a stream at a path of that
- *  document as a tab, or brings its tab up when it is already open. */
-const openers = new WeakMap<Doc, (path: readonly number[]) => void>();
-export function setLineageOpener(doc: Doc, open: (path: readonly number[]) => void): () => void {
+ *  document as a tab, or brings its tab up when it is already open, and says
+ *  which document that tab shows. Null while the stream is still being
+ *  unpacked (the tab opens by itself when it is done) or when it will not
+ *  open. */
+export type LineageOpener = (path: readonly number[]) => Doc | null;
+const openers = new WeakMap<Doc, LineageOpener>();
+export function setLineageOpener(doc: Doc, open: LineageOpener): () => void {
   openers.set(doc, open);
   return () => {
     if (openers.get(doc) === open) openers.delete(doc);
@@ -178,24 +186,72 @@ export function lineageCard(crumbs: readonly Crumb[]): HTMLElement {
   return tipCard(last?.label ?? "", crumbs.map((c) => `${c.label}: ${howText(c)}`));
 }
 
-/** Bring up the tab a crumb stands for: the file's, or the stream's, which
- *  is opened if it is not open yet. */
-function openCrumb(c: Crumb): void {
-  if (c.step === null) {
-    routes.focus(c.from);
-    return;
-  }
-  const open = openers.get(c.from);
-  if (open === undefined) return;
-  routes.focus(c.from);
-  open(c.step.opener);
+/** Bring up the tab a crumb stands for, the file's or the stream's, opening
+ *  the stream's if it is not open yet, and say which document it shows. Null
+ *  when it cannot be brought up now. */
+function showCrumb(c: Crumb): Doc | null {
+  if (c.step === null) return routes.focus(c.from) ? c.from : null;
+  return openers.get(c.from)?.(c.step.opener) ?? null;
 }
 
-/** Go to a stream's run in the tab one row up. */
-function goToRun(c: Crumb): void {
-  if (c.step === null || c.step.joined) return;
-  routes.focus(c.from);
-  goToField(c.from, { path: c.step.opener, startBit: c.step.atBits, endBit: c.step.atBits + c.step.inBits });
+/** Where a stream's root is in its home's reading, for telling whether a tab
+ *  shows it. Null when that is not known. */
+function rootInHome(c: Crumb): { readonly home: Doc; readonly path: readonly number[] } | null {
+  if (c.step === null) return null;
+  if (c.from.isFile || c.from.recognised) return { home: c.from, path: c.step.root };
+  const home = homeOf(c.from);
+  if (home === null) return null;
+  // A tab with no reading of its own has its stream's root as its `[]`.
+  return { home, path: [...c.from.spaceOrigin(), 0, ...c.step.root] };
+}
+
+/** Whether a tab showing a crumb's stream, or the file, is open now. */
+function isOpen(c: Crumb): boolean {
+  if (c.step === null) return routes.open().includes(c.from);
+  const want = rootInHome(c);
+  if (want === null) return false;
+  return routes.open().some((d) => {
+    if (d === c.from || d.isFile) return false;
+    const up = parents.get(d);
+    if (up === undefined || homeOf(up) !== want.home) return false;
+    const root = [...d.spaceOrigin(), 0];
+    return root.length === want.path.length && root.every((v, i) => v === want.path[i]);
+  });
+}
+
+/** How long a run's address waits for its stream to finish unpacking before
+ *  giving up: tries, and the time between them. */
+const RUN_TRIES = 40;
+const RUN_WAIT_MS = 100;
+
+/**
+ * Go to a stream's run in the tab of the stream it is in, `parent`, opening
+ * that tab if it is not open yet. The run's offsets are bits of the parent
+ * stream, so that tab is the only one with bytes to put the cursor on.
+ *
+ * The run's path is a path of `c.from`. The parent's tab is either that same
+ * document (a run in a tab's own bytes) or a tab over the parent stream,
+ * whose `[]` is the stream's root, so the path is cut to start below it.
+ */
+function goToRun(c: Crumb, parent: Crumb, tries = 0): void {
+  const step = c.step;
+  if (step === null || step.joined) return;
+  const there = showCrumb(parent);
+  if (there === null) {
+    // Still unpacking, most likely: the tab opens by itself when it is done,
+    // and the run is gone to then.
+    if (tries < RUN_TRIES) setTimeout(() => goToRun(c, parent, tries + 1), RUN_WAIT_MS);
+    return;
+  }
+  let path: readonly number[];
+  if (there === c.from) path = step.opener;
+  else if (parent.step !== null && parent.from === c.from && startsWith(step.opener, parent.step.root)) path = step.opener.slice(parent.step.root.length);
+  else return;
+  goToField(there, { path, startBit: step.atBits, endBit: step.atBits + step.inBits });
+}
+
+function startsWith(path: readonly number[], prefix: readonly number[]): boolean {
+  return prefix.length <= path.length && prefix.every((v, i) => v === path[i]);
 }
 
 // ----- the tab strip -----
@@ -250,7 +306,7 @@ export function tabTitleLabel(crumbs: readonly Crumb[], room = TAB_ROOM): HTMLEl
       return;
     }
     const c = crumbs[f.index] as Crumb;
-    const text = f.room === null ? c.label : (ellipsise(c.label, f.room, TAB_PX, m, MIN_CHARS) ?? MORE);
+    const text = f.room === null ? c.label : (cutMiddle(c.label, f.room, (t) => m(t, TAB_PX), MIN_CHARS) ?? MORE);
     out.append(span(f.index === crumbs.length - 1 ? "viz-lineage-tab-here" : "viz-lineage-tab-up", text));
   });
   return out;
@@ -296,7 +352,7 @@ export function drawLineage(doc: Doc, path: readonly number[]): HTMLElement | nu
     // The tab already showing is named in plain text, having nothing to bring
     // up; every other name is a button.
     const name = here ? span("viz-lineage-name is-here", c.label) : document.createElement("button");
-    const nameAction = here ? null : c.step === null ? VIZ.lineage.goToFile(c.label) : VIZ.lineage.open(c.label);
+    const nameAction = here ? null : c.step === null || isOpen(c) ? VIZ.lineage.goToTab(c.label) : VIZ.lineage.open(c.label);
     if (name instanceof HTMLButtonElement) {
       name.type = "button";
       name.className = "viz-lineage-name";
@@ -306,7 +362,7 @@ export function drawLineage(doc: Doc, path: readonly number[]): HTMLElement | nu
       if (nameAction !== null) name.setAttribute("aria-label", nameAction);
       name.addEventListener("click", () => {
         hideTip();
-        openCrumb(c);
+        showCrumb(c);
       });
     }
     const top = document.createElement("div");
@@ -321,13 +377,15 @@ export function drawLineage(doc: Doc, path: readonly number[]): HTMLElement | nu
       run.type = "button";
       run.className = "viz-lineage-at";
       run.textContent = formatOffset(c.step.atBits);
-      if (parent !== null) run.setAttribute("aria-label", VIZ.lineage.goToRun(parent.label));
-      run.addEventListener("click", () => {
-        hideTip();
-        goToRun(c);
-      });
+      if (parent !== null) {
+        run.setAttribute("aria-label", VIZ.lineage.goToRun(parent.label));
+        run.addEventListener("click", () => {
+          hideTip();
+          goToRun(c, parent);
+        });
+      } else run.disabled = true;
       if (isStored(c.step)) how.append(VIZ.lineage.storedBefore(c.step.inBits), run);
-      else how.append(VIZ.lineage.unpackedBefore(c.step.inBits, c.step.codec), run, VIZ.lineage.unpackedAfter(c.step.outBits));
+      else how.append(VIZ.lineage.unpackedBefore(c.step.outBits, c.step.inBits, c.step.codec), run);
     } else how.textContent = howText(c);
     li.append(top, how);
     list.append(li);
@@ -360,13 +418,22 @@ function deepestRoot(doc: Doc, path: readonly number[]): string {
   return steps[steps.length - 1]?.root.join("/") ?? "";
 }
 
+/** Which tabs are open, as part of the section's key: each name says whether
+ *  its tab is open, and a name whose tab has closed cannot be followed. */
+function openKey(): string {
+  return routes
+    .open()
+    .map((d) => d.space)
+    .join(",");
+}
+
 /** Put the section in the At cursor panel, for every field inside a stream
  *  and every field of a stream's tab. */
 export function register(): void {
   registerInspectorSection({
     id: "lineage",
     applies: (doc, n) => doc.space !== 0 || n.space !== 0,
-    key: (doc, _n, path) => `lineage|${doc.space}|${deepestRoot(doc, path)}`,
+    key: (doc, _n, path) => `lineage|${doc.space}|${deepestRoot(doc, path)}|${openKey()}`,
     draw: ({ doc, path }) => drawLineage(doc, path),
   });
 }

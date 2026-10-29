@@ -4024,18 +4024,20 @@ export const VIZ = {
   lineage: {
     /** Heading of the At cursor section listing those streams, the file
      *  first and the one holding the field last. */
-    title: "Streams this field is in",
+    title: "File and streams this field is in",
     /** A tab's title: the streams' names, outermost first, as the At cursor
      *  trail joins its steps. */
     tabTitle: (names: readonly string[]): string => names.join(" › "),
-    /** The line under an unpacked stream's name, worded as the report's
-     *  stream heading is. Two halves, because the address between them is a
-     *  link to the run: `18 bytes of deflate at @0x2 unpacks to 48 bytes`. */
-    unpackedBefore: (inBits: number, codec: string): string => `${bitSizeText(inBits)} of ${codec} at `,
-    unpackedAfter: (outBits: number): string => ` unpacks to ${bitSizeText(outBits)}`,
+    /** The line under an unpacked stream's name: the stream's own size
+     *  first, since the row is the stream, then the run it came from. The
+     *  address at the end is a link to the run, so the line is drawn as this
+     *  and then the address: `48 bytes decoded from 18 bytes of deflate at
+     *  @0x2`. "Decoded" covers inflating and a PNG's unfiltering alike. */
+    unpackedBefore: (outBits: number, inBits: number, codec: string): string =>
+      `${bitSizeText(outBits)} decoded from ${bitSizeText(inBits)} of ${codec} at `,
     /** The same in one string, for the hover card. */
     unpacked: (inBits: number, codec: string, at: string, outBits: number): string =>
-      `${bitSizeText(inBits)} of ${codec} at ${at} unpacks to ${bitSizeText(outBits)}`,
+      `${bitSizeText(outBits)} decoded from ${bitSizeText(inBits)} of ${codec} at ${at}`,
     /** In place of those for a run stored without compression (a zip entry's
      *  `stored` method), which is the same bytes out as in. */
     storedBefore: (bits: number): string => `${bitSizeText(bits)} stored at `,
@@ -4043,7 +4045,11 @@ export const VIZ = {
     /** The line under a joined stream's name. `parts` is null when the core
      *  has not said how many. */
     joined: (outBits: number, parts: number | null): string =>
-      parts === null ? `${bitSizeText(outBits)} joined from several parts` : `${bitSizeText(outBits)} joined from ${countText(parts, "part")}`,
+      parts === null
+        ? `${bitSizeText(outBits)} joined from several parts`
+        : parts === 1
+          ? `${bitSizeText(outBits)} in one part`
+          : `${bitSizeText(outBits)} joined from ${countText(parts, "part")}`,
     /** In the hover card of a joined stream: the run its first byte is in,
      *  named as the listing names it (`chunks[2].image_data`). */
     firstPart: (label: string): string => `First part: ${label}`,
@@ -4052,11 +4058,10 @@ export const VIZ = {
     where: (at: string, parent: string): string => `${at} in ${parent}`,
     /** Beside the name of the stream the tab shows. */
     thisTab: "this tab",
-    /** On a stream's name, which brings up its tab, opening it if it is not
-     *  open yet. */
+    /** On the name of a stream with no tab yet, which opens one. */
     open: (name: string): string => `Open ${name} in its own tab`,
-    /** On the file's name, from a tab of a stream. */
-    goToFile: (name: string): string => `Go to the tab for ${name}`,
+    /** On the name of the file, or of a stream whose tab is open. */
+    goToTab: (name: string): string => `Go to the tab for ${name}`,
     /** On the address of a run. */
     goToRun: (parent: string): string => `Go to these bytes in ${parent}`,
   },

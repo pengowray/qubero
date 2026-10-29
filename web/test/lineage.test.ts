@@ -4,13 +4,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { fitCrumbs, spaceSteps, type StepNode } from "../src/viz/lineagemath.ts";
+import { cutMiddle, fitCrumbs, NAME_NEIGHBOURS, spaceSteps, type StepNode } from "../src/viz/lineagemath.ts";
 import { fieldLineage, noteOpened, tabLineage, tabTitleText, titleCrumbs } from "../src/viz/lineage.ts";
 import type { Doc } from "../src/doc.ts";
 
 /** A node with only what a step reads. */
 function node(name: string, type: string, extra: Partial<StepNode> = {}): StepNode {
-  return { name, type, offset_bits: 0, size_bits: 0, space_root: false, decoded: false, list: false, space: 0, ...extra };
+  return { name, type, offset_bits: 0, size_bits: 0, space_root: false, decoded: false, list: false, space: 0, child_count: 0, ...extra };
 }
 
 /** A reading as a map from path to node. */
@@ -105,6 +105,63 @@ test("an element that is itself the run is called by its place alone", () => {
   assert.deepEqual(spaceSteps([1, 4, 0], blocks)?.map((s) => s.label), ["blocks[4]"]);
 });
 
+// Four zTXt chunks between other chunks, as pngsuite's ctzn0g04 has them:
+// each chunk's label is its type, so the type names none of the four.
+function pngText(count: number, extra: Record<string, StepNode> = {}): (path: readonly number[]) => StepNode | null {
+  const nodes: Record<string, StepNode> = {
+    "": node("file", "PNG"),
+    "1": node("chunks", "Chunk[]", { list: true, child_count: count }),
+    ...extra,
+  };
+  for (let k = 0; k < count; k++) {
+    const type = k >= 4 && k < 8 ? "zTXt" : k === 0 ? "IHDR" : k === count - 1 ? "IEND" : "tEXt";
+    nodes[`1.${k}`] = node(`[${k}] ${type}`, "Chunk");
+    nodes[`1.${k}.2`] = node("data", type);
+    nodes[`1.${k}.2.2`] = node("text", "ZlibStream");
+    nodes[`1.${k}.2.2.6`] = node("compressed", "deflate", { decoded: true });
+    nodes[`1.${k}.2.2.6.0`] = node("compressed", "Text", { space_root: true });
+  }
+  return reading(nodes);
+}
+
+test("records that share a name are called by their place", () => {
+  const png = pngText(10);
+  const labels = [4, 5, 6, 7].map((k) => spaceSteps([1, k, 2, 2, 6, 0], png)?.[0]?.label);
+  assert.deepEqual(labels, ["chunks[4].compressed", "chunks[5].compressed", "chunks[6].compressed", "chunks[7].compressed"]);
+  assert.equal(new Set(labels).size, 4, "four streams, four names");
+});
+
+test("a name repeated by a record with no stream still names the stream", () => {
+  // A zip's central directory names each entry again, next to the entries.
+  const zip = reading({
+    "": node("file", "Zip"),
+    "0": node("records", "ZipRecord[]", { list: true, child_count: 2 }),
+    "0.0": node("[0] state-dict-zip/data.pkl", "ZipRecord"),
+    "0.0.1": node("body", "LocalFile"),
+    "0.0.1.14": node("data", "stored", { decoded: true }),
+    "0.0.1.14.0": node("data", "DecodedText", { space_root: true }),
+    "0.1": node("[1] state-dict-zip/data.pkl", "ZipRecord"),
+    "0.1.1": node("body", "CentralDirectoryEntry"),
+    "0.1.1.14": node("comment", "bytes[]"),
+  });
+  assert.equal(spaceSteps([0, 0, 1, 14, 0], zip)?.[0]?.label, "state-dict-zip/data.pkl");
+});
+
+test("a record whose name no neighbour shares keeps its name", () => {
+  // The IHDR chunk is the only one of its type.
+  assert.equal(spaceSteps([1, 0, 2, 2, 6, 0], pngText(10))?.[0]?.label, "IHDR");
+});
+
+test("a name shared only further away than the neighbours looked at still counts as a name", () => {
+  // The last chunk is IEND. Chunk 1 is called IEND too, further from the
+  // last than the neighbours looked at.
+  const count = NAME_NEIGHBOURS * 2 + 12;
+  const png = pngText(count);
+  const withFar = (p: readonly number[]): StepNode | null => (p.join(".") === "1.1" ? node("[1] IEND", "Chunk") : png(p));
+  assert.ok(count - 2 > NAME_NEIGHBOURS);
+  assert.equal(spaceSteps([1, count - 1, 2, 2, 6, 0], withFar)?.[0]?.label, "IEND");
+});
+
 test("a record name above an earlier stream does not name a later one", () => {
   // The entry's name belongs to the stream made in the file. The stream
   // inside that one is called by its own opener.
@@ -170,6 +227,33 @@ test("the drawn row is never wider than the room", () => {
     for (const f of fit) total += f.kind === "more" ? 8 : (f.room ?? (widths[f.index] as number));
     assert.ok(total <= room, `room ${room}: drawn ${total}`);
     assert.equal(fit[fit.length - 1]?.kind, "crumb", "the last crumb is always drawn");
+  }
+});
+
+// ----- cutting a name -----
+
+/** One pixel per character. */
+const chars = (t: string): number => t.length;
+
+test("a name that fits is not cut", () => {
+  assert.equal(cutMiddle("state-dict-zip/data/0", 40, chars, 4), "state-dict-zip/data/0");
+});
+
+test("a long name keeps its end, where entries of one zip differ", () => {
+  const cut = cutMiddle("state-dict-zip/data/model.layers.17.attention.weight", 24, chars, 4);
+  assert.equal(cut, "state-di…ttention.weight");
+  assert.ok(cut !== null && cut.length <= 24);
+});
+
+test("a name cut to fewer characters than the least is left off", () => {
+  assert.equal(cutMiddle("abcdefghij", 3, chars, 4), null);
+});
+
+test("a cut name is never wider than the room", () => {
+  const name = "state-dict-zip/data/model.layers.17.attention.weight";
+  for (let room = 5; room < name.length; room++) {
+    const cut = cutMiddle(name, room, chars, 4);
+    assert.ok(cut !== null && cut.length <= room, `room ${room}: ${cut}`);
   }
 });
 

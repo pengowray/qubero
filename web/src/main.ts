@@ -92,6 +92,7 @@ setLineageRoutes({
     if (i >= 0) tabs.focus(i);
     return i >= 0;
   },
+  open: () => tabs.all.filter((t) => t.kind.view === "document").map((t) => t.doc),
 });
 tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}?`);
 
@@ -753,10 +754,14 @@ function buildDocument(tab: Tab): Page {
    * A deflate stream too large to unpack in one go is unpacked a go at a time
    * between frames. Until it is done the status bar says how far it has got,
    * and this asks again once the page has drawn; the tab opens at the end.
+   *
+   * Returns the document the tab shows, for the lineage breadcrumb to go to
+   * bytes in, or null while the stream is still being unpacked or when it
+   * will not open.
    */
-  const openUnpacked = (path: readonly number[]): void => {
+  const openUnpacked = (path: readonly number[]): Doc | null => {
     const n = doc.templateNode(path);
-    if (n.status !== "ok") return;
+    if (n.status !== "ok") return null;
     const unpacked = doc.openSpace(path);
     const key = path.join(".");
     if (unpacked !== null && "working" in unpacked) {
@@ -767,13 +772,13 @@ function buildDocument(tab: Tab): Page {
       setTimeout(() => {
         if (unpackingAt === key) openUnpacked(path);
       }, 0);
-      return;
+      return null;
     }
     if (unpackingAt === key) {
       unpackingAt = null;
       saveMsg.textContent = "";
     }
-    if (unpacked === null) return;
+    if (unpacked === null) return null;
     // A compressed run that will not open says why on its own row and is not
     // offered. A joined stream is offered whatever its length, and one whose
     // parts take up too much of the file, or have one that will not read, is
@@ -784,12 +789,14 @@ function buildDocument(tab: Tab): Page {
       const joined = first.status === "ok" && first.node.joined && first.node.space_root;
       const tab = JOINED.tabTitle(n.node.name, doc.name);
       if (joined) say(unpacked.refused === "too-large" ? JOINED.tooLarge(tab) : JOINED.failed(tab), true);
-      return;
+      return null;
     }
     const already = tabs.forSpace(unpacked.space);
+    // The tab's own document: `openSpace` makes a new one every time, and
+    // the lineage breadcrumb goes to bytes in the one the tab shows.
     if (already >= 0) {
       tabs.focus(already);
-      return;
+      return tabs.all[already]?.doc ?? null;
     }
     // Titled by every stream between the file and this one, the way the
     // At cursor trail names its steps; the old title is kept for a stream
@@ -804,6 +811,7 @@ function buildDocument(tab: Tab): Page {
       label: crumbs === null ? null : () => tabTitleLabel(titleCrumbs(crumbs, fileTab()?.doc ?? null)),
       tip: crumbs === null ? null : () => lineageCard(crumbs),
     });
+    return unpacked;
   };
   tab.release.push(setLineageOpener(doc, openUnpacked));
   structure.onOpenUnpacked = openUnpacked;

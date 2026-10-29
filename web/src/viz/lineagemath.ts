@@ -20,12 +20,13 @@
 // both, so the shape is what is read.
 //
 // No DOM and no Doc: a node is asked for through a callback, as `trailItems`
-// asks, so the tests feed in nodes by hand.
+// asks, so the tests feed in nodes by hand. The same goes for text widths in
+// `cutMiddle`, which are asked of a `Measure`.
 
 import type { TemplateNode } from "../doc.ts";
 
 /** What a step needs to know of a node. */
-export type StepNode = Pick<TemplateNode, "name" | "type" | "offset_bits" | "size_bits" | "space_root" | "decoded" | "list" | "space">;
+export type StepNode = Pick<TemplateNode, "name" | "type" | "offset_bits" | "size_bits" | "space_root" | "decoded" | "list" | "space" | "child_count">;
 
 /** One stream a path is inside. Paths are of the reading that was walked. */
 export type SpaceStep = {
@@ -82,7 +83,7 @@ export function spaceSteps(path: readonly number[], node: (path: readonly number
     steps.push({
       opener: path.slice(0, i - 1),
       root: path.slice(0, i),
-      label: stepLabel(nodes, path, from, i - 1),
+      label: stepLabel(nodes, path, from, i - 1, node),
       joined: !opener.decoded,
       codec: opener.type,
       holds: root.type,
@@ -107,12 +108,28 @@ export function spaceSteps(path: readonly number[], node: (path: readonly number
  * calls it. A record known only by its place gives its place instead, so the
  * eight members of a gzip file are `members[0].compressed` to
  * `members[7].compressed` rather than eight streams called `compressed`.
+ *
+ * A record's name counts as a name only when no record near it in the same
+ * list has it too and a stream made the same way. PNG chunks are labelled by
+ * their type, `[4] zTXt`, so a file with four zTXt chunks would otherwise
+ * have four streams called `zTXt`; those are called by their place,
+ * `chunks[4].compressed`. A zip names each entry twice, in its local header
+ * and in the central directory, but only the local header holds the data, so
+ * its name still names the stream. `node` is asked for the neighbours.
  */
-export function stepLabel(nodes: readonly StepNode[], path: readonly number[], from: number, at: number): string {
+export function stepLabel(
+  nodes: readonly StepNode[],
+  path: readonly number[],
+  from: number,
+  at: number,
+  node: (path: readonly number[]) => StepNode | null = () => null,
+): string {
   const opener = nodes[at] as StepNode;
   for (let i = at; i > from; i--) {
-    const named = /^\[\d+\]\s+(.+)$/.exec((nodes[i] as StepNode).name)?.[1];
-    if (named !== undefined) return named;
+    const named = recordName((nodes[i] as StepNode).name);
+    if (named === undefined) continue;
+    const list = nodes[i - 1] as StepNode;
+    if (!nameShared(list, path.slice(0, i - 1), path[i - 1] as number, named, path.slice(i, at), opener, node)) return named;
   }
   for (let i = at; i > from; i--) {
     const up = nodes[i - 1] as StepNode;
@@ -123,6 +140,72 @@ export function stepLabel(nodes: readonly StepNode[], path: readonly number[], f
     return i === at ? element : `${element}.${opener.name}`;
   }
   return opener.name;
+}
+
+/** The name in a list element's label, `[3] word/document.xml`. Undefined
+ *  for an element labelled by its index alone. */
+function recordName(label: string): string | undefined {
+  return /^\[\d+\]\s+(.+)$/.exec(label)?.[1];
+}
+
+/** How many elements either side of a record are looked at for one with the
+ *  same name. A list of thousands, a zip's entries say, is not read through
+ *  on every move of the cursor; the records whose names repeat, a PNG's
+ *  chunks of one type, sit next to each other. */
+export const NAME_NEIGHBOURS = 32;
+
+/** Whether an element near the `index`th of the list `list` (at `listPath`)
+ *  has the name `name` too, and a node like `opener` at `below` under it:
+ *  whether another stream would be called the same. */
+function nameShared(
+  list: StepNode,
+  listPath: readonly number[],
+  index: number,
+  name: string,
+  below: readonly number[],
+  opener: StepNode,
+  node: (path: readonly number[]) => StepNode | null,
+): boolean {
+  const lo = Math.max(0, index - NAME_NEIGHBOURS);
+  const hi = Math.min(list.child_count - 1, index + NAME_NEIGHBOURS);
+  for (let k = lo; k <= hi; k++) {
+    if (k === index) continue;
+    const other = node([...listPath, k]);
+    if (other === null || recordName(other.name) !== name) continue;
+    const made = node([...listPath, k, ...below]);
+    if (made !== null && made.type === opener.type && made.decoded === opener.decoded) return true;
+  }
+  return false;
+}
+
+/**
+ * `text` cut down to `room` pixels by taking characters out of its middle,
+ * with an ellipsis where they were: whole when it fits, null when fewer than
+ * `minChars` characters would be left.
+ *
+ * The middle, because the end of a name is as often what tells it from its
+ * neighbours as the start is: every entry of a PyTorch zip starts
+ * `state-dict-zip/`, and what differs is the file name after it. A third of
+ * what is kept is the start and two thirds the end.
+ */
+export function cutMiddle(text: string, room: number, measure: (text: string) => number, minChars: number): string | null {
+  if (measure(text) <= room) return text;
+  if (text.length <= minChars) return null;
+  const cut = (kept: number): string => {
+    const head = Math.ceil(kept / 3);
+    return `${text.slice(0, head)}…${text.slice(text.length - (kept - head))}`;
+  };
+  // The most characters that fit, by halving. Keeping one more character
+  // never makes the text narrower, so the search is sound.
+  let lo = minChars;
+  let hi = text.length - 1;
+  if (measure(cut(lo)) > room) return null;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (measure(cut(mid)) <= room) lo = mid;
+    else hi = mid - 1;
+  }
+  return cut(lo);
 }
 
 /** What `fitCrumbs` decided for one place in the row. */
