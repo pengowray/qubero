@@ -465,6 +465,9 @@ export function drawIcicle(doc: Doc, first: IcicleField, opts: IcicleOptions): I
     },
   });
   made = zoom;
+  // The first layout ran inside `board()`, before there was a board to tell
+  // that the canvas had grown to the rows it drew.
+  zoom.resize(width, AXIS_H + rowsH(), { x0: 0, y0: 0, x1: width, y1: AXIS_H + rowsH() });
   repaints.add(paint);
   reset.addEventListener("click", () => zoom.home(true));
   void loadAxis().then((loaded) => {
