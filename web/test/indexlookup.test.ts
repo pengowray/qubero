@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import type { Origin, Relation, TemplateNode, TemplateReply } from "../src/doc.ts";
 import {
+  byStart,
   entryAt,
   entryLabel,
   hexColour,
@@ -376,6 +377,17 @@ test("entryAt finds the entry holding a bit, and none in a gap", () => {
   assert.equal(entryAt(es, 24), -1);
   assert.equal(entryAt(es, 39), 6);
   assert.equal(entryAt(es, 40), -1);
+});
+
+test("a list placed by offsets out of file order is searched and drawn by its bytes", () => {
+  const e = (index: number, start: number, end: number): TableEntry => ({ index, path: [index], name: "", label: "", value: "", startBit: start, endBit: end, colour: null, space: 0 });
+  const es = [e(0, 80, 96), e(1, 0, 16), e(2, 40, 56)];
+  assert.equal(entryAt(byStart(es), 44), 2);
+  assert.equal(entryAt(byStart(es), 90), 0);
+  const node = { offset_bits: 0 } as TemplateNode;
+  const layout = stripLayout({ counts: "bytes", node, entries: es }, 120);
+  assert.deepEqual(layout.domain, [0, 12]);
+  assert.deepEqual(layout.cells.map((c) => [c.x0, c.x1]), [[100, 120], [0, 20], [50, 70]]);
 });
 
 // ----- the strip -----

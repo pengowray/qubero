@@ -450,8 +450,8 @@ export function mayLookUp(n: TemplateNode): boolean {
 
 // ----- which fields point at each entry -----
 
-/** The entry of `table` whose bits hold `bit`, by its place in the table, or
- *  -1. The entries are in file order, so this is a binary search. */
+/** The entry whose bits hold `bit`, by its place in the table, or -1. A
+ *  binary search, so `entries` must be in file order (`byStart`). */
 export function entryAt(entries: readonly TableEntry[], bit: number): number {
   let lo = 0;
   let hi = entries.length;
@@ -492,7 +492,7 @@ export function scanPointers(doc: Reads, lookup: Lookup): Read<Pointers> {
   const kin = kinOf(doc, lookup.index.path);
   if (kin === PENDING) return PENDING;
   if (kin === null) {
-    const hit = landing(doc, lookup, lookup.index);
+    const hit = landing(doc, lookup, lookup.index, byStart(lookup.table.entries));
     if (hit === PENDING) return PENDING;
     const byEntry = new Map<number, Pointer[]>();
     if (hit >= 0) byEntry.set(hit, [pointer(lookup.index, lookup.indexLabel)]);
@@ -501,11 +501,12 @@ export function scanPointers(doc: Reads, lookup: Lookup): Read<Pointers> {
   const total = kin.list.child_count;
   const scanned = Math.min(total, SCAN);
   const byEntry = new Map<number, Pointer[]>();
+  const sorted = byStart(lookup.table.entries);
   for (let r = 0; r < scanned; r++) {
     const n = node(doc, [...kin.list.path, r, ...kin.tail]);
     if (n === PENDING) return PENDING;
     if (n === null) continue;
-    const hit = landing(doc, lookup, n);
+    const hit = landing(doc, lookup, n, sorted);
     if (hit === PENDING) return PENDING;
     if (hit < 0) continue;
     const p = pointer(n, kin.label(r));
@@ -545,7 +546,12 @@ function pointer(n: TemplateNode, label: string): Pointer {
 }
 
 /** The entry one field like the index lands on, or -1 for none. */
-function landing(doc: Reads, lookup: Lookup, n: TemplateNode): number | Pending {
+/** Entries in file order, which a list placed by offsets need not be in. */
+export function byStart(entries: readonly TableEntry[]): TableEntry[] {
+  return [...entries].sort((a, b) => a.startBit - b.startBit);
+}
+
+function landing(doc: Reads, lookup: Lookup, n: TemplateNode, sorted: readonly TableEntry[]): number | Pending {
   if (lookup.how === "palette") {
     const v = numberOf(n);
     return v === null || v >= lookup.table.count ? -1 : v;
@@ -554,5 +560,5 @@ function landing(doc: Reads, lookup: Lookup, n: TemplateNode): number | Pending 
   if (o === PENDING) return PENDING;
   const p = o?.find((x) => x.role === "points" && x.target_bits !== null);
   if (p === undefined || p.target_bits === null) return -1;
-  return entryAt(lookup.table.entries, p.target_bits);
+  return entryAt(sorted, p.target_bits);
 }

@@ -38,7 +38,16 @@ export function stripLayout(table: Pick<LookupTable, "counts" | "node" | "entrie
   const last = es[es.length - 1];
   if (first === undefined || last === undefined) return { cells: [], domain: [0, 1] };
   const from = (b: number): number => (b - table.node.offset_bits) / 8;
-  const domain: [number, number] = table.counts === "entries" ? [first.index, last.index + 1] : [from(first.startBit), from(last.endBit)];
+  // In bytes, from the first byte of any entry to the last: a list placed by
+  // offsets need not be in file order, so neither end is the first or last
+  // entry's.
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const e of es) {
+    lo = Math.min(lo, e.startBit);
+    hi = Math.max(hi, e.endBit);
+  }
+  const domain: [number, number] = table.counts === "entries" ? [first.index, last.index + 1] : [from(lo), from(hi)];
   const span = Math.max(1e-9, domain[1] - domain[0]);
   const x = (u: number): number => ((u - domain[0]) / span) * width;
   const cells = es.map((e) =>

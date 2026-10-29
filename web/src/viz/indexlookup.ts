@@ -240,7 +240,9 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     return r;
   });
   /** The cells as hit targets along the axis, in file order already. */
-  const targets: AxisTarget<TableEntry>[] = table.entries.map((entry, i) => ({ start: (cells[i] as Cell).x0, end: (cells[i] as Cell).x1, value: entry }));
+  const targets: AxisTarget<TableEntry>[] = table.entries
+    .map((entry, i) => ({ start: (cells[i] as Cell).x0, end: (cells[i] as Cell).x1, value: entry }))
+    .sort((a, b) => a.start - b.start);
 
   const bus = linkedFor(doc);
   let view: View = { k: 1, x: 0, y: 0 };
@@ -618,19 +620,35 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
  */
 const notLookups = new WeakMap<Doc, Set<string>>();
 
+/** The template too, since the same document can be read with another. */
+function memoKey(doc: Doc, n: TemplateNode): string {
+  return `${doc.template ?? ""}|${n.path.join("/")}|${n.value}`;
+}
+
 /** Put the figure in the At cursor panel, for a field whose number picks an
  *  entry of a table. */
 export function register(): void {
   registerInspectorSection({
     id: "index-lookup",
-    applies: (doc, n) => mayLookUp(n) && notLookups.get(doc)?.has(`${n.path.join("/")}|${n.value}`) !== true,
+    applies: (doc, n) => mayLookUp(n) && notLookups.get(doc)?.has(memoKey(doc, n)) !== true,
     draw: ({ doc, node, width }) => {
       const data = lookupFor(doc, node);
       if (data === PENDING) return null;
-      if (data === null) {
+      const remember = (): void => {
         let set = notLookups.get(doc);
         if (set === undefined) notLookups.set(doc, (set = new Set()));
-        set.add(`${node.path.join("/")}|${node.value}`);
+        set.add(memoKey(doc, node));
+      };
+      if (data === null) {
+        remember();
+        return null;
+      }
+      // A number past the end of its table (a pixel of 9 in a palette of 3)
+      // lands on no entry, and a figure with nothing lit would show some
+      // other field's lookup instead. The At cursor panel's own rows say the
+      // number.
+      if (data.hit < 0 && !data.table.reached) {
+        remember();
         return null;
       }
       return drawIndexLookup(doc, data, { width }).el;

@@ -13,6 +13,7 @@
    target a pointer can hit (24px). */
 .viz-lookup-step {
   min-width: 24px;
+  min-height: 24px;
   font-size: 13px;
   line-height: 1;
 }
