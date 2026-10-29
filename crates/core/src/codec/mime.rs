@@ -1,5 +1,7 @@
-//! The two ways MIME writes bytes into a message that may only carry short
-//! lines of ASCII: base64 and quoted-printable, RFC 2045 sections 6.8 and 6.7.
+//! The ways MIME writes bytes into a message that may only carry short lines
+//! of ASCII: base64 and quoted-printable, RFC 2045 sections 6.8 and 6.7, and
+//! the Q encoding RFC 2047 writes non-ASCII header text in, which is
+//! quoted-printable with `_` for a space.
 //!
 //! Neither is compression. Base64 spells three bytes in four characters out of
 //! sixty-four, so an attachment comes out three quarters the size it went in.
@@ -138,6 +140,41 @@ pub fn quoted_printable(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
         }
         steps.copy(i, out.len());
         out.push(c);
+        i += 1;
+    }
+    let trace = steps.done(data.len(), out.len());
+    Ok((out, trace))
+}
+
+/// The Q encoding of an RFC 2047 encoded word, the `Q` in
+/// `=?iso-8859-1?Q?caf=E9_night?=`: quoted-printable without line breaks of
+/// any kind, and with `_` standing for a space, since a space would end the
+/// word.
+///
+/// Read as leniently as [`quoted_printable`] is: a `=` that starts no escape
+/// is kept as the `=` it is, and nothing is refused.
+pub fn q_encoding(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut steps = Steps::default();
+    let mut i = 0;
+    while i < data.len() {
+        let c = data[i];
+        if c == b'=' {
+            if let (Some(hi), Some(lo)) = (data.get(i + 1).and_then(|h| hex(*h)), data.get(i + 2).and_then(|l| hex(*l))) {
+                let byte = hi << 4 | lo;
+                steps.saw(i, out.len(), StepKind::Literal(byte));
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        if c == b'_' {
+            steps.saw(i, out.len(), StepKind::Literal(b' '));
+            out.push(b' ');
+        } else {
+            steps.copy(i, out.len());
+            out.push(c);
+        }
         i += 1;
     }
     let trace = steps.done(data.len(), out.len());
@@ -314,6 +351,17 @@ mod tests {
         // The text around it is copied through in runs.
         assert_eq!(trace.map_out(0).unwrap().kind, StepKind::Stored);
         assert_eq!(trace.map_out(0).unwrap().out_bytes, 0..16);
+    }
+
+    #[test]
+    fn the_q_encoding_writes_a_space_as_an_underscore() {
+        let (out, trace) = q_encoding(b"The_numbers_for_caf=C3=A9_night").unwrap();
+        assert_eq!(out, "The numbers for caf\u{e9} night".as_bytes());
+        trace.check_tiles().unwrap();
+        assert_eq!(trace.map_out(3).unwrap().kind, StepKind::Literal(b' '));
+        assert_eq!(trace.map_out(3).unwrap().in_bits, 24..32);
+        // A line break is text here, and a stray `=` is kept.
+        assert_eq!(q_encoding(b"a=\r\nb=z").unwrap().0, b"a=\r\nb=z");
     }
 
     #[test]

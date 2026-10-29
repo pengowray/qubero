@@ -234,6 +234,10 @@ pub enum Codec {
     /// the end. What a MIME part that says `quoted-printable` holds. See
     /// [`crate::codec::mime`].
     QuotedPrintable,
+    /// Not compression: the `Q` of an RFC 2047 encoded word in a header,
+    /// which is quoted-printable with `_` for a space and no line breaks. See
+    /// [`crate::codec::mime::q_encoding`].
+    QEncoding,
     /// Not compression: a whole PNG image's scanlines unfiltered, with the
     /// row lengths worked out from the header rather than fixed in the
     /// template. What [`Codec::PngUnfilter`] cannot be for an ordinary PNG,
@@ -297,6 +301,7 @@ impl Codec {
             Codec::EscapedLatin1Text => "latin-1 text, escaped",
             Codec::Base64 => "base64",
             Codec::QuotedPrintable => "quoted-printable",
+            Codec::QEncoding => "q encoding",
             Codec::PngScanlines { .. } => "png scanlines",
             Codec::JpegBaseline => "jpeg baseline",
         }
@@ -1490,6 +1495,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::EscapedLatin1Text => pytext::escaped_latin1_text(data)?,
         Codec::Base64 => mime::base64(data)?,
         Codec::QuotedPrintable => mime::quoted_printable(data)?,
+        Codec::QEncoding => mime::q_encoding(data)?,
         Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
             let shape = scanlines::Geometry::new(width as u64, height as u64, bits_per_pixel as u64, interlace);
             scanlines::unfilter_image(data, &shape.ok_or(Refusal::Settings)?)?
@@ -1587,6 +1593,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::EscapedLatin1Text
         | Codec::Base64
         | Codec::QuotedPrintable
+        | Codec::QEncoding
         | Codec::PngScanlines { .. }
         | Codec::Zstd
         | Codec::FastLz => {
