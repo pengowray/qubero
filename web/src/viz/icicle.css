@@ -1,0 +1,32 @@
+/* The position icicle (`icicle.ts`): the treemap panel's In order mode. Kept
+   beside the module rather than in style.css, which every batch agent would
+   otherwise append to at the same line. The bars themselves are drawn on the
+   canvas in the colours style.css gives each kind of field. */
+.icl {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* Drag pans and the wheel zooms, so the stage asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.icl-stage {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.icl-stage:active {
+  cursor: grabbing;
+}
+.icl-canvas,
+.icl-axis {
+  display: block;
+}
+/* The one control on the picture, under it on the right, where it does not
+   cover a bar. Its row is always there, greyed while there is no zoom to
+   undo, so the picture never changes height. */
+.icl-foot {
+  display: flex;
+  justify-content: flex-end;
+  height: 22px;
+  align-items: center;
+}
