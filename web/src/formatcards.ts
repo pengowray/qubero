@@ -86,7 +86,11 @@ export function formatCardKind(doc: Doc, node: TemplateNode, asked: ReadonlySet<
 export function drawFormatCard(c: DrawContext, item: Extract<Item, { kind: "formatcard" }>): HTMLElement {
   if (item.card.startsWith(KIND_PREFIX)) {
     const card = KIND_CARDS.get(item.card.slice(KIND_PREFIX.length));
-    return card === undefined ? document.createElement("div") : card.draw(c, item);
+    const drawn = card === undefined ? document.createElement("div") : card.draw(c, item);
+    // Every listing item is placed by the listing, which only places what
+    // wears its class; the format readers' cards put it on themselves.
+    drawn.classList.add("rp-item");
+    return drawn;
   }
   const reader = READERS.get(c.doc.template ?? "");
   return reader === undefined ? document.createElement("div") : reader.draw(c, item);

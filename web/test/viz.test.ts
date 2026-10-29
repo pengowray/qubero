@@ -20,6 +20,7 @@ import { overviewTabs, registerOverviewTab } from "../src/viz/overviewtabs.ts";
 import { headingButtonsFor, registerHeadingButton, type HeadingItem } from "../src/viz/headingbuttons.ts";
 import type { Doc, TemplateNode } from "../src/doc.ts";
 import type { DrawContext } from "../src/listingdraw.ts";
+import { childStripLayout, hexTicks } from "../src/viz/childstrip.ts";
 
 // ----- lanes -----
 
@@ -264,6 +265,27 @@ test("fit centres the content and scales it to the view, x only when asked", () 
   const box = { x0: 0, y0: 0, x1: 200, y1: 100 };
   assert.deepEqual(fitTransform(box, 400, 400, false, 0), { k: 2, x: 0, y: 100 });
   assert.deepEqual(fitTransform(box, 400, 400, true, 0), { k: 2, x: 0, y: 0 });
+});
+
+// ----- the example piece -----
+
+test("the example strip puts overlapping children in separate lanes", () => {
+  const node = (offset_bits: number, size_bits: number) => ({ offset_bits, size_bits, path: [offset_bits] }) as unknown as TemplateNode;
+  const parent = node(0, 64);
+  const layout = childStripLayout(parent, [node(0, 32), node(32, 32), node(16, 16), node(80, 0)], 64);
+  assert.equal(layout.lanes, 2);
+  assert.deepEqual(layout.bars.map((b) => [b.x0, b.x1, b.lane]), [[0, 32, 0], [32, 64, 0], [16, 32, 1]]);
+});
+
+test("hex ticks are a power of two apart and their labels stay inside the axis", () => {
+  // 0x10 to 0x1d across 280 pixels, as the IHDR strip is drawn.
+  const at = (b: number) => ((b - 16) / 13) * 280;
+  const ticks = hexTicks([16, 29], 3, at, 280, () => 30);
+  assert.deepEqual(ticks.map((t) => t.byte), [16, 24]);
+  assert.equal(ticks[0]?.anchor, "start");
+  assert.equal(ticks[1]?.anchor, "middle");
+  // Labels wider than the gaps between ticks are thinned.
+  assert.equal(hexTicks([0, 64], 64, (b) => b * 4, 256, () => 30).length <= 7, true);
 });
 
 // ----- role colours -----

@@ -28,7 +28,7 @@ import { fieldClass } from "../fieldstyle.ts";
 import { bitSizeText, childWord, countText, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { applyX, invertX, rescaleDomain, type View } from "./boardmath.ts";
-import { canvasMeasure, ellipsise, type Measure } from "./fit.ts";
+import { canvasMeasure, ellipsise, monoMeasure, thinLabels, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { assignLanes } from "./lanes.ts";
 import { linkedFor, subscribeWhileConnected } from "./linked.ts";
@@ -195,14 +195,17 @@ export function drawChildStrip(doc: Doc, data: ChildStripData, opts: { readonly 
     if (axis === null) return;
     const bytes = rescaleDomain(view, [layout.startBit / 8, layout.endBit / 8], [0, width]);
     const x = axis.scale.scaleLinear().domain(bytes).range([0, width]);
-    // Whole bytes only: a tick at byte 3.5 names no address.
-    const ticks = x.ticks(Math.max(2, Math.floor(width / TICK_SPACING_PX))).filter((t) => Number.isInteger(t));
+    const ticks = hexTicks(bytes, Math.max(2, Math.floor(width / TICK_SPACING_PX)), (b) => x(b), width, (b) => TICK_MEASURE(formatOffset(b * 8), TICK_PX));
     const a = axis.axis
       .axisBottom(x)
-      .tickValues(ticks)
+      .tickValues(ticks.map((t) => t.byte))
       .tickSize(3)
       .tickFormat((d) => formatOffset(Number(d) * 8));
-    axis.selection.select(axisG).call(a);
+    const g = axis.selection.select(axisG);
+    g.call(a);
+    // d3-axis centres every label; the ones by an edge run inward instead.
+    const anchors = new Map(ticks.map((t) => [t.byte, t.anchor]));
+    g.selectAll<SVGTextElement, number>(".tick text").attr("text-anchor", (d) => anchors.get(Number(d)) ?? "middle");
   };
 
   const draw = (): void => {
@@ -293,6 +296,41 @@ export function drawChildStrip(doc: Doc, data: ChildStripData, opts: { readonly 
     },
   };
 }
+
+/** The axis labels are in the monospace stack at 10 pixels (`.viz-axis`). */
+const TICK_PX = 10;
+const TICK_MEASURE = monoMeasure();
+
+/**
+ * Byte addresses to put ticks at across `domain` (in bytes): at most `count`
+ * of them, a power of two apart, since addresses are read in hex and a tick
+ * at 0x14 then 0x19 is a step nobody counts in. A label is centred on its
+ * tick, or starts at it by the left edge and ends at it by the right, so none
+ * is cut off; then only the labels clear of their neighbours are kept
+ * (`thinLabels`), so none is drawn over another. d3-axis draws what is left.
+ */
+export function hexTicks(domain: readonly [number, number], count: number, at: (byte: number) => number, width: number, labelWidth: (byte: number) => number): HexTick[] {
+  const [a, b] = domain;
+  const span = Math.max(1, b - a);
+  let step = 1;
+  while (span / step > count) step *= 2;
+  const ticks: HexTick[] = [];
+  const labels: { start: number; end: number; priority: number }[] = [];
+  for (let v = Math.ceil(a / step) * step; v <= b && ticks.length <= count + 1; v += step) {
+    const x = at(v);
+    const w = labelWidth(v);
+    if (x < 0 || x > width || w > width) continue;
+    const anchor: HexTick["anchor"] = x - w / 2 < 0 ? "start" : x + w / 2 > width ? "end" : "middle";
+    const start = anchor === "start" ? x : anchor === "end" ? x - w : x - w / 2;
+    ticks.push({ byte: v, anchor });
+    labels.push({ start, end: start + w, priority: 0 });
+  }
+  const keep = thinLabels(labels, 6);
+  return ticks.filter((_, i) => keep[i] === true);
+}
+
+/** A tick, and which way its label runs from it. */
+export type HexTick = { readonly byte: number; readonly anchor: "start" | "middle" | "end" };
 
 function samePath(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((s, i) => s === b[i]);
