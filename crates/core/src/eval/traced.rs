@@ -225,6 +225,8 @@ pub(super) fn is_payload(kind: &StepKind) -> bool {
             | StepKind::Ac { .. }
             | StepKind::Zrl { .. }
             | StepKind::Eob { .. }
+            | StepKind::Base64 { .. }
+            | StepKind::Ignored
     )
 }
 
@@ -503,6 +505,13 @@ pub(super) fn symbol_name(step: &Step) -> String {
         StepKind::Ac { run, k, value, .. } => format!("AC {value} at zigzag position {k}, after {run} zeros"),
         StepKind::Zrl { k, .. } => format!("ZRL, 16 zeros from zigzag position {k}"),
         StepKind::Eob { k, .. } => format!("EOB, zigzag positions {k} to 63 are zero"),
+        // Four characters of base64 and the bytes they spell, written the way
+        // a literal's byte is.
+        StepKind::Base64 { value, len } => {
+            let bytes: Vec<String> = (0..len).rev().map(|k| byte((value >> (8 * k)) as u8)).collect();
+            format!("base64 {}", bytes.join(" "))
+        }
+        StepKind::Ignored => "ignored".to_string(),
     }
 }
 
@@ -549,6 +558,8 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
                 (4, "not named"),
                 (5, "pixel"),
                 (6, "padding"),
+                (7, "base64 group"),
+                (8, "ignored"),
             ],
         )
     };
@@ -563,6 +574,8 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
         StepKind::Header(StepField::Padding, _) => vec![("kind", kind(6))],
         StepKind::Stored => vec![("kind", kind(3)), ("length", T::computed(E::lit(bytes as i128)))],
         StepKind::Pixel => vec![("kind", kind(5)), ("length", T::computed(E::lit(bytes as i128)))],
+        StepKind::Base64 { .. } => vec![("kind", kind(7)), ("length", T::computed(E::lit(bytes as i128)))],
+        StepKind::Ignored => vec![("kind", kind(8))],
         _ => vec![("kind", kind(4)), ("length", T::computed(E::lit(bytes as i128)))],
     };
     (name, sized(bits, T::structure("Symbol", fields)))

@@ -590,6 +590,8 @@ export const UNPACKED = {
     ac: "AC coefficient",
     zrl: "ZRL, 16 zero coefficients",
     eob: "EOB, the rest of the block is zero",
+    base64: "base64 group",
+    ignored: "ignored",
   } as Readonly<Record<string, string>>,
   /**
    * The named fields a deflate header and its code tables are made of, keyed by
@@ -2283,12 +2285,6 @@ export const REPORT = {
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
   imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
-  /** The picture is scaled to fit the column, or magnified when it is a few
-   *  pixels across; a click shows it pixel for pixel, and another puts it
-   *  back. "actual" covers both directions where "full" would promise the
-   *  magnified one gets bigger. Tooltips on the picture itself. */
-  imageShowFull: "Show at actual size",
-  imageShowFit: "Scale to fit",
 } as const;
 
 /**
@@ -4000,6 +3996,30 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
   return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
 }
 
+/** The file map strips (`filemap.ts`), the bars under the inspector's
+ *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`).
+ *  Its own block rather than a key of `VIZ`, whose end every batch piece
+ *  appends to. */
+export const LOCATOR = {
+  /** Hover card title over bytes that none of the fields the strip is
+   *  drawn from covers: the gaps between a PDF's objects. */
+  notInAnyField: "Bytes not in any field",
+  /** Hover card line: the part's share of the whole file. */
+  shareOfFile: (share: string): string => `${share} of the file`,
+  /** Hover card line: a field's share of the structure it is in, named as
+   *  the inspector's trail names it (`entries[3]`, `file (ZIP)`). */
+  shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
+  /** The At cursor section heading. */
+  title: "Position in the file",
+  /** Under the heading while the structures on the way down to the field
+   *  are still being read. */
+  reading: "Reading the fields…",
+  /** Caption of the second strip of a deep path, when the strips of the
+   *  structures between it and the first are left out. Counts strips, not
+   *  the trail's crumbs. */
+  levelsNotDrawn: (n: number, name: string): string => `${name} (${n} ${n === 1 ? "level" : "levels"} above it not drawn)`,
+} as const;
+
 /** The diagram pieces in `viz/`, starting with the example piece every batch
  *  piece is modelled on (`viz/childstrip.ts`). Each piece adds its own block
  *  of words under its own key, so two pieces never edit the same lines. */
@@ -4052,6 +4072,286 @@ export const VIZ = {
      *  The noun is the structure's own word for them: fields, items, chunks. */
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
+  },
+  /** The rail tab that draws an executable's sections twice, at their file
+   *  offsets and at their virtual addresses, joined by bands
+   *  (`viz/spacebands.ts`). */
+  spaceBands: {
+    tab: "Memory map",
+    tabTitle: "Where each section is in the file and where it is loaded in memory",
+    title: "Sections in the file and in memory",
+    fileHead: "File",
+    memoryHead: "Memory",
+    /** The colour key: the permissions a stretch has in memory. */
+    access: {
+      exec: "Executable",
+      "write-exec": "Writable and executable",
+      write: "Writable",
+      read: "Read-only",
+      unloaded: "Not loaded",
+    },
+    /** Names of the stretches that are not sections. */
+    names: {
+      elfHeader: "ELF header",
+      programHeaderTable: "Program header table",
+      sectionHeaderTable: "Section header table",
+      peHeaders: "Headers",
+      overlay: "Data after the last section",
+      /** A section with no name, by its index in the section table. */
+      section: (index: number): string => `Section ${index}`,
+      /** A program header by its index from 0 and its type, as `LOAD`. */
+      programHeader: (index: number, type: string): string => `Program header ${index} (${type})`,
+    },
+    /** The sentence over the drawing. `fileOnly` and `memoryOnly` are section
+     *  names; a long list is cut to its first few and a count. */
+    summary: (loaded: number, fileOnly: readonly string[], memoryOnly: readonly string[]): string => {
+      const names = (list: readonly string[]): string =>
+        list.length <= 4 ? list.join(", ") : `${list.slice(0, 3).join(", ")} and ${(list.length - 3).toLocaleString()} more`;
+      const parts = [loaded === 0 ? "No section is loaded into memory." : `Loaded into memory: ${countText(loaded, "section")}.`];
+      if (fileOnly.length > 0 && loaded > 0) parts.push(`In the file only: ${names(fileOnly)}.`);
+      if (memoryOnly.length > 0) parts.push(`No bytes in the file: ${names(memoryOnly)}.`);
+      return parts.join(" ");
+    },
+    /** Under the summary, when long gaps of unmapped addresses are cut out of
+     *  the memory column. */
+    cutNote: (bytes: string): string => `The memory column skips ${bytes} of unmapped addresses at the zigzag marks.`,
+    linked: "Zoom both columns together",
+    linkedTitle: "When off, the wheel zooms only the column under the pointer",
+    reading: "Reading the section table…",
+    failed: (message: string): string => `Could not read the headers: ${message}`,
+    /** Why the headers could not be read, after `failed`. */
+    missing: {
+      elfHeader: "the ELF header is missing",
+      peHeader: "the PE header is missing",
+      optionalHeader: "the PE optional header is missing",
+      imageBase: "the PE optional header has no image base",
+      sectionTable: "the PE section table is missing",
+      format: "not an ELF or PE file",
+    },
+    /** Hover card lines. `perms` is three letters, as `r-x`. */
+    perms: (perms: string): string => `Permissions: ${perms}`,
+    permsFrom: (perms: string, index: number, type: string): string => `Permissions: ${perms}, from program header ${index} (${type})`,
+    permsFromFlags: (perms: string): string => `Permissions: ${perms}, from the section flags`,
+    sectionFlags: (flags: string): string => `Section flags: ${flags}`,
+    inFile: (at: string, size: string): string => `File: ${at}, ${size}`,
+    noFileBytes: "File: no bytes, filled with zeros when loaded",
+    inMemory: (at: string, size: string): string => `Memory: ${at}, ${size}`,
+    /** A PE address is the image base plus the address relative to it,
+     *  which is the number the section table states. */
+    inMemoryRva: (at: string, size: string, rva: string): string => `Memory: ${at} (RVA ${rva}), ${size}`,
+    notLoaded: "Memory: not loaded",
+    noSection: "Not in any section",
+    unmapped: "Unmapped addresses",
+    unmappedRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,
+    notToScale: "Not drawn to scale",
+    /** Beside a cut on the memory side. */
+    cutLabel: (size: string): string => `${size} unmapped`,
+    /** The hover card's foot: what a click on this part of the drawing selects. */
+    click: {
+      bytes: "Click to select its bytes",
+      "section-header": "Click to select its section header",
+      "section-entry": "Click to select its entry in the section table",
+      "program-header": "Click to select its program header",
+      "loading-header": "Click to select the program header that loads it",
+      "image-base": "Click to select the image base field",
+    },
+  },
+  /** The picture of an image file in its content card, and in the report's
+   *  JPEG and PNG sections, with what is drawn over it (`viz/pixelgrid.ts`). */
+  pixelGrid: {
+    /** The buttons that choose what is drawn over the picture. */
+    modesLabel: "Overlay",
+    modes: {
+      picture: "Picture only",
+      blocks: "Blocks",
+      /** The legend under the picture says per what: MCU or block. */
+      bits: "Bits",
+      restart: "Restart intervals",
+      passes: "Passes",
+    },
+    channel: "Channel",
+    allChannels: "All channels",
+    opacity: "Opacity",
+    /** Zooms so one pixel of the picture is one pixel of the screen. */
+    actualSize: "Actual size",
+    // ----- the hover card -----
+    pixel: (x: number, y: number): string => `Pixel ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    /** A place the JPEG scan codes past the right or bottom edge of the
+     *  picture, which every scan does to make up whole MCUs. */
+    padding: (x: number, y: number): string => `Padding at ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    paddingNote: "Padding the encoder added to fill the last MCU. Not part of the picture.",
+    decoded: (hex: string): string => `Colour as the browser decodes it: #${hex}`,
+    /** Separated as the At cursor panel separates them. */
+    samples: (values: readonly string[]): string => `Samples: ${values.join(" · ")}`,
+    mcu: (x: number, y: number, bits: string): string => `MCU ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    block: (channel: string, x: number, y: number, bits: string): string => `${channel} block ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    interval: (n: number, of: number): string => `Restart interval ${(n + 1).toLocaleString()} of ${of.toLocaleString()}`,
+    scanline: (pass: number | null, row: number, filter: string): string =>
+      pass === null ? `Scanline ${row.toLocaleString()}, filter ${filter}` : `Pass ${pass}, scanline ${row.toLocaleString()} of the pass, filter ${filter}`,
+    /** The foot of a JPEG pixel's card: where the bits a click selects
+     *  start, the MCU's or, with one channel's bits shown, its block's. */
+    mcuStarts: (address: string): string => `MCU starts at ${address}`,
+    blockStarts: (channel: string, address: string): string => `${channel} block starts at ${address}`,
+    /** The foot of a PNG pixel's card: where its samples are. */
+    inUnfiltered: (address: string): string => `${address} in the unfiltered image data`,
+    // ----- the legend under the picture -----
+    heatAll: "Bits per MCU:",
+    heatChannel: (channel: string): string => `Bits per ${channel} block:`,
+    heatClass: (from: number, to: number): string => `${from.toLocaleString()}–${to.toLocaleString()}`,
+    passesLead: "Adam7 pass:",
+    restartLead: (n: number): string => `Restart intervals of ${countText(n, "MCU")}, alternating light and dark`,
+    blocksLead: (channel: string, bw: number, bh: number, mw: number, mh: number): string =>
+      `Thin lines: ${channel} blocks of ${bw} × ${bh} pixels. Thick lines: MCUs of ${mw} × ${mh} pixels.`,
+    /** No channel is subsampled, so a block of any channel is an MCU. */
+    blocksSame: (mw: number, mh: number): string => `Lines: MCUs of ${mw} × ${mh} pixels, each holding one 8 × 8 block of every channel.`,
+    filtersLead: "Scanline filter:",
+    filterItem: (filter: string, n: number): string => `${filter} (${countText(n, "scanline")})`,
+    /** Says what the strip down the left of a PNG is. */
+    stripOne: "The strip on the left shows the filter of each scanline.",
+    stripPasses: "The strip on the left shows the filter of each scanline, in one column for each pass, 1 to 7.",
+    stripCut: (shown: number, total: number): string => `Filters shown for the first ${shown.toLocaleString()} of ${countText(total, "scanline")}.`,
+    /** The caption of the picture in the report's PNG section. */
+    pngFigureLead: (interlaced: boolean): string =>
+      interlaced ? "The Adam7 pass that stores each pixel, drawn over the picture. Lower the opacity to see the picture." : "The picture, pixel for pixel.",
+    pngFigureCaption: "Hover a pixel for its stored samples and its scanline. Click a pixel to show its samples in the At cursor panel.",
+    /** Under the picture while what is drawn over it is read: a JPEG's scan,
+     *  or a PNG's scanlines. */
+    readingScan: "Reading the scan to draw over the picture…",
+    readingScanlines: "Reading the scanlines to draw over the picture…",
+    alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
+  },
+  /** A run of numbers as a plot (`viz/valueplot.ts`): a line per channel, or
+   *  a grid of colours for a run with two dimensions. */
+  valuePlot: {
+    /** The listing heading's button, and what it does. */
+    button: "Plot",
+    buttonTitle: (count: number, unit: string): string => `Plot all ${countText(count, unit)} in the pane beside the listing`,
+    /** The list pane's two ways of showing its list. */
+    paneRows: "List",
+    paneRowsTitle: (unit: string): string => `Show one row per ${unit}`,
+    panePlot: "Plot",
+    panePlotTitle: "Show the values as a plot",
+    /** While the bytes of the run are still arriving. */
+    reading: "Reading the values…",
+    /** In place of the plot when uPlot's module did not arrive (a dropped
+     *  connection, or a chunk gone after a deploy). No Try again button:
+     *  Chrome keeps a failed module import and answers a second import of it
+     *  with the same failure, so only a reload asks the server again. */
+    loadFailed: "Couldn't load the plotting library. Reload the page to try again.",
+    /** A run longer than the plot reads. */
+    firstOf: (shown: number, total: number, unit: string): string =>
+      `Plotting the first ${shown.toLocaleString()} of ${countText(total, unit)}`,
+    /** Hover card over the line. The title is the element's number in its run,
+     *  counted from 0 as the listing counts, and its time when the run has a
+     *  rate. */
+    at: (word: string, index: number): string => `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()}`,
+    atTime: (word: string, index: number, seconds: string): string =>
+      `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()} at ${seconds}`,
+    /** One channel's value, or the one value of a run with one channel. */
+    channelValue: (channel: string, value: string): string => `${channel}: ${value}`,
+    oneValue: (value: string): string => `Value: ${value}`,
+    /** The card's title over a run that is not a table: the element's index,
+     *  as the listing writes it. */
+    index: (index: number): string => `[${index.toLocaleString()}]`,
+    /** When one pixel of the line stands for several elements, the card says
+     *  which, and the lowest and highest of them, which is what the line drawn
+     *  there shows. */
+    inPixel: (word: string, from: number, to: number): string =>
+      `In this pixel, ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}:`,
+    channelRange: (channel: string, low: string, high: string): string => `${channel}: ${low} to ${high}`,
+    oneRange: (low: string, high: string): string => `Lowest ${low}, highest ${high}`,
+    /** The muted foot of the card: where the element is and what type. */
+    where: (offset: string, type: string): string => `${offset} · ${type}`,
+    /** A miniSEED record's decoded samples in the At cursor panel. A sample of
+     *  a Steim record is a sum of differences, so it is at no one place; the
+     *  card names the 64-byte frame its difference was read from, which is
+     *  what a click selects, and the offset is where that frame starts.
+     *  Sample 0 is stored whole, as the forward integration constant in the
+     *  second word of frame 0, and its card says so ("forward integration
+     *  constant" is the samples panel's name for it). */
+    samplesTitle: "Decoded samples",
+    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()}, which starts at ${offset}`,
+    fromConstant: (offset: string): string => `Read from the forward integration constant at ${offset}`,
+    /** The choice over a run with two dimensions. */
+    grid: "Grid",
+    gridTitle: "Show the values as a grid of colours, one cell per value",
+    line: "Line",
+    lineTitle: "Show the values as one line, in the order they are stored",
+    /** Over the grid: its shape, in the order the values are stored. */
+    shape: (rows: number, columns: number): string =>
+      `${countText(rows, "row")} of ${countText(columns, "value")}`,
+    /** Over the grid when it is drawn smaller than one pixel a value. `n` is
+     *  the most values any one pixel averages; a pixel at the grid's edge, or
+     *  where the cells do not divide evenly, averages fewer. */
+    meanOf: (n: number): string => `Each pixel shows the mean of up to ${n.toLocaleString()} values`,
+    /** The colour scale's range. */
+    rangeFull: "Full range",
+    rangeFullTitle: "Colours run from the lowest value to the highest",
+    rangeClip: "Middle 99%",
+    rangeClipTitle: "Colours run over the middle 99% of values; values outside that take the end colours",
+    /** Hover card over the grid. */
+    cell: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    /** The foot of a card over one element: its index in the run, counted
+     *  from 0 as the listing counts, where it is, and its type. */
+    element: (index: number, offset: string, type: string): string => `[${index.toLocaleString()}] · ${offset} · ${type}`,
+    cellMean: (n: number, value: string): string => `Mean of ${n.toLocaleString()} values: ${value}`,
+  },
+  structLayout: {
+    /** The listing heading's button, beside `bytes`, `list` and `table`. */
+    button: "layout",
+    buttonTitle: (name: string): string => `Show the byte layout of ${name}: each field at its offset, gaps between fields marked`,
+    buttonTitleOn: (name: string): string => `Show the fields of ${name} as a list again`,
+    /** The figure's heading. A struct layout is what pahole prints. */
+    title: (name: string): string => `Struct layout of ${name}`,
+    rowWidth: "Bytes per row",
+    rowWidthTitle: (n: number): string => `${n} bytes per row`,
+    /** The summary line under the heading, its parts joined with ` · `. */
+    size: (bytes: number, fields: number): string => `${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    /** For a list whose elements are all one size: `4 segments, each 56
+     *  bytes in 8 fields`. */
+    elementsEach: (count: number, noun: string, bytes: number, fields: number): string =>
+      `${countText(count, noun)}, each ${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    padding: (bytes: number): string => `${countText(bytes, "byte")} padding`,
+    /** Bytes no field anywhere covers, in the word the hex view and the
+     *  listing use for them (`GAP_LABEL`). */
+    unmapped: (bytes: number): string => `${countText(bytes, "byte")} ${GAP_LABEL}`,
+    noGaps: "no gaps between fields",
+    misaligned: (n: number): string => countText(n, "misaligned number"),
+    /** Inside a gap's box: the full label, and the one used when it does not
+     *  fit. */
+    gapShort: (bytes: number): string => `${bytes} B`,
+    gapPaddingNext: (next: string, align: number): string => `No field covers these bytes. After them, ${next} starts at a multiple of ${align} bytes.`,
+    gapPaddingTail: (name: string, align: number): string => `No field covers these bytes. They make ${name} a multiple of ${align} bytes long.`,
+    gapUnread: "No field covers these bytes.",
+    /** A gap in this structure that fields elsewhere in the file are read
+     *  from: `224 bytes of program_headers`. */
+    gapOf: (bytes: number, owner: string): string => `${countText(bytes, "byte")} of ${owner}`,
+    gapOfOthers: (bytes: number): string => `${countText(bytes, "byte")} of other parts of the file`,
+    gapOther: (name: string, owners: readonly string[]): string => `Not part of ${name}. Fields of ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""} are read from these bytes.`,
+    /** In the summary line, for those gaps. Not "in other fields", which
+     *  reads as more fields of this structure and invites adding the count to
+     *  the size before it. */
+    other: (bytes: number): string => `${countText(bytes, "byte")} belong to other parts of the file`,
+    /** On a field the format itself calls padding. */
+    namedPadding: "The format calls this field padding",
+    /** Hover card lines for a field. `rel` is an offset like `+0x08`, and
+     *  `record` is the name of the structure the rows count from. */
+    fromStart: (rel: string, record: string, size: string): string => `${rel} from the start of ${record} · ${size}`,
+    /** For a member of a structure inside the record: its offset in that
+     *  structure as well. */
+    inGroup: (rel: string, group: string): string => `${rel} from the start of ${group}`,
+    aligned: (align: number): string => `Aligned to ${align} bytes`,
+    notAligned: (bytes: number, rel: string): string => `Not aligned: ${bytes}-byte number at ${rel}`,
+    /** A break standing for rows that are wholly one field. */
+    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "more row")} of ${name} (${countText(bytes, "byte")})`,
+    /** The same for rows that are wholly one gap, whose box says what it is. */
+    foldedGap: (rows: number, bytes: number): string => `${countText(rows, "more row")} (${countText(bytes, "byte")})`,
+    /** A row's key, when more names are keyed than fit beside it. */
+    keyMore: (n: number): string => `+${n} more`,
+    /** Under the figure: fields of the structure stored somewhere else. */
+    placed: "Fields read from elsewhere in the file:",
+    reading: "Reading the fields…",
+    tooLarge: (size: string, limit: string): string => `Too large to draw as rows of bytes: ${size} (the limit is ${limit})`,
   },
   icicle: {
     /** The treemap heading's tooltip while the panel shows In order, where

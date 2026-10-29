@@ -1,0 +1,19 @@
+/* ---- the list pane's plot (listpane.ts) ---- */
+/* The rest of the pane's rules are `.lp-*` in style.css. These are the ones
+   for the plot the pane can show in place of its rows, which takes the
+   pane's height while the pane's bar keeps the choice between them. */
+.lp-plot {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 8px;
+  font-family: var(--sans);
+}
+.lp-plot[hidden] {
+  display: none;
+}
+/* Focusable so Escape closes the pane after a click on the plot; a click is
+   not a reason to draw a focus ring round the whole figure. */
+.lp-plot:focus:not(:focus-visible) {
+  outline: none;
+}

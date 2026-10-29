@@ -30,6 +30,7 @@ pub mod lazy;
 pub mod lha;
 pub mod lzma;
 pub mod lz4;
+pub mod mime;
 pub mod pico8;
 pub mod pixels;
 pub mod pxu;
@@ -224,6 +225,19 @@ pub enum Codec {
     /// The same text written as a protocol 0 line, so `raw-unicode-escape`'s
     /// escaping comes off before the characters do.
     EscapedLatin1Text,
+    /// Not compression: bytes spelled in base64, four characters of a
+    /// sixty-four letter alphabet to every three, the way a MIME part says
+    /// `Content-Transfer-Encoding: base64`. See [`crate::codec::mime`].
+    Base64,
+    /// Not compression: text with every byte that is not plain ASCII written
+    /// as `=` and two hexadecimal digits, and long lines broken with a `=` at
+    /// the end. What a MIME part that says `quoted-printable` holds. See
+    /// [`crate::codec::mime`].
+    QuotedPrintable,
+    /// Not compression: the `Q` of an RFC 2047 encoded word in a header,
+    /// which is quoted-printable with `_` for a space and no line breaks. See
+    /// [`crate::codec::mime::q_encoding`].
+    QEncoding,
     /// Not compression: a whole PNG image's scanlines unfiltered, with the
     /// row lengths worked out from the header rather than fixed in the
     /// template. What [`Codec::PngUnfilter`] cannot be for an ordinary PNG,
@@ -285,6 +299,9 @@ impl Codec {
             Codec::CdfAhuff => "cdf adaptive huffman",
             Codec::Latin1Text => "latin-1 text",
             Codec::EscapedLatin1Text => "latin-1 text, escaped",
+            Codec::Base64 => "base64",
+            Codec::QuotedPrintable => "quoted-printable",
+            Codec::QEncoding => "q encoding",
             Codec::PngScanlines { .. } => "png scanlines",
             Codec::JpegBaseline => "jpeg baseline",
         }
@@ -584,6 +601,14 @@ pub enum StepKind {
     /// position `k` to 63 is zero. Not deflate's [`StepKind::EndOfBlock`]: that
     /// ends a block of the stream, and this ends one 8×8 block of a picture.
     Eob { code: u8, k: u8 },
+    /// One base64 group: four characters that spell three bytes, or two or
+    /// three at the end of the run that spell one or two. `value` is the
+    /// bytes it spelled, the first one highest, and `len` how many there are.
+    Base64 { value: u32, len: u8 },
+    /// Input the decoder reads past and writes nothing for: the line breaks
+    /// between base64 lines, a quoted-printable soft line break, and the
+    /// blanks a quoted-printable line carries at its end.
+    Ignored,
 }
 
 impl StepKind {
@@ -604,6 +629,8 @@ impl StepKind {
             StepKind::Ac { .. } => "ac",
             StepKind::Zrl { .. } => "zrl",
             StepKind::Eob { .. } => "eob",
+            StepKind::Base64 { .. } => "base64",
+            StepKind::Ignored => "ignored",
         }
     }
 
@@ -1308,6 +1335,8 @@ const TAG_DC: u8 = 20;
 const TAG_AC: u8 = 21;
 const TAG_ZRL: u8 = 22;
 const TAG_EOB: u8 = 23;
+const TAG_BASE64: u8 = 24;
+const TAG_IGNORED: u8 = 25;
 
 fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
     let (tag, a, b) = match kind {
@@ -1334,6 +1363,8 @@ fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
         }
         StepKind::Zrl { code, k } => (TAG_ZRL, k as u32, code as u32),
         StepKind::Eob { code, k } => (TAG_EOB, k as u32, code as u32),
+        StepKind::Base64 { value, len } => (TAG_BASE64, value, len as u32),
+        StepKind::Ignored => (TAG_IGNORED, 0, 0),
     };
     RawStep { in_start: in_start as u32, out_start: out_start as u32, a, b, tag }
 }
@@ -1372,6 +1403,8 @@ fn unpack(raw: RawStep) -> StepKind {
         },
         TAG_ZRL => StepKind::Zrl { code: raw.b as u8, k: raw.a as u8 },
         TAG_EOB => StepKind::Eob { code: raw.b as u8, k: raw.a as u8 },
+        TAG_BASE64 => StepKind::Base64 { value: raw.a, len: raw.b as u8 },
+        TAG_IGNORED => StepKind::Ignored,
         _ => StepKind::Opaque,
     }
 }
@@ -1460,6 +1493,9 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::CdfAhuff => cdfhuff::adaptive(data)?,
         Codec::Latin1Text => pytext::latin1_text(data)?,
         Codec::EscapedLatin1Text => pytext::escaped_latin1_text(data)?,
+        Codec::Base64 => mime::base64(data)?,
+        Codec::QuotedPrintable => mime::quoted_printable(data)?,
+        Codec::QEncoding => mime::q_encoding(data)?,
         Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
             let shape = scanlines::Geometry::new(width as u64, height as u64, bits_per_pixel as u64, interlace);
             scanlines::unfilter_image(data, &shape.ok_or(Refusal::Settings)?)?
@@ -1555,6 +1591,9 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::CdfAhuff
         | Codec::Latin1Text
         | Codec::EscapedLatin1Text
+        | Codec::Base64
+        | Codec::QuotedPrintable
+        | Codec::QEncoding
         | Codec::PngScanlines { .. }
         | Codec::Zstd
         | Codec::FastLz => {

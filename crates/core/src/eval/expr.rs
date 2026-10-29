@@ -20,7 +20,9 @@ fn tag_key(tag: &Tag) -> Option<TagKey> {
         Tag::Int(v) => Some(TagKey::Int(*v)),
         Tag::Text(s) => Some(TagKey::Text(s.trim_end().to_string())),
         Tag::Bytes(b) => Some(TagKey::Bytes(b.clone())),
-        Tag::Computed(_) | Tag::ComputedText(_) => None,
+        // Not kept in the index, which is keyed by exact text: a search in
+        // any case reads the list from the front. See `Tag::TextAnyCase`.
+        Tag::Computed(_) | Tag::ComputedText(_) | Tag::TextAnyCase(_) => None,
     }
 }
 
@@ -32,6 +34,9 @@ const REAL_IN_WHOLE: &str = "a real number where a whole number is needed; trunc
 /// What a whole-number expression says when it meets a number written into
 /// words. The number is the expression inside, and that is what to ask for.
 const WORDS_IN_WHOLE: &str = "text where a number is needed; the number is the expression inside words(...)";
+
+/// The same for a word read in lower case, which is text and nothing else.
+const LOWER_IN_WHOLE: &str = "text where a number is needed; lower(...) is the text it reaches, in lower case";
 
 /// The same said of a field, after its name: a float asked for as a whole
 /// number is not "not a number", which would send a reader looking for text.
@@ -474,6 +479,9 @@ impl Evaluator {
             Expr::BytesEq { field, bytes } => return self.bytes_eq_at(doc, at, field, bytes, here),
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Find { needle, last } => return self.find_at(doc, at, needle, *last, here),
+            // Out of line and cold: it reads the text of a field before it
+            // walks. See `Expr::FindText`.
+            Expr::FindText(f) => return self.find_text_at(doc, at, f, here),
             Expr::Run { chars, negate } => return self.char_run_at(doc, at, chars, *negate, here),
             Expr::StreamLen(codec) => return self.stream_len_at(doc, at, *codec, here),
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
@@ -621,6 +629,7 @@ impl Evaluator {
             // bytes at an offset nobody wrote. `trunc` is the way in.
             Expr::Real(_) | Expr::RealText(_) => return fail(REAL_IN_WHOLE),
             Expr::Words { .. } => return fail(WORDS_IN_WHOLE),
+            Expr::Lower(_) => return fail(LOWER_IN_WHOLE),
             // In a whole number these are the shift and the power they would
             // be. A negative power is a fraction, and says so rather than
             // pointing at `trunc`, which would make it nought.
@@ -1008,6 +1017,37 @@ impl Evaluator {
         Ok(hit.unwrap_or(total) as i128)
     }
 
+    /// The bytes from `here` to the next place the needle is written, where
+    /// the middle of the needle is the text of a field. See
+    /// [`Expr::FindText`].
+    ///
+    /// The text is read once, before the walk, and the walk is the one
+    /// [`Self::find_at`] makes. A needle with no text in the middle is no
+    /// needle the file wrote, so it is not looked for.
+    #[cold]
+    #[inline(never)]
+    fn find_text_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        f: &Arc<crate::template::FindText>,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some((offset, limit)) = here else { return fail("nothing to search") };
+        if limit < offset {
+            return fail("nothing to search");
+        }
+        let f = f.clone();
+        let text = self.text_at(doc, at, &f.text, here)?;
+        if text.is_empty() {
+            return Ok(((limit - offset) / 8) as i128);
+        }
+        let mut needle = f.before.clone();
+        needle.extend_from_slice(text.as_bytes());
+        needle.extend_from_slice(&f.after);
+        self.find_at(doc, at, &needle, false, here)
+    }
+
     /// The bytes from `here` to where a stream packed with `codec` stops. See
     /// [`Expr::StreamLen`]. Decodes the stream in front of here to find where
     /// it stops; the bytes it comes to are dropped, and a run that is opened
@@ -1179,10 +1219,24 @@ impl Evaluator {
         if let Expr::Words { pattern, value } = e {
             return self.words_text(doc, at, pattern, value, here);
         }
+        // A word read the way it is compared where case does not matter.
+        if let Expr::Lower(inner) = e {
+            return self.lower_text(doc, at, inner, here);
+        }
         match self.text_path(doc, at, e, here)? {
             Some(p) => self.text_of(doc, &p),
             None => Ok(String::new()),
         }
+    }
+
+    /// The text `inner` reaches, in lower case and trimmed. See
+    /// [`Expr::Lower`]. Out of line and cold for the reason
+    /// [`Self::words_text`] is.
+    #[cold]
+    #[inline(never)]
+    fn lower_text<S: Source>(&mut self, doc: &Document<S>, at: &[usize], inner: &Expr, here: Option<(u64, u64)>) -> R<String> {
+        let text = self.text_at(doc, at, &inner.clone(), here)?;
+        Ok(text.trim_matches(|c: char| c.is_ascii_whitespace()).to_ascii_lowercase())
     }
 
     /// The number `value` comes to, written into `pattern`. See
@@ -1752,9 +1806,14 @@ impl Evaluator {
     /// that are something else.
     pub(super) fn tag_matches<S: Source>(&mut self, doc: &Document<S>, elem: &[usize], key: &[String], tag: &Tag) -> R<bool> {
         // A computed label was worked out before the search began, so what
-        // arrives here is always written down. See `tag_now`.
-        let Some(want) = tag_key(tag) else {
-            return fail("a computed label must be worked out before the search");
+        // arrives here is always written down. See `tag_now`. A label in any
+        // case is compared in lower case, which is how `tag_key_of` reads it.
+        let want = match tag {
+            Tag::TextAnyCase(s) => TagKey::Text(s.trim_end().to_ascii_lowercase()),
+            other => match tag_key(other) {
+                Some(want) => want,
+                None => return fail("a computed label must be worked out before the search"),
+            },
         };
         Ok(self.tag_key_of(doc, elem, key, tag)? == Some(want))
     }
@@ -1783,7 +1842,7 @@ impl Evaluator {
             // compares what is written and so has the padding of a fixed-width
             // key in it; this compares what the two fields read as, which is
             // the only comparison a label worked out somewhere else can win.
-            Tag::Text(_) => {
+            Tag::Text(_) | Tag::TextAnyCase(_) => {
                 let mut p = elem.to_vec();
                 match self.descend(doc, &mut p, key) {
                     Ok(true) => {}
@@ -1791,7 +1850,9 @@ impl Evaluator {
                     Err(e) if passes_up(&e) => return Err(e),
                     Err(_) => return Ok(None),
                 }
+                let any_case = matches!(tag, Tag::TextAnyCase(_));
                 match self.text_of(doc, &p) {
+                    Ok(got) if any_case => Ok(Some(TagKey::Text(got.trim_end().to_ascii_lowercase()))),
                     Ok(got) => Ok(Some(TagKey::Text(got.trim_end().to_string()))),
                     Err(e) if passes_up(&e) => Err(e),
                     Err(_) => Ok(None),

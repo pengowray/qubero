@@ -3735,6 +3735,109 @@ button.insp-xrow-where:hover {
 .rp-h1 .fmap {
   margin-inline-start: 8px;
 }
+/* A strip that goes to the part clicked. */
+.fmap-live {
+  cursor: pointer;
+}
+/* A field inside a compressed stream: the file's strip with the stream's
+   packed bytes lit, and the stream's own strip under it with the field lit. */
+.fmap-stack {
+  display: inline-flex;
+  flex-direction: column;
+  flex: none;
+  gap: 2px;
+}
+.fmap.fmap-ring {
+  height: 5px;
+}
+/* Under each crumb of the At cursor trail: where that crumb's field is
+   inside the crumb before it. 24 by 4, the size the locator design gives it. */
+.crumb-bar {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 4px;
+  margin-top: 1px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--fg) 14%, var(--bg));
+}
+/* Under the crumb's words, from their left edge, so the separator after the
+   crumb stays on the line. */
+.insp-crumb.has-bar {
+  position: relative;
+  padding-bottom: 6px;
+}
+.insp-crumb.has-bar .crumb-bar {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: 0;
+  margin: 0;
+}
+.crumb-bar i {
+  position: absolute;
+  inset-block: 0;
+  min-width: 1px;
+  background: var(--accent);
+}
+/* A strip a few pixels tall that goes to the part clicked also answers the
+   pointer just above and below it, so it is a target 24px tall. The hit test
+   reads only across the strip, so the extra height changes nothing else.
+   Not clipped, so the strip's rounded ends go on its end cells instead. */
+.fmap-reach {
+  position: relative;
+  overflow: visible;
+}
+.fmap-reach::before {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+.fmap-reach > i:first-child {
+  border-start-start-radius: 2px;
+  border-end-start-radius: 2px;
+}
+.fmap-reach > i:last-child {
+  border-start-end-radius: 2px;
+  border-end-end-radius: 2px;
+}
+/* ---- the zoom stack: the file, then each part the path goes through ---- */
+/* Which structure each strip is, over the strip: one line, cut short with an
+   ellipsis, so captions never run into each other. */
+.viz-stack-caption {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viz-stack-svg,
+.viz-stack-lens {
+  display: block;
+}
+/* The strip's own bytes that none of its fields cover. */
+.viz-stack-hole {
+  fill: color-mix(in srgb, var(--fg) 8%, var(--bg));
+}
+/* Joins the part lit in one strip to the strip under it, which is that part
+   drawn the full width. */
+.viz-lens {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1;
+}
+/* The strip under it counts in the stream's own offsets, not the file's:
+   a dashed lens, so the two are not read as one axis. */
+.viz-lens.is-unpacked {
+  stroke-dasharray: 3 2;
+}
+/* While the levels down to the field are still being read. */
+.viz-stack-reading {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Sticky trail: what the top of the window is inside. A listing scrolled past
    its heading stops saying which part of the file it is showing. */
 .report {
@@ -4831,28 +4934,6 @@ table.rec tr.is-on td {
   gap: 16px;
   padding-top: 10px;
   white-space: normal;
-}
-.rp-card-pic {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  overflow: auto;
-}
-.rp-card-pic img {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 320px;
-  cursor: zoom-in;
-}
-.rp-card-pic.is-full {
-  flex: 1 1 auto;
-}
-.rp-card-pic.is-full img {
-  max-width: none;
-  max-height: none;
-  cursor: zoom-out;
 }
 .rp-card-id,
 .rp-card-note {
@@ -7511,6 +7592,207 @@ table.rec td.is-invalid {
   display: inline-block;
   flex: none;
   overflow: hidden;
+}
+
+/* ---- file offsets against memory addresses (`viz/spacebands.ts`) ---- */
+/* The colours are a stretch's permissions in memory: executable, writable,
+   read-only. Blue, orange and green are the dataviz palette's
+   hues, which its validator passes for colour-blind readers next to each
+   other in both themes; every colour also has its word in the key and in
+   the hover card. Writable code takes the palette's violet, so the one
+   combination a reader is looking for stands apart. Not loaded is a grey. */
+.mmap-panel {
+  --mmap-exec: #2a78d6;
+  --mmap-write: #eb6834;
+  --mmap-read: #1baf7a;
+  --mmap-write-exec: #6250d6;
+  --mmap-unloaded: #8a8f98;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .mmap-panel {
+    --mmap-exec: #3987e5;
+    --mmap-write: #d95926;
+    --mmap-read: #199e70;
+    --mmap-write-exec: #9085e9;
+    --mmap-unloaded: #6f7580;
+  }
+}
+.mmap-exec { --mmap-c: var(--mmap-exec); }
+.mmap-write { --mmap-c: var(--mmap-write); }
+.mmap-read { --mmap-c: var(--mmap-read); }
+.mmap-write-exec { --mmap-c: var(--mmap-write-exec); }
+.mmap-unloaded { --mmap-c: var(--mmap-unloaded); }
+.mmap-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mmap-bar h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+}
+.mmap-summary {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.mmap-note {
+  color: var(--muted);
+}
+.mmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--fg);
+}
+.mmap-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mmap-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--mmap-c);
+}
+/* Only as wide as its words, so the checkbox's target is the label and not
+   the whole width of the window in the full-window mode. */
+.mmap-link {
+  align-self: flex-start;
+  min-height: 24px;
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.mmap-bar .tmp-grow {
+  width: 24px;
+  height: 24px;
+}
+/* Drag pans and the wheel zooms, so the drawing asks for the grab cursor and
+   keeps the page from selecting its text under a drag. */
+.mmap-svg {
+  display: block;
+  user-select: none;
+  touch-action: none;
+}
+.mmap-plot,
+.mmap-head {
+  pointer-events: none;
+}
+.mmap-hit {
+  fill: transparent;
+  cursor: grab;
+}
+.mmap-hit:active {
+  cursor: grabbing;
+}
+.mmap-ground {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.mmap-cut {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.mmap-box {
+  fill: var(--mmap-c);
+}
+/* A surface-coloured edge between two boxes that touch, where a box is tall
+   enough to keep its colour after losing a pixel to it. */
+.mmap-box.has-gap {
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+.mmap-band {
+  fill: var(--mmap-c);
+  fill-opacity: 0.28;
+}
+.mmap-band.is-hover {
+  fill-opacity: 0.5;
+}
+/* The section the cursor is in: the accent outline every view marks the
+   selection with. */
+.mmap-band.is-on {
+  fill-opacity: 0.55;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.mmap-box.is-on,
+.mmap-bracket.is-on {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.mmap-box.is-hover,
+.mmap-bracket.is-hover {
+  stroke: var(--fg);
+  stroke-width: 1;
+}
+.mmap-bracket {
+  fill: var(--mmap-c);
+  fill-opacity: 0.8;
+}
+.mmap-leader {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 0.75;
+  opacity: 0.7;
+}
+.mmap-leader.is-on,
+.mmap-leader.is-hover {
+  stroke: var(--fg);
+  opacity: 1;
+}
+.mmap-name {
+  font: 11px var(--sans);
+  fill: var(--fg);
+}
+.mmap-name.is-cut {
+  fill: var(--muted);
+}
+.mmap-name.is-on {
+  fill: var(--accent);
+}
+/* A band's `rwx` letters, over its fill. */
+.mmap-perms {
+  font: 10px var(--mono);
+  fill: var(--fg);
+}
+.mmap-colhead {
+  font: 600 11px var(--sans);
+  fill: var(--fg);
+}
+.mmap-readout {
+  font: 10px var(--mono);
+  fill: var(--muted);
+}
+/* Over the window, with the same frame the treemap takes there. */
+.mmap-big {
+  position: fixed;
+  inset: 8px;
+  z-index: 40;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+}
+.mmap-big .mmap-figure {
+  flex: 1;
+  min-height: 0;
+}
+.mmap-big .mmap-bar h3 {
+  font-size: 15px;
 }
 
 /* ---- lineage breadcrumb (viz/lineage.ts) ---- */
