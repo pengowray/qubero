@@ -7335,44 +7335,6 @@ table.rec td.is-invalid {
   fill: var(--fg);
 }
 
-/* A deflate code's bits as stored against as read, under the digits in the
-   panel at the cursor (`bitorder.ts`). Small, and there without a click. */
-.insp-bitorder {
-  margin: 6px 0 2px;
-}
-.bit-order {
-  margin: 0;
-}
-.bit-order-row {
-  font-size: 11px;
-  color: var(--muted);
-  margin: 1px 0;
-}
-.bit-order .rv-rb-band {
-  opacity: 0.55;
-}
-.bit-order-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 12px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.bit-order-swatch {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  margin-right: 5px;
-  vertical-align: -1px;
-}
-.bit-order figcaption {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-  max-width: 44ch;
-}
-
 /* ---- diagram pieces (src/viz/) ---- */
 /* The one hover card every picture shows its values in (`viz/tip.ts`), and
    the report too. Here and not in report.css, which loads only with the
