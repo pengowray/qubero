@@ -50,6 +50,7 @@ import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
 import { templateExtensions } from "./identity.ts";
 import { linkedFor } from "./viz/linked.ts";
 import { setPickRoute } from "./viz/pick.ts";
+import { lineageCard, noteOpened, setLineageOpener, setLineageRoutes, tabLineage, tabTitleLabel, tabTitleText, titleCrumbs } from "./viz/lineage.ts";
 // Every diagram piece registers itself with its host views from here, once.
 import "./viz/register.ts";
 
@@ -83,6 +84,15 @@ const graphUnlocked = ((): boolean => {
  */
 const tabs = new Tabs(app, build);
 tabs.onEmpty = () => welcome();
+// A crumb of the lineage breadcrumb brings up the tab of the file or stream it
+// names. See `viz/lineage.ts`.
+setLineageRoutes({
+  focus: (doc) => {
+    const i = tabs.all.findIndex((t) => t.kind.view === "document" && t.doc === doc);
+    if (i >= 0) tabs.focus(i);
+    return i >= 0;
+  },
+});
 tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}?`);
 
 function activeDoc(): Doc | null {
@@ -781,12 +791,21 @@ function buildDocument(tab: Tab): Page {
       tabs.focus(already);
       return;
     }
+    // Titled by every stream between the file and this one, the way the
+    // At cursor trail names its steps; the old title is kept for a stream
+    // whose way down cannot be walked yet. See `viz/lineage.ts`.
+    noteOpened(unpacked, doc);
+    const crumbs = tabLineage(unpacked);
     tabs.add({
       doc: unpacked,
-      title: unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name),
+      title:
+        crumbs !== null ? tabTitleText(crumbs) : unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name),
       origin: UNPACKED.openTitle(n.node.name),
+      label: crumbs === null ? null : () => tabTitleLabel(titleCrumbs(crumbs, fileTab()?.doc ?? null)),
+      tip: crumbs === null ? null : () => lineageCard(crumbs),
     });
   };
+  tab.release.push(setLineageOpener(doc, openUnpacked));
   structure.onOpenUnpacked = openUnpacked;
   inspector.onOpenUnpacked = openUnpacked;
   strings.onOpenUnpacked = openUnpacked;

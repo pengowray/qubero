@@ -4015,4 +4015,45 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /**
+   * The lineage breadcrumb (`viz/lineage.ts`): which compressed runs and
+   * joined streams a tab, or the field under the cursor, sits inside, from the
+   * file down. "Unpacked" and "joined" are the words the listing and the
+   * report already use for the two ways a stream is made.
+   */
+  lineage: {
+    /** Heading of the At cursor section listing those streams, the file
+     *  first and the one holding the field last. */
+    title: "Streams this field is in",
+    /** A tab's title: the streams' names, outermost first, as the At cursor
+     *  trail joins its steps. */
+    tabTitle: (names: readonly string[]): string => names.join(" › "),
+    /** The line under an unpacked stream's name, worded as the report's
+     *  stream heading is. Two halves, because the address between them is a
+     *  link to the run: `18 bytes of deflate at @0x2 unpacks to 48 bytes`. */
+    unpackedBefore: (inBits: number, codec: string): string => `${bitSizeText(inBits)} of ${codec} at `,
+    unpackedAfter: (outBits: number): string => ` unpacks to ${bitSizeText(outBits)}`,
+    /** The same in one string, for the hover card. */
+    unpacked: (inBits: number, codec: string, at: string, outBits: number): string =>
+      `${bitSizeText(inBits)} of ${codec} at ${at} unpacks to ${bitSizeText(outBits)}`,
+    /** The line under a joined stream's name. `parts` is null when the core
+     *  has not said how many. */
+    joined: (outBits: number, parts: number | null): string =>
+      parts === null ? `${bitSizeText(outBits)} joined from several parts` : `${bitSizeText(outBits)} joined from ${countText(parts, "part")}`,
+    /** In the hover card of a joined stream: the run its first byte is in,
+     *  named as the listing names it (`chunks[2].image_data`). */
+    firstPart: (label: string): string => `First part: ${label}`,
+    /** The foot of a hover card: where the run is, in the stream or file one
+     *  row up. */
+    where: (at: string, parent: string): string => `${at} in ${parent}`,
+    /** Beside the name of the stream the tab shows. */
+    thisTab: "this tab",
+    /** On a stream's name, which brings up its tab, opening it if it is not
+     *  open yet. */
+    open: (name: string): string => `Open ${name} in its own tab`,
+    /** On the file's name, from a tab of a stream. */
+    goToFile: (name: string): string => `Go to the tab for ${name}`,
+    /** On the address of a run. */
+    goToRun: (parent: string): string => `Go to these bytes in ${parent}`,
+  },
 } as const;
