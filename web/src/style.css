@@ -7323,3 +7323,80 @@ table.rec td.is-invalid {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+/* Ticks drawn by d3-axis. Its own attributes say `currentColor` and a 10px
+   sans; these make that the muted colour and the face the addresses are
+   written in everywhere else. */
+.viz-axis {
+  color: var(--muted);
+}
+.viz-axis text {
+  font: 10px var(--mono);
+}
+/* Puts a zoomed picture back. Small and quiet: it is the one control on a
+   figure, beside the figure's name, and is greyed out while there is no zoom
+   to undo, so the heading row never changes shape. */
+.viz-reset {
+  font-size: 11px;
+  padding: 1px 6px;
+  min-height: 0;
+}
+/* The diagram sections at the foot of the At cursor panel. */
+.insp-viz-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* ---- the example piece: a structure's fields over its bytes ---- */
+.viz-strip {
+  margin: 0;
+}
+.viz-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.viz-strip-title {
+  font-weight: 600;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Drag pans and the wheel zooms, so the strip asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.viz-strip-svg {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.viz-strip-svg:active {
+  cursor: grabbing;
+}
+.viz-strip-bar {
+  fill: var(--field-color);
+  fill-opacity: 0.35;
+  stroke: var(--field-color);
+  stroke-width: 1;
+}
+/* The field the cursor is in: the accent outline every view marks the
+   selection with, and a solid fill. */
+.viz-strip-bar.is-on {
+  fill-opacity: 0.7;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.viz-strip-names text {
+  font: 11px var(--sans);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.viz-strip-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}

@@ -27,7 +27,7 @@ function reach(size: number, min: number): number {
  * piece with tens of thousands of targets on one axis use `nearestOnAxis`,
  * which halves its way there.
  */
-export function nearestTarget<T>(targets: readonly HitTarget<T>[], x: number, y: number, min = LOD.targetPx): HitTarget<T> | null {
+export function nearestTarget<T>(targets: readonly HitTarget<T>[], x: number, y: number, min: number = LOD.targetPx): HitTarget<T> | null {
   let best: HitTarget<T> | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
   let bestArea = Number.POSITIVE_INFINITY;
@@ -57,7 +57,7 @@ export type AxisTarget<T> = { readonly start: number; readonly end: number; read
  * of fields or of parts is; the search halves to `x` and then looks only as
  * far either side as a target can reach.
  */
-export function nearestOnAxis<T>(spans: readonly AxisTarget<T>[], x: number, min = LOD.targetPx): AxisTarget<T> | null {
+export function nearestOnAxis<T>(spans: readonly AxisTarget<T>[], x: number, min: number = LOD.targetPx): AxisTarget<T> | null {
   if (spans.length === 0) return null;
   let lo = 0;
   let hi = spans.length;

@@ -28,6 +28,12 @@ export type InspectorSection = {
   readonly id: string;
   readonly applies: (doc: Doc, node: TemplateNode) => boolean;
   readonly draw: (ctx: InspectorSectionContext) => HTMLElement | null;
+  /** What the drawing depends on, for a section that draws more than the
+   *  field: one that draws the structure around the field returns the
+   *  structure's path, so moving between its fields keeps the same figure
+   *  (and its zoom), and the figure lights the new field from the shared
+   *  selection (`linked.ts`). Defaults to the field's own path and value. */
+  readonly key?: (doc: Doc, node: TemplateNode, path: readonly number[]) => string;
 };
 
 const SECTIONS = new Registry<InspectorSection>("inspector section");

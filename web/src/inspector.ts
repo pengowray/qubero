@@ -33,6 +33,7 @@ import { fieldClass } from "./fieldstyle.ts";
 import { nodeSwatch, paint } from "./colour.ts";
 import { withPictures } from "./textview.ts";
 import { typePanel } from "./typepanel.ts";
+import { inspectorSectionsFor } from "./viz/inspectorsections.ts";
 import { openPlan, type OpenPlan } from "./openplan.ts";
 import { extraction } from "./bitextract.ts";
 import {
@@ -267,6 +268,13 @@ export class Inspector {
    *  the box that spells it. Hidden for everything that is not a colour. */
   private readonly colourBlock: HTMLElement;
   private readonly types: HTMLElement;
+  /** The sections diagram pieces register (`viz/inspectorsections.ts`), and
+   *  what each last drew, by section id, with the field and width it was
+   *  drawn for. Kept so a render that changes nothing about the field (a
+   *  chunk landing, the cursor moving inside the field) leaves a figure
+   *  alone, zoom and all, rather than building it again under the pointer. */
+  private readonly vizHost: HTMLElement;
+  private vizDrawn = new Map<string, { readonly key: string; readonly el: HTMLElement }>();
   /** Human-readable dates and checks derived from format fields. */
   private readonly semantics: HTMLElement;
   /** The background sums this panel is listening to, and what it last showed
@@ -585,7 +593,12 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.colourBlock, this.area, this.bits, this.bitOrder, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    // The diagram pieces' sections go last, after everything the panel says
+    // in words: they are pictures of the same field, for a reader who has
+    // read the value and wants to see how it sits.
+    this.vizHost = el("div", "insp-viz-sections");
+    this.vizHost.hidden = true;
+    this.fieldRow.append(subhead("Value"), this.field, this.colourBlock, this.area, this.bits, this.bitOrder, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types, this.vizHost);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -1113,6 +1126,46 @@ export class Inspector {
     this.fillTypes(path, n);
     this.fillSemantics(path, n);
     this.fillOpenAs(path, n);
+    this.fillVizSections(path, n);
+  }
+
+  /**
+   * The registered diagram sections that apply to this field, after the
+   * panel's own. A section is asked to draw again only when the field, its
+   * value or the panel's width changes, or when it last answered null because
+   * its bytes were still on the way.
+   */
+  private fillVizSections(path: readonly number[], n: TemplateNode): void {
+    const sections = inspectorSectionsFor(this.doc, n);
+    if (sections.length === 0 && this.vizDrawn.size === 0) {
+      this.vizHost.hidden = true;
+      return;
+    }
+    // In steps of eight pixels, so a panel being dragged wider redraws its
+    // figures a few times rather than on every pixel.
+    const width = Math.max(0, Math.floor(this.fieldRow.clientWidth / 8) * 8);
+    const fieldKey = `${path.join("/")}|${n.offset_bits}|${n.size_bits}|${n.value}`;
+    const next = new Map<string, { readonly key: string; readonly el: HTMLElement }>();
+    const shown: HTMLElement[] = [];
+    for (const section of sections) {
+      const key = `${this.doc.template ?? ""}|${width}|${section.key?.(this.doc, n, path) ?? fieldKey}`;
+      const prev = this.vizDrawn.get(section.id);
+      if (prev !== undefined && prev.key === key) {
+        next.set(section.id, prev);
+        shown.push(prev.el);
+        continue;
+      }
+      const drawn = section.draw({ doc: this.doc, node: n, path, width });
+      if (drawn === null) continue;
+      drawn.classList.add("insp-viz");
+      drawn.dataset["section"] = section.id;
+      next.set(section.id, { key, el: drawn });
+      shown.push(drawn);
+    }
+    this.vizDrawn = next;
+    const same = shown.length === this.vizHost.children.length && shown.every((e, i) => this.vizHost.children[i] === e);
+    if (!same) this.vizHost.replaceChildren(...shown);
+    this.vizHost.hidden = shown.length === 0;
   }
 
   /**
