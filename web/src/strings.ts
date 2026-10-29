@@ -2283,12 +2283,6 @@ export const REPORT = {
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
   imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
-  /** The picture is scaled to fit the column, or magnified when it is a few
-   *  pixels across; a click shows it pixel for pixel, and another puts it
-   *  back. "actual" covers both directions where "full" would promise the
-   *  magnified one gets bigger. Tooltips on the picture itself. */
-  imageShowFull: "Show at actual size",
-  imageShowFit: "Scale to fit",
 } as const;
 
 /**
@@ -4121,6 +4115,70 @@ export const VIZ = {
       "loading-header": "Click to select the program header that loads it",
       "image-base": "Click to select the image base field",
     },
+  },
+  /** The picture of an image file in its content card, and in the report's
+   *  JPEG and PNG sections, with what is drawn over it (`viz/pixelgrid.ts`). */
+  pixelGrid: {
+    /** The buttons that choose what is drawn over the picture. */
+    modesLabel: "Overlay",
+    modes: {
+      picture: "Picture only",
+      blocks: "Blocks",
+      /** The legend under the picture says per what: MCU or block. */
+      bits: "Bits",
+      restart: "Restart intervals",
+      passes: "Passes",
+    },
+    channel: "Channel",
+    allChannels: "All channels",
+    opacity: "Opacity",
+    /** Zooms so one pixel of the picture is one pixel of the screen. */
+    actualSize: "Actual size",
+    // ----- the hover card -----
+    pixel: (x: number, y: number): string => `Pixel ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    /** A place the JPEG scan codes past the right or bottom edge of the
+     *  picture, which every scan does to make up whole MCUs. */
+    padding: (x: number, y: number): string => `Padding at ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    paddingNote: "Padding the encoder added to fill the last MCU. Not part of the picture.",
+    decoded: (hex: string): string => `Colour as the browser decodes it: #${hex}`,
+    /** Separated as the At cursor panel separates them. */
+    samples: (values: readonly string[]): string => `Samples: ${values.join(" · ")}`,
+    mcu: (x: number, y: number, bits: string): string => `MCU ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    block: (channel: string, x: number, y: number, bits: string): string => `${channel} block ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    interval: (n: number, of: number): string => `Restart interval ${(n + 1).toLocaleString()} of ${of.toLocaleString()}`,
+    scanline: (pass: number | null, row: number, filter: string): string =>
+      pass === null ? `Scanline ${row.toLocaleString()}, filter ${filter}` : `Pass ${pass}, scanline ${row.toLocaleString()} of the pass, filter ${filter}`,
+    /** The foot of a JPEG pixel's card: where the bits a click selects
+     *  start, the MCU's or, with one channel's bits shown, its block's. */
+    mcuStarts: (address: string): string => `MCU starts at ${address}`,
+    blockStarts: (channel: string, address: string): string => `${channel} block starts at ${address}`,
+    /** The foot of a PNG pixel's card: where its samples are. */
+    inUnfiltered: (address: string): string => `${address} in the unfiltered image data`,
+    // ----- the legend under the picture -----
+    heatAll: "Bits per MCU:",
+    heatChannel: (channel: string): string => `Bits per ${channel} block:`,
+    heatClass: (from: number, to: number): string => `${from.toLocaleString()}–${to.toLocaleString()}`,
+    passesLead: "Adam7 pass:",
+    restartLead: (n: number): string => `Restart intervals of ${countText(n, "MCU")}, alternating light and dark`,
+    blocksLead: (channel: string, bw: number, bh: number, mw: number, mh: number): string =>
+      `Thin lines: ${channel} blocks of ${bw} × ${bh} pixels. Thick lines: MCUs of ${mw} × ${mh} pixels.`,
+    /** No channel is subsampled, so a block of any channel is an MCU. */
+    blocksSame: (mw: number, mh: number): string => `Lines: MCUs of ${mw} × ${mh} pixels, each holding one 8 × 8 block of every channel.`,
+    filtersLead: "Scanline filter:",
+    filterItem: (filter: string, n: number): string => `${filter} (${countText(n, "scanline")})`,
+    /** Says what the strip down the left of a PNG is. */
+    stripOne: "The strip on the left shows the filter of each scanline.",
+    stripPasses: "The strip on the left shows the filter of each scanline, in one column for each pass, 1 to 7.",
+    stripCut: (shown: number, total: number): string => `Filters shown for the first ${shown.toLocaleString()} of ${countText(total, "scanline")}.`,
+    /** The caption of the picture in the report's PNG section. */
+    pngFigureLead: (interlaced: boolean): string =>
+      interlaced ? "The Adam7 pass that stores each pixel, drawn over the picture. Lower the opacity to see the picture." : "The picture, pixel for pixel.",
+    pngFigureCaption: "Hover a pixel for its stored samples and its scanline. Click a pixel to show its samples in the At cursor panel.",
+    /** Under the picture while what is drawn over it is read: a JPEG's scan,
+     *  or a PNG's scanlines. */
+    readingScan: "Reading the scan to draw over the picture…",
+    readingScanlines: "Reading the scanlines to draw over the picture…",
+    alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
   },
   icicle: {
     /** The treemap heading's tooltip while the panel shows In order, where

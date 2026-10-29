@@ -12,6 +12,10 @@
 // not yet share a code's bits out over the bytes it wrote.
 
 import type { Doc, TemplateNode } from "../doc.ts";
+import { cardState, watchCard } from "../contentcard.ts";
+import { VIZ } from "../strings.ts";
+import { drawPixelGrid, gridState, pngLayer, stripWidth, type Layers, type PixelGrid, type PixelGridState } from "../viz/pixelgrid.ts";
+import { viewSize } from "../viz/pixelgridmath.ts";
 import { ok } from "./model.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { RV } from "./text.ts";
@@ -24,12 +28,31 @@ const MAX_SCANLINES = 2048;
 /** Scanlines asked of the core in one call. */
 const BATCH = 256;
 
-type Header = { readonly width: number; readonly height: number; readonly interlaced: boolean };
+export type Header = {
+  readonly width: number;
+  readonly height: number;
+  readonly interlaced: boolean;
+  /** Bits per sample, and the colour type's number (0 grey, 2 RGB, 3
+   *  palette, 4 grey and alpha, 6 RGBA), or null where the header did not
+   *  read as a number. */
+  readonly bitDepth: number | null;
+  readonly colorType: number | null;
+};
 
-type Found =
+export type Found =
   | { readonly kind: "none" }
   | { readonly kind: "refused"; readonly stage: "inflate" | "unfilter"; readonly why: string }
-  | { readonly kind: "read"; readonly header: Header; readonly lines: readonly Scanline[]; readonly total: number };
+  | {
+      readonly kind: "read";
+      readonly header: Header;
+      readonly lines: readonly Scanline[];
+      readonly total: number;
+      /** The unfiltered pixels as one list in picture order, element
+       *  `y * width + x` for pixel (x, y), each at its own bytes; null when
+       *  the trace has no such list. The pixel grid reads a pixel's samples
+       *  from it. */
+      readonly pixels: TemplateNode | null;
+    };
 
 export const pngScanlinesSection: Section = {
   id: "png-scanlines",
@@ -64,13 +87,15 @@ export const pngScanlinesSection: Section = {
       p.textContent = RV.pngAdam7Intro;
       sec.append(p, passesFigure(header, lines));
     }
-    sec.append(stripFigure(ctx, header, lines, counts, total));
+    sec.append(pictureFigure(ctx, found), stripFigure(ctx, header, lines, counts, total));
     return sec;
   },
 };
 
-/** Find the scanlines and read every one of them, up to `MAX_SCANLINES`. */
-function readScanlines(doc: Doc): Found | typeof WAIT {
+/** Find the scanlines and read every one of them, up to `MAX_SCANLINES`.
+ *  The pixel grid (`viz/pixelgrid.ts`) reads the same, for its filter strip
+ *  and its pass overlay. */
+export function readScanlines(doc: Doc): Found | typeof WAIT {
   const root = ok(doc.templateNode([]));
   if (root === WAIT) return WAIT;
   if (root === null) return { kind: "none" };
@@ -112,7 +137,20 @@ function readScanlines(doc: Doc): Found | typeof WAIT {
       if (line !== null) lines.push(line);
     }
   }
-  return { kind: "read", header, lines, total };
+  const pixels = pixelList(doc, scanlines, header);
+  if (pixels === WAIT) return WAIT;
+  return { kind: "read", header, lines, total, pixels };
+}
+
+/** The list of unfiltered pixels: the first child of the scanlines' first
+ *  part, when it is a list of one element per pixel. */
+function pixelList(doc: Doc, scanlines: TemplateNode, header: Header): TemplateNode | null | typeof WAIT {
+  const unfiltered = ok(doc.templateNode([...scanlines.path, 0]));
+  if (unfiltered === WAIT) return WAIT;
+  if (unfiltered === null || unfiltered.child_count === 0) return null;
+  const list = firstChild(doc, unfiltered);
+  if (list === WAIT) return WAIT;
+  return list !== null && list.composite && list.child_count === header.width * header.height ? list : null;
 }
 
 /** A scanline's pass, row and filter, from the fields of its block. */
@@ -152,7 +190,7 @@ function readHeader(doc: Doc, root: TemplateNode): Header | null | typeof WAIT {
   const width = num("width");
   const height = num("height");
   if (width === null || height === null) return null;
-  return { width, height, interlaced: num("interlace") === 1 };
+  return { width, height, interlaced: num("interlace") === 1, bitDepth: num("bit_depth"), colorType: num("color_type") };
 }
 
 
@@ -226,6 +264,86 @@ function passesFigure(header: Header, lines: readonly Scanline[]): HTMLElement {
   lead.textContent = RV.pngPassesLead(header.width, header.height);
   cap.append(lead, ` ${RV.pngPassesCaption}`);
   fig.append(body2, cap);
+  return fig;
+}
+
+/** The widest the picture is drawn: the width of the report's other wide
+ *  figures. */
+const PICTURE_PX = 904;
+
+/** The reader's overlay and zoom on the picture, kept while the report draws
+ *  its sections again. */
+const pictureStates = new WeakMap<Doc, PixelGridState>();
+
+/**
+ * The picture in the pixel grid (`viz/pixelgrid.ts`), with the pass that
+ * stores each pixel shaded over it and the filter of each scanline down its
+ * left: the tile and the strip of this section, drawn where the pixels are.
+ * Drawn once the browser has decoded the picture; empty until then, and for
+ * good when it cannot.
+ */
+function pictureFigure(ctx: ReportCtx, found: Extract<Found, { kind: "read" }>): HTMLElement {
+  const fig = document.createElement("figure");
+  fig.className = "rv-figure rv-png-picture";
+  const holder = document.createElement("div");
+  const layers: Layers = { jpeg: null, png: pngLayer(found) };
+  let state = pictureStates.get(ctx.doc);
+  if (state === undefined) {
+    state = gridState();
+    pictureStates.set(ctx.doc, state);
+  }
+  const keep = state;
+  const { width, height, interlaced } = found.header;
+  let grid: PixelGrid | null = null;
+  const draw = (image: HTMLImageElement): void => {
+    grid?.destroy();
+    const size = viewSize(width, height, PICTURE_PX, stripWidth(layers));
+    grid = drawPixelGrid(
+      ctx.doc,
+      { width, height, image, layers },
+      {
+        ...size,
+        state: keep,
+        defaultMode: interlaced ? "passes" : "picture",
+        onPick: (hit) => {
+          const list = found.pixels;
+          if (list === null || !hit.inPicture) return;
+          const r = ok(ctx.doc.templateChildren(list.path, hit.y * width + hit.x, hit.y * width + hit.x + 1));
+          const n = r === WAIT || r === null ? undefined : r[0];
+          // As a click on the JPEG section's picture does: the report stays,
+          // and the At cursor panel shows the pixel's samples.
+          if (n !== undefined) ctx.host.pick({ path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits });
+        },
+      },
+    );
+    holder.replaceChildren(grid.el);
+  };
+  // The browser's picture, or null when there is none of this size to draw,
+  // or undefined while it is still being decoded.
+  const picture = (): HTMLImageElement | null | undefined => {
+    const s = cardState(ctx.doc);
+    if (s === null || s.status === "failed" || s.status === "too-large") return null;
+    if (s.status !== "ready") return undefined;
+    return s.width === width && s.height === height ? s.image : null;
+  };
+  const cap = document.createElement("figcaption");
+  const lead = document.createElement("b");
+  lead.textContent = VIZ.pixelGrid.pngFigureLead(interlaced);
+  cap.append(lead, ` ${VIZ.pixelGrid.pngFigureCaption}`);
+  const now = picture();
+  if (now === null) return fig;
+  fig.append(holder, cap);
+  if (now !== undefined) draw(now);
+  else {
+    const stop = watchCard(ctx.doc, (what) => {
+      if (what !== "state") return;
+      const p = picture();
+      if (p === undefined) return;
+      stop();
+      if (p === null) fig.replaceChildren();
+      else draw(p);
+    });
+  }
   return fig;
 }
 
