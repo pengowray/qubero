@@ -50,7 +50,9 @@
   }
 }
 /* The controls, in one row over the picture: what to draw over it, then the
-   settings of that overlay, then the zoom buttons at the far end. Wraps on a
+   settings of that overlay, then the zoom buttons. All of them start at the
+   picture's left edge, since the picture is often narrower than the card and
+   a button at the card's far edge would be nowhere near it. Wraps on a
    narrow card rather than running off it. */
 .viz-pixgrid-bar {
   display: flex;
@@ -90,7 +92,6 @@
 .viz-pixgrid-zoom {
   display: inline-flex;
   gap: 4px;
-  margin-left: auto;
 }
 .viz-pixgrid-zoom button {
   font-size: 11px;

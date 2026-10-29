@@ -36,7 +36,7 @@
 import "./pixelgrid.css";
 import type { Doc, JpegScan, TemplateNode } from "../doc.ts";
 import { formatAddress, formatOffset } from "../format.ts";
-import { bitSizeText, VIZ } from "../strings.ts";
+import { VIZ } from "../strings.ts";
 import { bitCount } from "../report/jpegtext.ts";
 import { ok } from "../report/model.ts";
 import { FILTERS, numberOf, pictureRow, type Scanline } from "../report/pngpasses.ts";
@@ -969,7 +969,9 @@ export function drawPixelGrid(doc: Doc, data: PixelGridData, opts: PixelGridOpti
       const n = restartInterval(s, m);
       if (n !== null) lines.push(VIZ.pixelGrid.interval(n, Math.ceil(s.mcu_bits.length / s.restart_interval)));
       const b = h.hit.block !== null && state.mode === "bits" && state.channel !== null ? blockBits(s, jpeg.index, h.hit.block) : mb;
-      where = `${formatOffset(b.startBit)} · ${bitSizeText(b.endBit - b.startBit)}`;
+      // In bits, as the lines above count them, even when they come to a
+      // whole number of bytes.
+      where = `${formatOffset(b.startBit)} · ${bitCount(b.endBit - b.startBit)}`;
     }
     const title = inPicture ? VIZ.pixelGrid.pixel(x, y) : VIZ.pixelGrid.padding(x, y);
     return tipCard(title, lines, where);
