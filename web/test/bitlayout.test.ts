@@ -66,6 +66,8 @@ test("rows are as wide as fit, never wider than the word, and never less than a 
   assert.equal(rowBitsFor(4, 260, 14), 16);
   assert.equal(rowBitsFor(2, 1000, 14), 16);
   assert.equal(rowBitsFor(4, 50, 14), 8);
+  // Three gaps between four bytes: 32 * 14 fits 448 alone, and not with them.
+  assert.equal(rowBitsFor(4, 450, 14, 3), 16);
 });
 
 test("a flags word's byte order comes from its bytes and its value", () => {

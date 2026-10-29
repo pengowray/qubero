@@ -333,9 +333,9 @@ const REC_H = 15;
 const BLOCK_GAP = 10;
 /** Extra room between two bytes, so a byte reads as one. */
 const BYTE_GAP = 3;
-/** The narrowest and widest a cell is drawn. 14 holds a two-digit bit number
+/** The narrowest and widest a cell is drawn. 13 holds a two-digit bit number
  *  at the ruler's size; past 22 the grid is only getting sparser. */
-const MIN_CELL = 14;
+const MIN_CELL = 13;
 const MAX_CELL = 22;
 const NAME_PX = 11;
 const NAME_PAD = 3;
@@ -414,7 +414,7 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     const addrW = MONO(formatOffset((data.firstByte + data.byteCount) * 8), 10);
     const recW = records === null ? 0 : Math.min(MAX_REC_NAME, Math.max(...records.map((r) => measurer()(r.name, NAME_PX))));
     const gutter = Math.ceil(Math.max(addrW, recW)) + GUTTER_PAD;
-    const fits = rowBitsFor(data.byteCount, opts.width - gutter - 3 * BYTE_GAP, MIN_CELL);
+    const fits = rowBitsFor(data.byteCount, opts.width - gutter, MIN_CELL, BYTE_GAP);
     const most = Math.min(32, data.byteCount * 8);
     const perRow = Math.min(most, rowChoice ?? fits) as 8 | 16 | 32;
     const bytesPerRow = perRow / 8;
@@ -463,10 +463,18 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     });
     const keyOf = new Map<number, number>();
     const inBox = new Map<number, { run: number; text: string }>();
+    // A flag is one bit, and the ruler over it already says which bit of the
+    // value it is: that number is its key, and the panel's own Flags list and
+    // the legend both name it by that number. Its box carries no text.
+    const legendKey = new Map<number, number>();
     for (const i of order1st) {
       const runs = runsByField[i] ?? [];
       const f = data.fields[i];
       if (f === undefined) continue;
+      if (data.flags !== null) {
+        legendKey.set(i, data.flags.valueBitOf([...f.bits][0] ?? 0));
+        continue;
+      }
       // The name goes in the widest of the field's boxes, if it fits there.
       let best = -1;
       let bestW = 0;
@@ -479,7 +487,10 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
       });
       const text = ellipsise(f.name, bestW - 2 * NAME_PAD, NAME_PX, measurer(), 4);
       if (text !== null && best >= 0) inBox.set(i, { run: best, text });
-      else keyOf.set(i, keyOf.size + 1);
+      else {
+        keyOf.set(i, keyOf.size + 1);
+        legendKey.set(i, keyOf.size);
+      }
     }
 
     const boxEls: { field: number; el: SVGRectElement }[] = [];
@@ -526,7 +537,9 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
           a.textContent = formatOffset((data.firstByte + Math.floor((first?.bit ?? 0) / 8)) * 8);
           g.append(a);
         } else {
-          const name = ellipsise(rec.name, gutter - GUTTER_PAD, NAME_PX, measurer(), 3) ?? "";
+          // Measured in the regular weight and drawn bold for the current record,
+          // so a tenth is kept in hand for the bold.
+          const name = ellipsise(rec.name, (gutter - GUTTER_PAD) * 0.9, NAME_PX, measurer(), 3) ?? "";
           const a = svg("text", { x: gutter - GUTTER_PAD, y: y + lineH / 2, class: `br-rec${samePath(rec.node.path, data.node.path) ? " is-on" : ""}`, "text-anchor": "end", "dominant-baseline": "central" });
           a.textContent = name;
           a.dataset.record = String(line);
@@ -648,7 +661,7 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
       }),
     );
 
-    drawLegend(keyOf, inBox, order1st);
+    drawLegend(legendKey, inBox, order1st);
   };
 
   /** The legend: every field whose name is not in its box, by its key; for a
@@ -666,6 +679,9 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     };
     for (const { f, i, key } of entries) {
       if (data.flags === null && inBox.has(i) && f.legend === f.name) continue;
+      // One flags word's names and states are the panel's own Flags list,
+      // just above; only a stack of them has something to add.
+      if (data.flags !== null && records === null) continue;
       const count = records === null ? 0 : setIn(f);
       const isClear = records === null ? f.set === false : f.set !== null && count === 0;
       if (isClear) {
@@ -789,7 +805,7 @@ function rulerGlyph(doc: Doc, n: TemplateNode): HTMLElement | null {
     GLYPHS.set(doc, cache);
   }
   const hit = cache.get(key);
-  if (hit !== undefined) return hit.cloneNode(true) as HTMLElement;
+  if (hit !== undefined) return glyphTip(hit.cloneNode(true) as HTMLElement, n);
   const bits = fieldValueBits(n.offset_bits, n.size_bits, n.lsb_first);
   const [first, count] = bytesOf(bits);
   if (count === 0 || count > 4) return null;
@@ -807,8 +823,16 @@ function rulerGlyph(doc: Doc, n: TemplateNode): HTMLElement | null {
     else cell.className = mine.has(first * 8 + k) ? "is-in" : "";
     glyph.append(cell);
   }
+  glyph.dataset.bytes = Array.from(read.bytes, (b) => b.toString(2).padStart(8, "0")).join(" ");
   cache.set(key, glyph);
-  return glyph.cloneNode(true) as HTMLElement;
+  return glyphTip(glyph.cloneNode(true) as HTMLElement, n);
+}
+
+/** The glyph's hover card: the field's value and its bytes' bits, high bit
+ *  first as the glyph draws them. */
+function glyphTip(glyph: HTMLElement, n: TemplateNode): HTMLElement {
+  hoverTip(glyph, () => tipCard(n.name, [n.value, T.glyphBits(glyph.dataset.bytes ?? "")], formatOffset(Math.floor(n.offset_bits / 8) * 8)));
+  return glyph;
 }
 
 /** Put the ruler in the At cursor panel, and its glyph on the listing's rows,

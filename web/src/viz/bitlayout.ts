@@ -63,12 +63,13 @@ export function runsOf(cells: readonly RulerCell[], has: (bit: number) => boolea
   return runs;
 }
 
-/** The widest row of 32, 16 or 8 bits that fits `px` at `cellPx` a bit, but
- *  never wider than the word: a two-byte word is one row of 16 even where 32
- *  would fit. Eight when not even that fits, since a byte is never split. */
-export function rowBitsFor(byteCount: number, px: number, cellPx: number): 8 | 16 | 32 {
+/** The widest row of 32, 16 or 8 bits that fits `px` at `cellPx` a bit and
+ *  `byteGap` between two bytes, but never wider than the word: a two-byte
+ *  word is one row of 16 even where 32 would fit. Eight when not even that
+ *  fits, since a byte is never split. */
+export function rowBitsFor(byteCount: number, px: number, cellPx: number, byteGap = 0): 8 | 16 | 32 {
   const most = byteCount * 8;
-  for (const w of [32, 16] as const) if (w <= most && w * cellPx <= px) return w;
+  for (const w of [32, 16] as const) if (w <= most && w * cellPx + (w / 8 - 1) * byteGap <= px) return w;
   return 8;
 }
 

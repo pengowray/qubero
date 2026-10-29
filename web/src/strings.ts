@@ -4090,6 +4090,8 @@ export const VIZ = {
     mask: (hex: string): string => `Mask ${hex}`,
     byteBit: (addr: string, low: number): string => `${addr}, bit ${low} of the byte (bit 0 is the lowest)`,
     bitValue: (v: number): string => `Bit value: ${v}`,
+    /** The row glyph's hover card: the bytes' bits as the glyph draws them. */
+    glyphBits: (bits: string): string => `Bits, high bit first: ${bits}`,
     setIn: (n: number, of: number): string => (n === of ? `set in all ${of}` : n === 0 ? `clear in all ${of}` : `set in ${n} of ${of}`),
     showClear: (n: number): string => (n === 1 ? "Show the 1 clear bit" : `Show the ${n} clear bits`),
     hideClear: (n: number): string => (n === 1 ? "Hide the 1 clear bit" : `Hide the ${n} clear bits`),
