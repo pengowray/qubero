@@ -16,13 +16,16 @@
 // of an entry or inside one.
 //
 // Three rows, top to bottom, each in a fixed slot so nothing can collide:
-// - the index: the field's name, its bytes and the number they hold, and
-//   the working for the address under it where the core wrote one
-//   (`section_name_base + name_offset = 1130461 + 17`);
+// - the index: the field's name, its bytes and the number they hold, and a
+//   line under it with the working for the address where the core wrote one
+//   (`section_name_base + name_offset = 1130461 + 17`), or after a step how
+//   many more fields point at the entry. The line keeps its height when it
+//   has nothing to say, so a step does not move the strip under the pointer;
 // - the table as a strip of cells, drawn in the units a number into it
 //   counts (bytes for a string table, entries for a palette), with an arrow
 //   from the index row down to where the number lands, a bracket under the
-//   entry, and the number itself a tick on the axis (`lookuplayout.ts`);
+//   entry, and the number itself a tick on the axis (`lookuplayout.ts`),
+//   with a note under the strip saying what the axis counts from;
 // - the entry: what it says, its colour for a palette.
 //
 // Explorable as every piece is: the strip zooms about the pointer and pans
@@ -48,10 +51,10 @@ import { ellipsise, monoMeasure, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
 import { LOD } from "./lod.ts";
-import { centreOn, inView, lookupTicks, openingFromStart, openingView, stepEntry, stripLayout, unitOf, unitX, type Cell } from "./lookuplayout.ts";
+import { axisOrigin, centreOn, inView, lookupTicks, openingFromStart, openingView, stepEntry, stripLayout, unitOf, unitX, type Cell } from "./lookuplayout.ts";
 import { followPicks, goToField, markPick, nearestOnAxis, type AxisTarget } from "./pick.ts";
-import { lookupFor, mayLookUp, PENDING, scanPointers, type Lookup, type Pointer, type Pointers, type TableEntry } from "./tableentries.ts";
-import { hideTip, hoverTip, tipCard } from "./tip.ts";
+import { lookupFor, mayLookUp, numberOf, PENDING, scanPointers, type Lookup, type Pointer, type Pointers, type TableEntry } from "./tableentries.ts";
+import { hideTip, hoverTip, tipAt, tipCard } from "./tip.ts";
 
 const T = VIZ.indexLookup;
 
@@ -158,6 +161,20 @@ function valueText(n: TemplateNode): string {
   return n.line ?? countText(n.child_count, childWord(n));
 }
 
+/** A number the core wrote in decimal, with its hex beside it, so the
+ *  working's result can be checked against the hex addresses on the cards. */
+function withHex(text: string): string {
+  const v = Number(text);
+  return Number.isSafeInteger(v) && v >= 10 ? `${text} (0x${v.toString(16)})` : text;
+}
+
+/** A palette entry's channels as the template writes them, `20 120 240`, in
+ *  CSS notation; anything else as it is. */
+function channelsText(value: string): string {
+  const m = /^(\d+) (\d+) (\d+)$/.exec(value.trim());
+  return m === null ? value : T.rgb(Number(m[1]), Number(m[2]), Number(m[3]));
+}
+
 function hexBytes(bytes: readonly number[]): string {
   return bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
@@ -178,13 +195,16 @@ export type IndexLookup = { readonly el: HTMLElement; readonly board: Board; des
 export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: number }): IndexLookup {
   const width = Math.max(80, opts.width);
   const table = data.table;
-  const layout = stripLayout(table, width);
+  // The axis counts from where the index's number counts from, so the number
+  // is a tick on it.
+  const origin = axisOrigin(table, data.target, numberOf(data.index));
+  const layout = stripLayout(table, width, origin);
   const cells = layout.cells;
   const byIndex = new Map<number, { cell: Cell; entry: TableEntry }>();
   table.entries.forEach((entry, i) => byIndex.set(entry.index, { cell: cells[i] as Cell, entry }));
   const tableName = table.node.name;
   const fieldName = data.index.name;
-  const title = table.reached ? T.pointsTo(fieldName) : T.title(tableName);
+  const title = table.reached ? T.pointsTo(data.indexLabel) : T.title(tableName);
   const measure = namesMeasure();
 
   const host = el("figure", "viz-strip viz-lookup");
@@ -210,7 +230,14 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   // ----- the index row and the entry row: filled by `showFocus` -----
   const indexRow = el("button", "viz-lookup-box viz-lookup-index");
   indexRow.type = "button";
+  // The line under the index row holds the working and the count of more
+  // fields in one grid cell, one of them hidden, so the line is as tall as
+  // the taller of them whichever shows.
   const via = el("div", "viz-lookup-via");
+  const work = el("span", "viz-lookup-work");
+  const also = el("span", "viz-lookup-also");
+  via.append(work, also);
+  if (data.via !== null) work.textContent = `${data.via.written} = ${data.via.substituted} = ${withHex(data.via.result)}`;
   const resultRow = el("button", "viz-lookup-box viz-lookup-result");
   resultRow.type = "button";
 
@@ -223,14 +250,16 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   const axisG = svg("g", { class: "viz-axis", transform: `translate(0,${AXIS_TOP})` });
   root.append(cellsG, namesG, axisG, marksG);
 
-  host.append(head, indexRow);
-  if (data.via !== null) {
-    via.textContent = `${data.via.written} = ${data.via.substituted} = ${data.via.result}`;
-    host.append(via);
+  host.append(head, indexRow, via, root);
+  // What the axis counts from, for a byte axis; an entry axis is the entry
+  // numbers the cells are drawn at.
+  const notes: string[] = [];
+  if (table.counts === "bytes") {
+    notes.push(origin === table.node.offset_bits ? T.axisFromTable(tableName) : origin === 0 && table.node.space === 0 ? T.axisFile : T.axisFrom(formatAddress(origin, table.node.space)));
   }
-  host.append(root);
   const last = table.entries[table.entries.length - 1];
-  if (last !== undefined && table.entries.length < table.count) host.append(el("div", "viz-strip-note", T.window(table.first, last.index, table.count)));
+  if (last !== undefined && table.entries.length < table.count) notes.push(T.window(table.first, last.index, table.count));
+  for (const note of notes) host.append(el("div", "viz-strip-note", note));
   host.append(resultRow);
 
   const rects = table.entries.map((entry) => {
@@ -257,6 +286,11 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
    *  structure, and for a table while the entry it looks up is lit. */
   const atCursor = (): boolean => whole || focus === data.hit;
   let hovered: number | null = null;
+  /** The last pointer move over the strip, so a zoom or a step, which moves
+   *  the cells under a pointer that stays still, can say what is under it
+   *  now. Null once the pointer has left. Declared here since the board
+   *  calls `onZoom` as soon as it is made. */
+  let lastMove: PointerEvent | null = null;
   let pointers: Pointers | null | undefined;
   /** The fields pointing at each entry, read the first time they are asked for. */
   const pointersNow = (): Pointers | null => {
@@ -268,13 +302,21 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   };
   const pointedAt = (i: number): boolean => whole || i === data.hit || (pointersNow()?.byEntry.get(i)?.length ?? 0) > 0;
   const xOf = (u: number): number => unitX(layout, width, u) * view.k + view.x;
+  /** Whether the line under the index row can ever have something to say:
+   *  the working, or more fields than one pointing at an entry. A scan not
+   *  read yet might, so its line is kept. */
+  const viaUsed = data.via !== null || (pointersNow()?.total ?? 2) > 1;
+  via.hidden = !viaUsed;
 
   // ----- the rows above and below the strip -----
   const showIndex = (): void => {
     indexRow.replaceChildren();
     indexRow.classList.remove("is-none");
-    // The working is for the field at the cursor, not for a field stepped to.
-    via.hidden = !atCursor();
+    // The working is for the field at the cursor, not for a field stepped to,
+    // which gets how many more fields point at its entry instead. The line
+    // keeps its height when it is empty.
+    work.classList.toggle("is-off", !atCursor());
+    also.textContent = "";
     let n: TemplateNode | null = null;
     let extra = 0;
     if (atCursor()) n = data.index;
@@ -304,7 +346,11 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     const bytes = doc.fieldBytes(n.path, 8);
     if (bytes.status === "ok" && bytes.node.bytes.length > 0) indexRow.append(el("span", "viz-lookup-bytes", hexBytes(bytes.node.bytes) + (bytes.node.truncated ? " …" : "")));
     indexRow.append(el("span", "viz-lookup-value", `= ${numberText(n, table.counts)}`));
-    if (extra > 0) indexRow.append(el("span", "viz-lookup-more", T.andMore(extra)));
+    if (extra > 0) {
+      const p = pointersNow();
+      const tail = p !== null && p.scanned < p.total ? ` ${T.ofFirst(p.scanned)}` : "";
+      also.textContent = (data.how === "palette" ? T.morePixels(extra) : T.morePointers(extra, fieldName)) + tail;
+    }
     markPick(indexRow, { path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits });
     indexNode = n;
     indexShown = label;
@@ -335,13 +381,17 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
       if (entry.colour !== null) sw.style.background = entry.colour;
       resultRow.append(sw);
     }
-    const label = table.kind === "records" ? entry.label : T.entry(entry.index);
+    // A record whose cell is its value (a list of offsets) is named by its
+    // index instead, so the value is not written twice.
+    const label = table.kind !== "records" ? T.entry(entry.index) : entry.label === entry.value ? entry.name : entry.label;
     resultRow.append(el("span", "viz-lookup-name", label));
-    // A palette entry's channels; its hex is in the row's hover card.
+    // A palette entry leads with its colour as `#rrggbb`, its channels quieter
+    // beside it.
     const value = entry.value;
-    const v = el("span", "viz-lookup-value", table.kind === "strings" && value === "" ? T.emptyString : value);
+    const v = el("span", "viz-lookup-value", table.kind === "strings" && value === "" ? T.emptyString : table.kind === "palette" ? (entry.colour ?? value) : value);
     if (table.kind === "strings" && value === "") v.classList.add("is-empty");
     resultRow.append(v);
+    if (table.kind === "palette" && entry.colour !== null) resultRow.append(el("span", "viz-lookup-detail", channelsText(value)));
     const alpha = table.kind === "palette" ? alphaOf(entry.index) : null;
     if (alpha !== null) resultRow.append(el("span", "viz-lookup-detail", T.alpha(alpha)));
     if (n !== null) {
@@ -367,7 +417,13 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     // field at the cursor, and the entry's start for a field stepped to.
     const f = byIndex.get(focus);
     const hitUnit =
-      table.counts === "entries" ? focus : atCursor() ? Math.round(unitOf(table, data.target, data.hit)) : f !== undefined && pointedAt(focus) ? Math.round(unitOf(table, f.entry.startBit, focus)) : null;
+      table.counts === "entries"
+        ? focus
+        : atCursor()
+          ? Math.round(unitOf(table, data.target, data.hit, origin))
+          : f !== undefined && pointedAt(focus)
+            ? Math.round(unitOf(table, f.entry.startBit, focus, origin))
+            : null;
     const ticks = lookupTicks(inside, Math.max(2, Math.floor(width / TICK_SPACING_PX)), (v) => x(v + mid), width, (v) => MONO(unitText(v, table.counts), TICK_PX), hitUnit);
     const a = axis.axis
       .axisBottom(axis.scale.scaleLinear().domain([visible[0] - mid, visible[1] - mid]).range([0, width]))
@@ -401,7 +457,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
       // The arrow from the index row to where the number lands, while some
       // field points at this entry.
       if (pointedAt(focus)) {
-        const unit = atCursor() || f === undefined ? unitOf(table, data.target, data.hit) : table.counts === "entries" ? focus + 0.5 : unitOf(table, f.entry.startBit, focus);
+        const unit = atCursor() || f === undefined ? unitOf(table, data.target, data.hit, origin) : table.counts === "entries" ? focus + 0.5 : unitOf(table, f.entry.startBit, focus, origin);
         const at = xOf(unit);
         if (at >= 0 && at <= width) {
           // Kept a head's half-width inside the strip, so an arrow at an end
@@ -434,6 +490,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
       const gap = table.kind === "palette" && x1 - x0 > 6 ? 1 : 0;
       r.setAttribute("x", String(x0 + gap / 2));
       r.setAttribute("width", String(Math.max(1, x1 - x0 - gap)));
+      if (table.kind === "palette") r.classList.toggle("is-wide", gap > 0);
       r.classList.toggle("is-on", entry.index === focus);
       r.classList.toggle("is-hover", entry.index === hovered);
       if (table.kind === "palette" || entry.label === "" || x1 < 0 || x0 > width) return;
@@ -464,6 +521,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     onZoom: (v) => {
       view = v;
       reset.disabled = atOpening(v);
+      rehover();
       draw();
     },
   });
@@ -484,7 +542,10 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     if (f !== undefined && !inView(view, f.cell.x0, f.cell.x1, width)) {
       const v = centreOn(view, f.cell.x0, f.cell.x1, width);
       zoom.zoomTo({ x0: -v.x / v.k, x1: (width - v.x) / v.k, y0: 0, y1: HEIGHT }, false);
-    } else draw();
+    } else {
+      rehover();
+      draw();
+    }
   };
   // A structure's steps start at the whole of it, one before its first field.
   const low = whole ? WHOLE : table.first;
@@ -520,7 +581,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     const lines: string[] = [];
     // A palette entry's card is headed by its colour, with its channels
     // under it; its place is the line after.
-    if (table.kind === "palette") lines.push(entry.value);
+    if (table.kind === "palette") lines.push(channelsText(entry.value));
     else if (table.kind === "strings" && entry.label === "") lines.push(T.emptyString);
     else if (table.kind === "records" && entry.value !== entry.name) lines.push(entry.value);
     if (!table.reached) lines.push(T.entryOf(entry.index, table.count));
@@ -539,6 +600,7 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     return (here.length === 1 ? T.pointedAtBy((here[0] as Pointer).label) : T.pointedAtByCount(here.length, fieldName)) + tail;
   };
   const stopTip = hoverTip(root, (e) => {
+    lastMove = e;
     const entry = cellAt(e);
     const was = hovered;
     hovered = entry?.index ?? null;
@@ -546,7 +608,21 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     bus.publish({ hover: entry === null ? null : rangeOf(entry) });
     return entry === null ? null : entryCard(entry);
   });
+  /** After the cells move: light and describe the one now under the
+   *  pointer. The caller draws. A declaration, so `onZoom` can name it
+   *  before this line runs; it does nothing until the pointer has moved. */
+  function rehover(): void {
+    const e = lastMove;
+    if (e === null) return;
+    const entry = cellAt(e);
+    hovered = entry?.index ?? null;
+    bus.publish({ hover: entry === null ? null : rangeOf(entry) });
+    // A drag shows no card, as `hoverTip` has it.
+    if (entry === null || e.buttons !== 0) hideTip();
+    else tipAt(entryCard(entry), e.clientX, e.clientY);
+  }
   const leave = (): void => {
+    lastMove = null;
     bus.publish({ hover: null });
     if (hovered !== null) {
       hovered = null;
@@ -566,7 +642,14 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
   const stopIndexTip = hoverTip(indexRow, () => {
     if (indexNode === null || indexRow.disabled) return null;
     bus.publish({ hover: rangeOf(nodeRange(indexNode)) });
-    const lines = focus === data.hit && data.via !== null ? [data.via.written, `${data.via.substituted} = ${data.via.result}`] : [];
+    // The entry the shown field picks is lit with it. Set after the publish,
+    // whose listener below lights what the field's own bytes overlap.
+    const picks = focus === WHOLE ? null : focus;
+    if (picks !== hovered) {
+      hovered = picks;
+      draw();
+    }
+    const lines = focus === data.hit && data.via !== null ? [data.via.written, `${data.via.substituted} = ${withHex(data.via.result)}`] : [];
     return rowCard(indexNode, lines, indexShown);
   });
   const stopResultTip = hoverTip(resultRow, () => {
@@ -576,7 +659,16 @@ export function drawIndexLookup(doc: Doc, data: Lookup, opts: { readonly width: 
     return rowCard(resultNode, colour === null ? [] : [colour]);
   });
   const rowLeave = (): void => bus.publish({ hover: null });
-  indexRow.addEventListener("pointerleave", rowLeave);
+  // The entry the index row lit goes out with it, even when the bus heard no
+  // change: an index in a decoded stream (a PNG pixel) published nothing.
+  const indexLeave = (): void => {
+    rowLeave();
+    if (hovered !== null) {
+      hovered = null;
+      draw();
+    }
+  };
+  indexRow.addEventListener("pointerleave", indexLeave);
   resultRow.addEventListener("pointerleave", rowLeave);
   const stopPicks = followPicks(host, doc);
 

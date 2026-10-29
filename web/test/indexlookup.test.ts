@@ -23,7 +23,7 @@ import {
   type Reads,
   type TableEntry,
 } from "../src/viz/tableentries.ts";
-import { centreOn, inView, lookupTicks, openingFromStart, openingView, stepEntry, stripLayout, unitOf, unitX } from "../src/viz/lookuplayout.ts";
+import { axisOrigin, centreOn, inView, lookupTicks, openingFromStart, openingView, stepEntry, stripLayout, unitOf, unitX } from "../src/viz/lookuplayout.ts";
 
 // ----- a stand-in document -----
 
@@ -403,6 +403,26 @@ test("a string table's strip is drawn in bytes from the table's start", () => {
   assert.equal(unitX(layout, 170, 11), 110);
 });
 
+test("the axis counts from where the index's number counts from", () => {
+  // An ELF name offset counts from its string table: the axis starts there.
+  const doc = elf();
+  const l = lookupFor(doc, doc.node([1, 1, 0])) as Lookup;
+  assert.equal(axisOrigin(l.table, l.target, 11), l.table.node.offset_bits);
+  // A TIFF directory offset of 8 counts from the file's start, so the
+  // directory at byte 8 is ticked 0x8, not 0x0.
+  const e = (index: number, start: number, end: number): TableEntry => ({ index, path: [index], name: "", label: "", value: "", startBit: start, endBit: end, colour: null, space: 0 });
+  const dir = { counts: "bytes" as const, node: { offset_bits: 64 } as TemplateNode, entries: [e(0, 64, 80), e(1, 80, 176)] };
+  assert.equal(axisOrigin(dir, 64, 8), 0);
+  const layout = stripLayout(dir, 100, 0);
+  assert.deepEqual(layout.domain, [8, 22]);
+  assert.equal(unitOf(dir, 64, 0, 0), 8);
+  // A number that cannot count bytes from at or before the table (a count
+  // of words, here) leaves the axis counting from the table's start.
+  assert.equal(axisOrigin(dir, 64, 20), 64);
+  // An entry axis has no origin to find.
+  assert.equal(axisOrigin({ ...dir, counts: "entries" }, 64, 8), 64);
+});
+
 test("a palette's strip is drawn in entries, and the arrow lands mid-cell", () => {
   const doc = png();
   const l = lookupFor(doc, doc.node([2, 0, 1, 0])) as Lookup;
@@ -456,4 +476,10 @@ test("a step stays inside the entries read, and an off-screen entry is brought t
   const v = centreOn(view, 50, 60, 100);
   assert.equal(v.k, 4);
   assert.equal(inView(v, 50, 60, 100), true);
+  // A cell wider than the strip is brought in from its start, a tenth of the
+  // way in, so where the number lands is on screen.
+  const w = centreOn(view, 40, 80, 100);
+  assert.equal(40 * w.k + w.x, 10);
+  assert.equal(inView(w, 40, 80, 100), true);
+  assert.equal(inView(view, 40, 80, 100), false);
 });

@@ -545,12 +545,12 @@ function pointer(n: TemplateNode, label: string): Pointer {
   return { path: n.path, label, value: n.value, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits, space: n.space };
 }
 
-/** The entry one field like the index lands on, or -1 for none. */
 /** Entries in file order, which a list placed by offsets need not be in. */
 export function byStart(entries: readonly TableEntry[]): TableEntry[] {
   return [...entries].sort((a, b) => a.startBit - b.startBit);
 }
 
+/** The entry one field like the index lands on, or -1 for none. */
 function landing(doc: Reads, lookup: Lookup, n: TemplateNode, sorted: readonly TableEntry[]): number | Pending {
   if (lookup.how === "palette") {
     const v = numberOf(n);

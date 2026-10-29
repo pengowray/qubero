@@ -8,9 +8,11 @@
 // string table is indexed by a byte offset from its start (an ELF `sh_name`
 // of 17 is the string starting 17 bytes in), so its strip is bytes and a long
 // name is a wide cell. A palette is indexed by entry number, so its strip is
-// entries, one cell each. Either way the axis counts from the table's start
-// in those units, and the number in the index field is a tick on it: the
-// tick where the arrow lands.
+// entries, one cell each. Either way the number in the index field is a tick
+// on the axis, the tick where the arrow lands, so the axis counts from where
+// that number counts from (`axisOrigin`): the table's start for an ELF name
+// offset, the file's start for a TIFF directory offset, which lands on byte 8
+// and is ticked 0x8, not 0x0.
 
 import type { View } from "./boardmath.ts";
 import { thinLabels } from "./fit.ts";
@@ -21,23 +23,45 @@ export type Cell = { readonly x0: number; readonly x1: number; readonly index: n
 
 export type StripLayout = {
   readonly cells: readonly Cell[];
-  /** What the strip's width stands for, in the table's units from its start
-   *  (bytes or entries). */
+  /** What the strip's width stands for, in the table's units: entries, or
+   *  bytes from `origin`. */
   readonly domain: readonly [number, number];
+  /** The bit a byte axis counts from. */
+  readonly origin: number;
 };
 
-/** Where a number into the table lands, in the table's units. */
-export function unitOf(table: Pick<LookupTable, "counts" | "node">, bit: number, hit: number): number {
-  return table.counts === "entries" ? hit + 0.5 : (bit - table.node.offset_bits) / 8;
+/**
+ * The bit the axis counts bytes from: where the index's number counts from,
+ * which is `target` less that many bytes. That is the table's own start for a
+ * string table's offset, and the file's for an offset into the file. A
+ * number that does not count bytes from at or before the first entry (one
+ * counting words, say) cannot be told apart from one counting bytes from
+ * somewhere else, so the axis then counts from the table's start, and the
+ * figure says so under the strip.
+ */
+export function axisOrigin(table: Pick<LookupTable, "counts" | "node" | "entries">, target: number, value: number | null): number {
+  const start = table.node.offset_bits;
+  if (table.counts !== "bytes" || value === null) return start;
+  let lo = Infinity;
+  for (const e of table.entries) lo = Math.min(lo, e.startBit);
+  const o = target - value * 8;
+  return Number.isSafeInteger(o) && o >= 0 && o <= lo ? o : start;
 }
 
-/** The cells of the entries read, across `width` pixels. */
-export function stripLayout(table: Pick<LookupTable, "counts" | "node" | "entries">, width: number): StripLayout {
+/** Where a number into the table lands, in the table's units: an entry's
+ *  middle, or bytes from `origin`. */
+export function unitOf(table: Pick<LookupTable, "counts" | "node">, bit: number, hit: number, origin = table.node.offset_bits): number {
+  return table.counts === "entries" ? hit + 0.5 : (bit - origin) / 8;
+}
+
+/** The cells of the entries read, across `width` pixels, with a byte axis
+ *  counting from `origin`. */
+export function stripLayout(table: Pick<LookupTable, "counts" | "node" | "entries">, width: number, origin = table.node.offset_bits): StripLayout {
   const es = table.entries;
   const first = es[0];
   const last = es[es.length - 1];
-  if (first === undefined || last === undefined) return { cells: [], domain: [0, 1] };
-  const from = (b: number): number => (b - table.node.offset_bits) / 8;
+  if (first === undefined || last === undefined) return { cells: [], domain: [0, 1], origin };
+  const from = (b: number): number => (b - origin) / 8;
   // In bytes, from the first byte of any entry to the last: a list placed by
   // offsets need not be in file order, so neither end is the first or last
   // entry's.
@@ -55,7 +79,7 @@ export function stripLayout(table: Pick<LookupTable, "counts" | "node" | "entrie
       ? { x0: x(e.index), x1: x(e.index + 1), index: e.index }
       : { x0: x(from(e.startBit)), x1: x(from(e.endBit)), index: e.index },
   );
-  return { cells, domain };
+  return { cells, domain, origin };
 }
 
 /** A layout x for a position in the table's units. */
@@ -142,18 +166,34 @@ export function stepEntry(from: number, delta: number, first: number, read: numb
   return Math.max(first, Math.min(first + read - 1, from + delta));
 }
 
+/** How much of the strip's width a cell may take and still be brought into
+ *  view whole; a wider one is brought in from its start. */
+const WIDE = 0.8;
+
+/** The part of layout x `x0..x1` a step brings into view: all of it, or for
+ *  a cell wider than `WIDE` of the strip at zoom `k`, that much from its
+ *  start, which is where the number lands. */
+function shownPart(k: number, x0: number, x1: number, width: number): [number, number] {
+  return [x0, Math.min(x1, x0 + (width * WIDE) / k)];
+}
+
 /** The view that keeps zoom `view.k` and brings layout x `x0..x1` into the
- *  middle of the strip, for a step to an entry off screen. */
+ *  middle of the strip, for a step to an entry off screen. A cell wider than
+ *  the strip can show is brought in from its start, a tenth of the way in,
+ *  so the arrow and the number's tick stay on screen. */
 export function centreOn(view: View, x0: number, x1: number, width: number): View {
   const k = view.k;
-  const mid = ((x0 + x1) / 2) * k;
-  const x = Math.min(0, Math.max(width - width * k, width / 2 - mid));
+  const [a, b] = shownPart(k, x0, x1, width);
+  const want = b < x1 ? width * ((1 - WIDE) / 2) - a * k : width / 2 - ((a + b) / 2) * k;
+  const x = Math.min(0, Math.max(width - width * k, want));
   return { k, x, y: 0 };
 }
 
-/** Whether layout x `x0..x1` is fully in view under `view`. */
+/** Whether layout x `x0..x1` is in view under `view`: all of it, or as much
+ *  of a wide cell from its start as `centreOn` would show. */
 export function inView(view: View, x0: number, x1: number, width: number): boolean {
-  const a = x0 * view.k + view.x;
-  const b = x1 * view.k + view.x;
+  const [p, q] = shownPart(view.k, x0, x1, width);
+  const a = p * view.k + view.x;
+  const b = q * view.k + view.x;
   return a >= 0 && b <= width;
 }

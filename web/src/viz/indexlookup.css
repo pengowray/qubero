@@ -56,8 +56,7 @@
   font-weight: 600;
 }
 .viz-lookup-bytes,
-.viz-lookup-detail,
-.viz-lookup-more {
+.viz-lookup-detail {
   font-family: var(--mono);
   color: var(--muted);
   font-size: 11px;
@@ -90,13 +89,33 @@
   box-shadow: 0 0 0 1px var(--line);
 }
 
-/* The working for the address, as the core writes it. Wraps rather than
-   being cut: every term of it is needed to check the sum. */
+/* The line under the index row: the working for the address, as the core
+   writes it, or after a step how many more fields point at the entry. Both
+   sit in one grid cell, the one not shown hidden but still taking its room,
+   so the line is the same height at every step and the strip under it stays
+   put. The working wraps rather than being cut: every term of it is needed
+   to check the sum. The line is one line tall when both are empty. */
 .viz-lookup-via {
+  display: grid;
+  min-height: 15px;
   margin: 2px 0 0 8px;
   color: var(--muted);
   font: 11px var(--mono);
+  line-height: 15px;
   overflow-wrap: anywhere;
+}
+.viz-lookup-via[hidden] {
+  display: none;
+}
+.viz-lookup-work,
+.viz-lookup-also {
+  grid-area: 1 / 1;
+}
+.viz-lookup-work.is-off {
+  visibility: hidden;
+}
+.viz-lookup-also {
+  font-family: var(--sans);
 }
 
 .viz-lookup-svg {
@@ -144,8 +163,15 @@
 }
 /* A palette's cells are its colours, drawn as they are: fading them would
    show the wrong colour. The lit one gets the accent ring instead. */
+/* Once a cell is wide enough to have a gap beside it, a thin outline in the
+   panel's line colour, so black entries on a dark panel (and white ones on a
+   light panel) still show where each one is. A narrower cell is all colour. */
 .viz-lookup-swatch {
   stroke: none;
+}
+.viz-lookup-swatch.is-wide {
+  stroke: var(--line);
+  stroke-width: 1;
 }
 .viz-lookup-swatch.is-hover {
   stroke: var(--fg);
