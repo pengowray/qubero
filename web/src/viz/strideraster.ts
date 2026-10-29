@@ -57,6 +57,7 @@ import {
   inkOn,
   lagSplits,
   lagTicks,
+  MAX_CELL_PX,
   MAX_STRIDE,
   maxZoom,
   OTHER,
@@ -421,7 +422,10 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
 
   const layout = (): void => {
     leftW = opts.rowAxis && width >= ROW_AXIS_MIN_WIDTH ? ROW_AXIS_W : 0;
-    const cw = Math.max(20, width - leftW);
+    // A narrow row in a wide view is drawn no wider than its cells at the
+    // deepest zoom, so eight bytes per row over the whole window are eight
+    // cells, not eight bars 180 pixels wide.
+    const cw = Math.max(20, Math.min(width - leftW, clampStride(state.stride) * MAX_CELL_PX));
     g = rasterGeometry(doc.lengthBytes, state.stride, cw, height);
     host.style.width = `${width}px`;
     axisSvg.setAttribute("width", String(width));
