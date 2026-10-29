@@ -48,7 +48,10 @@ export function headingButtonsFor(c: DrawContext, item: HeadingItem): HTMLElemen
 /**
  * A heading button in the listing's own style, the one the bytes and table
  * buttons wear, that runs `press` and nothing else. `on` marks it pressed, for
- * a button that opens and closes something.
+ * a button that opens and closes something. Like the listing's own Show
+ * bytes button, it is hidden until the pointer is on the heading row (or the
+ * row has the keyboard), and stays shown while pressed: `.rp-bytes` in
+ * style.css. Hover the row before looking for it in a browser test.
  */
 export function headingButton(label: string, title: string, on: boolean, press: () => void): HTMLButtonElement {
   const b = document.createElement("button");
