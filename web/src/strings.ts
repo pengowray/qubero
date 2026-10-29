@@ -4125,6 +4125,65 @@ export const VIZ = {
     /** A legend entry for a field the format adjusts after reading it. */
     storedRead: (name: string, stored: string, value: string): string => `${name} = ${stored} as stored, read as ${value}`,
   },
+  /** The records of a list as a grid of squares, one per record, opened from
+   *  a listing heading (`viz/recordtiles.ts`). `word` is what the list calls
+   *  one record, in the singular: chunk, event, record. */
+  tiles: {
+    /** The heading button, in the shape of `TABLE.open`. */
+    button: (word: string): string => `View ${plural(word)} as tiles`,
+    buttonTitle: (word: string): string => `Show each ${word} as a square. The colour shows its type and the fill shows its size.`,
+    /* `what` below is "type" where the format says what kind each record
+       is, and "name" where the records only have names (WAD lumps). */
+    /** Over the grid. */
+    title: (count: number, word: string): string => `${countText(count, word)} in file order`,
+    /** Under the title, when the list is longer than the grid reads. */
+    firstOf: (shown: number, total: number, word: string): string => `Showing the first ${countText(shown, word)} of ${total.toLocaleString()}`,
+    /** Under the legend: what the colour and the fill stand for. */
+    key: (word: string, what: string, largest: string, size: string): string =>
+      `Colour: ${word} ${what}. Fill: size, as a share of the largest ${word} (${largest}, ${size}).`,
+    /** The same, when every record is one size and the fill says nothing. */
+    keySameSize: (word: string, what: string, size: string): string => `Colour: ${word} ${what}. Every ${word} is ${size}.`,
+    /** After the key, when some tiles stand for several records. */
+    keyRuns: (word: string, same: "type" | "colour"): string =>
+      `A tile marked with a count, such as ×12, stands for that many ${plural(word)} in a row with the same ${same} and size.`,
+    /** The grey legend entry, for the types that had no colour left. */
+    otherTypes: (kinds: number, count: number, word: string, what: string): string => `${countText(kinds, `other ${what}`)}, ${countText(count, word)}`,
+    /** On a legend entry. */
+    highlight: (type: string): string => `Highlight the ${type} tiles`,
+    highlightOther: "Highlight the grey tiles",
+    showAll: "Show all tiles again",
+    /** Hover card lines. */
+    typeLine: (type: string): string => `Type: ${type}`,
+    nameLine: (name: string): string => `Name: ${name}`,
+    /** Hover card over a tile that stands for a run of the same record. */
+    runTitle: (word: string, from: number, to: number): string => {
+      const words = plural(word);
+      return `${words.charAt(0).toUpperCase()}${words.slice(1)} ${from.toLocaleString()} to ${to.toLocaleString()}`;
+    },
+    runLine: (count: number, word: string, size: string): string => `${countText(count, word)} of ${size} each`,
+  },
+  /** One field's value in every record of a list, as a line beside the
+   *  field's value in the listing (`viz/sparkline.ts`). */
+  spark: {
+    /** Read by a screen reader in place of the line. `count` of the `total`
+     *  records have the field; in a list of records of several types, some
+     *  may not. */
+    label: (field: string, count: number, total: number, word: string, min: string, max: string): string =>
+      count === total
+        ? `${field} in each of ${countText(count, word)}, from ${min} to ${max}`
+        : `${field} in ${count.toLocaleString()} of ${countText(total, word)}, from ${min} to ${max}`,
+    /** Hover card over one record. */
+    pointTitle: (field: string, record: string): string => `${field} in ${record}`,
+    /** Hover card over a stretch of records drawn as one pixel. */
+    binTitle: (field: string, from: number, to: number, word: string): string =>
+      `${field} in ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}`,
+    binLine: (min: string, max: string): string => `From ${min} to ${max}`,
+    /** Under the value, when the records either side have the same value. */
+    sameRun: (count: number, word: string, from: number, to: number): string =>
+      count === to - from + 1
+        ? `Same value in ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}`
+        : `Same value in ${count.toLocaleString()} of ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}`,
+  },
   childStrip: {
     /** The section's heading in the At cursor panel: the structure the
      *  cursor is in, with its fields drawn where their bytes are. */
