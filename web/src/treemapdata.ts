@@ -27,10 +27,20 @@ import { byteClassColor, fieldClass, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.ts";
 import type { TreeNode } from "./treemap.ts";
 
-/** Which key the file's bytes are divided by. */
-export type TreemapMode = "structure" | "classes" | "kinds" | "bytes" | "bits";
+/** Which key the file's bytes are divided by. `order` is the one mode that
+ *  is not a treemap: the template's tree in file order, one row per depth,
+ *  drawn by `viz/icicle.ts`. It is here so the panel's picker, trail and
+ *  corner button serve it as they serve the other five, and it sits next to
+ *  Structure because it is the same tree with position kept. */
+export type TreemapMode = "structure" | "order" | "classes" | "kinds" | "bytes" | "bits";
 
-export const TREEMAP_MODES: readonly TreemapMode[] = ["structure", "classes", "kinds", "bytes", "bits"];
+export const TREEMAP_MODES: readonly TreemapMode[] = ["structure", "order", "classes", "kinds", "bytes", "bits"];
+
+/** The modes drawn from the template, which a file without one cannot draw
+ *  and which read the template rather than scan the bytes. */
+export function readsTemplate(mode: TreemapMode): boolean {
+  return mode === "structure" || mode === "order" || mode === "kinds";
+}
 
 /** How the caller says what a box is worth: bits everywhere except the byte
  *  histogram, whose numbers are counts of a value rather than sizes of a run.

@@ -1179,7 +1179,7 @@ export const TREEMAP = {
    *  the 256 values. A category and a number, and the value map's four groups
    *  (00, 01-1F, 20-7F, 80-FF) are not called classes anywhere, so the two
    *  words do not collide. */
-  modes: { structure: "Structure", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
+  modes: { structure: "Structure", order: "In order", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
   /** Rectangles too small to point at, drawn as one. The leading ellipsis is
    *  the mark this app uses for content cut short rather than absent. */
   pooled: (n: number): string => `… ${n.toLocaleString()} more`,
@@ -4014,5 +4014,29 @@ export const VIZ = {
      *  The noun is the structure's own word for them: fields, items, chunks. */
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
+  },
+  icicle: {
+    /** The treemap heading's tooltip while the panel shows In order, where
+     *  `TREEMAP.what` ("every box's area is its share") is not true. */
+    what: "The file's structure in file order. Each bar spans the bytes of one field, at its offset in the file, and each row down shows the fields inside the bars above it. Click a bar to go to its bytes. Double-click to open it.",
+    /** Under the picture, in place of the treemap's hint. The wheel and the
+     *  drag are said once, since nothing else in the rail zooms. */
+    hint: "Click a bar to go to its bytes. Double-click to open it. Scroll to zoom, drag to pan.",
+    /** For a screen reader, on the canvas. */
+    label: (name: string): string => `Fields of ${name} in file order`,
+    /** A bar of bytes inside a structure that none of its fields covers. */
+    gapDetail: "No field covers these bytes",
+    /** A bar standing for neighbouring fields too narrow to draw one by one.
+     *  Its name is the count, in the structure's own word for its children,
+     *  and `noun` is that word. */
+    foldDetail: (noun: string): string => `These ${plural(noun)} are too narrow to draw separately. Double-click to zoom in.`,
+    /** On a structure with invalid values somewhere under it, which its bar
+     *  marks with a red edge. "Invalid" is the listing's word for them. */
+    wrongInside: (n: number): string => `${n.toLocaleString()} invalid ${n === 1 ? "value" : "values"} inside`,
+    /** A structure whose children are not in file order and too many to read
+     *  all of, so only the first ones are drawn and zooming in will not show
+     *  the rest. */
+    unread: (shown: number, total: number, noun: string): string =>
+      `Showing the first ${shown.toLocaleString()} of ${countText(total, noun)}. The ${plural(noun)} are not stored in file order, so the rest are not drawn.`,
   },
 } as const;
