@@ -27,7 +27,7 @@ import { linkedFor, subscribeWhileConnected } from "./linked.ts";
 import { goToField } from "./pick.ts";
 import { onSchemeChange } from "./schemewatch.ts";
 import { hideTip, hoverTip, tipAt, tipCard } from "./tip.ts";
-import type { RunSource, RunValues } from "./valueplot.ts";
+import type { RunSource, RunValues } from "./valuerun.ts";
 
 type Axis = {
   readonly scale: typeof import("d3-scale");
