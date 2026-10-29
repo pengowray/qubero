@@ -23,7 +23,7 @@ import { byteText, formatBytes, formatOffset, percentText } from "./doc.ts";
 import type { Doc, FocusState, OverviewState, Span } from "./doc.ts";
 import { TREEMAP } from "./strings.ts";
 import { byteClassColors } from "./fieldstyle.ts";
-import { fileMap, markMap, segmentWidths } from "./filemap.ts";
+import { fileMap, markMap } from "./filemap.ts";
 import type { MapMark, MapSegment } from "./filemap.ts";
 import type { Viewport } from "./outline.ts";
 import { factRow, noneLine } from "./dom.ts";
@@ -611,14 +611,9 @@ export class MinimapPanel {
       this.layoutStrip = null;
       return;
     }
-    const strip = fileMap(segments, 0, this.doc.lengthBits, LAYOUT_TITLE);
-    // The strip is drawn for a heading's width. Here it has the rail's, so
-    // its cells are sized again for that.
-    const widths = segmentWidths(segments, width);
-    Array.from(strip.children).forEach((cell, i) => {
-      if (cell instanceof HTMLElement) cell.style.flex = `0 0 ${(widths[i] ?? 0).toFixed(2)}px`;
-    });
-    strip.style.width = `${width}px`;
+    // At the rail's width, and live: pointing at a part names it and marks
+    // it in the hex view, and a click goes to it.
+    const strip = fileMap(segments, 0, this.doc.lengthBits, LAYOUT_TITLE, null, { width, lengthBits: this.doc.lengthBits, doc: this.doc });
     this.layout.replaceChildren(strip);
     this.layout.hidden = false;
     this.layoutStrip = strip;
