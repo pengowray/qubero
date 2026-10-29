@@ -3828,4 +3828,20 @@ export class Doc {
     if (this.refusesEdit()) return;
     if (this.editor.redo()) this.notify();
   }
+
+  /**
+   * The node this space was unpacked or joined from, as the editor keeps it:
+   * a path in the reading that opened the stream, which is the file's or a
+   * recognised stream's (a tar inside a gzip file has a reading of its own).
+   * Empty for the file and for a space that is no longer open.
+   *
+   * Usually the same as `origin`, which is the path in the tab the stream was
+   * opened from. The two differ for a stream opened from a tab that has no
+   * reading of its own, one read by the template its stream declared: that
+   * tab's paths start at its stream, and this path starts where the reading
+   * starts. The lineage breadcrumb (`viz/lineage.ts`) walks this one.
+   */
+  spaceOrigin(): number[] {
+    return this.space === 0 ? [] : Array.from(this.editor.space_origin(this.space));
+  }
 }
