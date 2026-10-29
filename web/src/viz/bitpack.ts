@@ -35,6 +35,7 @@ import type { Doc, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { ribbon, type RibbonBox, type RibbonData } from "../report/ribbon.ts";
 import { VIZ } from "../strings.ts";
+import { leadingInteger } from "./bitlayout.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor } from "./linked.ts";
 import { goToBits, goToField } from "./pick.ts";
@@ -198,7 +199,9 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
   const fig = document.createElement("figure");
   fig.className = "vb-fig vb-pack";
   fig.tabIndex = 0;
-  fig.title = T.keys;
+  // Said to assistive technology only: a title on the figure would put the
+  // browser's own tooltip over the hover card.
+  fig.setAttribute("aria-keyshortcuts", "ArrowLeft ArrowRight");
   const head = document.createElement("figcaption");
   head.className = "vb-head";
   const title = document.createElement("span");
@@ -263,7 +266,12 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
       // A Huffman code is a path through a tree, not a number; the legend
       // names it and says nothing it would have to make up.
       const r = String(right[i] ?? 0);
-      const text = !p.lowFirst ? p.label : comparing ? T.partCompare(p.label, r, String(shown[i] ?? 0)) : T.partValue(p.label, r);
+      // A field the format adjusts after reading (deflate's HCLEN is stored
+      // four short) reads as a number its bits do not make; say both, so the
+      // legend and the panel's value do not seem to disagree.
+      const said = data.code ? null : leadingInteger(n.value);
+      const own = said !== null && String(said) !== r ? T.partStored(p.label, r, n.value) : T.partValue(p.label, r);
+      const text = !p.lowFirst ? p.label : comparing ? T.partCompare(p.label, r, String(shown[i] ?? 0)) : own;
       if (seen.has(text)) return;
       seen.add(text);
       const sw = document.createElement("span");
@@ -355,7 +363,9 @@ export function register(): void {
   registerInspectorSection({
     id: "bit-pack",
     applies: (doc, n) =>
-      !n.composite && n.space === 0 && n.size_bits >= 2 && n.size_bits <= MAX_BITS && (isCode(doc, n) || (n.lsb_first && crossesBytes(n))),
+      // A code is read low bit first too, so most fields are turned away
+      // on the flag before the parent is asked whether it counts codes.
+      !n.composite && n.lsb_first && n.space === 0 && n.size_bits >= 2 && n.size_bits <= MAX_BITS && (crossesBytes(n) || isCode(doc, n)),
     key: (_doc, n, path) => `${path.join("/")}|${n.offset_bits}|${n.size_bits}|${n.edit_text}`,
     draw: ({ doc, node, width }) => {
       const data = bitPackData(doc, node);

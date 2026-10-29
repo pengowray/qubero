@@ -4030,6 +4030,7 @@ export const VIZ = {
     distanceExtra: "Distance extra bits",
     /** A legend entry for a part that is a number, with what it reads as. */
     partValue: (label: string, value: string): string => `${label} = ${value}`,
+    partStored: (label: string, stored: string, value: string): string => `${label} = ${stored} as stored, read as ${value}`,
     partCompare: (label: string, right: string, wrong: string): string => `${label} = ${right} (high bit first: ${wrong})`,
     /** The hover card on one bit of the field. */
     digit: (part: string, digit: number, of: number): string => `${part}: digit ${digit} of ${of}`,
@@ -4038,7 +4039,6 @@ export const VIZ = {
     /** The hover card on a bit of the same bytes that belongs to another field. */
     otherBit: "Bit of a neighbouring field",
     goToOther: "Click to go to that field",
-    keys: "Left and right arrow keys move to the previous and next field",
   },
   /** The varint figure (`viz/varintfigure.ts`): a variable-length number's
    *  bytes split into framing and value bits, and the value bits joined. */

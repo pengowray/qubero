@@ -67,7 +67,7 @@ function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: n
  * Which bits are which comes from the core, on the span. This draws the answer
  * and says nothing about how a varint works.
  */
-function bitsChip(span: Span, hue: string | null): HTMLElement | null {
+export function bitsChip(span: Span, hue: string | null): HTMLElement | null {
   if (span.bits === null) return null;
   const chip = el("span", "bs-chip");
   if (hue !== null) chip.style.setProperty("--hue", hue);
