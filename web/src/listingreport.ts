@@ -24,6 +24,7 @@ import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
 import { formatCardKind } from "./formatcards.ts";
+import { figureOpenOn, isFigureKey } from "./viz/headingfigures.ts";
 import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
 import type { GapVerdict } from "./gapcheck.ts";
@@ -117,8 +118,10 @@ function heightOf(item: Item): number {
 }
 
 /** The kinds whose height is what they turn out to be rather than what their
- *  kind says. */
-function isMeasured(item: Item): boolean {
+ *  kind says, and the headings with a figure open under their title
+ *  (`viz/headingfigures.ts`). */
+function isMeasured(item: Item, cards: ReadonlySet<string>): boolean {
+  if (item.kind === "heading") return figureOpenOn(cards, item.path);
   return item.kind === "bytes" || item.kind === "record" || item.kind === "card" || item.kind === "formatcard";
 }
 
@@ -665,7 +668,7 @@ export class ListingReport {
     let changed = false;
     for (let i = from; i < to; i++) {
       const item = this.items[i];
-      if (item === undefined || !isMeasured(item)) continue;
+      if (item === undefined || !isMeasured(item, this.cards)) continue;
       const node = this.mounted.get(item.key);
       if (node === undefined) continue;
       const height = Math.ceil(node.getBoundingClientRect().height);
@@ -744,6 +747,7 @@ export class ListingReport {
       // not to offer it twice when the stream is right above them.
       streams: this.streams,
       shown: this.scroller.clientWidth > 0,
+      width: this.scroller.clientWidth,
     };
   }
 
@@ -758,6 +762,17 @@ export class ListingReport {
     // card measured again. See `askedCardKey` in `formatcards.ts`.
     if (key.startsWith("ask:")) {
       this.rebuild();
+      return;
+    }
+    // A figure under a heading makes the heading a different height, measured
+    // where it stands; one closed leaves its measured height behind, which has
+    // to go before the heading is placed again at its fixed one.
+    if (isFigureKey(key)) {
+      for (const k of [...this.measured.keys()]) if (k.startsWith("h:")) this.measured.delete(k);
+      const anchor = this.anchor();
+      this.layout();
+      if (anchor !== null) this.restore(anchor);
+      this.paint();
       return;
     }
     for (const k of [...this.measured.keys()]) if (k.startsWith("fc:")) this.measured.delete(k);

@@ -4006,6 +4006,44 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
 export const VIZ = {
   /** Shared by every zoomable piece: puts the picture back as first drawn. */
   resetZoom: "Reset zoom",
+  /** The records of a list as a grid of squares, one per record, opened from
+   *  a listing heading (`viz/recordtiles.ts`). `word` is what the list calls
+   *  one record, in the singular: chunk, event, record. */
+  tiles: {
+    /** The heading button, in the shape of `TABLE.open`. */
+    button: (word: string): string => `View ${plural(word)} as tiles`,
+    buttonTitle: (word: string): string => `Show each ${word} as a square, coloured by its type and filled by its size`,
+    /** Over the grid. */
+    title: (count: number, word: string): string => `${countText(count, word)} in file order`,
+    /** Under the title, when the list is longer than the grid reads. */
+    firstOf: (shown: number, total: number, word: string): string => `Showing the first ${countText(shown, word)} of ${total.toLocaleString()}`,
+    /** Under the legend: what the colour and the fill stand for. */
+    key: (word: string, largest: string, size: string): string =>
+      `Colour: ${word} type. Fill: size, as a share of the largest ${word} (${largest}, ${size}).`,
+    /** The grey legend entry, for the types that had no colour left. */
+    otherTypes: (types: number): string => `${types.toLocaleString()} other types`,
+    /** On a legend entry. */
+    highlight: (type: string): string => `Highlight the ${type} tiles`,
+    highlightOther: "Highlight the grey tiles",
+    showAll: "Show all tiles again",
+    /** Hover card lines. */
+    typeLine: (type: string): string => `Type: ${type}`,
+    problems: (invalid: number, undefined_: number): string =>
+      [invalid > 0 ? `${countText(invalid, "invalid value")}` : "", undefined_ > 0 ? `${countText(undefined_, "undefined value")}` : ""].filter((s) => s !== "").join(", "),
+  },
+  /** One field's value in every record of a list, as a line beside the
+   *  field's value in the listing (`viz/sparkline.ts`). */
+  spark: {
+    /** Read by a screen reader in place of the line. */
+    label: (field: string, count: number, word: string, min: string, max: string): string =>
+      `${field} in each of ${countText(count, word)}, from ${min} to ${max}`,
+    /** Hover card over one record. */
+    pointTitle: (field: string, record: string): string => `${field} in ${record}`,
+    /** Hover card over a stretch of records drawn as one pixel. */
+    binTitle: (field: string, from: number, to: number, word: string): string =>
+      `${field} in ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}`,
+    binLine: (min: string, max: string): string => `From ${min} to ${max}`,
+  },
   childStrip: {
     /** The section's heading in the At cursor panel: the structure the
      *  cursor is in, with its fields drawn where their bytes are. */

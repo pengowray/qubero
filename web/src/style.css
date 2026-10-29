@@ -7400,3 +7400,114 @@ table.rec td.is-invalid {
   font-size: 11px;
   margin-top: 2px;
 }
+
+/* ---- figures inside a listing heading (`viz/headingfigures.ts`) ---- */
+/* A heading with a figure open is as tall as the figure makes it, and the
+   listing measures it rather than adding up its fixed height. The figure
+   takes a line of its own under the title line, across the whole heading. */
+.rp-item.rp-has-figure {
+  height: auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+}
+.rp-figures {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 6px 0 4px;
+  font-family: var(--sans);
+  font-size: 12px;
+  white-space: normal;
+}
+
+/* ---- record tiles: one square per record of a list (`viz/recordtiles.ts`) ---- */
+.viz-tiles {
+  margin: 0;
+}
+.viz-tiles-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.viz-tiles-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+/* Drag pans and the wheel zooms, as on every zoomable figure. */
+.viz-tiles-canvas {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.viz-tiles-canvas:active {
+  cursor: grabbing;
+}
+/* One button per colour. Wraps like text, so a long type name moves to the
+   next line rather than over its neighbour. */
+.viz-tiles-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-top: 6px;
+}
+.viz-tiles-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 0;
+  padding: 1px 6px;
+  font: 11px var(--sans);
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.viz-tiles-key:hover {
+  border-color: var(--line);
+}
+.viz-tiles-key.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.viz-tiles-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.viz-tiles-count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.viz-tiles-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* ---- run sparkline beside a value in the listing (`viz/sparkline.ts`) ---- */
+/* No taller than the row's text, so the row keeps its fixed height. The two
+   numbers are the run's smallest and largest value, in the muted colour the
+   listing writes secondary values in. */
+.viz-spark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+  margin-inline-start: 10px;
+  vertical-align: -3px;
+  cursor: pointer;
+}
+.viz-spark-end {
+  color: var(--muted);
+  font: 10px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.viz-spark-plot {
+  display: inline-block;
+  flex: none;
+  overflow: hidden;
+}

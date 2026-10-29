@@ -24,6 +24,7 @@ import { fileMap } from "./filemap.ts";
 import { recordTable } from "./records.ts";
 import { tablePlan } from "./tableplan.ts";
 import { headingButtonsFor } from "./viz/headingbuttons.ts";
+import { headingFiguresFor } from "./viz/headingfigures.ts";
 import { rowGlyphsFor } from "./viz/rowglyphs.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
@@ -69,6 +70,11 @@ export type DrawContext = {
    *  so the other views can have its headings, and work that is only for the
    *  eye, like decoding a picture, waits for this. */
   readonly shown: boolean;
+  /** How wide the listing is, for a figure drawn inside an item: a figure is
+   *  given its size and never measures its host. 0 while the listing is
+   *  hidden, and absent from a stand-in that draws no figures
+   *  (`report/cards.ts`). */
+  readonly width?: number;
 };
 
 /** `@0x1000 – @0x1fff`, the stretch a heading covers. A part of no bytes has no
@@ -237,7 +243,24 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   const share = space === 0 ? shareText(item.sizeBits, fileBits) : "";
   row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
   if (space === 0) row.append(mapFor(c, item));
+  // The figures a heading button opened under the title line
+  // (`viz/headingfigures.ts`), across the whole width of the heading. The
+  // heading is measured rather than a fixed height while one is open.
+  const width = c.width ?? 0;
+  const figures = width > 0 ? headingFiguresFor(c, item, figureWidth(width, item.level)) : [];
+  if (figures.length > 0) {
+    row.classList.add("rp-has-figure");
+    const under = el("div", "rp-figures");
+    under.append(...figures);
+    row.append(under);
+  }
   return row;
+}
+
+/** How wide a figure under a heading is drawn: the listing's width less the
+ *  heading's own padding (`.rp-h0`, `.rp-h1` and `.rp-figures` in style.css). */
+function figureWidth(width: number, level: 0 | 1): number {
+  return Math.max(160, width - 16 - (level === 1 ? 18 : 0) - 4);
 }
 
 function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElement {
