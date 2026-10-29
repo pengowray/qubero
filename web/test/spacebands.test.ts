@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   accessOf,
+  rwxOf,
   axisAt,
   axisY,
   bandAt,
@@ -102,6 +103,14 @@ test("flags words give the access, whole words only", () => {
   assert.equal(accessOf("alloc, execute", false), "unloaded");
 });
 
+test("flags words give rwx letters", () => {
+  assert.equal(rwxOf("execute, read"), "r-x");
+  assert.equal(rwxOf("write, read"), "rw-");
+  assert.equal(rwxOf("mem read, mem write, mem execute"), "rwx");
+  assert.equal(rwxOf("write, alloc", true), "rw-");
+  assert.equal(rwxOf("alloc"), "---");
+});
+
 test("an enum value's word is the part before its number", () => {
   assert.equal(enumWord("load (1)"), "load");
   assert.equal(enumWord("gnu_relro (1685382482)"), "gnu_relro");
@@ -118,19 +127,29 @@ test("busybox ELF: sections, headers and segments", () => {
   // The headers are inside the first LOAD segment, so they are loaded too.
   assert.deepEqual(by.get("ELF header")?.mem, { start: 4194304, end: 4194368 });
   assert.equal(by.get("ELF header")?.access, "exec");
+  assert.equal(by.get("ELF header")?.perms, "r-x");
+  assert.deepEqual(by.get("ELF header")?.grant, { index: 0, type: "load" });
   assert.deepEqual(by.get("Program header table")?.file, { start: 64, end: 288 });
   assert.equal(by.get(".text")?.access, "exec");
-  assert.equal(by.get(".rodata")?.access, "read");
+  // Permissions are the LOAD segment's, not the section's own flags:
+  // .rodata is in the code segment, so it is executable.
+  assert.equal(by.get(".rodata")?.access, "exec");
+  assert.equal(by.get(".rodata")?.perms, "r-x");
+  assert.equal(by.get(".rodata")?.flags, "alloc");
   assert.equal(by.get(".data")?.access, "write");
+  assert.deepEqual(by.get(".data")?.grant, { index: 1, type: "load" });
+  assert.equal(by.get(".shstrtab")?.perms, null);
   assert.equal(by.get(".shstrtab")?.mem, null);
   assert.equal(by.get(".shstrtab")?.access, "unloaded");
   assert.equal(by.get("Section header table")?.mem, null);
   // gnu_stack states only flags, so there is nothing of it to draw.
-  assert.deepEqual(pic.segments.map((s) => s.name), ["load 1", "load 2", "gnu_relro 4"]);
+  assert.deepEqual(pic.segments.map((s) => s.name), ["Program header 0 (LOAD)", "Program header 1 (LOAD)", "Program header 3 (GNU_RELRO)"]);
+  assert.equal(pic.segments[2]?.perms, "r--");
   assert.equal(pic.segments[0]?.access, "exec");
   assert.equal(pic.segments[1]?.access, "write");
   const counts = sectionCounts(pic.regions);
-  assert.equal(counts.total, 9);
+  // The null entry 0 has neither bytes nor addresses, so it is not drawn.
+  assert.equal(counts.drawn, 9);
   assert.equal(counts.loaded, 8);
   assert.deepEqual(counts.fileOnly.map((r) => r.name), [".shstrtab"]);
 });
@@ -145,6 +164,28 @@ test("an ELF NOBITS section has no file bytes, a point in the file, and memory",
   assert.equal(bss?.filePoint, 1130461);
   assert.deepEqual(bss?.mem, { start: 7421920, end: 7426016 });
   assert.deepEqual(sectionCounts(pic.regions).memOnly.map((r) => r.name), [".bss"]);
+});
+
+test("an ELF .bss takes its permissions from the LOAD segment holding its addresses", () => {
+  const pic = elfPicture({
+    ...BUSYBOX_ELF,
+    sections: [{ index: 1, name: ".bss", type: 8, flags: "write, alloc", address: 7421920, offset: 1130461, size: 32, entry: null, body: null }],
+    segments: [{ index: 1, type: "load", flags: "write, read", offset: 1122272, vaddr: 7413728, fileSize: 8189, memSize: 8224, entry: null }],
+  });
+  const bss = pic.regions.find((r) => r.name === ".bss");
+  assert.deepEqual(bss?.grant, { index: 1, type: "load" });
+  assert.equal(bss?.perms, "rw-");
+});
+
+test("an ELF section outside every LOAD segment keeps its own flags", () => {
+  const pic = elfPicture({
+    ...BUSYBOX_ELF,
+    sections: [{ index: 1, name: ".odd", type: 1, flags: "alloc, execute", address: 0x900000, offset: 1130461, size: 16, entry: null, body: null }],
+  });
+  const odd = pic.regions.find((r) => r.name === ".odd");
+  assert.equal(odd?.grant, null);
+  assert.equal(odd?.perms, "r-x");
+  assert.equal(odd?.access, "exec");
 });
 
 test("a relocatable ELF with no LOAD segment has nothing in memory", () => {
@@ -164,6 +205,9 @@ test("busybox PE: headers, sections at image base plus RVA, .bss memory only", (
   assert.equal(by.get(".text")?.access, "exec");
   assert.equal(by.get(".data")?.access, "write");
   assert.equal(by.get(".rdata")?.access, "read");
+  assert.equal(by.get(".text")?.perms, "r-x");
+  assert.equal(by.get(".data")?.perms, "rw-");
+  assert.equal(by.get("Headers")?.perms, "r--");
   assert.equal(by.get(".bss")?.file, null);
   assert.equal(by.get(".bss")?.filePoint, null);
   assert.equal(by.get(".bss")?.access, "write");

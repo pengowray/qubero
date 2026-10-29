@@ -22,18 +22,28 @@
 //   column would be empty and the data segment a hairline. The cut is a fixed
 //   height, marked on the drawing and stated in words, so the reader is told
 //   the column is not to one scale rather than left to assume it is.
+// - Colour is permission in memory, from one source for every stretch: an
+//   ELF stretch takes the permissions of the LOAD segment that maps it, since
+//   the loader goes by the program headers and not by the section flags (a
+//   `.rodata` in the code segment is executable whatever its own flags say);
+//   a PE section takes its own characteristics, which are what the PE loader
+//   goes by. The section flags are still in the hover card.
 // - Names are put on fixed rows (`placeLabels`) with a leader line to what
 //   they name, in the order of what they name, so that two leaders never
 //   cross and two names never share a row. A name with no free row near its
 //   section is dropped, and the hover card still has it.
 
+import { VIZ } from "../strings.ts";
+
+const NAMES = VIZ.spaceBands.names;
+
 /** A stretch of bytes or of addresses, end exclusive. */
 export type Range = { readonly start: number; readonly end: number };
 
-/** What the loader lets a running program do with a stretch, as the colours
- *  of the drawing: run it, write it, only read it, or nothing, since it is
- *  never loaded. Write and execute together is its own colour, because it is
- *  the unusual one a reader is looking for. */
+/** The permissions a stretch has in memory, as the colours of the drawing:
+ *  executable, writable, read-only, or none, since it is never loaded. Write
+ *  and execute together is its own colour, because it is the unusual one a
+ *  reader is looking for. */
 export type Access = "exec" | "write-exec" | "write" | "read" | "unloaded";
 
 export const ACCESS_ORDER: readonly Access[] = ["exec", "write-exec", "write", "read", "unloaded"];
@@ -61,7 +71,13 @@ export type Region = {
   /** For a PE, the address the loader adds the relative ones to. */
   readonly imageBase: number | null;
   readonly access: Access;
-  /** The flags as the format states them, for the hover card. */
+  /** The permissions as `r-x`, or null when it is not loaded. */
+  readonly perms: string | null;
+  /** The program header the permissions are from, for an ELF stretch inside
+   *  a LOAD segment; null when they are the stretch's own. */
+  readonly grant: Grant | null;
+  /** The section's own flags as the format states them, for the hover card;
+   *  empty for a header or a segment. */
   readonly flags: string;
   /** The header entry that states where it goes: a section header, a
    *  program header. Null for a stretch no one entry describes. */
@@ -71,6 +87,15 @@ export type Region = {
   /** The field holding its bytes, when the template has one. */
   readonly body: EntryPick | null;
 };
+
+/** A program header, as the hover card names it. */
+export type Grant = { readonly index: number; readonly type: string };
+
+/** A program header's name: its index from 0, as the listing and readelf
+ *  number them, and its type as readelf writes it. */
+export function programHeaderName(index: number, type: string): string {
+  return NAMES.programHeader(index, type.toUpperCase());
+}
 
 /** What a flags field's words say about access. ELF writes `alloc, write,
  *  execute`; a program header `execute, read`; PE `cnt code, mem execute,
@@ -85,6 +110,14 @@ export function accessOf(flags: string, loaded: boolean): Access {
   if (x) return "exec";
   if (w) return "write";
   return "read";
+}
+
+/** A flags field's words as `rwx` letters, with a dash for each one missing.
+ *  `read` is taken as given when `readable` says so: an ELF section's flags
+ *  have no word for it, and every allocated section can be read. */
+export function rwxOf(flags: string, readable = false): string {
+  const words = new Set(flags.toLowerCase().split(/[^a-z]+/).filter(Boolean));
+  return `${readable || words.has("read") ? "r" : "-"}${words.has("write") ? "w" : "-"}${words.has("execute") ? "x" : "-"}`;
 }
 
 /** A word of a flags or type field's value, as `"load (1)"` reads `load`. */
@@ -139,17 +172,30 @@ export type ElfIn = {
 const NOBITS = 8;
 const SHF_ALLOC = "alloc";
 
-/** Where a stretch of the file lands in memory, by the LOAD segment that
- *  holds it, or null when none does. */
-function loadedAt(segments: readonly ElfSegmentIn[], file: Range): { mem: Range; flags: string; entry: EntryPick | null } | null {
+/** The LOAD segment whose file bytes hold a stretch of the file, and where
+ *  that stretch lands in memory; null when no LOAD segment holds it. */
+function loadedAt(segments: readonly ElfSegmentIn[], file: Range): { mem: Range; segment: ElfSegmentIn } | null {
   for (const s of segments) {
     if (s.type !== "load") continue;
     if (file.start >= s.offset && file.end <= s.offset + s.fileSize) {
       const at = s.vaddr + (file.start - s.offset);
-      return { mem: { start: at, end: at + (file.end - file.start) }, flags: s.flags, entry: s.entry };
+      return { mem: { start: at, end: at + (file.end - file.start) }, segment: s };
     }
   }
   return null;
+}
+
+/** The LOAD segment whose addresses hold `mem`, which is how a `.bss` with
+ *  no file bytes finds the segment that maps it. */
+function loadHolding(segments: readonly ElfSegmentIn[], mem: Range): ElfSegmentIn | null {
+  return segments.find((s) => s.type === "load" && mem.start >= s.vaddr && mem.end <= s.vaddr + s.memSize) ?? null;
+}
+
+/** The colour, letters and source of a loaded ELF stretch's permissions:
+ *  its LOAD segment's when one maps it, else its own section flags. */
+function elfPerms(segment: ElfSegmentIn | null, ownFlags: string): { access: Access; perms: string; grant: Grant | null } {
+  if (segment !== null) return { access: accessOf(segment.flags, true), perms: rwxOf(segment.flags), grant: { index: segment.index, type: segment.type } };
+  return { access: accessOf(ownFlags, true), perms: rwxOf(ownFlags, true), grant: null };
 }
 
 export type Picture = {
@@ -174,16 +220,17 @@ export function elfPicture(elf: ElfIn): Picture {
     const file = clip(range);
     if (file === null) return;
     const at = loadedAt(elf.segments, file);
-    const entry = at?.entry ?? null;
+    const entry = at?.segment.entry ?? null;
+    const p = at === null ? null : elfPerms(at.segment, "");
     regions.push({
       key, name, kind: "headers", file, filePoint: null, mem: at?.mem ?? null, imageBase: null,
-      access: accessOf(at?.flags ?? "", at !== null), flags: "", entry,
+      access: p?.access ?? "unloaded", perms: p?.perms ?? null, grant: p?.grant ?? null, flags: "", entry,
       entryKind: entry !== null ? "loading-header" : null, body,
     });
   };
-  header("elf-header", "ELF header", { start: 0, end: elf.headerSize }, elf.headerEntry);
-  if (elf.phnum > 0) header("ph-table", "Program header table", { start: elf.phoff, end: elf.phoff + elf.phnum * elf.phentsize }, elf.phEntry);
-  if (elf.shnum > 0) header("sh-table", "Section header table", { start: elf.shoff, end: elf.shoff + elf.shnum * elf.shentsize }, elf.shEntry);
+  header("elf-header", NAMES.elfHeader, { start: 0, end: elf.headerSize }, elf.headerEntry);
+  if (elf.phnum > 0) header("ph-table", NAMES.programHeaderTable, { start: elf.phoff, end: elf.phoff + elf.phnum * elf.phentsize }, elf.phEntry);
+  if (elf.shnum > 0) header("sh-table", NAMES.sectionHeaderTable, { start: elf.shoff, end: elf.shoff + elf.shnum * elf.shentsize }, elf.shEntry);
 
   // A relocatable object (`.o`) has no LOAD segment: its allocated sections
   // all say address 0 until a linker places them, so none is loaded yet.
@@ -196,10 +243,11 @@ export function elfPicture(elf: ElfIn): Picture {
     const mem = alloc && s.size > 0 ? { start: s.address, end: s.address + s.size } : null;
     const file = nobits || s.size === 0 ? null : clip({ start: s.offset, end: s.offset + s.size });
     if (file === null && mem === null) continue;
+    const p = mem === null ? null : elfPerms(loadHolding(elf.segments, mem) ?? (file === null ? null : (loadedAt(elf.segments, file)?.segment ?? null)), s.flags);
     regions.push({
-      key: `s${s.index}`, name: s.name === "" ? `Section ${s.index}` : s.name, kind: "section",
+      key: `s${s.index}`, name: s.name === "" ? NAMES.section(s.index) : s.name, kind: "section",
       file, filePoint: nobits ? s.offset : null, mem, imageBase: null,
-      access: accessOf(s.flags, mem !== null), flags: s.flags, entry: s.entry,
+      access: p?.access ?? "unloaded", perms: p?.perms ?? null, grant: p?.grant ?? null, flags: s.flags, entry: s.entry,
       entryKind: s.entry !== null ? "section-header" : null, body: s.body,
     });
   }
@@ -211,8 +259,8 @@ export function elfPicture(elf: ElfIn): Picture {
     // draw; its flags are in the listing.
     if (file === null && mem === null) continue;
     segments.push({
-      key: `p${s.index}`, name: `${s.type} ${s.index + 1}`, kind: "segment", file, filePoint: null, mem, imageBase: null,
-      access: accessOf(s.flags, mem !== null), flags: s.flags, entry: s.entry,
+      key: `p${s.index}`, name: programHeaderName(s.index, s.type), kind: "segment", file, filePoint: null, mem, imageBase: null,
+      access: accessOf(s.flags, mem !== null), perms: mem === null ? null : rwxOf(s.flags), grant: null, flags: "", entry: s.entry,
       entryKind: s.entry !== null ? "program-header" : null, body: null,
     });
   }
@@ -252,8 +300,8 @@ export function pePicture(pe: PeIn): Picture {
   if (pe.headersSize > 0) {
     const end = Math.min(pe.headersSize, pe.fileBytes);
     regions.push({
-      key: "pe-headers", name: "Headers", kind: "headers", file: { start: 0, end }, filePoint: null,
-      mem: { start: base, end: base + pe.headersSize }, imageBase: base, access: "read", flags: "",
+      key: "pe-headers", name: NAMES.peHeaders, kind: "headers", file: { start: 0, end }, filePoint: null,
+      mem: { start: base, end: base + pe.headersSize }, imageBase: base, access: "read", perms: "r--", grant: null, flags: "",
       entry: pe.imageBaseEntry, entryKind: pe.imageBaseEntry !== null ? "image-base" : null, body: pe.headersEntry,
     });
   }
@@ -267,8 +315,9 @@ export function pePicture(pe: PeIn): Picture {
     if (file !== null) fileEnd = Math.max(fileEnd, file.end);
     if (file === null && mem === null) continue;
     regions.push({
-      key: `s${s.index}`, name: s.name === "" ? `Section ${s.index + 1}` : s.name, kind: "section",
-      file, filePoint: null, mem, imageBase: base, access: accessOf(s.flags, mem !== null), flags: s.flags,
+      key: `s${s.index}`, name: s.name === "" ? NAMES.section(s.index + 1) : s.name, kind: "section",
+      file, filePoint: null, mem, imageBase: base, access: accessOf(s.flags, mem !== null),
+      perms: mem === null ? null : rwxOf(s.flags), grant: null, flags: s.flags,
       entry: s.entry, entryKind: s.entry !== null ? "section-entry" : null, body: s.body,
     });
   }
@@ -276,8 +325,8 @@ export function pePicture(pe: PeIn): Picture {
   // the file and never loaded.
   if (fileEnd < pe.fileBytes) {
     regions.push({
-      key: "pe-overlay", name: "Data after the last section", kind: "headers", file: { start: fileEnd, end: pe.fileBytes },
-      filePoint: null, mem: null, imageBase: null, access: "unloaded", flags: "", entry: null, entryKind: null, body: null,
+      key: "pe-overlay", name: NAMES.overlay, kind: "headers", file: { start: fileEnd, end: pe.fileBytes },
+      filePoint: null, mem: null, imageBase: null, access: "unloaded", perms: null, grant: null, flags: "", entry: null, entryKind: null, body: null,
     });
   }
   return { fileBytes: pe.fileBytes, regions: sortRegions(regions), segments: [] };
@@ -599,12 +648,14 @@ export function regionAtByte(regions: readonly Region[], byte: number): Region |
   return best;
 }
 
-/** How many sections the picture has, and how many of them are loaded, in
- *  the file only, or in memory only: the sentence over the drawing. */
-export function sectionCounts(regions: readonly Region[]): { total: number; loaded: number; fileOnly: Region[]; memOnly: Region[] } {
+/** How many of the drawn sections are loaded, in the file only, or in
+ *  memory only: the sentence over the drawing. `drawn` leaves out the
+ *  sections with neither bytes nor addresses, such as an ELF's null entry,
+ *  so it can be fewer than the section table lists. */
+export function sectionCounts(regions: readonly Region[]): { drawn: number; loaded: number; fileOnly: Region[]; memOnly: Region[] } {
   const sections = regions.filter((r) => r.kind === "section");
   return {
-    total: sections.length,
+    drawn: sections.length,
     loaded: sections.filter((r) => r.mem !== null).length,
     fileOnly: sections.filter((r) => r.mem === null),
     memOnly: sections.filter((r) => r.file === null && r.mem !== null),

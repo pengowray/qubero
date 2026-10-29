@@ -7402,76 +7402,76 @@ table.rec td.is-invalid {
 }
 
 /* ---- file offsets against memory addresses (`viz/spacebands.ts`) ---- */
-/* The colours say what the loader lets a program do with a stretch: run it,
-   write it, only read it. Blue, orange and green are the dataviz palette's
+/* The colours are a stretch's permissions in memory: executable, writable,
+   read-only. Blue, orange and green are the dataviz palette's
    hues, which its validator passes for colour-blind readers next to each
    other in both themes; every colour also has its word in the key and in
    the hover card. Writable code takes the palette's violet, so the one
    combination a reader is looking for stands apart. Not loaded is a grey. */
-.sb-panel {
-  --sb-exec: #2a78d6;
-  --sb-write: #eb6834;
-  --sb-read: #1baf7a;
-  --sb-write-exec: #6250d6;
-  --sb-unloaded: #8a8f98;
+.mmap-panel {
+  --mmap-exec: #2a78d6;
+  --mmap-write: #eb6834;
+  --mmap-read: #1baf7a;
+  --mmap-write-exec: #6250d6;
+  --mmap-unloaded: #8a8f98;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 @media (prefers-color-scheme: dark) {
-  .sb-panel {
-    --sb-exec: #3987e5;
-    --sb-write: #d95926;
-    --sb-read: #199e70;
-    --sb-write-exec: #9085e9;
-    --sb-unloaded: #6f7580;
+  .mmap-panel {
+    --mmap-exec: #3987e5;
+    --mmap-write: #d95926;
+    --mmap-read: #199e70;
+    --mmap-write-exec: #9085e9;
+    --mmap-unloaded: #6f7580;
   }
 }
-.sb-exec { --sb-c: var(--sb-exec); }
-.sb-write { --sb-c: var(--sb-write); }
-.sb-read { --sb-c: var(--sb-read); }
-.sb-write-exec { --sb-c: var(--sb-write-exec); }
-.sb-unloaded { --sb-c: var(--sb-unloaded); }
-.sb-bar {
+.mmap-exec { --mmap-c: var(--mmap-exec); }
+.mmap-write { --mmap-c: var(--mmap-write); }
+.mmap-read { --mmap-c: var(--mmap-read); }
+.mmap-write-exec { --mmap-c: var(--mmap-write-exec); }
+.mmap-unloaded { --mmap-c: var(--mmap-unloaded); }
+.mmap-bar {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.sb-bar h3 {
+.mmap-bar h3 {
   flex: 1;
   margin: 0;
   font-size: 12px;
 }
-.sb-summary {
+.mmap-summary {
   margin: 0;
   color: var(--fg);
   font-size: 12px;
   line-height: 1.4;
 }
-.sb-note {
+.mmap-note {
   color: var(--muted);
 }
-.sb-legend {
+.mmap-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 10px;
   font-size: 11px;
   color: var(--fg);
 }
-.sb-key {
+.mmap-key {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
-.sb-swatch {
+.mmap-swatch {
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  background: var(--sb-c);
+  background: var(--mmap-c);
 }
 /* Only as wide as its words, so the checkbox's target is the label and not
    the whole width of the window in the full-window mode. */
-.sb-link {
+.mmap-link {
   align-self: flex-start;
   min-height: 24px;
   font-size: 11px;
@@ -7480,106 +7480,111 @@ table.rec td.is-invalid {
   align-items: center;
   gap: 2px;
 }
-.sb-bar .tmp-grow {
+.mmap-bar .tmp-grow {
   width: 24px;
   height: 24px;
 }
 /* Drag pans and the wheel zooms, so the drawing asks for the grab cursor and
    keeps the page from selecting its text under a drag. */
-.sb-svg {
+.mmap-svg {
   display: block;
   user-select: none;
   touch-action: none;
 }
-.sb-plot,
-.sb-head {
+.mmap-plot,
+.mmap-head {
   pointer-events: none;
 }
-.sb-hit {
+.mmap-hit {
   fill: transparent;
   cursor: grab;
 }
-.sb-hit:active {
+.mmap-hit:active {
   cursor: grabbing;
 }
-.sb-ground {
+.mmap-ground {
   fill: var(--panel);
   stroke: var(--line);
   stroke-width: 1;
 }
-.sb-cut {
+.mmap-cut {
   fill: none;
   stroke: var(--muted);
   stroke-width: 1.5;
 }
-.sb-box {
-  fill: var(--sb-c);
+.mmap-box {
+  fill: var(--mmap-c);
 }
 /* A surface-coloured edge between two boxes that touch, where a box is tall
    enough to keep its colour after losing a pixel to it. */
-.sb-box.has-gap {
+.mmap-box.has-gap {
   stroke: var(--bg);
   stroke-width: 1;
 }
-.sb-band {
-  fill: var(--sb-c);
+.mmap-band {
+  fill: var(--mmap-c);
   fill-opacity: 0.28;
 }
-.sb-band.is-hover {
+.mmap-band.is-hover {
   fill-opacity: 0.5;
 }
 /* The section the cursor is in: the accent outline every view marks the
    selection with. */
-.sb-band.is-on {
+.mmap-band.is-on {
   fill-opacity: 0.55;
   stroke: var(--accent);
   stroke-width: 1.5;
 }
-.sb-box.is-on,
-.sb-bracket.is-on {
+.mmap-box.is-on,
+.mmap-bracket.is-on {
   stroke: var(--accent);
   stroke-width: 2;
 }
-.sb-box.is-hover,
-.sb-bracket.is-hover {
+.mmap-box.is-hover,
+.mmap-bracket.is-hover {
   stroke: var(--fg);
   stroke-width: 1;
 }
-.sb-bracket {
-  fill: var(--sb-c);
+.mmap-bracket {
+  fill: var(--mmap-c);
   fill-opacity: 0.8;
 }
-.sb-leader {
+.mmap-leader {
   fill: none;
   stroke: var(--muted);
   stroke-width: 0.75;
   opacity: 0.7;
 }
-.sb-leader.is-on,
-.sb-leader.is-hover {
+.mmap-leader.is-on,
+.mmap-leader.is-hover {
   stroke: var(--fg);
   opacity: 1;
 }
-.sb-name {
+.mmap-name {
   font: 11px var(--sans);
   fill: var(--fg);
 }
-.sb-name.is-cut {
+.mmap-name.is-cut {
   fill: var(--muted);
 }
-.sb-name.is-on {
+.mmap-name.is-on {
   fill: var(--accent);
 }
-.sb-colhead {
+/* A band's `rwx` letters, over its fill. */
+.mmap-perms {
+  font: 10px var(--mono);
+  fill: var(--fg);
+}
+.mmap-colhead {
   font: 600 11px var(--sans);
   fill: var(--fg);
 }
-.sb-readout {
+.mmap-readout {
   font: 10px var(--mono);
   fill: var(--muted);
 }
 /* Over the window, with the same frame the treemap takes there. */
-.sb-big {
+.mmap-big {
   position: fixed;
   inset: 8px;
   z-index: 40;
@@ -7589,10 +7594,10 @@ table.rec td.is-invalid {
   background: var(--bg);
   box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
 }
-.sb-big .sb-figure {
+.mmap-big .mmap-figure {
   flex: 1;
   min-height: 0;
 }
-.sb-big .sb-bar h3 {
+.mmap-big .mmap-bar h3 {
   font-size: 15px;
 }

@@ -95,6 +95,9 @@ const CLICK_SLOP_PX = 4;
 /** How long an animated Fit or Home takes. Short: it says where the picture
  *  went, and nobody wants to wait for it. */
 const ANIMATE_MS = 200;
+/** How far past the content's edges a drag may take it, as a share of the
+ *  view's width and height on screen. */
+const SLACK = 0.25;
 
 /** Give `host` pan and zoom. `host` is the element the pointer is over: the
  *  SVG, the canvas, or a div around either. */
@@ -156,13 +159,11 @@ export function board(host: Element, opts: BoardOptions): Board {
       [0, 0],
       [width, height],
     ]);
-    // A little room past the edges, so the first and last bar can be pulled
-    // into the middle of the view to be looked at, and no further.
-    const slackX = width * 0.25;
-    const slackY = xOnly ? 0 : height * 0.25;
+    // The content itself. The room past its edges is added by `constrain`
+    // below, where the zoom is known.
     behaviour.translateExtent([
-      [content.x0 - slackX, content.y0 - slackY],
-      [content.x1 + slackX, content.y1 + slackY],
+      [content.x0, content.y0],
+      [content.x1, content.y1],
     ]);
   };
 
@@ -180,13 +181,21 @@ export function board(host: Element, opts: BoardOptions): Board {
       const e = event as MouseEvent;
       return !e.ctrlKey && !e.button;
     });
-    if (xOnly) {
-      const base = z.constrain();
-      z.constrain((t, extent, translateExtent) => {
-        const c = base(t, extent, translateExtent);
-        return new loaded.zoom.ZoomTransform(c.k, c.x, 0);
-      });
-    }
+    // A little room past the edges, so the first and last bar can be pulled
+    // into the middle of the view to be looked at, and no further. The room
+    // is a quarter of the view on screen at every zoom: given in layout
+    // pixels, it would be a quarter of the view at no zoom and thousands of
+    // blank screens at a deep one, with the picture lost somewhere past them.
+    const base = z.constrain();
+    z.constrain((t, extent, inner) => {
+      const sx = ((extent[1][0] - extent[0][0]) * SLACK) / t.k;
+      const sy = xOnly ? 0 : ((extent[1][1] - extent[0][1]) * SLACK) / t.k;
+      const c = base(t, extent, [
+        [inner[0][0] - sx, inner[0][1] - sy],
+        [inner[1][0] + sx, inner[1][1] + sy],
+      ]);
+      return xOnly ? new loaded.zoom.ZoomTransform(c.k, c.x, 0) : c;
+    });
     z.on("zoom", (e: { transform: ZoomTransform }) => {
       current = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
       opts.onZoom(current);

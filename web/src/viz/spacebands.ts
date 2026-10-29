@@ -9,8 +9,11 @@
 // header at a time, and nothing on screen says how the loader puts the file
 // together in memory. Here the file runs down the left column to scale and
 // memory down the right, and a band joins each section's bytes to its
-// addresses, coloured by what the loader lets the program do with it (run
-// it, write it, only read it). A band that fans out is alignment slack; a
+// addresses, coloured by its permissions in memory (executable, writable,
+// read-only), with the `rwx` letters on the band where there is room. An
+// ELF stretch has the permissions of the LOAD segment that maps it, as the
+// loader goes by the program headers; a PE section has its own. A band that
+// fans out is alignment slack; a
 // `.bss` widens out of nothing on the memory side; the section names and
 // debug data have no band, because they are never loaded. The program
 // headers that do the loading are brackets beside both columns.
@@ -22,15 +25,20 @@
 //   one side while the other still shows the whole; the bands then shear,
 //   which is why it is not the default. Each half of the drawing is its own
 //   `board.ts` surface, and in linked mode one follows the other.
-// - Hover shows the one card (`tip.ts`): name, access and flags, the file
-//   offset and size, the address and size, the segment that loads it, and
-//   what a click selects. Hovering a section lights its bytes in the hex view
+// - Hover shows the one card (`tip.ts`): name, permissions and the program
+//   header they are from, the section flags, the file offset and size, the
+//   address and size, and what a click selects. A click selects what the
+//   card names, even where two stretches share a pixel. Hovering a section lights its bytes in the hex view
 //   (`linked.ts`), and the field the cursor is in lights its band.
 // - A click on the file side or a band selects the bytes; on the memory side
 //   it selects the header entry that put the section there (`pick.ts`).
 // - Names sit outside the columns on rows (`placeLabels`), with a leader to
 //   what they name, cut with an ellipsis to fit (`fit.ts`), and dropped where
-//   no row is free; the hover card always has them.
+//   no row is free; the hover card always has them. The `rwx` letters on the
+//   bands are measured the same way and dropped where they would touch.
+// - The wheel and the drag answer only over the columns' height, not over
+//   the column names and readouts above and below it: zooming about a point
+//   outside the picture would push the picture off the drawing.
 //
 // The layout arithmetic is `spacebandslayout.ts`, with its tests. This module
 // reads the Doc (`readPicture`), draws at the size it is given
@@ -52,6 +60,7 @@ import {
   axisAt,
   axisY,
   bandAt,
+  bandEdges,
   bandPath,
   BRACKET_LANE_PX,
   columnsFor,
@@ -134,9 +143,11 @@ function need<T>(reply: TemplateReply<T>): T {
   return reply.node;
 }
 
-function needField(f: Fields, name: string): TemplateNode {
+/** The field `name`, or a `Wait` with `missing`, the reader's words for
+ *  what is not there. */
+function needField(f: Fields, name: string, missing: string): TemplateNode {
   const n = f.get(name);
-  if (n === undefined) throw new Wait({ status: "error", message: `no ${name} field` });
+  if (n === undefined) throw new Wait({ status: "error", message: missing });
   return n;
 }
 
@@ -147,7 +158,7 @@ export function readPicture(doc: Doc): PictureReply {
   try {
     if (doc.template === "elf") return { status: "ok", node: readElf(doc) };
     if (doc.template === "pe") return { status: "ok", node: readPe(doc) };
-    return { status: "error", message: doc.template ?? "no format" };
+    return { status: "error", message: S.missing.format };
   } catch (e) {
     if (e instanceof Wait) return e.reply as PictureReply;
     throw e;
@@ -156,7 +167,7 @@ export function readPicture(doc: Doc): PictureReply {
 
 function readElf(doc: Doc): Picture {
   const root = need(fieldsOf(doc, []));
-  const headerNode = needField(root, "header");
+  const headerNode = needField(root, "header", S.missing.elfHeader);
   const h = need(fieldsOf(doc, headerNode.path));
   const phTable = h.get("program_headers");
   const shTable = h.get("section_headers");
@@ -208,10 +219,10 @@ function readElf(doc: Doc): Picture {
 
 function readPe(doc: Doc): Picture {
   const root = need(fieldsOf(doc, []));
-  const pe = need(fieldsOf(doc, needField(root, "pe").path));
-  const optional = need(fieldsOf(doc, needField(pe, "optional").path));
-  const addresses = need(fieldsOf(doc, needField(optional, "addresses").path));
-  const table = needField(pe, "sections");
+  const pe = need(fieldsOf(doc, needField(root, "pe", S.missing.peHeader).path));
+  const optional = need(fieldsOf(doc, needField(pe, "optional", S.missing.optionalHeader).path));
+  const addresses = need(fieldsOf(doc, needField(optional, "addresses", S.missing.imageBase).path));
+  const table = needField(pe, "sections", S.missing.sectionTable);
   const bodiesNode = pe.get("section_data");
   const bodies = bodiesNode === undefined ? null : doc.templateChildren(bodiesNode.path, 0, Math.min(bodiesNode.child_count, MOST_ENTRIES));
   const sections = need(entriesOf(doc, table)).map((e, index) => {
@@ -270,6 +281,8 @@ const NAME_MIN_CHARS = 4;
 /** The addresses over and under the columns, in the monospace stack. */
 const READOUT_PX = 10;
 const READOUT_MEASURE = monoMeasure();
+/** How thick a band has to be where the letters go for its `rwx` letters. */
+const PERMS_MIN_PX = 14;
 /** How wide one byte may get at the deepest zoom. */
 const MAX_BYTE_PX = 4;
 
@@ -280,7 +293,7 @@ function measurer(): Measure {
 }
 
 function accessClass(a: Access): string {
-  return `sb-${a}`;
+  return `mmap-${a}`;
 }
 
 export type SpaceBandsOptions = {
@@ -331,19 +344,21 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
   const mAxis = memoryAxis(memRanges, length);
   const bigLabelsR = cols.namesR.end - cols.namesR.start >= 90;
 
-  const root = svg("svg", { width, height, class: "sb-svg", role: "img" });
+  const root = svg("svg", { width, height, class: "mmap-svg", role: "img" });
   root.setAttribute("aria-label", S.title);
-  const clipId = `sb-clip-${Math.random().toString(36).slice(2)}`;
+  const clipId = `mmap-clip-${Math.random().toString(36).slice(2)}`;
   const defs = svg("defs");
   const clip = svg("clipPath", { id: clipId });
   clip.append(svg("rect", { x: 0, y: top, width, height: length }));
   defs.append(clip);
-  const plot = svg("g", { "clip-path": `url(#${clipId})`, class: "sb-plot" });
-  const head = svg("g", { class: "sb-head" });
+  const plot = svg("g", { "clip-path": `url(#${clipId})`, class: "mmap-plot" });
+  const head = svg("g", { class: "mmap-head" });
   // Two surfaces for the wheel and the drag, one per half, drawn over
-  // everything so the pictures under them never take the pointer.
-  const hitL = svg("rect", { x: 0, y: 0, width: cols.middle, height, class: "sb-hit" });
-  const hitR = svg("rect", { x: cols.middle, y: 0, width: width - cols.middle, height, class: "sb-hit" });
+  // everything so the pictures under them never take the pointer. They
+  // cover the columns' height only, so the wheel always zooms about a point
+  // of the picture.
+  const hitL = svg("rect", { x: 0, y: top, width: cols.middle, height: length, class: "mmap-hit" });
+  const hitR = svg("rect", { x: cols.middle, y: top, width: width - cols.middle, height: length, class: "mmap-hit" });
   root.append(defs, plot, head, hitL, hitR);
 
   let fileView: View = IDENTITY;
@@ -352,6 +367,10 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
   let hovered: string | null = null;
   const bus = linkedFor(doc);
   let selected: string | null = null;
+  /** What the hover card shows and where the pointer was, so a click there
+   *  selects what the card names. Two stretches can share one pixel at no
+   *  zoom, and a click's position is rounded where the pointer's is not. */
+  let carded: { x: number; y: number; hit: Hit | null } | null = null;
 
   const fy = (byte: number): number => applyY(fileView, top + axisY(fAxis, byte));
   const my = (addr: number): number => applyY(memView, top + axisY(mAxis, addr));
@@ -378,18 +397,18 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     // The columns' ground: the whole file, and each mapped stretch of memory.
     const fileTop = fy(0);
     const fileBot = fy(pic.fileBytes);
-    parts.push(svg("rect", { x: cols.file.start, y: fileTop, width: cols.file.end - cols.file.start, height: Math.max(1, fileBot - fileTop), class: "sb-ground" }));
+    parts.push(svg("rect", { x: cols.file.start, y: fileTop, width: cols.file.end - cols.file.start, height: Math.max(1, fileBot - fileTop), class: "mmap-ground" }));
     for (const p of mAxis.pieces) {
       const y0 = applyY(memView, top + p.y0);
       const y1 = applyY(memView, top + p.y1);
-      parts.push(svg("rect", { x: cols.memory.start, y: y0, width: cols.memory.end - cols.memory.start, height: Math.max(1, y1 - y0), class: "sb-ground" }));
+      parts.push(svg("rect", { x: cols.memory.start, y: y0, width: cols.memory.end - cols.memory.start, height: Math.max(1, y1 - y0), class: "mmap-ground" }));
     }
     // A cut is a zigzag across the memory column at each of its edges.
     for (const c of mAxis.cuts) {
       const y0 = applyY(memView, top + c.y0);
       const y1 = applyY(memView, top + c.y1);
       cutBoxes.push({ x0: cols.memory.start, x1: cols.memory.end, y0, y1, value: c });
-      parts.push(svg("path", { d: zigzag(cols.memory.start - 3, cols.memory.end + 3, y0 + 3) + zigzag(cols.memory.start - 3, cols.memory.end + 3, y1 - 3), class: "sb-cut" }));
+      parts.push(svg("path", { d: zigzag(cols.memory.start - 3, cols.memory.end + 3, y0 + 3) + zigzag(cols.memory.start - 3, cols.memory.end + 3, y1 - 3), class: "mmap-cut" }));
     }
 
     // Bands first, under the boxes they join.
@@ -400,15 +419,16 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       const band: Band = { xa: cols.file.end, xb: cols.memory.start, fa: fy(fileAt.start), fb: fy(fileAt.end), ma: my(r.mem.start), mb: my(r.mem.end) };
       if (Math.max(band.fb, band.mb) < top || Math.min(band.fa, band.ma) > bottom) continue;
       bands.push({ band, region: r });
-      parts.push(svg("path", { d: bandPath(band), class: `sb-band ${accessClass(r.access)}${state(r)}` }));
+      parts.push(svg("path", { d: bandPath(band), class: `mmap-band ${accessClass(r.access)}${state(r)}`, "data-k": r.key }));
     }
+    drawPerms(parts);
     const box = (r: Region, range: Range, x: Range, y: (n: number) => number, into: HitTarget<Region>[]): void => {
       const y0 = y(range.start);
       const y1 = y(range.end);
       if (y1 < top - 2 || y0 > bottom + 2) return;
       into.push({ x0: x.start, x1: x.end, y0, y1, value: r });
       const h = Math.max(1, y1 - y0);
-      parts.push(svg("rect", { x: x.start, y: y0, width: x.end - x.start, height: h, class: `sb-box ${accessClass(r.access)}${h >= 4 ? " has-gap" : ""}${state(r)}` }));
+      parts.push(svg("rect", { x: x.start, y: y0, width: x.end - x.start, height: h, class: `mmap-box ${accessClass(r.access)}${h >= 4 ? " has-gap" : ""}${state(r)}`, "data-k": r.key }));
     };
     for (const r of pic.regions) {
       if (r.file !== null) box(r, r.file, cols.file, fy, fileBoxes);
@@ -424,7 +444,7 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
         // Lane 0 sits against the column; later lanes step outward.
         const x = outward === 1 ? strip.start + 1 + lane * BRACKET_LANE_PX : strip.end - 1 - (lane + 1) * BRACKET_LANE_PX;
         bracketBoxes.push({ x0: x, x1: x + BRACKET_LANE_PX - 1, y0, y1, value: s });
-        parts.push(svg("rect", { x, y: y0, width: BRACKET_LANE_PX - 2, height: Math.max(1, y1 - y0), class: `sb-bracket ${accessClass(s.access)}${state(s)}` }));
+        parts.push(svg("rect", { x, y: y0, width: BRACKET_LANE_PX - 2, height: Math.max(1, y1 - y0), class: `mmap-bracket ${accessClass(s.access)}${state(s)}`, "data-k": s.key }));
       };
       bracket(s.file, cols.stripL, fileLanes.lane[i] ?? 0, -1, fy);
       bracket(s.mem, cols.stripR, memLanes.lane[i] ?? 0, 1, my);
@@ -432,6 +452,29 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     drawNames(parts);
     plot.replaceChildren(...parts);
     drawHead();
+  };
+
+  /** The `rwx` letters across the middle of each band thick enough to hold
+   *  them, dropped where they would touch letters already placed. */
+  const drawPerms = (parts: SVGElement[]): void => {
+    const x = (cols.file.end + cols.memory.start) / 2;
+    const placed: { y0: number; y1: number }[] = [];
+    for (const { band, region } of bands) {
+      if (region.perms === null) continue;
+      const w = READOUT_MEASURE(region.perms, READOUT_PX);
+      if (w > cols.memory.start - cols.file.end - 8) continue;
+      const e = bandEdges(band, x);
+      const y0 = Math.max(top, e.top);
+      const y1 = Math.min(bottom, e.bottom);
+      if (y1 - y0 < PERMS_MIN_PX) continue;
+      const y = (y0 + y1) / 2;
+      const box = { y0: y - READOUT_PX / 2 - 1, y1: y + READOUT_PX / 2 + 1 };
+      if (placed.some((p) => box.y0 < p.y1 && box.y1 > p.y0)) continue;
+      placed.push(box);
+      const t = svg("text", { x, y, "text-anchor": "middle", "dominant-baseline": "central", class: "mmap-perms" });
+      t.textContent = region.perms;
+      parts.push(t);
+    }
   };
 
   /** Names on rows beside both columns, each with a leader to its box. */
@@ -449,8 +492,8 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       if (text === null) return;
       const at = visible(b.y0, b.y1);
       namesL.push({ x0: cols.namesL.start, x1: cols.stripL.start, y0: row - ROW_H / 2, y1: row + ROW_H / 2, value: b.value });
-      parts.push(svg("path", { d: `M${cols.namesL.end + 2},${row}L${cols.stripL.start - 1},${at}L${cols.file.start},${at}`, class: `sb-leader${state(b.value)}` }));
-      const t = svg("text", { x: cols.namesL.end, y: row, "text-anchor": "end", "dominant-baseline": "central", class: `sb-name${state(b.value)}` });
+      parts.push(svg("path", { d: `M${cols.namesL.end + 2},${row}L${cols.stripL.start - 1},${at}L${cols.file.start},${at}`, class: `mmap-leader${state(b.value)}`, "data-k": b.value.key }));
+      const t = svg("text", { x: cols.namesL.end, y: row, "text-anchor": "end", "dominant-baseline": "central", class: `mmap-name${state(b.value)}`, "data-k": b.value.key });
       t.textContent = text;
       parts.push(t);
     });
@@ -481,9 +524,10 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       if (text === null) return;
       const at = visible(r.y0, r.y1);
       const st = isCut ? "" : state(r.value as Region);
+      const k = isCut ? "" : (r.value as Region).key;
       namesR.push({ x0: cols.memory.end, x1: cols.namesR.end, y0: row - ROW_H / 2, y1: row + ROW_H / 2, value: r.value });
-      parts.push(svg("path", { d: `M${cols.memory.end},${at}L${cols.stripR.end + 1},${at}L${cols.namesR.start - 2},${row}`, class: `sb-leader${st}` }));
-      const t = svg("text", { x: cols.namesR.start, y: row, "dominant-baseline": "central", class: `sb-name${isCut ? " is-cut" : ""}${st}` });
+      parts.push(svg("path", { d: `M${cols.memory.end},${at}L${cols.stripR.end + 1},${at}L${cols.namesR.start - 2},${row}`, class: `mmap-leader${st}`, "data-k": k }));
+      const t = svg("text", { x: cols.namesR.start, y: row, "dominant-baseline": "central", class: `mmap-name${isCut ? " is-cut" : ""}${st}`, "data-k": k });
       t.textContent = text;
       parts.push(t);
     });
@@ -497,8 +541,8 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       t.textContent = s;
       parts.push(t);
     };
-    text(cols.file.end, 12, S.fileHead, "end", "sb-colhead");
-    text(cols.memory.start, 12, S.memoryHead, "start", "sb-colhead");
+    text(cols.file.end, 12, S.fileHead, "end", "mmap-colhead");
+    text(cols.memory.start, 12, S.memoryHead, "start", "mmap-colhead");
     const fileFrom = Math.max(0, axisAt(fAxis, invertY(fileView, top) - top).at);
     const fileTo = Math.min(pic.fileBytes, axisAt(fAxis, invertY(fileView, bottom) - top).at);
     const memFrom = axisAt(mAxis, invertY(memView, top) - top).at;
@@ -510,14 +554,14 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     const fileReadout = (s: string, y: number): number => {
       const w = READOUT_MEASURE(s, READOUT_PX);
       if (cols.file.end - w < 0) return 0;
-      text(cols.file.end, y, s, "end", "sb-readout");
+      text(cols.file.end, y, s, "end", "mmap-readout");
       return cols.file.end;
     };
     const memReadout = (s: string, y: number, after: number): void => {
       const w = READOUT_MEASURE(s, READOUT_PX);
       const x = Math.min(cols.memory.start, width - w);
       if (x < after + 6) return;
-      text(x, y, s, "start", "sb-readout");
+      text(x, y, s, "start", "mmap-readout");
     };
     const topEnd = fileReadout(formatOffset(Math.floor(fileFrom) * 8), 28);
     const footEnd = fileReadout(formatOffset(Math.ceil(fileTo) * 8), height - 5);
@@ -569,6 +613,8 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     following = false;
   };
   const onZoom = (side: "file" | "memory") => (v: View): void => {
+    // What the card showed is no longer under the pointer.
+    carded = null;
     if (!following) lastSide = side;
     if (side === "file") fileView = v;
     else memView = v;
@@ -629,12 +675,6 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     return "key" in named ? { kind: "region", region: named, side: "memory" } : { kind: "cut", cut: named };
   };
 
-  /** The LOAD segment a region's file bytes are in, for the hover card. */
-  const segmentOf = (r: Region): Region | null =>
-    r.kind === "segment" || r.file === null
-      ? null
-      : (pic.segments.find((s) => s.name.startsWith("load") && s.file !== null && r.file !== null && r.file.start >= s.file.start && r.file.end <= s.file.end) ?? null);
-
   const card = (hit: Hit): HTMLElement => {
     if (hit.kind === "cut") {
       const c = hit.cut;
@@ -643,7 +683,11 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     if (hit.kind === "file-at") return tipCard(formatOffset(Math.floor(hit.at) * 8), [S.noSection]);
     if (hit.kind === "memory-at") return tipCard(addressText(hit.at), [S.noSection]);
     const r = hit.region;
-    const lines = [S.flags(S.access[r.access], r.flags)];
+    const lines: string[] = [];
+    if (r.perms !== null) {
+      lines.push(r.grant !== null ? S.permsFrom(r.perms, r.grant.index, r.grant.type.toUpperCase()) : r.kind === "section" && pic.segments.length > 0 ? S.permsFromFlags(r.perms) : S.perms(r.perms));
+    }
+    if (r.flags !== "") lines.push(S.sectionFlags(r.flags));
     if (r.file !== null) lines.push(S.inFile(formatOffset(r.file.start * 8), sizeText(r.file.end - r.file.start)));
     else if (r.mem !== null) lines.push(S.noFileBytes);
     if (r.mem !== null) {
@@ -651,35 +695,40 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
       const size = sizeText(r.mem.end - r.mem.start);
       lines.push(r.imageBase !== null ? S.inMemoryRva(at, size, addressText(r.mem.start - r.imageBase)) : S.inMemory(at, size));
     } else lines.push(S.notLoaded);
-    const seg = segmentOf(r);
-    if (seg !== null) lines.push(S.inSegment(seg.name));
     const side = hit.kind === "segment" ? "memory" : hit.side;
     const where = side === "memory" && r.entryKind !== null ? S.click[r.entryKind] : r.file !== null ? S.click.bytes : r.entryKind !== null ? S.click[r.entryKind] : "";
     return tipCard(r.name, lines, where);
   };
 
+  /** Light the hovered region's parts by their class, without drawing the
+   *  picture again: a file with thousands of sections redraws slowly. */
+  const relight = (key: string | null): void => {
+    if (key === hovered) return;
+    const was = hovered;
+    hovered = key;
+    for (const k of [was, key]) {
+      if (k === null) continue;
+      for (const el of plot.querySelectorAll(`[data-k="${CSS.escape(k)}"]`)) el.classList.toggle("is-hover", k === key && k !== selected);
+    }
+  };
+
   const stopTip = hoverTip(root, (e) => {
     const { x, y } = pointAt(e);
     const hit = hitAt(x, y);
+    carded = { x, y, hit };
     const region = hit !== null && (hit.kind === "region" || hit.kind === "segment") ? hit.region : null;
-    const key = region?.key ?? null;
     bus.publish({ hover: region?.file != null ? { startBit: region.file.start * 8, endBit: region.file.end * 8 } : null });
-    if (key !== hovered) {
-      hovered = key;
-      draw();
-    }
+    relight(region?.key ?? null);
     return hit === null ? null : card(hit);
   });
   root.addEventListener("pointerleave", () => {
+    carded = null;
     bus.publish({ hover: null });
-    if (hovered !== null) {
-      hovered = null;
-      draw();
-    }
+    relight(null);
   });
   root.addEventListener("click", (e) => {
     const { x, y } = pointAt(e);
-    const hit = hitAt(x, y);
+    const hit = carded !== null && Math.abs(carded.x - x) <= 1 && Math.abs(carded.y - y) <= 1 ? carded.hit : hitAt(x, y);
     if (hit === null || (hit.kind !== "region" && hit.kind !== "segment")) return;
     const r = hit.region;
     const side = hit.kind === "segment" ? "memory" : hit.side;
@@ -731,10 +780,14 @@ function zigzag(x0: number, x1: number, y: number): string {
 
 // ----- the rail's panel -----
 
-/** The least and most height the drawing takes in the rail, which scrolls:
- *  enough rows for every name at no zoom, within reason. */
-const RAIL_MIN_H = 420;
+/** The least and most height the drawing takes in the rail. It takes the
+ *  room left in the window under it, so its foot is in view without
+ *  scrolling the rail, and never less than the least, where the rail
+ *  scrolls instead. */
+const RAIL_MIN_H = 300;
 const RAIL_MAX_H = 900;
+/** Room kept under the drawing, in the rail. */
+const RAIL_FOOT_PX = 12;
 
 class SpaceBandsPanel implements OverviewTabPanel {
   readonly el: HTMLElement;
@@ -752,14 +805,18 @@ class SpaceBandsPanel implements OverviewTabPanel {
   private picLength = -1;
   private drawn: SpaceBands | null = null;
   private retry = 0;
+  /** Draws again at the window's new size, while the drawing fills it. */
+  private readonly onWindowResize = (): void => {
+    if (this.big) this.render();
+  };
 
   constructor(private readonly doc: Doc, width: number) {
     this.width = width;
     this.el = document.createElement("section");
-    this.el.className = "sb-panel";
+    this.el.className = "mmap-panel";
     this.el.tabIndex = -1;
     const bar = document.createElement("div");
-    bar.className = "sb-bar";
+    bar.className = "mmap-bar";
     const title = document.createElement("h3");
     title.textContent = S.title;
     this.reset = document.createElement("button");
@@ -775,7 +832,7 @@ class SpaceBandsPanel implements OverviewTabPanel {
     bar.append(title, this.reset, this.grow);
 
     const link = document.createElement("label");
-    link.className = "sb-link";
+    link.className = "mmap-link";
     link.title = S.linkedTitle;
     this.linkBox = document.createElement("input");
     this.linkBox.type = "checkbox";
@@ -787,11 +844,11 @@ class SpaceBandsPanel implements OverviewTabPanel {
     link.append(this.linkBox, document.createTextNode(` ${S.linked}`));
 
     this.summary = document.createElement("p");
-    this.summary.className = "sb-summary";
+    this.summary.className = "mmap-summary";
     this.legend = document.createElement("div");
-    this.legend.className = "sb-legend";
+    this.legend.className = "mmap-legend";
     this.figure = document.createElement("div");
-    this.figure.className = "sb-figure";
+    this.figure.className = "mmap-figure";
     this.el.append(bar, this.summary, this.legend, link, this.figure);
     this.setGrowLabel();
     this.el.addEventListener("keydown", (e) => {
@@ -799,9 +856,6 @@ class SpaceBandsPanel implements OverviewTabPanel {
         e.stopPropagation();
         this.setBig(false);
       }
-    });
-    window.addEventListener("resize", () => {
-      if (this.big) this.render();
     });
   }
 
@@ -848,15 +902,12 @@ class SpaceBandsPanel implements OverviewTabPanel {
     const pic = this.pic;
     if (pic === null) return;
     const counts = sectionCounts(pic.regions);
-    this.summary.replaceChildren(S.summary(counts.total, counts.loaded, counts.fileOnly.map((r) => r.name), counts.memOnly.map((r) => r.name)));
-    if (counts.loaded === 0) {
-      this.summary.append(document.createElement("br"), S.nothingLoaded);
-    }
+    this.summary.replaceChildren(S.summary(counts.loaded, counts.fileOnly.map((r) => r.name), counts.memOnly.map((r) => r.name)));
     const memRanges = [...pic.regions, ...pic.segments].flatMap((r) => (r.mem === null ? [] : [r.mem]));
     const cuts = memoryAxis(memRanges, 1000).cuts;
     if (cuts.length > 0) {
       const note = document.createElement("span");
-      note.className = "sb-note";
+      note.className = "mmap-note";
       note.textContent = S.cutNote(formatBytes(cuts.reduce((n, c) => n + (c.end - c.start), 0)));
       this.summary.append(document.createElement("br"), note);
     }
@@ -865,15 +916,18 @@ class SpaceBandsPanel implements OverviewTabPanel {
     this.legend.replaceChildren(
       ...ACCESS_ORDER.filter((a) => used.has(a)).map((a) => {
         const item = document.createElement("span");
-        item.className = "sb-key";
+        item.className = "mmap-key";
         const swatch = document.createElement("i");
-        swatch.className = `sb-swatch ${accessClass(a)}`;
+        swatch.className = `mmap-swatch ${accessClass(a)}`;
         item.append(swatch, S.access[a]);
         return item;
       }),
     );
     let width = this.width;
-    let height = Math.max(RAIL_MIN_H, Math.min(RAIL_MAX_H, pic.regions.length * ROW_H * 1.6 + HEAD_H + FOOT_H));
+    const wanted = pic.regions.length * ROW_H * 1.6 + HEAD_H + FOOT_H;
+    // The figure is in the page by now, with the summary and key over it.
+    const room = this.figure.isConnected ? window.innerHeight - this.figure.getBoundingClientRect().top - RAIL_FOOT_PX : RAIL_MAX_H;
+    let height = Math.max(RAIL_MIN_H, Math.min(RAIL_MAX_H, wanted, room));
     if (this.big) {
       width = Math.floor(this.figure.clientWidth);
       height = Math.floor(this.figure.clientHeight);
@@ -890,7 +944,11 @@ class SpaceBandsPanel implements OverviewTabPanel {
 
   private setBig(big: boolean): void {
     this.big = big;
-    this.el.classList.toggle("sb-big", big);
+    // Listened for only while big, so a panel the rail has let go of keeps
+    // no listener on the window.
+    if (big) window.addEventListener("resize", this.onWindowResize);
+    else window.removeEventListener("resize", this.onWindowResize);
+    this.el.classList.toggle("mmap-big", big);
     this.setGrowLabel();
     if (big) this.el.focus();
     this.render();

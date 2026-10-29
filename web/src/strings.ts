@@ -4024,34 +4024,57 @@ export const VIZ = {
     title: "Sections in the file and in memory",
     fileHead: "File",
     memoryHead: "Memory",
-    /** The colour key. Each name is the access the loader gives a stretch. */
+    /** The colour key: the permissions a stretch has in memory. */
     access: {
-      exec: "Code",
-      "write-exec": "Writable code",
-      write: "Writable data",
-      read: "Read-only data",
+      exec: "Executable",
+      "write-exec": "Writable and executable",
+      write: "Writable",
+      read: "Read-only",
       unloaded: "Not loaded",
+    },
+    /** Names of the stretches that are not sections. */
+    names: {
+      elfHeader: "ELF header",
+      programHeaderTable: "Program header table",
+      sectionHeaderTable: "Section header table",
+      peHeaders: "Headers",
+      overlay: "Data after the last section",
+      /** A section with no name, by its index in the section table. */
+      section: (index: number): string => `Section ${index}`,
+      /** A program header by its index from 0 and its type, as `LOAD`. */
+      programHeader: (index: number, type: string): string => `Program header ${index} (${type})`,
     },
     /** The sentence over the drawing. `fileOnly` and `memoryOnly` are section
      *  names; a long list is cut to its first few and a count. */
-    summary: (total: number, loaded: number, fileOnly: readonly string[], memoryOnly: readonly string[]): string => {
+    summary: (loaded: number, fileOnly: readonly string[], memoryOnly: readonly string[]): string => {
       const names = (list: readonly string[]): string =>
         list.length <= 4 ? list.join(", ") : `${list.slice(0, 3).join(", ")} and ${(list.length - 3).toLocaleString()} more`;
-      const parts = [`${loaded.toLocaleString()} of ${countText(total, "section")} loaded into memory.`];
-      if (fileOnly.length > 0) parts.push(`In the file only: ${names(fileOnly)}.`);
+      const parts = [loaded === 0 ? "No section is loaded into memory." : `Loaded into memory: ${countText(loaded, "section")}.`];
+      if (fileOnly.length > 0 && loaded > 0) parts.push(`In the file only: ${names(fileOnly)}.`);
       if (memoryOnly.length > 0) parts.push(`No bytes in the file: ${names(memoryOnly)}.`);
       return parts.join(" ");
     },
     /** Under the summary, when long gaps of unmapped addresses are cut out of
      *  the memory column. */
-    cutNote: (bytes: string): string => `Not to scale at the zigzag: ${bytes} of unmapped addresses are left out of the memory column.`,
+    cutNote: (bytes: string): string => `The memory column skips ${bytes} of unmapped addresses at the zigzag marks.`,
     linked: "Zoom both columns together",
     linkedTitle: "When off, the wheel zooms only the column under the pointer",
     reading: "Reading the section table…",
-    nothingLoaded: "No section in this file has a memory address.",
-    failed: (message: string): string => `Could not read the section table: ${message}`,
-    /** Hover card lines. */
-    flags: (access: string, flags: string): string => (flags === "" ? access : `${access} · flags: ${flags}`),
+    failed: (message: string): string => `Could not read the headers: ${message}`,
+    /** Why the headers could not be read, after `failed`. */
+    missing: {
+      elfHeader: "the ELF header is missing",
+      peHeader: "the PE header is missing",
+      optionalHeader: "the PE optional header is missing",
+      imageBase: "the PE optional header has no image base",
+      sectionTable: "the PE section table is missing",
+      format: "not an ELF or PE file",
+    },
+    /** Hover card lines. `perms` is three letters, as `r-x`. */
+    perms: (perms: string): string => `Permissions: ${perms}`,
+    permsFrom: (perms: string, index: number, type: string): string => `Permissions: ${perms}, from program header ${index} (${type})`,
+    permsFromFlags: (perms: string): string => `Permissions: ${perms}, from the section flags`,
+    sectionFlags: (flags: string): string => `Section flags: ${flags}`,
     inFile: (at: string, size: string): string => `File: ${at}, ${size}`,
     noFileBytes: "File: no bytes, filled with zeros when loaded",
     inMemory: (at: string, size: string): string => `Memory: ${at}, ${size}`,
@@ -4059,7 +4082,6 @@ export const VIZ = {
      *  which is the number the section table states. */
     inMemoryRva: (at: string, size: string, rva: string): string => `Memory: ${at} (RVA ${rva}), ${size}`,
     notLoaded: "Memory: not loaded",
-    inSegment: (segment: string): string => `Segment: ${segment}`,
     noSection: "Not in any section",
     unmapped: "Unmapped addresses",
     unmappedRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,
