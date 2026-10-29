@@ -14,6 +14,7 @@ import {
   columnTicks,
   followZoom,
   greyLevel,
+  inkOn,
   MAX_CELL_PX,
   MAX_STRIDE,
   maxZoom,
@@ -162,6 +163,13 @@ test("a range in one row is a box, and one across rows is one outline", () => {
   assert.deepEqual(across[0], { col: 10, row: 0 });
   assert.deepEqual(across[3], { col: 8, row: 2 });
   assert.deepEqual(rangeOutline(16, 5, 5), []);
+});
+
+test("hex digits are black on light cells and white on dark ones", () => {
+  assert.equal(inkOn([255, 255, 255]), "black");
+  assert.equal(inkOn([20, 20, 20]), "white");
+  assert.equal(inkOn([0x90, 0x90, 0x90]), "black");
+  assert.equal(inkOn([0x60, 0x60, 0x60]), "white");
 });
 
 // ----- the row width a template suggests -----

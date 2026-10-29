@@ -46,6 +46,7 @@ import { registerOverviewTab, type OverviewTabPanel } from "./overviewtabs.ts";
 import { periodicity, type Peak, type PeriodicityRequest, type PeriodicityResult } from "./periodicity.ts";
 import { goToBits } from "./pick.ts";
 import {
+  byteKind,
   clampStride,
   clampTopRow,
   columnAt,
@@ -53,6 +54,7 @@ import {
   columnX,
   followZoom,
   greyLevel,
+  inkOn,
   MAX_STRIDE,
   maxZoom,
   OTHER,
@@ -581,6 +583,15 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
       ctx.font = `${Math.min(11, Math.floor(rowH * 0.7))}px ${getComputedStyle(document.body).getPropertyValue("--mono") || "monospace"}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      // The colour each byte's cell was drawn in, for the digit's ink.
+      const cellColour = (v: number): Rgb => {
+        if (state.mode === "kind") {
+          const k = byteKind(v);
+          return k === OTHER ? c.other : k === TEXT ? c.text : c.zero;
+        }
+        const l = v === 0 ? zeroCell : greyLevel(v, c.dark, c.bg[0]);
+        return [l, l, l];
+      };
       const c0 = Math.max(0, Math.floor(columnAt(g, view, 0)));
       const c1 = Math.min(g.stride, Math.ceil(columnAt(g, view, g.width)));
       for (let r = firstRow; r <= lastRow; r++) {
@@ -589,8 +600,7 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
         const y = rowY(rowH, topRow, r) + rowH / 2;
         for (let col = c0; col < Math.min(c1, got.bytes.length); col++) {
           const v = got.bytes[col] as number;
-          const fill = state.mode === "value" ? (Math.abs(greyLevel(v, c.dark, c.bg[0]) - (c.dark ? 240 : 20)) < 110 ? rgbText(c.bg) : c.fg) : c.fg;
-          ctx.fillStyle = fill;
+          ctx.fillStyle = inkOn(cellColour(v)) === "black" ? "#000" : "#fff";
           ctx.fillText(v.toString(16).padStart(2, "0"), columnX(g, view, col) + cw / 2, y);
         }
       }

@@ -303,3 +303,18 @@ export function rangeOutline(stride: number, a: number, b: number): { readonly c
     { col: c0, row: r0 + 1 },
   ];
 }
+
+/**
+ * Whether text on a cell of this colour should be black or white: whichever
+ * contrasts more. The two are equal at a relative luminance of about 0.18,
+ * a mid grey near 0x76, so a hex digit on any grey of the ramp is at least
+ * 4.5:1 from its cell.
+ */
+export function inkOn(rgb: readonly [number, number, number]): "black" | "white" {
+  const lin = (c: number): number => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  const l = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+  return (l + 0.05) / 0.05 >= 1.05 / (l + 0.05) ? "black" : "white";
+}
