@@ -36,7 +36,7 @@
 import type { Doc, TemplateNode } from "../doc.ts";
 import { fieldClass, sectionColor } from "../fieldstyle.ts";
 import { rangeWords, shareWords } from "../filemap.ts";
-import { bitSizeText, childWord, countText, VIZ } from "../strings.ts";
+import { bitSizeText, childWord, countText, LOCATOR, VIZ } from "../strings.ts";
 import { crumbLabelAt, trailItems } from "../trail.ts";
 import { board, type Board } from "./board.ts";
 import { applyX, invertX, type View } from "./boardmath.ts";
@@ -185,7 +185,7 @@ function frame(host: HTMLElement): HTMLButtonElement {
   head.className = "viz-strip-head";
   const title = document.createElement("span");
   title.className = "viz-strip-title";
-  title.textContent = VIZ.locator.title;
+  title.textContent = LOCATOR.title;
   const reset = document.createElement("button");
   reset.type = "button";
   reset.className = "viz-reset";
@@ -288,7 +288,7 @@ export function drawZoomStack(doc: Doc, data: ZoomStackData, opts: { readonly wi
     caption.className = "viz-stack-caption";
     // The levels a deep path leaves out are between the first strip and the
     // second, and said in the second's caption.
-    const said = j === 1 && data.skipped > 0 ? VIZ.locator.levelsNotDrawn(data.skipped, strip.label) : strip.label;
+    const said = j === 1 && data.skipped > 0 ? LOCATOR.levelsNotDrawn(data.skipped, strip.label) : strip.label;
     const more = level.parent.child_count > strip.kids.length && level.parent.child_count > MAX_CHILDREN;
     caption.textContent = more ? `${said} · ${VIZ.childStrip.firstOf(MAX_CHILDREN, level.parent.child_count, childWord(level.parent))}` : said;
     caption.style.height = `${CAPTION_H}px`;
@@ -338,9 +338,9 @@ export function drawZoomStack(doc: Doc, data: ZoomStackData, opts: { readonly wi
       if (u === null) return null;
       const s = where(u);
       const share = shareWords(s.sizeBits, level.parent.size_bits);
-      const shareLine = share !== "" ? [VIZ.locator.shareOf(share, strip.label)] : [];
+      const shareLine = share !== "" ? [LOCATOR.shareOf(share, strip.label)] : [];
       const range = `${rangeWords(s, level.parent.space)} · ${bitSizeText(s.sizeBits)}`;
-      if (!("kid" in u)) return tipCard(VIZ.locator.notInAnyField, [range, ...shareLine]);
+      if (!("kid" in u)) return tipCard(LOCATOR.notInAnyField, [range, ...shareLine]);
       const kid = u.kid;
       const value = kid.composite ? countText(kid.child_count, childWord(kid)) : kid.value;
       return tipCard(kid.name, [`${kid.type} · ${value}`, range, ...shareLine]);
@@ -409,7 +409,7 @@ function stackSection(doc: Doc, path: readonly number[], width: number): HTMLEle
   frame(host);
   const line = document.createElement("p");
   line.className = "viz-stack-reading";
-  line.textContent = VIZ.locator.reading;
+  line.textContent = LOCATOR.reading;
   host.append(line);
   const started = Date.now();
   let shown = false;

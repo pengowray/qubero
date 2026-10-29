@@ -4000,6 +4000,30 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
   return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
 }
 
+/** The file map strips (`filemap.ts`), the bars under the inspector's
+ *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`).
+ *  Its own block rather than a key of `VIZ`, whose end every batch piece
+ *  appends to. */
+export const LOCATOR = {
+  /** Hover card title over bytes that none of the fields the strip is
+   *  drawn from covers: the gaps between a PDF's objects. */
+  notInAnyField: "Bytes not in any field",
+  /** Hover card line: the part's share of the whole file. */
+  shareOfFile: (share: string): string => `${share} of the file`,
+  /** Hover card line: a field's share of the structure it is in, named as
+   *  the inspector's trail names it (`entries[3]`, `file (ZIP)`). */
+  shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
+  /** The At cursor section heading. */
+  title: "Position in the file",
+  /** Under the heading while the structures on the way down to the field
+   *  are still being read. */
+  reading: "Reading the fields…",
+  /** Caption of the second strip of a deep path, when the strips of the
+   *  structures between it and the first are left out. Counts strips, not
+   *  the trail's crumbs. */
+  levelsNotDrawn: (n: number, name: string): string => `${name} (${n} ${n === 1 ? "level" : "levels"} above it not drawn)`,
+} as const;
+
 /** The diagram pieces in `viz/`, starting with the example piece every batch
  *  piece is modelled on (`viz/childstrip.ts`). Each piece adds its own block
  *  of words under its own key, so two pieces never edit the same lines. */
@@ -4014,26 +4038,5 @@ export const VIZ = {
      *  The noun is the structure's own word for them: fields, items, chunks. */
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
-  },
-  /** The file map strips (`filemap.ts`), the bars under the inspector's
-   *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`). */
-  locator: {
-    /** Hover card title over bytes that none of the fields the strip is
-     *  drawn from covers: the gaps between a PDF's objects. */
-    notInAnyField: "Bytes not in any field",
-    /** Hover card line: the part's share of the whole file. */
-    shareOfFile: (share: string): string => `${share} of the file`,
-    /** Hover card line: a field's share of the structure it is in, named as
-     *  the inspector's trail names it (`entries[3]`, `file (ZIP)`). */
-    shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
-    /** The At cursor section heading. */
-    title: "Position in the file",
-    /** Under the heading while the structures on the way down to the field
-     *  are still being read. */
-    reading: "Reading the fields…",
-    /** Caption of the second strip of a deep path, when the strips of the
-     *  structures between it and the first are left out. Counts strips, not
-     *  the trail's crumbs. */
-    levelsNotDrawn: (n: number, name: string): string => `${name} (${n} ${n === 1 ? "level" : "levels"} above it not drawn)`,
   },
 } as const;

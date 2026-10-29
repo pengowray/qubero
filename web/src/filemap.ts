@@ -39,7 +39,7 @@ import type { Doc, TemplateNode } from "./doc.ts";
 import { crumbLabelAt, trailItems, type TrailPlace } from "./trail.ts";
 import { sectionColor } from "./fieldstyle.ts";
 import { formatAddress, percentText } from "./format.ts";
-import { bitSizeText, VIZ } from "./strings.ts";
+import { bitSizeText, LOCATOR } from "./strings.ts";
 import {
   bitInCell,
   cellAt,
@@ -331,7 +331,7 @@ function holeAround(drawn: Drawn, bit: number): Stretch {
 }
 
 function cardFor(drawn: Drawn, hit: { part: number; bit: number }): HTMLElement {
-  const words = VIZ.locator;
+  const words = LOCATOR;
   const seg = hit.part >= 0 ? (drawn.segments[hit.part] as MapSegment) : null;
   const s: Stretch = seg ?? holeAround(drawn, hit.bit);
   const share = shareWords(s.sizeBits, drawn.totalBits);
@@ -421,7 +421,7 @@ export function crumbBar(crumb: HTMLElement, label: string, place: TrailPlace): 
   bar.append(lit);
   const card = (): HTMLElement => {
     const where: Stretch = { offsetBits: place.offsetBits, sizeBits: place.sizeBits };
-    return tipCard(label, [`${rangeOf(where, place.space)} · ${bitSizeText(place.sizeBits)}`, VIZ.locator.shareOf(shareWords(place.sizeBits, place.parentBits), place.parent)]);
+    return tipCard(label, [`${rangeOf(where, place.space)} · ${bitSizeText(place.sizeBits)}`, LOCATOR.shareOf(shareWords(place.sizeBits, place.parentBits), place.parent)]);
   };
   crumb.classList.add("has-bar");
   crumb.append(bar);
