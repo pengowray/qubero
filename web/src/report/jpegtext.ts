@@ -41,20 +41,11 @@ export const JPEG = {
   ledeRestart: (n: number): string => (n === 1 ? " A restart marker follows every MCU." : ` A restart marker follows every ${n} MCUs.`),
 
   // ----- the map -----
-  pictureLabel: "The picture",
-  mapLabel: "Bits per MCU",
-  mapAlt: (across: number, down: number): string => `A map of ${across} by ${down} MCUs, each shaded by the bits it takes`,
-  /** A class of the legend: `0–99`. */
-  legendClass: (from: number, to: number): string => `${from.toLocaleString()}–${to.toLocaleString()}`,
   captionLead: (x: number, y: number, max: number, median: number): string =>
     `MCU ${x}, ${y} costs the most: ${bitCount(max)}, against a median of ${median.toLocaleString()}.`,
   caption:
     "Each square is one MCU, shaded by the bits its codes take. An interval's padding and restart marker count in the MCU before them. " +
     "Hover an MCU for its numbers, and click it to trace its blocks below.",
-  tipHead: (x: number, y: number): string => `MCU ${x}, ${y}`,
-  tipBits: (bits: number, whole: number): string => `${bitCount(bits)}, ${share(bits, whole)} of the scan`,
-  tipChannel: (channel: string, bits: number, blocks: number): string =>
-    `${channel}: ${bitCount(bits)} in ${counted(blocks, "block")}`,
   coarse: (n: number, limit: number): string =>
     `Qubero lists the first ${limit.toLocaleString()} Huffman codes one by one. ` +
     (n === 1 ? "The last block is past that limit, so the walkthrough cannot show its codes. " : `The last ${n.toLocaleString()} blocks are past that limit, so the walkthrough cannot show their codes. `) +

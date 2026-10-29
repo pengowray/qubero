@@ -449,6 +449,27 @@ pub enum Expr {
     /// The distance stops before the needle, so the word belongs to whatever
     /// is declared next rather than to the run before it.
     Find { needle: Vec<u8>, last: bool },
+    /// How far it is from here to where a needle made partly of the file's
+    /// own text is written next, in bytes, or to the end of the container
+    /// when it is not written again: the bytes `before`, then the text `text`
+    /// reaches, then the bytes `after`. See [`FindText`].
+    ///
+    /// `Find` looks for a word the template fixes. A format that names its
+    /// own terminator in the file needs to look for a word the file fixes. A
+    /// MIME message says in its `Content-Type` header what line separates its
+    /// parts, `boundary="b1_9f3c"`, and the parts end where `--b1_9f3c` is
+    /// written next at the start of a line. No template can name those bytes,
+    /// since each message picks its own.
+    ///
+    /// The text is read the way text is read anywhere else (see
+    /// [`Expr::StartOf`] for what it may land on), and turned into the bytes
+    /// searched for as UTF-8. A text that reaches nothing, or reaches an
+    /// empty field, is a needle nobody wrote, and the search measures to the
+    /// end of its container as a search that found nothing does.
+    ///
+    /// Behind a pointer for the reason [`Expr::Tagged`] is: two runs of bytes
+    /// and an expression held in place would widen every expression there is.
+    FindText(Arc<FindText>),
     /// How far the run of bytes starting here goes, in bytes: while each byte
     /// is one of `chars`, or with `negate`, while each byte is not one of
     /// them. Zero when the first byte already fails the test, and the whole
@@ -734,6 +755,21 @@ pub enum Expr {
     /// inside: that number is `value`, and a template wanting it should ask
     /// for it there instead of for the words around it.
     Words { pattern: Arc<str>, value: Box<Expr> },
+    /// The text the expression inside reaches, in lower case and with the
+    /// blanks at either end taken off: what a word is compared as where case
+    /// does not matter.
+    ///
+    /// A [`Ty::Match`] compares text exactly, which is right for a format
+    /// that spells its words one way. MIME spells none of them one way: a
+    /// header says `multipart/mixed`, `Multipart/Mixed` or `MULTIPART/MIXED`,
+    /// and `Content-Transfer-Encoding: base64` is sometimes written with a
+    /// space after the word. Matching `lower(...)` against cases written in
+    /// lower case takes all of them.
+    ///
+    /// ASCII letters only, since every word a format compares this way is
+    /// ASCII. Text in the only sense: asked for as a number it fails, as
+    /// [`Expr::Words`] does.
+    Lower(Box<Expr>),
     /// Two to an integer power, which is as often negative as not: a GRIB
     /// value's binary scale factor is -5 as readily as 5. A real, and not a
     /// shift, since two to the minus five is a fraction. In a whole number it
@@ -841,6 +877,32 @@ pub enum Tag {
     /// wherever the writer put it, so `ARCHIVE_ID_PSF` is followed by one
     /// blank in one card and by none in the next. See [`Expr::tagged_text`].
     Text(String),
+    /// Text the template fixed, compared as [`Tag::Text`] is but without
+    /// regard to the case of ASCII letters: written here in lower case.
+    ///
+    /// What a format whose names are case-insensitive needs. RFC 5322 says a
+    /// header field's name is, and `Content-type:` is as common in mail as
+    /// `Content-Type:`; a MIME parameter's name is too, so `Boundary=` is the
+    /// same parameter as `boundary=`.
+    ///
+    /// Read from the front of the list every time rather than through the
+    /// index a search by exact text keeps, so the two never answer from each
+    /// other's notes. The lists that are searched this way are a message's
+    /// header and its parameters, a few dozen elements at most.
+    TextAnyCase(String),
+}
+
+/// The needle of [`Expr::FindText`]: bytes the template fixes on either side
+/// of text the file holds.
+#[derive(Debug, Clone)]
+pub struct FindText {
+    /// Written before the text: `\n--` in front of a MIME boundary, which is
+    /// what says the boundary starts a line.
+    pub before: Vec<u8>,
+    /// What reaches the text, the way an expression reaches text anywhere.
+    pub text: Expr,
+    /// Written after it: the `--` that makes a boundary line the last one.
+    pub after: Vec<u8>,
 }
 
 impl Expr {
@@ -937,6 +999,18 @@ impl Expr {
     /// reads as `tag`, blanks at the end aside. See [`Tag::Text`].
     pub fn tagged_text(array: &str, key: &[&str], tag: &str, field: &[&str]) -> Expr {
         Expr::tagged_by(Some(array), key, Tag::Text(tag.to_string()), field)
+    }
+    /// The same, with the list reached by an expression and the label
+    /// compared without regard to case: `field` of the first element of the
+    /// list `array` lands on whose `key` reads as `tag` in any case. See
+    /// [`Tag::TextAnyCase`].
+    pub fn tagged_text_any_case(array: Expr, key: &[&str], tag: &str, field: &[&str]) -> Expr {
+        Expr::Tagged(Arc::new(TaggedRef {
+            array: Some(array),
+            key: key.iter().map(|s| s.to_string()).collect(),
+            tag: Tag::TextAnyCase(tag.to_ascii_lowercase()),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }))
     }
     /// The same, for a label this record works out rather than one the format
     /// fixed: `field` of the first element of `array` whose `key` holds
@@ -1063,6 +1137,16 @@ impl Expr {
     /// The same, to the last place it is written rather than the first.
     pub fn to_last_bytes(needle: &[u8]) -> Expr {
         Expr::Find { needle: needle.to_vec(), last: true }
+    }
+    /// The bytes from here to the next place `before`, the text `text`
+    /// reaches and `after` are written one after another, or to the end of
+    /// the container when they are not. See [`Expr::FindText`].
+    pub fn to_text(before: &[u8], text: Expr, after: &[u8]) -> Expr {
+        Expr::FindText(Arc::new(FindText { before: before.to_vec(), text, after: after.to_vec() }))
+    }
+    /// The text `e` reaches, in lower case and trimmed. See [`Expr::Lower`].
+    pub fn lower(e: Expr) -> Expr {
+        Expr::Lower(Box::new(e))
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {

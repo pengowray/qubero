@@ -745,11 +745,14 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         | Expr::BytesEq { field: inner, .. }
         | Expr::RealText(inner)
         | Expr::Words { value: inner, .. }
+        | Expr::Lower(inner)
         | Expr::Pow2(inner)
         | Expr::Pow10(inner)
         | Expr::Trunc(inner) => names_in(inner, out),
         Expr::PeekAt { skip, .. } => names_in(skip, out),
         Expr::PeekIn { at, .. } => names_in(at, out),
+        // The field whose text the needle is made of.
+        Expr::FindText(f) => names_in(&f.text, out),
         Expr::Cond { when, then, otherwise } => {
             names_in(when, out);
             names_in(then, out);

@@ -9,15 +9,19 @@
 // quantization steps, and the inverse DCT to samples.
 //
 // Two figures and two tables per scan. The map shades each MCU by its bits,
-// beside the picture at the same scale when the file is the JPEG. The tables
+// over the picture when the file is the JPEG, in the pixel grid
+// (`viz/pixelgrid.ts`), which zooms, pans, and can shade one channel's
+// blocks instead. The tables
 // say which channel and which kind of code the bits went to. The walkthrough
 // takes the MCU of median cost, or the one the reader clicks, and shows one of
 // its blocks as its codes, then its coefficients in zigzag order and in rows,
 // dequantized, and turned into samples.
 
 import "./jpeg.css";
-import type { JpegBlock, JpegCode, JpegScan, TemplateNode } from "../doc.ts";
+import type { Doc, JpegBlock, JpegCode, JpegScan, TemplateNode } from "../doc.ts";
 import { cardState, watchCard } from "../contentcard.ts";
+import { drawPixelGrid, gridArea, gridState, type Layers, type PixelGrid, type PixelGridState } from "../viz/pixelgrid.ts";
+import { blockBits, indexScan, mcuBits, mcuSize, viewSize } from "../viz/pixelgridmath.ts";
 import { ok } from "./model.ts";
 import { byteRef } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
@@ -28,13 +32,9 @@ import { JPEG, share } from "./jpegtext.ts";
 /** Scans given a section each; a file of more is a file of one channel per
  *  scan, and three or four cover it. */
 const SCANS_SHOWN = 4;
-/** The widest the map and the picture are drawn, each. */
-const PANEL_PX = 440;
-/** The largest a small picture is magnified. */
-const MAX_ZOOM = 6;
-/** Classes of the map's shading, fewest bits first. Their colours are
- *  `--rv-seq-0` to `--rv-seq-6` in `jpeg.css`, one set for each theme. */
-const CLASSES = 7;
+/** The widest the picture with its map over it is drawn: the width the
+ *  picture and the map took when they were drawn side by side. */
+const MAP_PX = 904;
 
 export const jpegSection: Section = {
   id: "jpeg",
@@ -63,17 +63,6 @@ export const jpegSection: Section = {
   },
 };
 
-/** Where one MCU is in the grid, and the pixels an MCU covers. */
-type Geometry = { readonly mw: number; readonly mh: number };
-
-function geometry(map: JpegScan): Geometry {
-  const hmax = Math.max(...map.channels.map((c) => c.h));
-  const vmax = Math.max(...map.channels.map((c) => c.v));
-  const only = map.scan.length === 1 ? map.channels[map.scan[0] ?? 0] : undefined;
-  if (only !== undefined) return { mw: (8 * hmax) / only.h, mh: (8 * vmax) / only.v };
-  return { mw: 8 * hmax, mh: 8 * vmax };
-}
-
 function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: boolean): HTMLElement[] {
   const out: HTMLElement[] = [];
   const names = map.scan.map((i) => map.channels[i]?.name ?? "");
@@ -83,7 +72,7 @@ function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: bo
   h.dataset.rvScan = node.path.join("/");
   out.push(h);
 
-  const g = geometry(map);
+  const g = mcuSize(map);
   const mcus = map.mcus_across * map.mcus_down;
   const perMcu = mcus === 0 ? 0 : map.block_channel.length / mcus;
   const lede = document.createElement("p");
@@ -112,7 +101,7 @@ function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: bo
     hideTip();
     walk.replaceChildren(...blockWalk(ctx, node, map, mcu, block, mcu === median, choose));
   };
-  out.push(mapFigure(ctx, map, g, (mcu) => choose(mcu, firstBlock(mcu))));
+  out.push(mapFigure(ctx, node, map, (mcu, block) => choose(mcu, block ?? firstBlock(mcu))));
   if (map.coarse) {
     const n = map.block_codes.filter((c) => c === 0).length;
     const p = document.createElement("p");
@@ -128,201 +117,94 @@ function scanBody(ctx: ReportCtx, node: TemplateNode, map: JpegScan, several: bo
 
 // ----- the map -----
 
-/** A round step that splits 0 to `max` into `CLASSES` classes: 1, 2, 2.5 or 5
- *  times a power of ten. */
-function classStep(max: number): number {
-  const raw = Math.max(1, max) / CLASSES;
-  const p = 10 ** Math.floor(Math.log10(raw));
-  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= raw) return Math.max(1, Math.ceil(m * p));
-  return Math.ceil(10 * p);
+/** The reader's overlay, channel and zoom on each scan's map, kept while the
+ *  report draws its sections again. */
+const mapStates = new WeakMap<Doc, Map<string, PixelGridState>>();
+
+function mapState(doc: Doc, node: TemplateNode): PixelGridState {
+  let byScan = mapStates.get(doc);
+  if (byScan === undefined) {
+    byScan = new Map();
+    mapStates.set(doc, byScan);
+  }
+  const key = node.path.join("/");
+  let s = byScan.get(key);
+  if (s === undefined) {
+    s = gridState();
+    byScan.set(key, s);
+  }
+  return s;
 }
 
-/** The classes' colours as they stand on `el` now, for painting a canvas,
- *  which cannot take a CSS variable. */
-function ramp(el: Element): [number, number, number][] {
-  const style = getComputedStyle(el);
-  return [...Array(CLASSES).keys()].map((i) => rgb(style.getPropertyValue(`--rv-seq-${i}`).trim() || "#808080"));
-}
-
-function mapFigure(ctx: ReportCtx, map: JpegScan, g: Geometry, pick: (mcu: number) => void): HTMLElement {
+/**
+ * The picture with the bits of each MCU shaded over it, in the pixel grid
+ * (`viz/pixelgrid.ts`), which zooms and pans and can show one channel's
+ * blocks instead. The picture is the browser's, when the file is this JPEG
+ * and the browser has drawn it at the scan's size; without it the shading is
+ * drawn alone. A click picks the MCU for the walkthrough below and selects
+ * its bits.
+ */
+function mapFigure(ctx: ReportCtx, node: TemplateNode, map: JpegScan, pick: (mcu: number, block: number | null) => void): HTMLElement {
   const fig = document.createElement("figure");
   fig.className = "rv-figure rv-jpeg-mapfig";
-  const across = map.mcus_across;
-  const down = map.mcus_down;
-  const codedW = across * g.mw;
-  const codedH = down * g.mh;
-  let scale = PANEL_PX / codedW;
-  if (scale >= 1) scale = Math.min(MAX_ZOOM, Math.floor(scale));
-  const cssW = Math.max(1, Math.round(codedW * scale));
-  const cssH = Math.max(1, Math.round(codedH * scale));
-
-  const panels = document.createElement("div");
-  panels.className = "rv-jpeg-panels";
-  // The picture, when the file is this JPEG and the browser has drawn it: at
-  // the map's scale, over the same area, so an MCU and the part of the
-  // picture it codes are at the same place in each.
-  const picture = document.createElement("div");
-  picture.className = "rv-jpeg-panel";
-  const drawPicture = (): boolean => {
-    const s = cardState(ctx.doc);
-    if (s === null || s.status === "failed" || s.status === "too-large") {
-      picture.remove();
-      return true;
-    }
-    if (s.status !== "ready") return false;
-    if (s.width !== map.width || s.height !== map.height) {
-      picture.remove();
-      return true;
-    }
-    const label = document.createElement("div");
-    label.className = "rv-jpeg-panellabel";
-    label.textContent = JPEG.pictureLabel;
-    const frame = document.createElement("div");
-    frame.className = "rv-jpeg-frame";
-    frame.style.width = `${cssW}px`;
-    frame.style.height = `${cssH}px`;
-    const img = document.createElement("img");
-    img.src = s.url;
-    img.alt = "";
-    img.style.width = `${Math.round(map.width * scale)}px`;
-    img.style.height = `${Math.round(map.height * scale)}px`;
-    if (scale > 1) img.style.imageRendering = "pixelated";
-    frame.append(img);
-    picture.replaceChildren(label, frame);
-    return true;
+  const holder = document.createElement("div");
+  const index = indexScan(map);
+  const layers: Layers = { jpeg: { node, scan: map, index }, png: null };
+  const state = mapState(ctx.doc, node);
+  let grid: PixelGrid | null = null;
+  const draw = (image: HTMLImageElement | null): void => {
+    grid?.destroy();
+    const area = gridArea(map.width, map.height, layers);
+    const size = viewSize(area.w, area.h, MAP_PX);
+    grid = drawPixelGrid(
+      ctx.doc,
+      { width: map.width, height: map.height, image, layers },
+      {
+        ...size,
+        state,
+        defaultMode: "bits",
+        onPick: (hit) => {
+          if (hit.mcu === null) return;
+          const oneChannel = state.mode === "bits" && state.channel !== null && hit.block !== null;
+          pick(hit.mcu, oneChannel ? hit.block : null);
+          ctx.host.pick(oneChannel && hit.block !== null ? blockBits(map, index, hit.block) : mcuBits(index, hit.mcu));
+        },
+      },
+    );
+    holder.replaceChildren(grid.el);
   };
-  if (!drawPicture()) {
+  // The browser's picture: null when there is none to draw under the map,
+  // and undefined while it is still being decoded.
+  const picture = (): HTMLImageElement | null | undefined => {
+    const s = cardState(ctx.doc);
+    if (s === null || s.status === "failed" || s.status === "too-large") return null;
+    if (s.status !== "ready") return undefined;
+    return s.width === map.width && s.height === map.height ? s.image : null;
+  };
+  const now = picture();
+  draw(now ?? null);
+  if (now === undefined) {
     const stop = watchCard(ctx.doc, (what) => {
-      if (what === "state" && drawPicture()) stop();
+      if (what !== "state") return;
+      const p = picture();
+      if (p === undefined) return;
+      stop();
+      if (p !== null && holder.isConnected) draw(p);
     });
   }
-  panels.append(picture);
+  fig.append(holder);
 
-  const mapPanel = document.createElement("div");
-  mapPanel.className = "rv-jpeg-panel";
-  const label = document.createElement("div");
-  label.className = "rv-jpeg-panellabel";
-  label.textContent = JPEG.mapLabel;
-  const canvas = document.createElement("canvas");
-  canvas.className = "rv-jpeg-map";
-  canvas.width = across;
-  canvas.height = down;
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
-  canvas.setAttribute("role", "img");
-  canvas.setAttribute("aria-label", JPEG.mapAlt(across, down));
   const bits = map.mcu_bits;
   const max = bits.reduce((a, b) => Math.max(a, b), 0);
-  const step = classStep(max);
-  const paint = (): void => {
-    const c = canvas.getContext("2d");
-    if (c === null) return;
-    const img = c.createImageData(across, down);
-    const colours = ramp(canvas);
-    for (let m = 0; m < bits.length; m++) {
-      const col = colours[Math.min(CLASSES - 1, Math.floor((bits[m] ?? 0) / step))] ?? [0, 0, 0];
-      img.data.set([col[0], col[1], col[2], 255], m * 4);
-    }
-    c.putImageData(img, 0, 0);
-  };
-  // Painted once the section is on the page, since the colours are the
-  // page's variables and a canvas not yet in it has none; and again when the
-  // theme changes.
-  ctx.live(() => {
-    if (!canvas.isConnected) return false;
-    paint();
-    return true;
-  });
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (canvas.isConnected) paint();
-  });
-  const at = (e: PointerEvent): number | null => {
-    const r = canvas.getBoundingClientRect();
-    const x = Math.floor(((e.clientX - r.left) / r.width) * across);
-    const y = Math.floor(((e.clientY - r.top) / r.height) * down);
-    if (x < 0 || y < 0 || x >= across || y >= down) return null;
-    return y * across + x;
-  };
-  const whole = bits.reduce((a, b) => a + b, 0);
-  canvas.addEventListener("pointermove", (e) => {
-    const m = at(e);
-    if (m === null) {
-      hideTip();
-      return;
-    }
-    tipAt(mcuTip(map, m, whole), e.clientX, e.clientY);
-  });
-  canvas.addEventListener("pointerleave", () => hideTip());
-  canvas.addEventListener("click", (e) => {
-    const m = at(e);
-    if (m === null) return;
-    pick(m);
-    let start = map.run_offset_bits;
-    for (let i = 0; i < m; i++) start += bits[i] ?? 0;
-    ctx.host.pick({ startBit: start, endBit: start + (bits[m] ?? 0) });
-  });
-  mapPanel.append(label, canvas, legend(step));
-  panels.append(mapPanel);
-  fig.append(panels);
-
   const cap = document.createElement("figcaption");
   const most = bits.indexOf(max);
   const sorted = [...bits].sort((a, b) => a - b);
   const mid = sorted[Math.floor(sorted.length / 2)] ?? 0;
   const lead = document.createElement("b");
-  lead.textContent = JPEG.captionLead(most % across, Math.floor(most / across), max, mid);
+  lead.textContent = JPEG.captionLead(most % map.mcus_across, Math.floor(most / map.mcus_across), max, mid);
   cap.append(lead, ` ${JPEG.caption}`);
   fig.append(cap);
   return fig;
-}
-
-function rgb(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function legend(step: number): HTMLElement {
-  const l = document.createElement("div");
-  l.className = "rv-jpeg-legend";
-  for (let i = 0; i < CLASSES; i++) {
-    const item = document.createElement("span");
-    item.className = "rv-jpeg-legenditem";
-    const sw = document.createElement("span");
-    sw.className = "rv-jpeg-swatch";
-    sw.style.background = `var(--rv-seq-${i})`;
-    const t = document.createElement("span");
-    t.textContent = JPEG.legendClass(i * step, (i + 1) * step - 1);
-    item.append(sw, t);
-    l.append(item);
-  }
-  return l;
-}
-
-/** The hover over one MCU: its place, its bits, and its blocks' bits by
- *  channel. */
-function mcuTip(map: JpegScan, m: number, whole: number): HTMLElement {
-  const box = document.createElement("div");
-  const b = document.createElement("b");
-  b.textContent = JPEG.tipHead(m % map.mcus_across, Math.floor(m / map.mcus_across));
-  box.append(b);
-  const line = (text: string): void => {
-    const d = document.createElement("div");
-    d.textContent = text;
-    box.append(d);
-  };
-  line(JPEG.tipBits(map.mcu_bits[m] ?? 0, whole));
-  const mcus = map.mcus_across * map.mcus_down;
-  const per = mcus === 0 ? 0 : map.block_channel.length / mcus;
-  if (per > 1) {
-    const by = new Map<number, [number, number]>();
-    for (let i = m * per; i < (m + 1) * per; i++) {
-      const c = map.block_channel[i] ?? 0;
-      const [bits, n] = by.get(c) ?? [0, 0];
-      by.set(c, [bits + (map.block_bits[i] ?? 0), n + 1]);
-    }
-    for (const [c, [bits, n]] of by) line(JPEG.tipChannel(map.channels[c]?.name ?? "", bits, n));
-  }
-  return box;
 }
 
 // ----- where the bits go -----

@@ -316,6 +316,11 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         // part, and is plumbing for them the same as a length field is.
         Expr::Trunc(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::RealText(a) => expr_refs(a, out),
         Expr::Words { value, .. } => expr_refs(value, out),
+        Expr::Lower(a) => expr_refs(a, out),
+        // A field whose text is searched for settles where the run it ends
+        // stops, the way a length field settles it: a MIME message's header
+        // is machinery for every part its boundary separates.
+        Expr::FindText(f) => expr_refs(&f.text, out),
         // What a record says, and a record is somewhere else entirely: the
         // names inside are its fields, not siblings of this one.
         Expr::Placer(_) => {}

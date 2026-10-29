@@ -3,13 +3,62 @@
 // tested without a document or a page.
 
 import type { TemplateNode } from "./doc.ts";
+import { placeIn } from "./viz/mapcells.ts";
 
-/** What the trail reads of a node. */
-export type TrailNode = Pick<TemplateNode, "name" | "type" | "composite" | "list" | "size_bits" | "child_count" | "inline">;
+/** What the trail reads of a node. Where the node is, when given, places
+ *  each crumb in the one before it (`TrailItem.place`). */
+export type TrailNode = Pick<TemplateNode, "name" | "type" | "composite" | "list" | "size_bits" | "child_count" | "inline"> &
+  Partial<Pick<TemplateNode, "offset_bits" | "space">>;
 
-/** One crumb: what it says, the field it goes to, and whether that field is
- *  the one the trail was asked for. */
-export type TrailItem = { readonly label: string; readonly path: readonly number[]; readonly here: boolean };
+/** Where a crumb's field is inside the crumb before it: the fractions of the
+ *  parent's width it starts and ends at, for the bar drawn under the crumb,
+ *  and the field's own bits and the parent's label, for the bar's card. */
+export type TrailPlace = {
+  readonly at: readonly [number, number];
+  readonly parent: string;
+  readonly offsetBits: number;
+  readonly sizeBits: number;
+  readonly space: number;
+  readonly parentBits: number;
+};
+
+/** One crumb: what it says, the field it goes to, whether that field is the
+ *  one the trail was asked for, and where it is in the crumb before it. Null
+ *  for the first crumb, for a field placed nowhere, and for the first field
+ *  of an unpacked stream, whose bytes are not inside the packed ones. */
+export type TrailItem = { readonly label: string; readonly path: readonly number[]; readonly here: boolean; readonly place?: TrailPlace | null };
+
+/** The least of the 24-pixel bar a field is drawn as: one pixel. */
+const PLACE_MIN_FRACTION = 1 / 24;
+
+/** Each crumb's place in the crumb before it. */
+function placed(items: readonly TrailItem[], node: (path: readonly number[]) => TrailNode | null): TrailItem[] {
+  return items.map((item, k) => {
+    const before = items[k - 1];
+    if (before === undefined) return { ...item, place: null };
+    const n = node(item.path);
+    const p = node(before.path);
+    if (n === null || p === null || n.offset_bits === undefined || p.offset_bits === undefined) return { ...item, place: null };
+    const child = { offsetBits: n.offset_bits, sizeBits: n.size_bits, space: n.space ?? 0 };
+    const at = placeIn(child, { offsetBits: p.offset_bits, sizeBits: p.size_bits, space: p.space ?? 0 }, PLACE_MIN_FRACTION);
+    if (at === null) return { ...item, place: null };
+    return { ...item, place: { at, parent: before.label, ...child, parentBits: p.size_bits } };
+  });
+}
+
+/**
+ * What the trail calls the node at `path`, a prefix of the path the items
+ * were made for, so a figure beside the trail names a structure the way the
+ * crumbs do: the element of a list is `entries[3]` and not `[3]`, and a
+ * pointer and what it reads are one name, `image (joined → ZlibStream)`. A
+ * crumb that folds several steps goes to the deepest of them, and only that
+ * one answers. Null for a step with no crumb of its own: the list an element
+ * was taken from, a wrapper folded into the field below it.
+ */
+export function crumbLabelAt(items: readonly TrailItem[], path: readonly number[]): string | null {
+  const item = items.find((i) => i.path.length === path.length);
+  return item === undefined ? null : item.label;
+}
 
 /**
  * Every step from the root down, each one selectable. A list and the element
@@ -58,7 +107,12 @@ export function trailItems(path: readonly number[], node: (path: readonly number
     // name the template gave that structure is the template's own business,
     // and `value (Elsewhere)` names a thing no reader of the format has heard
     // of. See `StructDef::inline`.
-    const label = n.composite && n.type !== n.name && !n.inline ? `${n.name} (${n.type})` : n.name;
+    // The element of a list the crumb before reached by address (a PDF's
+    // `entries (at → switch[])`) is named after the list, as the element of
+    // any other list is, and not by its bare index, `[3]`.
+    const list = i > 0 ? node(path.slice(0, i - 1)) : null;
+    const viaPointer = list !== null && list.list && items[items.length - 1]?.path.length === i - 1;
+    const label = viaPointer ? `${list.name}[${path[i - 1]}]` : n.composite && n.type !== n.name && !n.inline ? `${n.name} (${n.type})` : n.name;
     const previous = items[items.length - 1];
     if (previous !== undefined && previous.label === label) {
       // Repeated `object`/`body` wrappers are one logical step. Keep the
@@ -68,5 +122,5 @@ export function trailItems(path: readonly number[], node: (path: readonly number
       items.push({ label, path: path.slice(0, i), here: i === path.length });
     }
   }
-  return items;
+  return placed(items, node);
 }

@@ -589,5 +589,9 @@ mod tests {
     fn an_expression_with_no_reading_is_not_half_written() {
         let e = E::Add(Box::new(E::field("a")), Box::new(E::Find { needle: vec![0], last: false }));
         assert_eq!(write_expr(&e), None);
+        // Nor is a search for text the file holds, whatever names the text.
+        assert_eq!(write_expr(&E::to_text(b"--", E::field("boundary"), b"")), None);
+        // A word in lower case is a call around the field it is read from.
+        assert_eq!(write_expr(&E::lower(E::field("kind"))).as_deref(), Some("lower(kind)"));
     }
 }

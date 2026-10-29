@@ -169,6 +169,12 @@ pub(crate) fn step_dto(s: MapStep, run_offset_bits: u64, in_file: bool) -> MapSt
             dto.len = Some(k as f64);
         }
         StepKind::Zrl { k, .. } | StepKind::Eob { k, .. } => dto.len = Some(k as f64),
+        // The bytes a base64 group spelled, as one number, and how many.
+        StepKind::Base64 { value, len } => {
+            dto.value = Some(value as f64);
+            dto.len = Some(len as f64);
+        }
+        StepKind::Ignored => {}
     }
     dto
 }

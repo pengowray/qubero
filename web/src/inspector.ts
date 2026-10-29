@@ -21,7 +21,8 @@ import { withinGroup } from "./within.ts";
 import { spinner } from "./spinner.ts";
 import type { ArchiveSumSlot } from "./sumjob.ts";
 import { anyStored, clauseStored, readShown, storedLine, templateLine, writeShown, type StoredLine } from "./storedpath.ts";
-import { trailItems } from "./trail.ts";
+import { trailItems, type TrailPlace } from "./trail.ts";
+import { crumbBar } from "./filemap.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, LINE_CHARS, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
@@ -2985,7 +2986,7 @@ export class Inspector {
     });
     const MAX_CRUMBS = 7;
     if (this.crumbsExpanded || items.length <= MAX_CRUMBS) {
-      return items.map((item) => this.crumb(item.label, item.path, item.here));
+      return items.map((item) => this.crumb(item.label, item.path, item.here, item.place));
     }
     const head = items.slice(0, 2);
     const tail = items.slice(-3);
@@ -2997,19 +2998,20 @@ export class Inspector {
     more.textContent = `… ${hidden.length} internal levels`;
     more.title = hidden.map((item) => item.label).join(" › ");
     return [
-      ...head.map((item) => this.crumb(item.label, item.path, item.here)),
+      ...head.map((item) => this.crumb(item.label, item.path, item.here, item.place)),
       more,
-      ...tail.map((item) => this.crumb(item.label, item.path, item.here)),
+      ...tail.map((item) => this.crumb(item.label, item.path, item.here, item.place)),
     ];
   }
 
-  private crumb(label: string, path: readonly number[], here: boolean): HTMLElement {
+  private crumb(label: string, path: readonly number[], here: boolean, place?: TrailPlace | null): HTMLElement {
     const b = document.createElement("button");
     b.type = "button";
     b.className = here ? "insp-crumb insp-crumb-here" : "insp-crumb";
     b.dataset["path"] = path.join("/");
     b.textContent = label;
-    return b;
+    // Where this crumb's field is in the crumb before it (`filemap.ts`).
+    return place === undefined || place === null ? b : crumbBar(b, label, place);
   }
 }
 
