@@ -1,0 +1,218 @@
+/* The struct layout card (`structlayout.ts`), drawn in the listing in place
+   of a heading's fields. Its own file so the piece touches no shared
+   stylesheet; the tokens are the app's. */
+
+/* The listing places every item as one line of a flex row that never wraps
+   and hides what overflows (`.rp-item`); a card is a block of its own lines,
+   so the inner box puts ordinary wrapping and block layout back. */
+.sl-card.rp-item {
+  align-items: stretch;
+  padding-block: 4px 8px;
+}
+.sl-body {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  white-space: normal;
+  font: 12px/1.4 var(--sans);
+}
+.sl-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sl-heading {
+  font-weight: 600;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.sl-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+/* Three widths in one segmented control: the chosen one filled, as the
+   inspector's Field / Little-endian / Big-endian control does. */
+.sl-rowwidth {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.sl-rowwidth-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 6px;
+}
+.sl-seg {
+  font: 11px var(--mono);
+  min-height: 0;
+  min-width: 26px;
+  padding: 2px 6px;
+  border-radius: 0;
+  margin-left: -1px;
+}
+.sl-seg:first-of-type {
+  border-radius: 4px 0 0 4px;
+}
+.sl-seg:last-of-type {
+  border-radius: 0 4px 4px 0;
+}
+.sl-seg.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.sl-summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-frame {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.sl-foot,
+.sl-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sl-foot {
+  margin-top: 4px;
+}
+.sl-link {
+  font: 12px var(--sans);
+  min-height: 0;
+  padding: 1px 6px;
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+.sl-link-at {
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+
+/* Drag pans and the wheel zooms, so the figure asks for the grab cursor and
+   keeps the page from selecting text under a drag. */
+.sl-svg {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.sl-svg:active {
+  cursor: grabbing;
+}
+/* Every box is a fill and an outline drawn apart, so that a field carried
+   on into the next row can leave that side of its outline open. */
+.sl-fill {
+  stroke: none;
+}
+.sl-edge {
+  fill: none;
+}
+/* A field: its kind's colour, as in the hex view, lightly filled so the name
+   on it reads in the text colour. */
+.sl-box.sl-fill,
+.sl-fold.sl-fill {
+  fill: color-mix(in srgb, var(--field-color) 22%, var(--bg));
+}
+.sl-box.sl-edge,
+.sl-fold.sl-edge {
+  stroke: color-mix(in srgb, var(--field-color) 70%, var(--bg));
+  stroke-width: 1;
+}
+/* The rows a break stands for: the same field, drawn fainter and dashed, so
+   it reads as more of the box above it rather than a field of its own. */
+.sl-fold.sl-fill {
+  fill: color-mix(in srgb, var(--field-color) 10%, var(--bg));
+}
+.sl-fold.sl-edge {
+  stroke-dasharray: 3 3;
+}
+/* The field the cursor is in: the accent outline every view marks the
+   selection with. */
+.sl-box.is-on.sl-fill,
+.sl-fold.is-on.sl-fill {
+  fill: color-mix(in srgb, var(--field-color) 40%, var(--bg));
+}
+.sl-box.is-on.sl-edge,
+.sl-fold.is-on.sl-edge {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+/* Bytes no field covers: hatched, in no kind's colour. */
+.sl-gap.sl-edge {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.sl-hatch {
+  stroke: color-mix(in srgb, var(--muted) 55%, transparent);
+  stroke-width: 1.5;
+}
+.sl-name,
+.sl-key,
+.sl-title,
+.sl-foldname {
+  font: 11px var(--sans);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.sl-num {
+  font: 600 11px var(--mono);
+}
+.sl-gapname {
+  fill: var(--muted);
+  font-style: italic;
+}
+.sl-foldname {
+  fill: var(--muted);
+  font-size: 10px;
+}
+.sl-key-group,
+.sl-key-more {
+  fill: var(--muted);
+}
+.sl-title {
+  font-weight: 600;
+}
+.sl-title.is-on {
+  fill: var(--accent);
+}
+.sl-offset {
+  font: 10px var(--mono);
+  fill: var(--addr);
+  pointer-events: none;
+}
+.sl-bracket {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.sl-bracket.is-on {
+  stroke: var(--accent);
+}
+.sl-ruler-bg {
+  fill: var(--panel);
+}
+.sl-ruler {
+  font: 10px var(--mono);
+  fill: var(--muted);
+  pointer-events: none;
+}

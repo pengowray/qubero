@@ -33,7 +33,7 @@
 // field starts and ends.
 
 import { assignLanes } from "./lanes.ts";
-import { ellipsise, type Measure } from "./fit.ts";
+import type { Measure } from "./fit.ts";
 
 /** The parts of a template node the layout reads. `TemplateNode` has them
  *  all; the tests make them up. */
@@ -218,7 +218,7 @@ export function buildRecord<N extends NodeLike>(node: N, kids: readonly Gathered
     if (s > reach) gaps.push(gapPiece(reach, s, f.node, startBit, widest));
     reach = Math.max(reach, s + f.node.size_bits);
   }
-  if (endBit > reach) gaps.push(gapPiece(reach, endBit, null, startBit, widest));
+  if (endBit > reach) gaps.push(gapPiece<N>(reach, endBit, null, startBit, widest));
 
   const all = [...pieces, ...gaps].sort((a, b) => a.startBit - b.startBit || a.lane - b.lane);
   groups.sort((a, b) => a.startBit - b.startBit || a.depth - b.depth);
@@ -385,6 +385,34 @@ export function defaultRowWidth(bytes: number): number {
   return bytes > 256 ? 16 : 8;
 }
 
+const ELLIPSIS = "…";
+
+/**
+ * `text` cut in the middle to fit `room` pixels: its head, an ellipsis and its
+ * tail, whole if it fits and null if fewer than `minChars` characters would
+ * be left. Fields in one structure differ at the end as often as at the
+ * start (`linker_version_major`, `linker_version_minor`), so keeping both
+ * ends keeps them apart where cutting the end would make them one name.
+ */
+export function middleCut(text: string, room: number, size: number, measure: Measure, minChars: number): string | null {
+  if (measure(text, size) <= room) return text;
+  const cut = (n: number): string => {
+    const head = Math.ceil(n / 2);
+    return text.slice(0, head) + ELLIPSIS + text.slice(text.length - (n - head));
+  };
+  if (text.length <= minChars || measure(cut(minChars), size) > room) return null;
+  // The most characters kept that still fit, by halving: the width grows
+  // with the count kept, in every face.
+  let lo = minChars;
+  let hi = text.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (measure(cut(mid), size) <= room) lo = mid;
+    else hi = mid - 1;
+  }
+  return cut(lo);
+}
+
 /** What is drawn inside one cell: the name, a number keyed beside the row,
  *  or nothing (the hover card still has it). */
 export type CellLabel = { readonly text: string; readonly keyed: boolean };
@@ -396,13 +424,15 @@ export type KeyEntry = { readonly text: string; readonly index: number };
 /**
  * The labels of one row: which cell carries each piece's label (its widest
  * cell in this row, and only in the row where that cell is widest overall,
- * which `home` says), what fits there, and the key for the rest. `px` turns a
- * fraction of the row into pixels at the current zoom. `name` is the label a
- * piece would like; `numberOf` hands out the number a keyed member wears.
+ * which `home` says), what fits there, and the key for the rest. `room` is
+ * how many pixels of a cell are on screen at the current zoom. `name` is the
+ * label a piece would like; `numberOf` hands out the number a keyed member
+ * wears. Two names cut to the same text on one row would read as one field,
+ * so both are keyed instead.
  */
 export function rowLabels<N extends NodeLike>(
   cells: readonly Cell<N>[],
-  px: (fraction: number) => number,
+  room: (cell: Cell<N>) => number,
   home: (index: number) => boolean,
   name: (piece: Piece<N>) => { readonly full: string; readonly short: string | null },
   numberOf: (index: number) => number,
@@ -410,12 +440,22 @@ export function rowLabels<N extends NodeLike>(
 ): { readonly labels: Map<Cell<N>, CellLabel>; readonly key: readonly KeyEntry[] } {
   const labels = new Map<Cell<N>, CellLabel>();
   const key: KeyEntry[] = [];
+  const fitted = new Map<Cell<N>, string | null>();
+  const seen = new Map<string, number>();
   for (const cell of cells) {
     if (!home(cell.index)) continue;
-    const room = px(cell.x1 - cell.x0) - 2 * opts.pad;
+    const inside = room(cell) - 2 * opts.pad;
     const want = name(cell.piece);
-    const text = ellipsise(want.full, room, opts.size, opts.measure, opts.minChars) ?? (want.short !== null && opts.measure(want.short, opts.size) <= room ? want.short : null);
-    if (text !== null) {
+    const text = middleCut(want.full, inside, opts.size, opts.measure, opts.minChars) ?? (want.short !== null && opts.measure(want.short, opts.size) <= inside ? want.short : null);
+    fitted.set(cell, text);
+    if (text !== null && text !== want.full) seen.set(text, (seen.get(text) ?? 0) + 1);
+  }
+  for (const cell of cells) {
+    if (!fitted.has(cell)) continue;
+    const shown = room(cell);
+    const want = name(cell.piece);
+    const text = fitted.get(cell) ?? null;
+    if (text !== null && (text === want.full || (seen.get(text) ?? 0) < 2)) {
       labels.set(cell, { text, keyed: false });
       continue;
     }
@@ -423,7 +463,7 @@ export function rowLabels<N extends NodeLike>(
     // has nothing a key could add that the hover does not.
     if (cell.piece.kind !== "field") continue;
     const n = String(numberOf(cell.index));
-    if (opts.measure(n, opts.size) <= px(cell.x1 - cell.x0) - 2) {
+    if (opts.measure(n, opts.size) <= shown - 2) {
       labels.set(cell, { text: n, keyed: true });
       key.push({ text: `${n} ${want.full}`, index: cell.index });
     } else key.push({ text: want.full, index: cell.index });

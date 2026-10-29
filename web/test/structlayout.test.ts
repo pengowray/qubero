@@ -12,6 +12,7 @@ import {
   COLLAPSE_ROWS,
   defaultRowWidth,
   fitKey,
+  middleCut,
   misaligned,
   naturalAlign,
   offsetAlign,
@@ -223,7 +224,7 @@ test("a name that does not fit is keyed by number, and the key fits its room", (
   // 8 bytes over 120 pixels: 60 for the first, 30 for each of the others.
   const { labels, key } = rowLabels(
     line.cells,
-    (f) => f * 120,
+    (c) => (c.x1 - c.x0) * 120,
     () => true,
     (p) => ({ full: p.kind === "field" ? p.node.name : "gap", short: null }),
     (i) => {
@@ -233,8 +234,9 @@ test("a name that does not fit is keyed by number, and the key fits its room", (
     { size: 10, pad: 3, minChars: 4, measure },
   );
   const texts = line.cells.map((c) => labels.get(c)?.text ?? null);
-  // 54 pixels inside the padding: eight characters and the ellipsis.
-  assert.deepEqual(texts, ["a_long_n…", "b", "1"]);
+  // 54 pixels inside the padding: eight characters and the ellipsis, four
+  // from each end.
+  assert.deepEqual(texts, ["a_lo…name", "b", "1"]);
   assert.deepEqual(
     key.map((k) => k.text),
     ["1 tiny_but_named"],
@@ -253,4 +255,35 @@ test("a name that does not fit is keyed by number, and the key fits its room", (
     [0],
   );
   assert.equal(tight.rest, 2);
+});
+
+test("names are cut in the middle, and two cut alike are keyed instead", () => {
+  const measure = monoMeasure();
+  // 60 pixels at 6 a character: ten characters, nine kept and the ellipsis.
+  assert.equal(middleCut("linker_version_major", 60, 10, measure, 3), "linke…ajor");
+  assert.equal(middleCut("short", 60, 10, measure, 3), "short");
+  assert.equal(middleCut("abcdefgh", 12, 10, measure, 3), null);
+  const s = n("s", "composite", 0, 4, { child_count: 2 });
+  const r = buildRecord(s, [leaf(n("version_major_a", "uint", 0, 2)), leaf(n("version_major_b", "uint", 2, 2))]);
+  const rows = wrapRows([r], 4, METRICS, false);
+  const line = rows.lines[0];
+  assert.ok(line !== undefined && line.kind === "row");
+  let number = 0;
+  // 66 pixels a cell, 58 inside the padding: the two cut to different texts,
+  // so both stay in their boxes.
+  const wide = rowLabels(line.cells, (c) => (c.x1 - c.x0) * 132, () => true, (p) => ({ full: p.kind === "field" ? p.node.name : "", short: null }), () => ++number, { size: 10, pad: 4, minChars: 3, measure });
+  assert.deepEqual(
+    line.cells.map((c) => wide.labels.get(c)?.keyed),
+    [false, false],
+  );
+  const twins = buildRecord(s, [leaf(n("version_major_aa_x", "uint", 0, 2)), leaf(n("version_major_bb_x", "uint", 2, 2))]);
+  const twinRow = wrapRows([twins], 4, METRICS, false).lines[0];
+  assert.ok(twinRow !== undefined && twinRow.kind === "row");
+  // 40 pixels a cell: both cut to the same text, so both are keyed.
+  const narrow = rowLabels(twinRow.cells, (c) => (c.x1 - c.x0) * 80, () => true, (p) => ({ full: p.kind === "field" ? p.node.name : "", short: null }), () => ++number, { size: 10, pad: 4, minChars: 3, measure });
+  assert.deepEqual(
+    twinRow.cells.map((c) => narrow.labels.get(c)?.keyed),
+    [true, true],
+  );
+  assert.equal(narrow.key.length, 2);
 });

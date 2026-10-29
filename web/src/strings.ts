@@ -4015,4 +4015,42 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  structLayout: {
+    /** The listing heading's button, beside `bytes`, `list` and `table`. */
+    button: "layout",
+    buttonTitle: (name: string): string => `Show where each field of ${name} sits in its bytes, with gaps between fields marked`,
+    buttonTitleOn: (name: string): string => `Show the fields of ${name} as rows again`,
+    /** The figure's heading. A struct layout is what pahole prints. */
+    title: (name: string): string => `Struct layout of ${name}`,
+    rowWidth: "Bytes per row",
+    rowWidthTitle: (n: number): string => `Draw ${n} bytes on each row`,
+    /** The summary line under the heading, its parts joined with ` · `. */
+    size: (bytes: number, fields: number): string => `${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    /** For a list whose elements are all one size: `4 segments, each 56
+     *  bytes in 8 fields`. */
+    elementsEach: (count: number, noun: string, bytes: number, fields: number): string =>
+      `${countText(count, noun)}, each ${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    padding: (bytes: number): string => `${countText(bytes, "byte")} padding`,
+    unread: (bytes: number): string => `${countText(bytes, "byte")} unread`,
+    noGaps: "no gaps between fields",
+    misaligned: (n: number): string => `${countText(n, "number")} not aligned to its size`,
+    /** Inside a gap's box: the full label, and the one used when it does not
+     *  fit. */
+    gapShort: (bytes: number): string => `${bytes} B`,
+    gapPaddingNext: (next: string, align: number): string => `No field covers these bytes. After them, ${next} starts at a multiple of ${align} bytes.`,
+    gapPaddingTail: (name: string, align: number): string => `No field covers these bytes. They make ${name} a multiple of ${align} bytes long.`,
+    gapUnread: "No field covers these bytes.",
+    /** Hover card lines for a field. `rel` is an offset like `+0x08`. */
+    fromStart: (rel: string, size: string): string => `${rel} from the start of the structure · ${size}`,
+    aligned: (align: number): string => `Aligned to ${align} bytes`,
+    notAligned: (bytes: number, rel: string): string => `Not aligned: a ${bytes}-byte number at ${rel}`,
+    /** A break standing for rows that are wholly one field. */
+    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "row")} of ${name} (${countText(bytes, "byte")})`,
+    /** A row's key, when more names are keyed than fit beside it. */
+    keyMore: (n: number): string => `+${n} more`,
+    /** Under the figure: fields of the structure stored somewhere else. */
+    placed: "Fields read from elsewhere in the file:",
+    reading: "Reading the fields…",
+    tooLarge: (size: string): string => `Too large to draw as rows: ${size}`,
+  },
 } as const;
