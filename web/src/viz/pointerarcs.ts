@@ -57,7 +57,7 @@ import { askedCardKey, CARD_RESIZED, registerKindCard } from "../formatcards.ts"
 import { arcShapes, arcsTouching, sideRoom, arcOverlaps, arcTouches, nearestArc, reach, roleCounts, uncovered, type ArcEnd, type ArcHit, type ArcShape, type PointerArc } from "./arcmath.ts";
 import { board, type Board } from "./board.ts";
 import { applyX, invertX, rescaleDomain, type View } from "./boardmath.ts";
-import { hexTicks } from "./childstrip.ts";
+import { hexTicks } from "./axis.ts";
 import { canvasMeasure, ellipsise, monoMeasure, type Measure } from "./fit.ts";
 import { headingButton, registerHeadingButton } from "./headingbuttons.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
