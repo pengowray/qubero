@@ -16,6 +16,11 @@
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.9",
+    "@types/d3-axis": "^3.0.6",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-selection": "^3.0.12",
+    "@types/d3-shape": "^3.2.0",
+    "@types/d3-zoom": "^3.0.9",
     "@types/node": "^26.4.0",
     "typescript": "^5.9",
     "vite": "^7"
@@ -24,8 +29,15 @@
     "@types/d3-hierarchy": "^3.1.7",
     "cytoscape": "^3.34.2",
     "cytoscape-fcose": "^2.2.0",
+    "d3-axis": "^3.0.0",
     "d3-hierarchy": "^3.1.2",
-    "elkjs": "^0.12.0"
+    "d3-scale": "^4.0.2",
+    "d3-selection": "^3.0.0",
+    "d3-shape": "^3.2.0",
+    "d3-transition": "^3.0.1",
+    "d3-zoom": "^3.0.0",
+    "elkjs": "^0.12.0",
+    "uplot": "^1.6.32"
   },
   "allowScripts": {
     "esbuild@0.28.2": true
