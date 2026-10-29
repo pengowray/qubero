@@ -14,9 +14,14 @@
 //   of its blocks in the file, and the stream it unpacks to), so a strip of
 //   them would draw offsets of two spaces on one axis. The path goes on in
 //   the stream, and the stream's strip hangs from the compressed run's bar
-//   in the strip above, marked as unpacked.
+//   in the strip above by a dashed lens. A joined stream hangs from a field
+//   of no size, which says nothing about where its bytes are; the stack
+//   finds its runs (`streamsource.ts`) and puts the lens there instead.
 // A deep path keeps its first strip, the whole file, and its last few, since
-// those are the two ends a reader asks about.
+// those are the two ends a reader asks about. What it leaves out is counted
+// in strips, which is not the count of crumbs the trail hides: the trail has
+// a crumb for nearly every step, and the stack has no strip for a wrapper or
+// for the step into a stream, as listed above.
 
 /** What the plan reads of a node. */
 export type StackNode = {
@@ -46,7 +51,7 @@ export const MAX_LEVELS = 6;
 
 /**
  * The strips for the path whose nodes, from the root down to the field, are
- * `chain`. Returns them top to bottom and how many steps were left out of
+ * `chain`. Returns them top to bottom and how many strips were left out of
  * the middle of a deep path.
  */
 export function stackPlan<N extends StackNode>(chain: readonly N[], max = MAX_LEVELS): { levels: StackLevel<N>[]; skipped: number } {

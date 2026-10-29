@@ -1,15 +1,19 @@
 // The arithmetic behind the locator pieces: how the file map cuts parts into
 // cells in file order (`viz/mapcells.ts`), what a pointer on a strip is on,
 // how much of a cell a lit range covers, where a crumb's field sits in the
-// crumb before it (`trail.ts`), and which strips the zoom stack draws for a
-// path (`viz/stacklevels.ts`).
+// crumb before it (`trail.ts`), which strips the zoom stack draws for a
+// path (`viz/stacklevels.ts`), and where in the file a stream's bytes were
+// read from (`viz/streamsource.ts`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { bitInCell, cellAt, cellSpans, cellsThatFit, foldCells, litSpans, mapCells, MIN_LIT_FRACTION, partAt, placeIn, type MapCell } from "../src/viz/mapcells.ts";
 import { levelDomain, stackPlan, type StackNode } from "../src/viz/stacklevels.ts";
-import { trailItems, type TrailNode } from "../src/trail.ts";
+import { crumbLabelAt, trailItems, type TrailNode } from "../src/trail.ts";
+import { packedStretch } from "../src/viz/streamsource.ts";
+import { shareWords } from "../src/filemap.ts";
+import type { Doc, JoinedPart, TemplateNode } from "../src/doc.ts";
 
 const part = (byteAt: number, bytes: number) => ({ offsetBits: byteAt * 8, sizeBits: bytes * 8 });
 const owners = (cells: readonly MapCell[]): number[] => cells.map((c) => c.owner);
@@ -126,6 +130,95 @@ test("the trail places each crumb in the one before it", () => {
   assert.equal(items[2]!.place!.at[0], 0);
 });
 
+test("a figure names a list element and a pointer the way the trail does", () => {
+  const n = (name: string, type: string, size: number, composite: boolean, list = false, children = 2): TrailNode => ({
+    name, type, composite, list, size_bits: size, child_count: children, inline: false,
+  });
+  // pdf/linearized.pdf's entries[3], and a PNG's joined image stream.
+  const nodes: Record<string, TrailNode> = {
+    "": n("file", "PDF", 800, true),
+    "4": n("entries", "Entry[]", 400, true, true, 9),
+    "4/3": n("[3]", "Entry", 20, true),
+    "4/3/1": n("generation", "decimal", 6, false),
+  };
+  const items = trailItems([4, 3, 1], (p) => nodes[p.join("/")] ?? null);
+  assert.equal(crumbLabelAt(items, [4, 3]), "entries[3]");
+  // The list itself has no crumb of its own: the element's crumb took it in.
+  assert.equal(crumbLabelAt(items, [4]), null);
+  assert.equal(crumbLabelAt(items, []), "file (PDF)");
+  const png: Record<string, TrailNode> = {
+    "": n("file", "PNG", 1272, true, false, 3),
+    "2": n("image", "joined → ZlibStream", 0, true, false, 1),
+    "2/0": n("image", "ZlibStream", 192, true, false, 8),
+  };
+  const pitems = trailItems([2, 0], (p) => png[p.join("/")] ?? null);
+  assert.equal(crumbLabelAt(pitems, [2, 0]), "image (joined → ZlibStream)");
+  // pdf/linearized.pdf reaches its entries by address: the pointer and the
+  // list are one crumb, and the element is still named after the list.
+  const xref: Record<string, TrailNode> = {
+    "": n("file", "PDF", 800, true),
+    "4": n("entries", "at → switch[]", 0, true, false, 1),
+    "4/0": n("entries", "switch[]", 400, true, true, 9),
+    "4/0/3": n("[3]", "switch", 160, true),
+    "4/0/3/0": n("offset", "decimal", 88, false),
+  };
+  const xitems = trailItems([4, 0, 3, 0], (p) => xref[p.join("/")] ?? null);
+  assert.deepEqual(xitems.map((i) => i.label), ["file (PDF)", "entries (at → switch[])", "entries[3]", "offset"]);
+  assert.equal(crumbLabelAt(xitems, [4, 0, 3]), "entries[3]");
+});
+
+test("a share of nearly all of something says so, as the listing does", () => {
+  assert.equal(shareWords(2601, 2610), ">99%");
+  assert.equal(shareWords(2610, 2610), "100%");
+  assert.equal(shareWords(1, 1000), "<1%");
+  assert.equal(shareWords(5, 0), "");
+});
+
+// ----- where a stream's bytes are -----
+
+/** Enough of a Doc for `packedStretch`: nodes by path, the run each field of
+ *  the joined stream starts in, and children by index. */
+function stubDoc(nodes: Record<string, Partial<TemplateNode>>, runs: Record<string, number[]>): Doc {
+  const full = (k: string): TemplateNode => ({ path: k === "" ? [] : k.split("/").map(Number), ...nodes[k] }) as TemplateNode;
+  return {
+    templateNode: (p: readonly number[]) => (nodes[p.join("/")] === undefined ? { status: "error", message: "" } : { status: "ok", node: full(p.join("/")) }),
+    templateChildren: (p: readonly number[], from: number, to: number) => {
+      const out: TemplateNode[] = [];
+      for (let i = from; i < to; i++) if (nodes[[...p, i].join("/")] !== undefined) out.push(full([...p, i].join("/")));
+      return { status: "ok", node: out };
+    },
+    partOf: (p: readonly number[]) => {
+      const run = runs[p.join("/")];
+      return run === undefined ? null : ({ path: run, run_space: 0 } as unknown as JoinedPart);
+    },
+  } as unknown as Doc;
+}
+
+test("a compressed run's stream comes from the run's own bytes", () => {
+  const doc = stubDoc({}, {});
+  const from = { offset_bits: 368, size_bits: 240, space: 0 } as TemplateNode;
+  assert.deepEqual(packedStretch(doc, from, { joined: false } as TemplateNode), { offsetBits: 368, sizeBits: 240 });
+});
+
+test("a joined stream comes from its first run to its last, not from the field of no size it hangs from", () => {
+  // A PNG with its image data in two IDAT chunks: chunks[2].data and
+  // chunks[3].data. `image` is the field of no size after the last chunk.
+  const nodes: Record<string, Partial<TemplateNode>> = {
+    "1/2/2": { offset_bits: 952, size_bits: 96, space: 0 },
+    "1/3/2": { offset_bits: 1144, size_bits: 96, space: 0 },
+    "2/0": { offset_bits: 0, size_bits: 192, space: 1, joined: true, child_count: 3 },
+    "2/0/0": { offset_bits: 0, size_bits: 16, space: 1, joined: true },
+    "2/0/1": { offset_bits: 16, size_bits: 144, space: 1, joined: true },
+    "2/0/2": { offset_bits: 160, size_bits: 32, space: 1, joined: true },
+  };
+  const doc = stubDoc(nodes, { "2/0": [1, 2, 2], "2/0/2": [1, 3, 2] });
+  const from = { offset_bits: 1272, size_bits: 0, space: 0 } as TemplateNode;
+  const stream = { path: [2, 0], joined: true, child_count: 3 } as unknown as TemplateNode;
+  assert.deepEqual(packedStretch(doc, from, stream), { offsetBits: 952, sizeBits: 1240 - 952 });
+  // A stream nobody can place gives no stretch, rather than the end of the file.
+  assert.equal(packedStretch(stubDoc(nodes, {}), from, stream), null);
+});
+
 // ----- the zoom stack -----
 
 const node = (path: number[], name: string, at: number, size: number, children: number, space = 0): StackNode => ({
@@ -143,7 +236,7 @@ test("a wrapper with one child gets no strip, and the field's structure is the l
   assert.deepEqual(levels[2]!.source, { offsetBits: 32, sizeBits: 576 });
 });
 
-test("a field in a stream hangs from the compressed run, marked unpacked", () => {
+test("a field in a stream hangs from the compressed run it was unpacked from", () => {
   const data = node([0, 0, 1, 14], "data", 46, 30, 2);
   const chain = [
     node([], "file", 0, 318, 1),

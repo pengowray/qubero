@@ -4018,23 +4018,22 @@ export const VIZ = {
   /** The file map strips (`filemap.ts`), the bars under the inspector's
    *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`). */
   locator: {
-    /** Hover card title over bytes between the parts the strip is drawn from. */
-    notInAnyPart: "Bytes not in any part",
+    /** Hover card title over bytes that none of the fields the strip is
+     *  drawn from covers: the gaps between a PDF's objects. */
+    notInAnyField: "Bytes not in any field",
     /** Hover card line: the part's share of the whole file. */
     shareOfFile: (share: string): string => `${share} of the file`,
-    /** The same on the strip of a compressed stream's unpacked bytes. */
-    shareOfStream: (share: string): string => `${share} of the unpacked stream`,
-    /** Hover card line on a crumb's bar: the field's share of the crumb
-     *  before it, named as that crumb names it. */
+    /** Hover card line: a field's share of the structure it is in, named as
+     *  the inspector's trail names it (`entries[3]`, `file (ZIP)`). */
     shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
     /** The At cursor section heading. */
     title: "Position in the file",
-    /** Caption of a level of the stack that is a stream's unpacked bytes,
-     *  named after the field holding the packed bytes. */
-    unpacked: (name: string): string => `${name}, unpacked`,
+    /** Under the heading while the structures on the way down to the field
+     *  are still being read. */
+    reading: "Reading the fields…",
     /** Caption of the second strip of a deep path, when the strips of the
-     *  levels between it and the first are not drawn. Written the way the
-     *  trail above writes the crumbs it hides. */
-    levelsBetween: (n: number, name: string): string => `… ${n} internal ${n === 1 ? "level" : "levels"} › ${name}`,
+     *  structures between it and the first are left out. Counts strips, not
+     *  the trail's crumbs. */
+    levelsNotDrawn: (n: number, name: string): string => `${name} (${n} ${n === 1 ? "level" : "levels"} above it not drawn)`,
   },
 } as const;

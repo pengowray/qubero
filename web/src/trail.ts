@@ -47,6 +47,20 @@ function placed(items: readonly TrailItem[], node: (path: readonly number[]) => 
 }
 
 /**
+ * What the trail calls the node at `path`, a prefix of the path the items
+ * were made for, so a figure beside the trail names a structure the way the
+ * crumbs do: the element of a list is `entries[3]` and not `[3]`, and a
+ * pointer and what it reads are one name, `image (joined → ZlibStream)`. A
+ * crumb that folds several steps goes to the deepest of them, and only that
+ * one answers. Null for a step with no crumb of its own: the list an element
+ * was taken from, a wrapper folded into the field below it.
+ */
+export function crumbLabelAt(items: readonly TrailItem[], path: readonly number[]): string | null {
+  const item = items.find((i) => i.path.length === path.length);
+  return item === undefined ? null : item.label;
+}
+
+/**
  * Every step from the root down, each one selectable. A list and the element
  * taken from it are one crumb, `boxes[0]`, because two crumbs for one step
  * doubles the length of a deep path without saying more.
@@ -93,7 +107,12 @@ export function trailItems(path: readonly number[], node: (path: readonly number
     // name the template gave that structure is the template's own business,
     // and `value (Elsewhere)` names a thing no reader of the format has heard
     // of. See `StructDef::inline`.
-    const label = n.composite && n.type !== n.name && !n.inline ? `${n.name} (${n.type})` : n.name;
+    // The element of a list the crumb before reached by address (a PDF's
+    // `entries (at → switch[])`) is named after the list, as the element of
+    // any other list is, and not by its bare index, `[3]`.
+    const list = i > 0 ? node(path.slice(0, i - 1)) : null;
+    const viaPointer = list !== null && list.list && items[items.length - 1]?.path.length === i - 1;
+    const label = viaPointer ? `${list.name}[${path[i - 1]}]` : n.composite && n.type !== n.name && !n.inline ? `${n.name} (${n.type})` : n.name;
     const previous = items[items.length - 1];
     if (previous !== undefined && previous.label === label) {
       // Repeated `object`/`body` wrappers are one logical step. Keep the

@@ -443,11 +443,18 @@
   color: var(--muted);
 }
 /* The position map under a part's range: the file map (`filemap.ts`) with
-   this part's pieces lit. A block of its own, on its own line. */
+   this part's pieces lit. A block of its own, on its own line, narrower than
+   its 480px in a narrow column (its cells shrink in proportion). */
 .rv-posmap {
   display: flex;
+  max-width: 100%;
   height: 8px;
   margin: 6px 0 10px;
+}
+/* Answers the pointer across its 6px top margin and 10px bottom margin, so
+   it is 24px tall to the pointer and does not cover the range line above. */
+.rv-posmap.fmap-reach::before {
+  inset: -6px 0 -10px;
 }
 .rv-doc {
   margin: 4px 0 8px;

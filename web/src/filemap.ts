@@ -31,11 +31,14 @@
 // A field inside a compressed stream is at an offset of the bytes the stream
 // unpacks to, which is nowhere in the file. Its strip has a second ring
 // (`ring`): the file strip with the stream's packed bytes lit, and under it a
-// strip of the unpacked stream with the field lit.
+// strip of the unpacked stream with its fields, the field lit. `ringFor`
+// works the ring out from the field's path, so a caller with a path passes
+// `ring: ringFor(doc, path)` and draws the strip as it already does.
 
-import type { Doc } from "./doc.ts";
-import type { TrailPlace } from "./trail.ts";
-import { formatAddress } from "./format.ts";
+import type { Doc, TemplateNode } from "./doc.ts";
+import { crumbLabelAt, trailItems, type TrailPlace } from "./trail.ts";
+import { sectionColor } from "./fieldstyle.ts";
+import { formatAddress, percentText } from "./format.ts";
 import { bitSizeText, VIZ } from "./strings.ts";
 import {
   bitInCell,
@@ -54,6 +57,7 @@ import {
 } from "./viz/mapcells.ts";
 import { linkedFor } from "./viz/linked.ts";
 import { goToBits, goToField } from "./viz/pick.ts";
+import { packedStretch } from "./viz/streamsource.ts";
 import { hideTip, tipAt, tipCard } from "./viz/tip.ts";
 
 export { segmentWidths } from "./viz/mapcells.ts";
@@ -83,9 +87,52 @@ export type MapRing = {
   readonly space: number;
   readonly packed: Stretch;
   readonly lit: Stretch;
-  /** What the stream is called, for the hover card. */
+  /** What the stream is called, as the trail names it, for the hover card. */
   readonly name: string;
 };
+
+/** Most of a stream's fields drawn on its ring. */
+const RING_PARTS = 2000;
+
+/**
+ * The second ring for the field at `path`, or null for a field in the file
+ * itself, and while the structure on the way down is still being read. The
+ * ring is the outermost stream the path enters, with its own fields as its
+ * parts; a field in a stream inside that one lights the field of the outer
+ * stream it is in.
+ */
+export function ringFor(doc: Doc, path: readonly number[]): MapRing | null {
+  const chain: TemplateNode[] = [];
+  for (let i = 0; i <= path.length; i++) {
+    const r = doc.templateNode(path.slice(0, i));
+    if (r.status !== "ok") return null;
+    chain.push(r.node);
+  }
+  const k = chain.findIndex((n) => n.space !== 0);
+  if (k <= 0) return null;
+  const stream = chain[k] as TemplateNode;
+  const from = chain[k - 1] as TemplateNode;
+  const packed = packedStretch(doc, from, stream);
+  if (packed === null) return null;
+  let lit = stream;
+  for (const n of chain.slice(k)) if (n.space === stream.space) lit = n;
+  const kids = doc.templateChildren(stream.path, 0, Math.min(stream.child_count, RING_PARTS));
+  const segments: MapSegment[] =
+    kids.status !== "ok"
+      ? []
+      : kids.node
+          .filter((n) => n.space === stream.space && n.size_bits > 0)
+          .map((n, i) => ({ offsetBits: n.offset_bits, sizeBits: n.size_bits, color: sectionColor(i), name: n.name, path: n.path }));
+  const items = trailItems(path, (p) => chain[p.length] ?? null);
+  return {
+    segments,
+    lengthBits: stream.offset_bits + stream.size_bits,
+    space: stream.space,
+    packed,
+    lit: { offsetBits: lit.offset_bits, sizeBits: lit.size_bits },
+    name: crumbLabelAt(items, stream.path) ?? stream.name,
+  };
+}
 
 export type MapOptions = {
   /** How wide the strip is drawn, in CSS pixels. 96 when not given. */
@@ -128,8 +175,10 @@ type Drawn = {
   readonly spans: ReturnType<typeof cellSpans>;
   /** Which address space the strip's offsets count in; 0 is the file. */
   readonly space: number;
-  /** The bits the shares on the hover card are of. */
+  /** The bits the shares on the hover card are of, and what those bits are
+   *  called: null for the whole file. */
   readonly totalBits: number;
+  readonly whole: string | null;
 };
 
 const drawnOver = new WeakMap<HTMLElement, Drawn>();
@@ -192,13 +241,13 @@ export function fileMap(
 ): HTMLElement {
   const ring = opts.ring ?? null;
   const lit = ring !== null ? [ring.packed] : (opts.lit ?? [{ offsetBits, sizeBits }]);
-  const strip = drawStrip(segments, lit, mark ?? null, opts.width ?? MAP_WIDTH_PX, opts.lengthBits, 0, title, opts.doc);
+  const strip = drawStrip(segments, lit, mark ?? null, opts.width ?? MAP_WIDTH_PX, opts.lengthBits, 0, null, title, opts.doc);
   if (ring === null) return strip;
   // The file strip, then the stream's: the first `.fmap` in the stack is the
   // file's, which is the one callers mark the selection on.
   const stack = document.createElement("span");
   stack.className = "fmap-stack";
-  const inner = drawStrip(ring.segments.length > 0 ? ring.segments : [{ offsetBits: 0, sizeBits: ring.lengthBits, color: "var(--accent)", name: ring.name }], [ring.lit], null, opts.width ?? MAP_WIDTH_PX, ring.lengthBits, ring.space, title, opts.doc);
+  const inner = drawStrip(ring.segments.length > 0 ? ring.segments : [{ offsetBits: 0, sizeBits: ring.lengthBits, color: "var(--accent)", name: ring.name }], [ring.lit], null, opts.width ?? MAP_WIDTH_PX, ring.lengthBits, ring.space, ring.name, title, opts.doc);
   inner.classList.add("fmap-ring");
   stack.append(strip, inner);
   return stack;
@@ -211,6 +260,7 @@ function drawStrip(
   width: number,
   lengthBits: number | undefined,
   space: number,
+  whole: string | null,
   title: string,
   doc: Doc | undefined,
 ): HTMLElement {
@@ -223,7 +273,9 @@ function drawStrip(
   const widths = segmentWidths(cellStretches(cells), width);
   cells.forEach((c, i) => {
     const cell = document.createElement("i");
-    cell.style.flex = `0 0 ${(widths[i] ?? 0).toFixed(2)}px`;
+    // Shrinks with the rest when the strip is given less room than it was
+    // laid out for (a narrow report column), so it stays in proportion.
+    cell.style.flex = `0 1 ${(widths[i] ?? 0).toFixed(2)}px`;
     const color = c.owner < 0 ? null : (segments[c.owner] as MapSegment).color;
     cell.style.background = color === null ? UNCOVERED : paint(color, litSpans(c, lit));
     // What is selected, over the top of what this strip is about. Drawn rather
@@ -235,7 +287,7 @@ function drawStrip(
   const first = cells[0];
   const last = cells[cells.length - 1];
   const totalBits = lengthBits ?? (first !== undefined && last !== undefined ? last.end - first.start : 0);
-  const drawn: Drawn = { segments, cells, spans: cellSpans(widths), space, totalBits };
+  const drawn: Drawn = { segments, cells, spans: cellSpans(widths), space, totalBits, whole };
   drawnOver.set(strip, drawn);
   live(strip, drawn, doc);
   return strip;
@@ -266,11 +318,10 @@ export function rangeWords(s: Stretch, space: number): string {
 
 const rangeOf = rangeWords;
 
-/** A share of the whole, said the way the listing says it. */
+/** A share of the whole, said the way the listing says it (`percentText`),
+ *  or nothing when there is no whole to be a share of. */
 export function shareWords(sizeBits: number, totalBits: number): string {
-  if (totalBits <= 0) return "";
-  const share = sizeBits / totalBits;
-  return share > 0 && share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
+  return totalBits <= 0 ? "" : percentText(sizeBits, totalBits);
 }
 
 /** The stretch of bytes no part covers around `bit`, for the hover card. */
@@ -284,9 +335,9 @@ function cardFor(drawn: Drawn, hit: { part: number; bit: number }): HTMLElement 
   const seg = hit.part >= 0 ? (drawn.segments[hit.part] as MapSegment) : null;
   const s: Stretch = seg ?? holeAround(drawn, hit.bit);
   const share = shareWords(s.sizeBits, drawn.totalBits);
-  const title = seg === null ? words.notInAnyPart : (seg.name ?? rangeOf(s, drawn.space));
+  const title = seg === null ? words.notInAnyField : (seg.name ?? rangeOf(s, drawn.space));
   const lines = [`${rangeOf(s, drawn.space)} · ${bitSizeText(s.sizeBits)}`];
-  if (share !== "") lines.push(drawn.space === 0 ? words.shareOfFile(share) : words.shareOfStream(share));
+  if (share !== "") lines.push(drawn.whole === null ? words.shareOfFile(share) : words.shareOf(share, drawn.whole));
   return tipCard(title, lines);
 }
 
@@ -294,6 +345,9 @@ function cardFor(drawn: Drawn, hit: { part: number; bit: number }): HTMLElement 
 function live(strip: HTMLElement, drawn: Drawn, doc: Doc | undefined): void {
   const canGo = doc !== undefined || drawn.segments.some((s) => s.path !== undefined);
   if (canGo) strip.classList.add("fmap-live");
+  // A strip that goes there itself answers the pointer a little above and
+  // below it too, since it is only a few pixels tall (`.fmap-reach`).
+  if (doc !== undefined) strip.classList.add("fmap-reach");
   /** Put the part under the pointer where a host that follows the click
    *  contract will find it. */
   const carry = (hit: { part: number; bit: number } | null): void => {

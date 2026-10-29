@@ -3779,6 +3779,65 @@ button.insp-xrow-where:hover {
   min-width: 1px;
   background: var(--accent);
 }
+/* A strip a few pixels tall that goes to the part clicked also answers the
+   pointer just above and below it, so it is a target 24px tall. The hit test
+   reads only across the strip, so the extra height changes nothing else.
+   Not clipped, so the strip's rounded ends go on its end cells instead. */
+.fmap-reach {
+  position: relative;
+  overflow: visible;
+}
+.fmap-reach::before {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+.fmap-reach > i:first-child {
+  border-start-start-radius: 2px;
+  border-end-start-radius: 2px;
+}
+.fmap-reach > i:last-child {
+  border-start-end-radius: 2px;
+  border-end-end-radius: 2px;
+}
+/* ---- the zoom stack: the file, then each part the path goes through ---- */
+/* Which structure each strip is, over the strip: one line, cut short with an
+   ellipsis, so captions never run into each other. */
+.viz-stack-caption {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viz-stack-svg,
+.viz-stack-lens {
+  display: block;
+}
+/* The strip's own bytes that none of its fields cover. */
+.viz-stack-hole {
+  fill: color-mix(in srgb, var(--fg) 8%, var(--bg));
+}
+/* Joins the part lit in one strip to the strip under it, which is that part
+   drawn the full width. */
+.viz-lens {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1;
+}
+/* The strip under it counts in the stream's own offsets, not the file's:
+   a dashed lens, so the two are not read as one axis. */
+.viz-lens.is-unpacked {
+  stroke-dasharray: 3 2;
+}
+/* While the levels down to the field are still being read. */
+.viz-stack-reading {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Sticky trail: what the top of the window is inside. A listing scrolled past
    its heading stops saying which part of the file it is showing. */
 .report {
@@ -7443,36 +7502,4 @@ table.rec td.is-invalid {
   color: var(--muted);
   font-size: 11px;
   margin-top: 2px;
-}
-
-/* ---- the zoom stack: the file, then each part the path goes through ---- */
-/* Which structure each strip is, over the strip: one line, cut short with an
-   ellipsis, so captions never run into each other. */
-.viz-stack-caption {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 15px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.viz-stack-svg,
-.viz-stack-lens {
-  display: block;
-}
-/* The strip's own bytes that none of its fields cover. */
-.viz-stack-hole {
-  fill: color-mix(in srgb, var(--fg) 8%, var(--bg));
-}
-/* Joins the part lit in one strip to the strip under it, which is that part
-   drawn the full width. */
-.viz-lens {
-  fill: color-mix(in srgb, var(--accent) 14%, transparent);
-  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
-  stroke-width: 1;
-}
-/* The strip under it counts the bytes the stream unpacks to, not the file's:
-   a dashed lens, so the two are not read as one axis. */
-.viz-lens.is-unpacked {
-  stroke-dasharray: 3 2;
 }
