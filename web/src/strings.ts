@@ -4015,4 +4015,42 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** The pointer arcs (`viz/pointerarcs.ts`): every offset, length and count
+   *  in the file drawn as an arc over the file's bytes, in a rail tab and in
+   *  a card under a listing heading. The role words on the chips and in the
+   *  hover card are `ROLE_GROUP`'s, the words the inspector and the arrows
+   *  over the hex grid use. */
+  pointerArcs: {
+    tab: "Pointers",
+    tabTitle: "Every offset, length and count in this file, drawn as an arc from the field that holds it to the field it refers to",
+    /** The heading button that opens the card, and its hover text. */
+    button: "Pointers",
+    buttonTitle: "Show the offsets, lengths and counts that point into or out of this part",
+    /** The figure's name for a screen reader. */
+    figureLabel: "Pointers in this file, drawn as arcs over the file's bytes",
+    /** The line under the figure that says how to read it. */
+    legend: "Each arc joins a field holding an offset, length or count to the field that number refers to. Arcs above the bar point forward in the file, and arcs below point back.",
+    /** Beside the hatched swatch, under the figure. */
+    unclaimed: "Bytes no field covers",
+    /** Hover text of a role chip. `word` is the role's name, lower case. */
+    chipTitle: (word: string, n: number): string => `Show or hide the ${countText(n, `${word} arc`)}`,
+    /** The status line while the fields are being checked. */
+    finding: (fields: number): string => `Finding pointers: ${countText(fields, "field")} checked so far`,
+    /** The status line when the walk stopped at its limit. */
+    capped: (fields: number): string => `Checked the first ${countText(fields, "field")} only. Pointers in later fields are not drawn.`,
+    /** In place of the figure, for a file with none. */
+    none: "No offsets, lengths or counts found in this file's fields",
+    /** In place of the card's figure, for a part with none. */
+    noneHere: (name: string): string => `No offsets, lengths or counts point into or out of ${name}`,
+    /** Hover card of one arc: what the field holds, about which field. */
+    arcTitle: (role: string, target: string): string => `${role} of ${target}`,
+    holds: (field: string, value: string): string => `${field} = ${value}`,
+    /** Where the arc leaves and lands, and how far it reaches. */
+    reach: (from: string, to: string, bytes: number, forward: boolean): string =>
+      `From ${from} to ${to}, ${countText(bytes, "byte")} ${forward ? "forward" : "back"}`,
+    /** Hover card of a bundle: arcs too close together to draw apart. */
+    bundleTitle: (n: number, role: string): string => countText(n, `${role} arc`),
+    bundleWhere: (fromA: string, fromB: string, toA: string, toB: string): string => `From ${fromA} – ${fromB} to ${toA} – ${toB}`,
+    bundleHint: "Zoom in to see each arc. Click to go to the first one.",
+  },
 } as const;
