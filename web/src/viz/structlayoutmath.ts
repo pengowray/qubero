@@ -21,7 +21,8 @@
 // multiple of four from the start of the record), and is shorter than that
 // alignment, is what a compiler leaves, and is called padding; any other gap
 // is bytes no field describes, called unread. A field the format itself names
-// as padding stays a field: it has a name, and the template read it.
+// as padding (`name_padding` in cpio) stays a field, since the template read
+// it, and is hatched over its colour and counted as padding.
 //
 // Rows: the record's bits are cut into rows of `bytesPerRow` bytes, and each
 // member or gap becomes one cell per row it touches. Members that overlap (a
@@ -88,8 +89,28 @@ export function opensInside(n: NodeLike): boolean {
 /** One box: a member, or a stretch no member covers. Offsets are in bits
  *  from the start of the file, end exclusive. */
 export type Piece<N extends NodeLike = NodeLike> =
-  | { readonly kind: "field"; readonly node: N; readonly startBit: number; readonly endBit: number; readonly lane: number; readonly depth: number }
-  | { readonly kind: "padding" | "unread"; readonly startBit: number; readonly endBit: number; readonly lane: 0; readonly next: N | null };
+  | {
+      readonly kind: "field";
+      readonly node: N;
+      readonly startBit: number;
+      readonly endBit: number;
+      readonly lane: number;
+      readonly depth: number;
+      /** True for a run of bytes the format itself calls padding. */
+      readonly padding: boolean;
+    }
+  | {
+      /** Padding and unread are gaps no field in the file covers; other is a
+       *  gap in this record that fields elsewhere in the file are read from,
+       *  as the program headers sit among the ELF sections. */
+      readonly kind: "padding" | "unread" | "other";
+      readonly startBit: number;
+      readonly endBit: number;
+      readonly lane: 0;
+      readonly next: N | null;
+      /** For `other`: the parts of the file those fields belong to. */
+      readonly owners: readonly string[];
+    };
 
 /** A structure inside the record, drawn as the members it holds, with a
  *  bracket over them in the key. */
@@ -109,18 +130,37 @@ export type StructRecord<N extends NodeLike = NodeLike> = {
   readonly lanes: number;
 };
 
+/** A run of bytes the template calls padding: `padding`, `name_padding`,
+ *  `pad2`. Only by that word, which says what the bytes are for; `reserved`
+ *  and `unused` are kept for later versions of a format as often as they are
+ *  filler, and are left as fields. */
+const PADDING_NAME = /^(?:.*_)?pad(?:ding)?\d*$/i;
+export function namedPadding(n: NodeLike): boolean {
+  return (n.kind === "bytes" || n.kind === "unread") && PADDING_NAME.test(n.name);
+}
+
 /** The largest alignment worth inferring: a 16-byte number is rare, and
  *  aligning one to more than 8 is the platform's business, not the format's. */
 const MAX_ALIGN = 8;
 
 const NUMBER_KINDS = new Set(["uint", "int", "float", "enum", "flags", "unset"]);
+/** A number written in binary has a type like `u32 le`, `i16` or `f64`. A
+ *  number written as text (`base-16 digits` in cpio, `ascii decimal` in tar)
+ *  is a string to the machine and has no alignment to want. */
+const BINARY_TYPE = /^[uif]\d+\b/;
+
+/** What `naturalAlign` reads of a member. */
+export type Sized = { readonly kind: string; readonly type: string; readonly size_bits: number };
 
 /** The alignment a number of this size would want in a C struct: its own
  *  size, for 2, 4 and 8 bytes. Null for anything else, which has no natural
- *  alignment to infer: text, bytes, structures, bit fields. */
-export function naturalAlign(kind: string, sizeBits: number): number | null {
-  if (!NUMBER_KINDS.has(kind) || sizeBits % 8 !== 0) return null;
-  const bytes = sizeBits / 8;
+ *  alignment to infer: text, bytes, structures, bit fields, numbers written
+ *  as digits. An enum or a set of flags is read as its own type name, and is
+ *  taken to be the binary number it nearly always is. */
+export function naturalAlign(n: Sized): number | null {
+  if (!NUMBER_KINDS.has(n.kind) || n.size_bits % 8 !== 0) return null;
+  if ((n.kind === "uint" || n.kind === "int" || n.kind === "float") && !BINARY_TYPE.test(n.type)) return null;
+  const bytes = n.size_bits / 8;
   if (bytes < 2 || bytes > MAX_ALIGN || (bytes & (bytes - 1)) !== 0) return null;
   return bytes;
 }
@@ -137,8 +177,8 @@ export function offsetAlign(relBytes: number): number {
 
 /** Whether a member sits off its natural alignment: an eight-byte number at
  *  +0x0c, say. Only for whole-byte numbers, the only members with one. */
-export function misaligned(kind: string, relBits: number, sizeBits: number): boolean {
-  const natural = naturalAlign(kind, sizeBits);
+export function misaligned(n: Sized, relBits: number): boolean {
+  const natural = naturalAlign(n);
   if (natural === null || relBits % 8 !== 0) return false;
   return (relBits / 8) % natural !== 0;
 }
@@ -147,9 +187,11 @@ export function misaligned(kind: string, relBits: number, sizeBits: number): boo
  * The record for a structure and its gathered children: its members, the
  * structures inside it, the gaps between them, and the fields placed
  * elsewhere. How deep structures inside structures are opened is the
- * gathering's choice: a child gathered with no `kids` is one box.
+ * gathering's choice: a child gathered with no `kids` is one box. `cut` says
+ * the children are only the first of them, and the record then ends with the
+ * last one given rather than at the end of its own bytes.
  */
-export function buildRecord<N extends NodeLike>(node: N, kids: readonly Gathered<N>[]): StructRecord<N> {
+export function buildRecord<N extends NodeLike>(node: N, kids: readonly Gathered<N>[], cut = false): StructRecord<N> {
   const fields: { node: N; depth: number }[] = [];
   const groups: Group<N>[] = [];
   const placed: N[] = [];
@@ -194,7 +236,7 @@ export function buildRecord<N extends NodeLike>(node: N, kids: readonly Gathered
     // A structure that reached out has a size that says so; its own bytes end
     // with its last member. One that did not has its own size to go by, and a
     // gap after its last member is part of it.
-    endBit = reachedOut ? last : Math.max(endBit, last);
+    endBit = reachedOut || cut ? last : Math.max(endBit, last);
   }
 
   fields.sort((a, b) => a.node.offset_bits - b.node.offset_bits || b.node.size_bits - a.node.size_bits);
@@ -206,13 +248,14 @@ export function buildRecord<N extends NodeLike>(node: N, kids: readonly Gathered
     endBit: f.node.offset_bits + f.node.size_bits,
     lane: lane[i] ?? 0,
     depth: f.depth,
+    padding: namedPadding(f.node),
   }));
 
   // The gaps, from how far the members reach so far: overlapping members
   // leave no gap between them.
   const gaps: Piece<N>[] = [];
   let reach = startBit;
-  const widest = Math.max(1, ...fields.map((f) => naturalAlign(f.node.kind, f.node.size_bits) ?? 1));
+  const widest = Math.max(1, ...fields.map((f) => naturalAlign(f.node) ?? 1));
   for (const f of fields) {
     const s = f.node.offset_bits;
     if (s > reach) gaps.push(gapPiece(reach, s, f.node, startBit, widest));
@@ -235,12 +278,36 @@ function gapPiece<N extends NodeLike>(start: number, end: number, next: N | null
     const at = (start - recordStart) / 8;
     const size = bits / 8;
     if (next !== null) {
-      const want = naturalAlign(next.kind, next.size_bits);
+      const want = naturalAlign(next);
       return want !== null && size < want && (at + size) % want === 0 && at % want !== 0;
     }
     return widest > 1 && size < widest && (at + size) % widest === 0 && at % widest !== 0;
   })();
-  return { kind: padding ? "padding" : "unread", startBit: start, endBit: end, lane: 0, next };
+  return { kind: padding ? "padding" : "unread", startBit: start, endBit: end, lane: 0, next, owners: [] };
+}
+
+/** What is in a gap's bytes, as far as the rest of the file says: nothing
+ *  (`[]`), the names of the parts whose fields are there, or null when that
+ *  is not known yet. */
+export type GapCover = (startBit: number, endBit: number) => readonly string[] | null;
+
+/**
+ * The record with each gap that other fields of the file are read from
+ * called `other`, with the names of what those fields belong to. A gap
+ * inside a record is only bytes no field describes when no field anywhere
+ * does; a list placed by offsets has whole other structures between its
+ * elements.
+ */
+export function coverGaps<N extends NodeLike>(r: StructRecord<N>, cover: GapCover): StructRecord<N> {
+  let changed = false;
+  const pieces = r.pieces.map((p): Piece<N> => {
+    if (p.kind === "field") return p;
+    const owners = cover(p.startBit, p.endBit);
+    if (owners === null || owners.length === 0) return p;
+    changed = true;
+    return { ...p, kind: "other", owners };
+  });
+  return changed ? { ...r, pieces } : r;
 }
 
 /** What the figure says about a record in its summary line. */
@@ -249,6 +316,8 @@ export type Summary = {
   readonly fields: number;
   readonly paddingBytes: number;
   readonly unreadBytes: number;
+  /** Bytes in gaps that fields elsewhere in the file are read from. */
+  readonly otherBytes: number;
   readonly gaps: number;
   readonly misaligned: number;
 };
@@ -257,15 +326,18 @@ export function summarise(r: StructRecord): Summary {
   let fields = 0;
   let paddingBits = 0;
   let unreadBits = 0;
+  let otherBits = 0;
   let gaps = 0;
   let off = 0;
   for (const p of r.pieces) {
     if (p.kind === "field") {
       fields++;
-      if (misaligned(p.node.kind, p.startBit - r.startBit, p.endBit - p.startBit)) off++;
+      if (p.padding) paddingBits += p.endBit - p.startBit;
+      if (misaligned(p.node, p.startBit - r.startBit)) off++;
     } else {
       gaps++;
       if (p.kind === "padding") paddingBits += p.endBit - p.startBit;
+      else if (p.kind === "other") otherBits += p.endBit - p.startBit;
       else unreadBits += p.endBit - p.startBit;
     }
   }
@@ -274,6 +346,7 @@ export function summarise(r: StructRecord): Summary {
     fields,
     paddingBytes: paddingBits / 8,
     unreadBytes: unreadBits / 8,
+    otherBytes: otherBits / 8,
     gaps,
     misaligned: off,
   };
@@ -446,7 +519,10 @@ export function rowLabels<N extends NodeLike>(
     if (!home(cell.index)) continue;
     const inside = room(cell) - 2 * opts.pad;
     const want = name(cell.piece);
-    const text = middleCut(want.full, inside, opts.size, opts.measure, opts.minChars) ?? (want.short !== null && opts.measure(want.short, opts.size) <= inside ? want.short : null);
+    // A gap's label says how many bytes, and a cut one would not: it is drawn
+    // whole, or as its short form, or not at all.
+    const whole = cell.piece.kind === "field" ? middleCut(want.full, inside, opts.size, opts.measure, opts.minChars) : opts.measure(want.full, opts.size) <= inside ? want.full : null;
+    const text = whole ?? (want.short !== null && opts.measure(want.short, opts.size) <= inside ? want.short : null);
     fitted.set(cell, text);
     if (text !== null && text !== want.full) seen.set(text, (seen.get(text) ?? 0) + 1);
   }

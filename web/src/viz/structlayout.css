@@ -162,6 +162,14 @@
   stroke-width: 1;
   stroke-dasharray: 2 2;
 }
+/* A gap that other fields of the file are read from: not hatched, since
+   those bytes are described, only by something else. */
+.sl-other.sl-fill {
+  fill: color-mix(in srgb, var(--panel) 70%, var(--bg));
+}
+.sl-gapfold.sl-edge {
+  stroke-dasharray: 3 3;
+}
 .sl-hatch {
   stroke: color-mix(in srgb, var(--muted) 55%, transparent);
   stroke-width: 1.5;
@@ -214,5 +222,8 @@
 .sl-ruler {
   font: 10px var(--mono);
   fill: var(--muted);
+  pointer-events: none;
+}
+.sl-padfield {
   pointer-events: none;
 }

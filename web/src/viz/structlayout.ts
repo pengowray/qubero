@@ -60,12 +60,12 @@ import { linkedFor, subscribeWhileConnected } from "./linked.ts";
 import { goToBits, goToField, nearestTarget, type HitTarget } from "./pick.ts";
 import {
   buildRecord,
+  coverGaps,
   defaultRowWidth,
   fitKey,
   misaligned,
   naturalAlign,
   opensInside,
-  placedElsewhere,
   ROW_WIDTHS,
   rowLabels,
   summarise,
@@ -87,9 +87,11 @@ const MAX_DEPTH = 3;
 const MAX_MEMBERS = 1024;
 /** Elements of a list drawn, each as a block of its own. */
 const MAX_ELEMENTS = 16;
-/** A record longer than this is not drawn as rows: even folded, it is a
- *  stream of bytes rather than a structure. */
-const MAX_RECORD_BYTES = 1 << 20;
+/** A record longer than this is not drawn as rows. Long fields fold, so the
+ *  rows drawn stay few, but every row is cut before it is folded; four MiB is
+ *  a quarter of a million rows at 16 bytes, and room for the sections of a
+ *  small executable laid out where they sit. */
+const MAX_RECORD_BYTES = 4 << 20;
 
 type N = TemplateNode;
 
@@ -105,12 +107,18 @@ export type StructLayoutData =
       readonly elements: boolean;
       /** How many records the list has, when more than were drawn. */
       readonly total: number;
+      /** For one record with more children than are read for a figure: how
+       *  many it has, and the figure stops at the last one read. */
+      readonly cutAt: { readonly shown: number; readonly total: number } | null;
     }
   | { readonly status: "pending" }
   | { readonly status: "too-large"; readonly bytes: number };
 
 /** The children of `node`, with the structures among them opened `depth`
- *  levels down. Null while any of them is still being read. */
+ *  levels down. Null while any of them is still being read. A structure
+ *  inside is opened only when all of its children fit in what is left of
+ *  `budget`, so a structure is never drawn with half its members, which would
+ *  leave the rest looking like bytes no field covers; it stays one box. */
 function gather(doc: Doc, node: N, depth: number, budget: { left: number }): Gathered<N>[] | null {
   const count = Math.min(node.child_count, budget.left);
   if (count <= 0) return [];
@@ -119,13 +127,37 @@ function gather(doc: Doc, node: N, depth: number, budget: { left: number }): Gat
   budget.left -= reply.node.length;
   const out: Gathered<N>[] = [];
   for (const kid of reply.node) {
-    if (depth < MAX_DEPTH && opensInside(kid) && budget.left > 0) {
+    if (depth < MAX_DEPTH && opensInside(kid) && kid.child_count <= budget.left) {
       const inner = gather(doc, kid, depth + 1, budget);
       if (inner === null) return null;
       out.push({ node: kid, kids: inner });
     } else out.push({ node: kid, kids: null });
   }
   return out;
+}
+
+/** Most entries asked of the annotation column for one gap. A gap is
+ *  classed by whether any of it is read elsewhere; the first few entries
+ *  say that as well as all of them would. */
+const COVER_SPANS = 64;
+
+/** What fields elsewhere in the file are read from a gap in `record`: the
+ *  names of the parts they belong to, one level under what holds the
+ *  record, since that level is where the two part ways. */
+function coverFor(doc: Doc, record: N): (startBit: number, endBit: number) => readonly string[] | null {
+  return (startBit, endBit) => {
+    if (record.space !== 0) return [];
+    const reply = doc.spans(startBit, endBit, COVER_SPANS);
+    if (reply.status !== "ok") return null;
+    const owners: string[] = [];
+    const level = Math.max(0, record.path.length - 1);
+    for (const span of reply.node) {
+      if (span.gap) continue;
+      const owner = span.trail[level] ?? span.name;
+      if (!owners.includes(owner)) owners.push(owner);
+    }
+    return owners;
+  };
 }
 
 /** What the figure draws for the structure at a heading: its record, or one
@@ -143,24 +175,29 @@ export function structLayoutData(doc: Doc, node: N): StructLayoutData {
       for (const e of reply.node) {
         const kids = gather(doc, e, 1, { left: MAX_MEMBERS });
         if (kids === null) return { status: "pending" };
-        const r = buildRecord(e, kids);
+        const r = coverGaps(buildRecord(e, kids), coverFor(doc, e));
         if (r.endBit - r.startBit > MAX_RECORD_BYTES * 8) return { status: "too-large", bytes: (r.endBit - r.startBit) / 8 };
         records.push(r);
       }
-      return { status: "ok", root: node, records, elements: true, total: node.child_count };
+      return { status: "ok", root: node, records, elements: true, total: node.child_count, cutAt: null };
     }
   }
   const kids = gather(doc, node, 0, { left: MAX_MEMBERS });
   if (kids === null) return { status: "pending" };
-  const r = buildRecord(node, kids);
+  // A record with more children than are read ends at the last one read:
+  // the bytes after it are fields not drawn, not a gap.
+  const cut = node.child_count > MAX_MEMBERS;
+  const r = coverGaps(buildRecord(node, kids, cut), coverFor(doc, node));
   if (r.endBit - r.startBit > MAX_RECORD_BYTES * 8) return { status: "too-large", bytes: (r.endBit - r.startBit) / 8 };
-  return { status: "ok", root: node, records: [r], elements: false, total: 1 };
+  return { status: "ok", root: node, records: [r], elements: false, total: 1, cutAt: cut ? { shown: kids.length, total: node.child_count } : null };
 }
 
 // ----- the draw -----
 
 /** Layout pixels: the parts of a row, left to right, and their heights. */
-const GUTTER = 58;
+const GUTTER_MIN = 58;
+/** Room either side of an offset in the gutter. */
+const GUTTER_PAD = 6;
 /** Room for the bracket of each level of structure inside the record. */
 const NEST_W = 7;
 const KEY_MIN = 120;
@@ -254,6 +291,9 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
   const rows = wrapRows(records, bytesPerRow, METRICS, data.elements);
   const viewH = viewHeight(rows.height);
   const depth = Math.max(0, ...records.flatMap((r) => r.groups.map((g) => g.depth + 1)));
+  // Wide enough for the longest offset the rows count to.
+  const longest = Math.max(0, ...records.map((r) => r.endBit - r.startBit));
+  const gutter = Math.max(GUTTER_MIN, Math.ceil(MONO(relText(longest), OFFSET_PX)) + 2 * GUTTER_PAD);
   let width = Math.max(200, opts.width);
 
   const root = svg("svg", { width, height: viewH, class: "sl-svg", role: "img" });
@@ -297,7 +337,7 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
 
   const geometry = (): { x0: number; w: number; keyX: number; keyW: number } => {
     const keyW = Math.max(KEY_MIN, Math.min(KEY_MAX, Math.round(width * 0.22)));
-    const x0 = GUTTER + depth * NEST_W;
+    const x0 = gutter + depth * NEST_W;
     const w = Math.max(40, width - x0 - keyW - KEY_GAP);
     return { x0, w, keyX: x0 + w + KEY_GAP, keyW };
   };
@@ -332,7 +372,7 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
       const roomy = h >= TEXT_ROOM_PX;
       // The offset in the gutter, counted from the record's start.
       if (roomy && line.kind === "row") {
-        const t = svg("text", { x: GUTTER - 6, y: top + Math.min(h, METRICS.laneH * k) / 2, class: "sl-offset", "text-anchor": "end", "dominant-baseline": "central" });
+        const t = svg("text", { x: gutter - GUTTER_PAD, y: top + Math.min(h, METRICS.laneH * k) / 2, class: "sl-offset", "text-anchor": "end", "dominant-baseline": "central" });
         t.textContent = relText(line.rel);
         side.push(t);
       }
@@ -370,6 +410,8 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
         const below = p.endBit > rowStart + bytesPerRow * 8;
         const cls = p.kind === "field" ? `sl-box ${fieldClass(p.node.kind)}${isOn(p.node.path) ? " is-on" : ""}` : `sl-gap sl-${p.kind}`;
         grid.push(...box(x0, x1, y0, y0 + laneH, above, below, cls, p.kind === "field" ? null : `url(#${uid}-${p.kind})`));
+        // A field the format calls padding keeps its colour, hatched over.
+        if (p.kind === "field" && p.padding) grid.push(svg("rect", { x: x0 + 0.5, y: y0 + 1, width: Math.max(1, x1 - x0 - 1), height: Math.max(1, laneH - 2), fill: `url(#${uid}-padding)`, class: "sl-padfield" }));
         const label = labels.get(cell);
         if (label !== undefined && laneH >= TEXT_ROOM_PX) {
           const left = Math.max(clipX(x0), g.x0);
@@ -463,11 +505,11 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
     const p = line.piece;
     const x0 = X(0);
     const x1 = X(1);
-    const cls = p.kind === "field" ? `sl-fold ${fieldClass(p.node.kind)}${isOn(p.node.path) ? " is-on" : ""}` : `sl-fold sl-gap sl-${p.kind}`;
+    const cls = p.kind === "field" ? `sl-fold ${fieldClass(p.node.kind)}${isOn(p.node.path) ? " is-on" : ""}` : `sl-gapfold sl-gap sl-${p.kind}`;
     grid.push(...box(x0, x1, top, top + h, true, true, cls, p.kind === "field" ? null : `url(#${uid}-${p.kind})`));
     if (h >= TEXT_ROOM_PX - 2) {
-      const name = p.kind === "field" ? p.node.name : nameOf(p).full;
-      const text = VIZ.structLayout.folded(line.rows, name, (line.rows * bytesPerRow) | 0);
+      const bytes = line.rows * bytesPerRow;
+      const text = p.kind === "field" ? VIZ.structLayout.folded(line.rows, p.node.name, bytes) : VIZ.structLayout.foldedGap(line.rows, bytes);
       const left = clipX(x0);
       const right = clipX(x1);
       if (measure(text, LABEL_PX - 1) + 2 * LABEL_PAD <= right - left) {
@@ -586,7 +628,9 @@ function nameOf(p: Piece<N>): { readonly full: string; readonly short: string | 
   if (p.kind === "field") return { full: p.node.name, short: null };
   const bytes = (p.endBit - p.startBit) / 8;
   if (!Number.isInteger(bytes)) return { full: bitSizeText(p.endBit - p.startBit), short: null };
-  return { full: p.kind === "padding" ? VIZ.structLayout.padding(bytes) : VIZ.structLayout.unread(bytes), short: VIZ.structLayout.gapShort(bytes) };
+  const S = VIZ.structLayout;
+  const full = p.kind === "padding" ? S.padding(bytes) : p.kind === "other" ? (p.owners.length === 1 ? S.gapOf(bytes, p.owners[0] as string) : S.gapOfOthers(bytes)) : S.unread(bytes);
+  return { full, short: S.gapShort(bytes) };
 }
 
 /** The first and last layout pixel of the rows a stretch of a record covers,
@@ -624,14 +668,16 @@ function tipFor(hit: Hit, record: StructRecord<N>): HTMLElement {
   if (p.kind === "field") {
     const n = p.node;
     const lines = [n.composite ? `${n.type} · ${countText(n.child_count, childWord(n))}` : `${n.type} · ${n.value}`, S.fromStart(rel, size)];
-    const natural = naturalAlign(n.kind, n.size_bits);
-    if (natural !== null) lines.push(misaligned(n.kind, p.startBit - record.startBit, n.size_bits) ? S.notAligned(natural, rel) : S.aligned(natural));
+    const natural = naturalAlign(n);
+    if (natural !== null) lines.push(misaligned(n, p.startBit - record.startBit) ? S.notAligned(natural, rel) : S.aligned(natural));
+    if (p.padding) lines.push(S.namedPadding);
     return tipCard(n.name, lines, where);
   }
   const line = (() => {
     if (p.kind === "unread") return S.gapUnread;
-    if (p.next !== null) return S.gapPaddingNext(p.next.name, naturalAlign(p.next.kind, p.next.size_bits) ?? 1);
-    const widest = Math.max(1, ...record.pieces.map((q) => (q.kind === "field" ? (naturalAlign(q.node.kind, q.node.size_bits) ?? 1) : 1)));
+    if (p.kind === "other") return S.gapOther(record.node.name, p.owners);
+    if (p.next !== null) return S.gapPaddingNext(p.next.name, naturalAlign(p.next) ?? 1);
+    const widest = Math.max(1, ...record.pieces.map((q) => (q.kind === "field" ? (naturalAlign(q.node) ?? 1) : 1)));
     return S.gapPaddingTail(record.node.name, widest);
   })();
   return tipCard(nameOf(p).full, [line, S.fromStart(rel, size)], where);
@@ -666,10 +712,12 @@ function summaryText(data: Extract<StructLayoutData, { status: "ok" }>): string 
   } else parts.push(S.size(first.bytes, first.fields));
   const padding = sums.reduce((n, s) => n + s.paddingBytes, 0);
   const unread = sums.reduce((n, s) => n + s.unreadBytes, 0);
+  const other = sums.reduce((n, s) => n + s.otherBytes, 0);
   const gaps = sums.reduce((n, s) => n + s.gaps, 0);
   const off = sums.reduce((n, s) => n + s.misaligned, 0);
   if (padding > 0) parts.push(S.padding(padding));
   if (unread > 0) parts.push(S.unread(unread));
+  if (other > 0) parts.push(S.other(other));
   if (gaps === 0) parts.push(S.noGaps);
   if (off > 0) parts.push(S.misaligned(off));
   return parts.join(" · ");
@@ -779,6 +827,10 @@ function drawCard(c: DrawContext, item: Extract<Item, { kind: "formatcard" }>): 
     const more = el("div", "sl-note", VIZ.childStrip.firstOf(data.records.length, data.total, childWord(node)));
     more.style.height = `${NOTE_H}px`;
     body.append(more);
+  } else if (data.cutAt !== null) {
+    const more = el("div", "sl-note", VIZ.childStrip.firstOf(data.cutAt.shown, data.cutAt.total, childWord(node)));
+    more.style.height = `${NOTE_H}px`;
+    body.append(more);
   }
 
   // Drawn at the width the card turns out to have, and again whenever that
@@ -828,7 +880,11 @@ function pointee(doc: Doc, p: N): N {
 /** Whether a heading's structure can be drawn as a layout. Asked of every
  *  heading on every paint, so it looks at the node alone. */
 function offers(n: TemplateNode): boolean {
-  return n.composite && n.child_count > 0 && !n.decoded && !n.framed && !placedElsewhere(n);
+  // A list placed by offsets is drawn as its elements where they landed, gaps
+  // between them included; only a pointer's own row (an `at →` field, of no
+  // bytes) has nothing here to draw, and the listing draws its target under
+  // the heading instead.
+  return n.composite && n.child_count > 0 && n.size_bits > 0 && !n.decoded && !n.framed;
 }
 
 /** A card in place of any structure's fields, asked for from a button on its

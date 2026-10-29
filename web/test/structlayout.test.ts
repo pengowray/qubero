@@ -13,6 +13,8 @@ import {
   defaultRowWidth,
   fitKey,
   middleCut,
+  coverGaps,
+  namedPadding,
   misaligned,
   naturalAlign,
   offsetAlign,
@@ -75,7 +77,7 @@ test("the ELF header is its own 48 bytes, not the fields it reaches by offset", 
   assert.equal(r.endBit, 64 * 8);
   assert.equal(r.placed.map((p) => p.name).join(","), "section_name_base,program_headers,sections");
   const s = summarise(r);
-  assert.deepEqual(s, { bytes: 48, fields: 13, paddingBytes: 0, unreadBytes: 0, gaps: 0, misaligned: 0 });
+  assert.deepEqual(s, { bytes: 48, fields: 13, paddingBytes: 0, unreadBytes: 0, otherBytes: 0, gaps: 0, misaligned: 0 });
   // Eight bytes a row: six rows, and `entry` fills the second one whole.
   const rows = wrapRows([r], 8, METRICS, false);
   assert.equal(rows.lines.length, 6);
@@ -123,17 +125,21 @@ test("a gap at the end is padding when it rounds the record up to its widest mem
 });
 
 test("alignment is inferred from whole-byte numbers only", () => {
-  assert.equal(naturalAlign("uint", 32), 4);
-  assert.equal(naturalAlign("float", 64), 8);
-  assert.equal(naturalAlign("uint", 24), null);
-  assert.equal(naturalAlign("bytes", 32), null);
-  assert.equal(naturalAlign("uint", 8), null);
+  const num = (kind: string, type: string, bits: number) => ({ kind, type, size_bits: bits });
+  assert.equal(naturalAlign(num("uint", "u32 le", 32)), 4);
+  assert.equal(naturalAlign(num("float", "f64 be", 64)), 8);
+  assert.equal(naturalAlign(num("enum", "ObjectType", 16)), 2);
+  assert.equal(naturalAlign(num("uint", "u24 le", 24)), null);
+  assert.equal(naturalAlign(num("bytes", "bytes[]", 32)), null);
+  assert.equal(naturalAlign(num("uint", "u8", 8)), null);
+  // cpio's header fields are eight hex digits: text, with nothing to align.
+  assert.equal(naturalAlign(num("int", "base-16 digits", 64)), null);
   assert.equal(offsetAlign(0), 8);
   assert.equal(offsetAlign(12), 4);
   assert.equal(offsetAlign(6), 2);
-  assert.equal(misaligned("uint", 12 * 8, 64), true);
-  assert.equal(misaligned("uint", 16 * 8, 64), false);
-  assert.equal(misaligned("str", 3 * 8, 32), false);
+  assert.equal(misaligned(num("uint", "u64 le", 64), 12 * 8), true);
+  assert.equal(misaligned(num("uint", "u64 le", 64), 16 * 8), false);
+  assert.equal(misaligned(num("str", "ascii[]", 32), 3 * 8), false);
 });
 
 test("a structure inside the record is opened, and its long field folds into a break", () => {
@@ -286,4 +292,48 @@ test("names are cut in the middle, and two cut alike are keyed instead", () => {
     [true, true],
   );
   assert.equal(narrow.key.length, 2);
+});
+
+test("a field the format names as padding is counted as padding and stays a field", () => {
+  // A cpio entry's name, the byte after it that brings the data to a
+  // multiple of four, and the data.
+  const e = n("[0] init", "composite", 0, 8, { child_count: 3 });
+  const r = buildRecord(e, [leaf(n("name", "str", 0, 5)), leaf(n("name_padding", "bytes", 5, 1)), leaf(n("data", "bytes", 6, 2))]);
+  const pad = r.pieces[1];
+  assert.ok(pad !== undefined && pad.kind === "field" && pad.padding);
+  assert.deepEqual(summarise(r), { bytes: 8, fields: 3, paddingBytes: 1, unreadBytes: 0, otherBytes: 0, gaps: 0, misaligned: 0 });
+  assert.equal(namedPadding(n("pad2", "bytes", 0, 2)), true);
+  assert.equal(namedPadding(n("reserved", "bytes", 0, 2)), false);
+  assert.equal(namedPadding(n("padding", "uint", 0, 2)), false);
+  assert.equal(namedPadding(n("keypad", "bytes", 0, 2)), false);
+});
+
+test("a record cut short ends at its last member given, with no gap after it", () => {
+  const s = n("s", "composite", 0, 64, { child_count: 16 });
+  const r = buildRecord(s, [leaf(n("a", "uint", 0, 4)), leaf(n("b", "uint", 4, 4))], true);
+  assert.equal(r.endBit, 64);
+  assert.equal(summarise(r).gaps, 0);
+  const whole = buildRecord(s, [leaf(n("a", "uint", 0, 4)), leaf(n("b", "uint", 4, 4))]);
+  assert.equal(summarise(whole).unreadBytes, 56);
+});
+
+test("a gap other fields are read from is called other, with what they belong to", () => {
+  // ELF sections placed by offsets, with the program headers between the
+  // list's start and its first section, and one byte nothing reads.
+  const list = n("sections", "composite", 64, 400, { list: true, type: "offsets → switch", child_count: 2 });
+  const r = buildRecord(list, [leaf(n("[1] .init", "bytes", 288, 27)), leaf(n("[2] .text", "bytes", 316, 148))]);
+  const covered = coverGaps(r, (start, end) => (start === 64 * 8 && end === 288 * 8 ? ["program_headers"] : []));
+  const gaps = covered.pieces.filter((p) => p.kind !== "field");
+  assert.deepEqual(
+    gaps.map((g) => [g.kind, (g.endBit - g.startBit) / 8, "owners" in g ? g.owners : []]),
+    [
+      ["other", 224, ["program_headers"]],
+      ["unread", 1, []],
+    ],
+  );
+  const s = summarise(covered);
+  assert.equal(s.otherBytes, 224);
+  assert.equal(s.unreadBytes, 1);
+  // Not known yet: the gap stays as it was.
+  assert.equal(coverGaps(r, () => null), r);
 });

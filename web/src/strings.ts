@@ -4033,19 +4033,30 @@ export const VIZ = {
     padding: (bytes: number): string => `${countText(bytes, "byte")} padding`,
     unread: (bytes: number): string => `${countText(bytes, "byte")} unread`,
     noGaps: "no gaps between fields",
-    misaligned: (n: number): string => `${countText(n, "number")} not aligned to its size`,
+    misaligned: (n: number): string => countText(n, "misaligned number"),
     /** Inside a gap's box: the full label, and the one used when it does not
      *  fit. */
     gapShort: (bytes: number): string => `${bytes} B`,
     gapPaddingNext: (next: string, align: number): string => `No field covers these bytes. After them, ${next} starts at a multiple of ${align} bytes.`,
     gapPaddingTail: (name: string, align: number): string => `No field covers these bytes. They make ${name} a multiple of ${align} bytes long.`,
     gapUnread: "No field covers these bytes.",
+    /** A gap in this structure that fields elsewhere in the file are read
+     *  from: `224 bytes of program_headers`. */
+    gapOf: (bytes: number, owner: string): string => `${countText(bytes, "byte")} of ${owner}`,
+    gapOfOthers: (bytes: number): string => `${countText(bytes, "byte")} of other fields`,
+    gapOther: (name: string, owners: readonly string[]): string => `Not part of ${name}. Fields of ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""} are read from these bytes.`,
+    /** In the summary line, for those gaps. */
+    other: (bytes: number): string => `${countText(bytes, "byte")} in other fields`,
+    /** On a field the format itself calls padding. */
+    namedPadding: "Padding: the format names these bytes as filler",
     /** Hover card lines for a field. `rel` is an offset like `+0x08`. */
     fromStart: (rel: string, size: string): string => `${rel} from the start of the structure · ${size}`,
     aligned: (align: number): string => `Aligned to ${align} bytes`,
     notAligned: (bytes: number, rel: string): string => `Not aligned: a ${bytes}-byte number at ${rel}`,
     /** A break standing for rows that are wholly one field. */
     folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "row")} of ${name} (${countText(bytes, "byte")})`,
+    /** The same for rows that are wholly one gap, whose box says what it is. */
+    foldedGap: (rows: number, bytes: number): string => `${countText(rows, "more row")} (${countText(bytes, "byte")})`,
     /** A row's key, when more names are keyed than fit beside it. */
     keyMore: (n: number): string => `+${n} more`,
     /** Under the figure: fields of the structure stored somewhere else. */
