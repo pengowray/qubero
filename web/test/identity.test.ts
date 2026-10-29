@@ -46,6 +46,11 @@ test("agreement comes from extensions, media type, or a naming word", () => {
   assert.ok(!agrees(rule("PARity archive data", [], "application/octet-stream"), "parquet", "Parquet file"));
   // The rules call an OMF module with a five-byte first record a XENIX object.
   assert.ok(agrees(rule("XENIX 8086 relocatable or i286 small model", [], "application/octet-stream", 50), "omf", "OMF object"));
+  // The rules name a message by its first header field: news, SMTP mail, RFC 822 mail, MIME entity.
+  assert.ok(agrees(rule("news text", [], "message/news"), "eml", "Email or newsgroup message"));
+  assert.ok(agrees(rule("SMTP mail text", [], "message/rfc822"), "eml", "Email or newsgroup message"));
+  assert.ok(agrees(rule("MIME entity text", [], ""), "eml", "Email or newsgroup message"));
+  assert.ok(agrees(rule("ASCII text", ["nws"]), "eml", "Email or newsgroup message"));
   // "data" and "archive" are in every other sentence and name nothing.
   assert.ok(!agrees(rule("Par archive data", [], ""), "tar", "tar archive"));
 });
