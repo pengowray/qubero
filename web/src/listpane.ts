@@ -12,13 +12,19 @@
 // search: no flattening, no measuring, no prefix sums. Only the rows in the
 // window are asked for, which is what makes a list nobody could draw scroll
 // like one anybody can.
+//
+// A list of plain numbers has a second reading, and the pane offers it: List
+// and Plot in the pane's bar switch between the rows and a plot of the whole
+// list (`viz/valueplot.ts`, registered through `setPanePlotter` so the pane
+// does not import the piece). The plot is drawn the first time it is asked
+// for, at the size the pane measures, and kept until the list changes.
 
 import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { Doc, FieldPick, TemplateNode } from "./doc.ts";
 import { fieldClass } from "./fieldstyle.ts";
-import { bitSizeText, childWord, countText, REPORT } from "./strings.ts";
+import { bitSizeText, childWord, countText, REPORT, VIZ } from "./strings.ts";
 
 /** Height of one row, which must match `--lp-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that draws taller would slide out
@@ -33,6 +39,44 @@ const OVERSCAN = 8;
  *  A quarter of a million rows is five and a half million pixels, so this is
  *  headroom rather than a limit anybody meets. */
 const MAX_CANVAS = 16_000_000;
+
+/**
+ * Something the pane can show in place of its rows: a plot of the values
+ * (`viz/valueplot.ts`). The pane owns the size and passes it, so the figure
+ * never measures the pane; the figure reads the list itself and keeps itself
+ * up to date as its bytes arrive.
+ */
+export type PaneFigure = {
+  readonly el: HTMLElement;
+  resize(width: number, height: number): void;
+  destroy(): void;
+};
+
+/** What offers a plot for a list, registered once by the piece that draws it.
+ *  `applies` looks at the node only, since the pane asks it every time a list
+ *  is opened. */
+export type PanePlotter = {
+  readonly applies: (node: TemplateNode) => boolean;
+  readonly draw: (doc: Doc, path: readonly number[], width: number, height: number) => PaneFigure;
+};
+
+let plotter: PanePlotter | null = null;
+
+/** Let every pane offer a plot of the lists `p` can draw. */
+export function setPanePlotter(p: PanePlotter): void {
+  plotter = p;
+}
+
+/** One pane per document tab, so a heading button in that tab's listing can
+ *  open a list in it without the tab handing the pane round. */
+const panes = new WeakMap<Doc, ListPane>();
+
+export function listPaneFor(doc: Doc): ListPane | undefined {
+  return panes.get(doc);
+}
+
+/** How the pane shows its list: a row per element, or a plot of them. */
+export type PaneMode = "rows" | "plot";
 
 export class ListPane {
   readonly el: HTMLElement;
@@ -54,6 +98,13 @@ export class ListPane {
    *  move it causes does not come back and undo the scroll position. */
   private picking = false;
   private frame = 0;
+  private mode: PaneMode = "rows";
+  /** Where the plot goes, in place of the scrolling rows. */
+  private readonly plotHost: HTMLElement;
+  private figure: PaneFigure | null = null;
+  /** List or Plot, shown only for a list there is a plot of. */
+  private readonly modes: HTMLElement;
+  private readonly modeButtons: Record<PaneMode, HTMLButtonElement>;
 
   onPick: (pick: FieldPick) => void = () => {};
   onClose: () => void = () => {};
@@ -72,13 +123,34 @@ export class ListPane {
     this.scroller.tabIndex = 0;
     this.canvas = el("div", "lp-canvas");
     this.scroller.append(this.canvas);
+    this.modes = el("span", "vp-seg lp-modes");
+    const modeButton = (mode: PaneMode, label: string, title: string): HTMLButtonElement => {
+      const b = el("button", "", label);
+      b.type = "button";
+      b.title = title;
+      b.setAttribute("aria-pressed", "false");
+      b.addEventListener("click", () => this.setMode(mode));
+      this.modes.append(b);
+      return b;
+    };
+    this.modeButtons = {
+      rows: modeButton("rows", VIZ.valuePlot.paneRows, VIZ.valuePlot.paneRowsTitle),
+      plot: modeButton("plot", VIZ.valuePlot.panePlot, VIZ.valuePlot.panePlotTitle),
+    };
+    this.modes.hidden = true;
+    this.plotHost = el("div", "lp-plot");
+    this.plotHost.hidden = true;
     const bar = el("header", "lp-bar");
-    bar.append(this.title, close);
-    this.el.append(bar, this.scroller);
+    bar.append(this.title, this.modes, close);
+    this.el.append(bar, this.scroller, this.plotHost);
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
     this.scroller.addEventListener("keydown", (e) => this.onKey(e));
     new ResizeObserver(() => this.paintAgain()).observe(this.scroller);
+    // The plot is drawn at the size it is given, so the pane says again when
+    // its own size changes: the window, the rail, the listing's share.
+    new ResizeObserver(() => this.resizeFigure()).observe(this.plotHost);
+    panes.set(doc, this);
     // Chunks arriving turn a waiting row into an element; so does an edit.
     doc.onChange(() => this.schedule());
   }
@@ -90,10 +162,11 @@ export class ListPane {
 
   /** Show one list. A second call replaces what is there: the pane is a place
    *  to read one list in, not a stack of them. */
-  open(path: readonly number[]): void {
+  open(path: readonly number[], mode: PaneMode = "rows"): void {
     const reply = this.doc.templateNode(path);
     if (reply.status !== "ok") return;
     const node = reply.node;
+    this.dropFigure();
     this.path = path;
     this.count = node.child_count;
     this.unit = childWord(node);
@@ -102,17 +175,73 @@ export class ListPane {
     this.scroller.scrollTop = 0;
     this.title.textContent = REPORT.paneTitle(node.name, node.child_count, this.unit);
     this.canvas.style.height = `${Math.min(MAX_CANVAS, this.count * ROW)}px`;
-    this.paintAgain();
+    const plots = plotter !== null && plotter.applies(node);
+    this.modes.hidden = !plots;
+    this.setMode(plots ? mode : "rows");
+  }
+
+  /** Show the list as rows or as a plot. A plot is drawn the first time it is
+   *  asked for and kept while the list stays open, so going back and forth
+   *  keeps its zoom. */
+  setMode(mode: PaneMode): void {
+    if (this.path === null) return;
+    this.mode = mode;
+    for (const [m, b] of Object.entries(this.modeButtons)) b.setAttribute("aria-pressed", String(m === mode));
+    const plot = mode === "plot";
+    this.scroller.hidden = plot;
+    this.plotHost.hidden = !plot;
+    if (!plot) {
+      this.paintAgain();
+      return;
+    }
+    if (this.figure === null && plotter !== null) {
+      const { width, height } = this.plotSize();
+      this.figure = plotter.draw(this.doc, this.path, width, height);
+      this.plotHost.replaceChildren(this.figure.el);
+    }
+  }
+
+  /** The room inside the plot's host, less its padding. Measured here, by the
+   *  pane, so the figure never has to. */
+  private plotSize(): { width: number; height: number } {
+    const style = getComputedStyle(this.plotHost);
+    const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    return {
+      width: Math.max(120, this.plotHost.clientWidth - (padX || 0)),
+      height: Math.max(120, this.plotHost.clientHeight - (padY || 0)),
+    };
+  }
+
+  private resizeFigure(): void {
+    if (this.figure === null || this.plotHost.hidden) return;
+    const { width, height } = this.plotSize();
+    this.figure.resize(width, height);
+  }
+
+  private dropFigure(): void {
+    this.figure?.destroy();
+    this.figure = null;
+    this.plotHost.replaceChildren();
   }
 
   close(): void {
     if (this.path === null) return;
     this.path = null;
     this.have.clear();
+    this.dropFigure();
     this.el.hidden = true;
     this.canvas.replaceChildren();
     this.drawn = null;
     this.onClose();
+  }
+
+  /** How the pane is showing the list at `path`, or null when it is showing
+   *  another list or none. */
+  showing(path: readonly number[]): PaneMode | null {
+    const mine = this.path;
+    if (mine === null || mine.length !== path.length || !mine.every((step, i) => path[i] === step)) return null;
+    return this.mode;
   }
 
   /** The list this pane is showing, so the caller can tell whether a path is
@@ -148,7 +277,7 @@ export class ListPane {
   // ----- drawing -----
 
   private paint(): void {
-    if (this.path === null || this.el.hidden) return;
+    if (this.path === null || this.el.hidden || this.mode === "plot") return;
     const first = Math.max(0, Math.floor(this.scroller.scrollTop / ROW) - OVERSCAN);
     const last = Math.min(this.count, Math.ceil((this.scroller.scrollTop + this.scroller.clientHeight) / ROW) + OVERSCAN);
     if (this.drawn !== null && this.drawn.from === first && this.drawn.to === last) return;

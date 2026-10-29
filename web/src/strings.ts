@@ -4015,4 +4015,66 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** A run of numbers as a plot (`viz/valueplot.ts`): a line per channel, or
+   *  a grid of colours for a run with two dimensions. */
+  valuePlot: {
+    /** The listing heading's button, and what it does. */
+    button: "Plot",
+    buttonTitle: (count: number, unit: string): string => `Plot all ${countText(count, unit)} in the pane beside the listing`,
+    /** The list pane's two ways of showing its list. */
+    paneRows: "List",
+    paneRowsTitle: "Show one row per element",
+    panePlot: "Plot",
+    panePlotTitle: "Show the values as a plot",
+    /** While the bytes of the run are still arriving. */
+    reading: "Reading the values…",
+    /** A run longer than the plot reads. */
+    firstOf: (shown: number, total: number, unit: string): string =>
+      `Plotting the first ${shown.toLocaleString()} of ${countText(total, unit)}`,
+    /** Hover card over the line. The title is the element's number in its run,
+     *  counted from 0 as the listing counts, and its time when the run has a
+     *  rate. */
+    at: (word: string, index: number): string => `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()}`,
+    atTime: (word: string, index: number, seconds: string): string =>
+      `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()} at ${seconds}`,
+    /** One channel's value, or the one value of a run with one channel. */
+    channelValue: (channel: string, value: string): string => `${channel}: ${value}`,
+    oneValue: (value: string): string => `Value: ${value}`,
+    /** When one pixel of the line stands for several elements, the card says
+     *  which, and the lowest and highest of them, which is what the line drawn
+     *  there shows. */
+    inPixel: (word: string, from: number, to: number): string =>
+      `In this pixel, ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}:`,
+    channelRange: (channel: string, low: string, high: string): string => `${channel}: ${low} to ${high}`,
+    oneRange: (low: string, high: string): string => `Lowest ${low}, highest ${high}`,
+    /** The muted foot of the card: where the element is and what type. */
+    where: (offset: string, type: string): string => `${offset} · ${type}`,
+    /** A miniSEED record's decoded samples in the At cursor panel. A sample of
+     *  a Steim record is a sum of differences, so it is at no one place; the
+     *  card names the 64-byte frame its difference was read from, which is
+     *  what a click selects. */
+    samplesTitle: "Decoded samples",
+    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()} · ${offset}`,
+    /** The choice over a run with two dimensions. */
+    grid: "Grid",
+    gridTitle: "Show the values as a grid of colours, one cell per value",
+    line: "Line",
+    lineTitle: "Show the values as one line, in the order they are stored",
+    /** Over the grid: its shape, in the order the values are stored. */
+    shape: (rows: number, columns: number): string =>
+      `${countText(rows, "row")} of ${countText(columns, "value")}`,
+    /** Over the grid when it is drawn smaller than one pixel a value. */
+    meanOf: (n: number): string => `Each pixel shows the mean of ${n.toLocaleString()} values`,
+    /** The colour scale's range. */
+    rangeFull: "Full range",
+    rangeFullTitle: "Colours run from the lowest value to the highest",
+    rangeClip: "Middle 99%",
+    rangeClipTitle: "Colours run over the middle 99% of values; values outside that take the end colours",
+    /** Hover card over the grid. */
+    cell: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    /** The foot of a card over one element: its index in the run, counted
+     *  from 0 as the listing counts, where it is, and its type. */
+    element: (index: number, offset: string, type: string): string => `[${index.toLocaleString()}] · ${offset} · ${type}`,
+    cellMean: (n: number, value: string): string => `Mean of ${n.toLocaleString()} values: ${value}`,
+  },
 } as const;

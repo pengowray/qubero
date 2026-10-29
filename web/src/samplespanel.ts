@@ -83,6 +83,21 @@ export function frameRows(info: SamplesInfo): StepRow[] {
   });
 }
 
+/** Which frame sample `sample` was decoded from: the frame whose differences
+ *  made it, counted the way [`frameRows`] counts, so frame 0 holds sample 0.
+ *  Null for a sample past the frames the core listed, and for a record that is
+ *  not Steim. The plot of the samples (`viz/valueplot.ts`) lights that frame's
+ *  64 bytes, since a Steim sample has no bytes of its own. */
+export function frameOfSample(info: SamplesInfo, sample: number): number | null {
+  if (!info.steim || sample < 0) return null;
+  let next = 0;
+  for (let f = 0; f < info.frames.length; f++) {
+    next += info.frames[f]?.used ?? 0;
+    if (sample < next) return f;
+  }
+  return null;
+}
+
 function stepLine(row: StepRow, cls = "insp-orow is-step"): HTMLElement {
   const e = document.createElement("div");
   e.className = cls;

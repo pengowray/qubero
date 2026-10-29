@@ -1,0 +1,159 @@
+/* ---- a numeric run as a plot (viz/valueplot.ts) ---- */
+/* Imported by valueplot.ts, so it loads with the piece and not with every
+   page. The series colours are the dataviz palette's first categorical slots,
+   the same hexes `fieldstyle.ts` gives the length and position roles, stepped
+   for each ground. The canvas reads them when it paints, so the lines and the
+   lane names cannot disagree, and a change of theme is one repaint. */
+.vp {
+  --vp-1: #2a78d6;
+  --vp-2: #eb6834;
+  --vp-3: #1baf7a;
+  --vp-4: #eda100;
+  --vp-5: #e87ba4;
+  --vp-6: #008300;
+  --vp-7: #6250d6;
+  --vp-8: #6f7887;
+  /* The diverging ramp of the grid: blue for below zero, orange above, grey
+     at zero. Not the palette's red pole, which here means a wrong value. */
+  --vp-neg: #2a78d6;
+  --vp-mid: #f0efec;
+  --vp-pos: #eb6834;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  min-width: 0;
+  font: 12px var(--sans);
+}
+@media (prefers-color-scheme: dark) {
+  .vp {
+    --vp-1: #3987e5;
+    --vp-2: #d95926;
+    --vp-3: #199e70;
+    --vp-4: #c98500;
+    --vp-5: #d55181;
+    --vp-6: #008300;
+    --vp-7: #9085e9;
+    --vp-8: #a3abb8;
+    --vp-neg: #3987e5;
+    --vp-mid: #383835;
+    --vp-pos: #d95926;
+  }
+}
+.vp-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 22px;
+}
+.vp-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vp-note {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.vp-reading {
+  color: var(--muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+/* Two or three choices side by side, one of them pressed: List or Plot in
+   the pane's bar, Grid or Line over a two-dimensional run, the colour range.
+   The pressed one wears the accent fill the app gives a selection. */
+.vp-seg {
+  display: inline-flex;
+  flex: none;
+}
+.vp-seg button {
+  min-height: 0;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 0;
+}
+.vp-seg button:first-child {
+  border-start-start-radius: 4px;
+  border-end-start-radius: 4px;
+}
+.vp-seg button:last-child {
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
+}
+.vp-seg button + button {
+  margin-inline-start: -1px;
+}
+.vp-seg button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+/* The lanes, one per channel, over one x axis. Drag pans and the wheel
+   zooms, so the lanes ask for the grab cursor and keep a drag from selecting
+   the lane names. */
+.vp-lanes {
+  position: relative;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.vp-lanes:active {
+  cursor: grabbing;
+}
+.vp-lane-name {
+  position: absolute;
+  z-index: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  color: var(--fg);
+  font-size: 11px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.vp-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 2px;
+  margin-inline-end: 4px;
+  vertical-align: middle;
+}
+/* uPlot draws its own crosshair as a dashed line; the app's hairlines are
+   solid, and the crosshair is the muted ink. */
+.vp .u-cursor-x {
+  border-right: 1px solid var(--muted) !important;
+}
+.vp .u-over,
+.vp .uplot {
+  cursor: inherit;
+}
+/* ---- the grid, for a run of two dimensions ---- */
+.vp-grid {
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.vp-grid:active {
+  cursor: grabbing;
+}
+.vp-bar {
+  display: block;
+}
+/* The list pane holds a plot in place of its rows: the plot takes the pane's
+   height, and the pane's bar keeps the choice between them. */
+.lp-plot {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 8px;
+  font-family: var(--sans);
+}
+.lp-plot[hidden] {
+  display: none;
+}
