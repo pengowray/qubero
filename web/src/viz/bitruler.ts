@@ -46,7 +46,7 @@ import type { Doc, FieldPick, FlagsInfo, TemplateNode } from "../doc.ts";
 import { bitFormula, bitFormulaLow } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import { bitSizeText, countText, VIZ } from "../strings.ts";
-import { bytesOf, fieldValueBits, rowBitsFor, rulerCells, runsOf, valueBit, wordEndian, type CellOrder, type RulerCell } from "./bitlayout.ts";
+import { bytesOf, fieldValueBits, leadingInteger, rowBitsFor, rulerCells, runsOf, valueBit, wordEndian, type CellOrder, type RulerCell } from "./bitlayout.ts";
 import { canvasMeasure, ellipsise, monoMeasure, type Measure } from "./fit.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor, subscribeWhileConnected, type BitRange } from "./linked.ts";
@@ -161,7 +161,7 @@ function flagsData(doc: Doc, n: TemplateNode, path: readonly number[]): RulerDat
   }
   const records = aligned ? recordsOf(doc, n, path, byteCount) : null;
   return {
-    title: records === null ? T.titleFlags(n.name) : T.titleRecords(n.name, records.count),
+    title: records === null ? T.titleFlags(n.name) : records.list.length < records.total ? T.titleSome(n.name, records.list.length, records.count) : T.titleRecords(n.name, records.count),
     firstByte,
     byteCount,
     bytes: read.bytes,
@@ -180,7 +180,10 @@ function flagsData(doc: Doc, n: TemplateNode, path: readonly number[]): RulerDat
  * steps down from the element and of the same type: the general-purpose flags
  * of every ZIP local header, the characteristics of every PE section. Null
  * when fewer than two elements have one, and while any of their bytes are on
- * the way (the figure is drawn again when they land).
+ * the way (the figure is drawn again when they land). `total` is how many
+ * elements the list has, and `count` says it in the list's own word, so a
+ * list of mixed records (a ZIP's local headers among its central directory
+ * entries) says how many of them are stacked and how many there are.
  */
 function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount: number): { list: RulerRecord[]; total: number; count: string } | null {
   for (let depth = path.length - 2; depth >= 0; depth--) {
@@ -200,7 +203,8 @@ function recordsOf(doc: Doc, n: TemplateNode, path: readonly number[], byteCount
       out.push({ name: kid.name, node: r.node, bytes: bytes.bytes });
     }
     if (out.length < 2) return null;
-    return { list: out, total: out.length, count: recordCount(list.node, out.length) };
+    const total = list.node.child_count;
+    return { list: out, total, count: recordCount(list.node, total) };
   }
   return null;
 }
@@ -224,12 +228,17 @@ function bytesData(doc: Doc, n: TemplateNode): RulerData | null {
   const fields: RulerField[] = [];
   for (const { node: s, bits } of leaves) {
     const value = s.value;
+    const stored = storedValue(doc, s);
+    const said = leadingInteger(value);
     fields.push({
       name: s.name,
       bits,
       lines: [value, `${s.type} · ${bitSizeText(s.size_bits)}`],
       formula: (s.lsb_first ? bitFormulaLow : bitFormula)(s.offset_bits, s.size_bits),
-      legend: value === "" ? s.name : `${s.name} = ${value}`,
+      // A field the format adjusts after reading (deflate's HDIST is stored
+      // one short) says both numbers, as the bit-order ribbon does, so the
+      // legend and the bits under the box do not seem to disagree.
+      legend: value === "" ? s.name : stored !== null && said !== null && stored !== said ? T.storedRead(s.name, stored.toString(), value) : `${s.name} = ${value}`,
       set: null,
       pick: { path: s.path, startBit: s.offset_bits, endBit: s.offset_bits + s.size_bits },
     });
@@ -249,6 +258,22 @@ function bytesData(doc: Doc, n: TemplateNode): RulerData | null {
     records: null,
     recordTotal: 0,
   };
+}
+
+/** The number a field's own bits make, before the format adjusts it, or null
+ *  for one wider than 32 bits or whose bytes are not here. */
+function storedValue(doc: Doc, s: TemplateNode): bigint | null {
+  if (s.size_bits > 32 || s.composite) return null;
+  const bits = fieldValueBits(s.offset_bits, s.size_bits, s.lsb_first);
+  const [first, count] = bytesOf(bits);
+  const read = doc.read(first, count);
+  if (!read.complete) return null;
+  let v = 0n;
+  bits.forEach((k, i) => {
+    const byte = read.bytes[Math.floor(k / 8) - first] ?? 0;
+    if (((byte >> (7 - (k % 8))) & 1) === 1) v |= 1n << BigInt(i);
+  });
+  return v;
 }
 
 /** The most fields looked at under one structure, and the deepest a word's
@@ -307,7 +332,9 @@ export function bitRulerData(doc: Doc, n: TemplateNode, path: readonly number[])
 
 /** Whether a field is drawn by the ruler: a flags field of up to 64 bits, or
  *  any value smaller than a byte or off a byte boundary. A deflate code is
- *  the bit-order ribbon's (`bitpack.ts`) and not drawn here. */
+ *  the bit-order ribbon's (`bitpack.ts`) and not drawn here. Only a field in
+ *  space 0 is drawn, the bytes `Doc.read` reads: a field of a stream inside
+ *  them (a PNG's joined IDAT data) counts its offset from that stream. */
 function rulerApplies(n: TemplateNode): boolean {
   if (n.composite || n.space !== 0 || n.size_bits === 0 || n.kind === "str") return false;
   if (n.kind === "flags") return n.size_bits <= 64;
@@ -327,9 +354,9 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
  *  row of cells (a stacked record's row is shorter), and the gap between
  *  blocks when the word wraps. */
 const NUM_H = 13;
-const BOX_H = 18;
-const CELL_H = 18;
-const REC_H = 15;
+const BOX_H = 22;
+const CELL_H = 22;
+const REC_H = 18;
 const BLOCK_GAP = 10;
 /** Extra room between two bytes, so a byte reads as one. */
 const BYTE_GAP = 3;
@@ -343,11 +370,25 @@ const GUTTER_PAD = 6;
 /** Widest a record's name is drawn down the left before it is cut short. */
 const MAX_REC_NAME = 96;
 
+/** The face the ruler's names are drawn in (`.br-name`, `.br-rec` in
+ *  `bits.css`), in the regular weight and in the bold the current record is
+ *  drawn in. */
 let measure: Measure | null = null;
+let measureBold: Measure | null = null;
+function sansFamily(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue("--sans").trim() || getComputedStyle(document.body).fontFamily;
+}
 function measurer(): Measure {
-  measure ??= canvasMeasure(getComputedStyle(document.body).fontFamily);
+  measure ??= canvasMeasure(sansFamily());
   return measure;
 }
+function boldMeasurer(): Measure {
+  measureBold ??= canvasMeasure(sansFamily(), "600");
+  return measureBold;
+}
+/** Each ruler's hatch pattern gets its own id, so two rulers on one page do
+ *  not fill each other's cells. */
+let hatchIds = 0;
 const MONO = monoMeasure();
 
 /** What the reader picked, kept across fields: the order of the bits in each
@@ -412,7 +453,9 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     // The gutter down the left: the address of each row's first byte, or the
     // name of each record.
     const addrW = MONO(formatOffset((data.firstByte + data.byteCount) * 8), 10);
-    const recW = records === null ? 0 : Math.min(MAX_REC_NAME, Math.max(...records.map((r) => measurer()(r.name, NAME_PX))));
+    // Measured in the bold the current record is drawn in, which is the
+    // wider weight, so no name that fits is cut when it becomes current.
+    const recW = records === null ? 0 : Math.min(MAX_REC_NAME, Math.max(...records.map((r) => boldMeasurer()(r.name, NAME_PX))));
     const gutter = Math.ceil(Math.max(addrW, recW)) + GUTTER_PAD;
     const fits = rowBitsFor(data.byteCount, opts.width - gutter, MIN_CELL, BYTE_GAP);
     const most = Math.min(32, data.byteCount * 8);
@@ -447,7 +490,9 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
 
     const root = svg("svg", { width: gridW, height, class: "vb-svg br-svg", role: "img", "aria-label": data.title });
     const defs = svg("defs");
-    const hatch = svg("pattern", { id: "br-hatch", width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+    const hatchId = `br-hatch-${++hatchIds}`;
+    fig.style.setProperty("--br-hatch", `url(#${hatchId})`);
+    const hatch = svg("pattern", { id: hatchId, width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
     hatch.append(svg("rect", { width: 5, height: 5, class: "br-cell is-set" }), svg("line", { x1: 0, y1: 0, x2: 0, y2: 5, class: "br-hatch-line" }));
     defs.append(hatch);
     root.append(defs);
@@ -475,7 +520,10 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
         legendKey.set(i, data.flags.valueBitOf([...f.bits][0] ?? 0));
         continue;
       }
-      // The name goes in the widest of the field's boxes, if it fits there.
+      // The name goes in the widest of the field's boxes if all of it fits
+      // there. A name cut short could read the same as its neighbour's
+      // ("code l…" twice), so one that does not fit is left out of the box
+      // and keyed to the legend instead.
       let best = -1;
       let bestW = 0;
       runs.forEach((r, j) => {
@@ -485,8 +533,7 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
           best = j;
         }
       });
-      const text = ellipsise(f.name, bestW - 2 * NAME_PAD, NAME_PX, measurer(), 4);
-      if (text !== null && best >= 0) inBox.set(i, { run: best, text });
+      if (best >= 0 && measurer()(f.name, NAME_PX) <= bestW - 2 * NAME_PAD) inBox.set(i, { run: best, text: f.name });
       else {
         keyOf.set(i, keyOf.size + 1);
         legendKey.set(i, keyOf.size);
@@ -537,9 +584,7 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
           a.textContent = formatOffset((data.firstByte + Math.floor((first?.bit ?? 0) / 8)) * 8);
           g.append(a);
         } else {
-          // Measured in the regular weight and drawn bold for the current record,
-          // so a tenth is kept in hand for the bold.
-          const name = ellipsise(rec.name, (gutter - GUTTER_PAD) * 0.9, NAME_PX, measurer(), 3) ?? "";
+          const name = ellipsise(rec.name, gutter - GUTTER_PAD, NAME_PX, boldMeasurer(), 3) ?? "";
           const a = svg("text", { x: gutter - GUTTER_PAD, y: y + lineH / 2, class: `br-rec${samePath(rec.node.path, data.node.path) ? " is-on" : ""}`, "text-anchor": "end", "dominant-baseline": "central" });
           a.textContent = name;
           a.dataset.record = String(line);
@@ -617,12 +662,32 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
         return null;
       }),
     );
+    // While the pointer is on the ruler its own hover lights the cells; while
+    // it is elsewhere, a hover from another view of the file (the hex view, a
+    // diagram) lights the cells whose bits it covers.
+    let inside = false;
+    const enter = (): void => {
+      inside = true;
+    };
     const leave = (): void => {
+      inside = false;
       lit(null, null, null);
       bus.publish({ hover: null });
     };
+    root.addEventListener("pointerenter", enter);
     root.addEventListener("pointerleave", leave);
-    cleanups.push(() => root.removeEventListener("pointerleave", leave));
+    cleanups.push(() => {
+      root.removeEventListener("pointerenter", enter);
+      root.removeEventListener("pointerleave", leave);
+    });
+    const litFrom = (range: BitRange | null): void => {
+      for (const b of boxEls) b.el.classList.remove("is-lit");
+      for (const [k, el] of cellEls) {
+        const [l, bt] = k.split("/").map(Number);
+        const at = recordBase(records === null ? null : (l ?? null)) * 8 + (bt ?? 0);
+        el.classList.toggle("is-lit", range !== null && at >= range.startBit && at < range.endBit);
+      }
+    };
     root.addEventListener("click", (e) => {
       const d = (e.target as SVGElement | null)?.dataset;
       if (d === undefined) return;
@@ -655,7 +720,10 @@ export function drawBitRuler(doc: Doc, data: RulerData, opts: { readonly width: 
     mark();
     cleanups.push(
       subscribeWhileConnected(bus, fig, (state, changed) => {
-        if (changed !== "selection") return;
+        if (changed === "hover") {
+          if (!inside) litFrom(state.hover);
+          return;
+        }
         selected = state.selection?.path ?? null;
         mark();
       }),

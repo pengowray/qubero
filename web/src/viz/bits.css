@@ -8,7 +8,9 @@
    them, in both themes: blue for bits read high bit first (a Huffman code,
    a varint's value bits), orange for a number stored low bit first (extra
    bits, any field packed from the bottom of each byte), purple for EBML's
-   length marker, and grey for framing. Red is left out: it means a wrong
+   length marker, and grey for framing. A match code's distance takes aqua
+   for its code and violet for its extra bits, so all four parts of a match
+   have their own hue. Red is left out: it means a wrong
    value on this screen. Fills are tints of the hue with the text in the
    page's own colour on top, so a digit reads at 4.5:1 in either theme. */
 
@@ -16,6 +18,8 @@
   --vb-code: #2a78d6;
   --vb-extra: #eb6834;
   --vb-marker: #6250d6;
+  --vb-dist: #1baf7a;
+  --vb-dist-extra: #6250d6;
   --vb-frame: #8a8f98;
   --vb-set: #2a78d6;
 }
@@ -24,6 +28,8 @@
     --vb-code: #3987e5;
     --vb-extra: #d95926;
     --vb-marker: #9085e9;
+    --vb-dist: #199e70;
+    --vb-dist-extra: #9085e9;
     --vb-frame: #7d838c;
     --vb-set: #3987e5;
   }
@@ -94,8 +100,8 @@
    own small text: it changes how the figure reads, and nothing else. */
 .vb-toggle {
   font-size: 11px;
-  padding: 1px 6px;
-  min-height: 0;
+  padding: 2px 8px;
+  min-height: 24px;
 }
 .vb-toggle[aria-pressed="true"] {
   background: var(--accent-soft);
@@ -111,8 +117,9 @@
 }
 .vb-seg button {
   font-size: 11px;
-  padding: 1px 6px;
-  min-height: 0;
+  padding: 2px 8px;
+  min-width: 24px;
+  min-height: 24px;
 }
 .vb-seg button[aria-pressed="true"] {
   background: var(--accent-soft);
@@ -224,7 +231,7 @@
 /* A set bit the format has no name for: hatched, so it reads as set and as
    something else at once, without leaning on colour alone. */
 .br-cell.is-unnamed {
-  fill: url(#br-hatch);
+  fill: var(--br-hatch);
 }
 .br-hatch-line {
   stroke: var(--vb-extra);

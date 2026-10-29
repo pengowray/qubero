@@ -27,8 +27,9 @@ export function monoMeasure(ratio = 0.6): Measure {
  * A canvas measurer for one font family. Widths scale with the size, so each
  * text is measured once at a reference size and scaled after, which keeps a
  * redraw of a thousand names at every zoom step to a thousand map lookups.
+ * `weight` is a CSS font weight, such as "600" for text drawn bold.
  */
-export function canvasMeasure(family: string): Measure {
+export function canvasMeasure(family: string, weight = ""): Measure {
   const REF = 100;
   const cache = new Map<string, number>();
   let ctx: CanvasRenderingContext2D | null = null;
@@ -37,7 +38,7 @@ export function canvasMeasure(family: string): Measure {
     if (w === undefined) {
       ctx ??= document.createElement("canvas").getContext("2d");
       if (ctx === null) return text.length * size * 0.6;
-      ctx.font = `${REF}px ${family}`;
+      ctx.font = `${weight === "" ? "" : `${weight} `}${REF}px ${family}`;
       w = ctx.measureText(text).width;
       // A bound on memory, not a policy: a piece that names fifty thousand
       // records measures each once per redraw rather than keeping them all.

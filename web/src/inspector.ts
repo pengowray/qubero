@@ -30,6 +30,7 @@ import { nodeSwatch, paint } from "./colour.ts";
 import { withPictures } from "./textview.ts";
 import { typePanel } from "./typepanel.ts";
 import { inspectorSectionsFor } from "./viz/inspectorsections.ts";
+import { hideTip } from "./viz/tip.ts";
 import { openPlan, type OpenPlan } from "./openplan.ts";
 import { extraction } from "./bitextract.ts";
 import {
@@ -1151,10 +1152,23 @@ export class Inspector {
       next.set(section.id, { key, el: drawn });
       shown.push(drawn);
     }
+    // A figure being replaced may hold the keyboard focus (its arrow keys
+    // moved the cursor, which is what redrew it) or have a hover card up for
+    // the pointer resting on it. The focus goes to the same section's new
+    // figure, so the next key press reaches it; the card goes, since what it
+    // described is gone and the old figure will never hear the pointer leave.
+    let refocus: HTMLElement | null = null;
+    for (const [id, prev] of this.vizDrawn) {
+      const now = next.get(id);
+      if (now?.el === prev.el) continue;
+      if (prev.el.contains(document.activeElement)) refocus = now?.el ?? null;
+      if (prev.el.matches(":hover")) hideTip();
+    }
     this.vizDrawn = next;
     const same = shown.length === this.vizHost.children.length && shown.every((e, i) => this.vizHost.children[i] === e);
     if (!same) this.vizHost.replaceChildren(...shown);
     this.vizHost.hidden = shown.length === 0;
+    if (refocus !== null && refocus.tabIndex >= 0) refocus.focus({ preventScroll: true });
   }
 
   /**

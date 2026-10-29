@@ -79,7 +79,7 @@ export function varintData(doc: Doc, n: TemplateNode): VarintData | null {
 
 /** Heights of the figure's parts, in pixels. */
 const HEX_H = 13;
-const CELL_H = 17;
+const CELL_H = 22;
 const GAP_H = 34;
 /** The widest and narrowest a bit is drawn, and the narrowest that still
  *  carries its digit. */

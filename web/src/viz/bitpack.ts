@@ -33,9 +33,10 @@ import "./bits.css";
 import { bitOrderLayout, partValues, readOrderDigits, type BitOrderLayout, type BitPart, type BitReading } from "../bitorder.ts";
 import type { Doc, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
-import { ribbon, type RibbonBox, type RibbonData } from "../report/ribbon.ts";
+import { ribbon } from "../report/ribbon.ts";
 import { VIZ } from "../strings.ts";
 import { leadingInteger } from "./bitlayout.ts";
+import { digitName, packRibbon, PART_COLORS, type PackInput } from "./bitpacklayout.ts";
 import { registerInspectorSection } from "./inspectorsections.ts";
 import { linkedFor } from "./linked.ts";
 import { goToBits, goToField } from "./pick.ts";
@@ -48,18 +49,9 @@ const T = VIZ.bitPack;
 const MAX_BITS = 64;
 /** The most a digit of the figure is drawn across, in pixels. */
 const MAX_DIGIT_PX = 16;
-
-/** The colour of a part: blue for bits read high bit first, orange for a
- *  number stored low bit first (`bits.css`). */
-function partColor(p: BitPart | undefined): string {
-  return p?.lowFirst === true ? "var(--vb-extra)" : "var(--vb-code)";
-}
-
-/** The same colour as a tint of the page, for a box with a digit on it: the
- *  digit is in the page's own colour and reads at 4.5:1 in either theme. */
-function partTint(p: BitPart | undefined): string {
-  return `color-mix(in srgb, ${partColor(p)} 32%, var(--bg))`;
-}
+/** How tall a bit box is drawn, which is also the height of what a pointer
+ *  aims at: the boxes of a row touch, so every point along it is one. */
+const BOX_PX = 22;
 
 /** Whether a field is a code of a deflate stream: its parent counts codes. */
 function isCode(doc: Doc, n: TemplateNode): boolean {
@@ -78,7 +70,7 @@ function crossesBytes(n: TemplateNode): boolean {
 /** The parts of a deflate code under the cursor, from the decoder's own
  *  reading of it (`Doc.decodedCode`), or null where the stream above it is
  *  not one the decoder can step through. */
-function codeParts(doc: Doc, n: TemplateNode): BitPart[] | null {
+function codeParts(doc: Doc, n: TemplateNode): { parts: BitPart[]; colors: string[] } | null {
   for (let i = n.path.length - 1; i >= 1; i--) {
     const at = n.path.slice(0, i);
     const up = doc.templateNode(at);
@@ -86,29 +78,26 @@ function codeParts(doc: Doc, n: TemplateNode): BitPart[] | null {
     const found = doc.decodedCode(at, up.node.offset_bits, n.offset_bits);
     if (found === null) return null;
     const parts: BitPart[] = [];
+    const colors: string[] = [];
     // A match is two codes, each with its own extra bits, and the panel's
     // Decoded section calls them the length and the distance; so does this.
     const match = found.step.distance !== undefined;
-    const add = (c: { readonly code_bits: number; readonly extra_bits: number }, code: string, extra: string): void => {
+    const add = (c: { readonly code_bits: number; readonly extra_bits: number }, code: string, extra: string, distance: boolean): void => {
       parts.push({ bits: c.code_bits, lowFirst: false, label: code });
-      if (c.extra_bits > 0) parts.push({ bits: c.extra_bits, lowFirst: true, label: extra });
+      colors.push(distance ? PART_COLORS.distanceCode : PART_COLORS.code);
+      if (c.extra_bits > 0) {
+        parts.push({ bits: c.extra_bits, lowFirst: true, label: extra });
+        colors.push(distance ? PART_COLORS.distanceExtra : PART_COLORS.extra);
+      }
     };
-    add(found.step.symbol, match ? T.lengthCode : T.huffman, match ? T.lengthExtra : T.extra);
-    if (found.step.distance !== undefined) add(found.step.distance, T.distanceCode, T.distanceExtra);
-    return parts;
+    add(found.step.symbol, match ? T.lengthCode : T.huffman, match ? T.lengthExtra : T.extra, false);
+    if (found.step.distance !== undefined) add(found.step.distance, T.distanceCode, T.distanceExtra, true);
+    return { parts, colors };
   }
   return null;
 }
 
-export type BitPackData = {
-  readonly node: TemplateNode;
-  readonly parts: readonly BitPart[];
-  /** The field's digits in the order it reads them. */
-  readonly digits: string;
-  /** The bytes it touches. */
-  readonly bytes: Uint8Array;
-  readonly code: boolean;
-};
+export type BitPackData = PackInput & { readonly node: TemplateNode };
 
 /** Codes whose parts did not add up to their digits, by document, so a
  *  figure that can never be drawn is not worked out again on every render. */
@@ -122,68 +111,23 @@ export function bitPackData(doc: Doc, n: TemplateNode): BitPackData | null {
   const key = `${n.path.join("/")}|${n.offset_bits}`;
   if (UNDRAWABLE.get(doc)?.has(key) === true) return null;
   const code = isCode(doc, n);
-  let parts: BitPart[] | null = code ? codeParts(doc, n) : [{ bits: count, lowFirst: true, label: n.name }];
-  if (parts === null) return null;
+  const found = code ? codeParts(doc, n) : { parts: [{ bits: count, lowFirst: true, label: n.name }], colors: [PART_COLORS.extra] };
+  if (found === null) return null;
   // A band drawn to the wrong digit is worse than none.
-  if (parts.reduce((t, p) => t + p.bits, 0) !== count) {
+  if (found.parts.reduce((t, p) => t + p.bits, 0) !== count) {
     if (!UNDRAWABLE.has(doc)) UNDRAWABLE.set(doc, new Set());
     UNDRAWABLE.get(doc)?.add(key);
     return null;
   }
-  parts = parts.filter((p) => p.bits > 0);
+  const keep = found.parts.map((p) => p.bits > 0);
+  const parts = found.parts.filter((_, i) => keep[i]);
+  const colors = found.colors.filter((_, i) => keep[i]);
   const first = Math.floor(n.offset_bits / 8);
   const last = Math.floor((n.offset_bits + count - 1) / 8);
   const read = doc.read(first, last - first + 1);
   if (!read.complete) return null;
   const digits = code && n.edit_text.length === count ? n.edit_text : readOrderDigits(read.bytes, n.offset_bits, count);
-  return { node: n, parts, digits, bytes: read.bytes, code };
-}
-
-/** The ribbon's two rows and the bands between them, for one reading. */
-export function packRibbon(data: BitPackData, layout: BitOrderLayout): RibbonData {
-  const { parts, digits, bytes } = data;
-  // A half-digit gap between bytes, and between parts, so each reads as one.
-  const byteBox = (slot: number): { from: number; to: number } => {
-    const at = Math.floor(slot / 8) * 8.5 + (slot % 8);
-    return { from: at, to: at + 1 };
-  };
-  const inField = new Map<number, number>();
-  layout.top.forEach((slot, i) => inField.set(slot, i));
-  const topBoxes: RibbonBox[] = [];
-  for (let slot = 0; slot < layout.byteCount * 8; slot++) {
-    const byte = bytes[Math.floor(slot / 8)] ?? 0;
-    const digit = (byte >> (7 - (slot % 8))) & 1;
-    const i = inField.get(slot);
-    const part = i === undefined ? undefined : parts[layout.partOf[i] ?? 0];
-    topBoxes.push({ ...byteBox(slot), label: String(digit), color: i === undefined ? "var(--muted)" : partTint(part), dim: i === undefined });
-  }
-  const bottomStart: number[] = [];
-  let at = 0;
-  for (const p of parts) {
-    bottomStart.push(at);
-    at += p.bits + 0.5;
-  }
-  const base: number[] = [];
-  let sum = 0;
-  for (const p of parts) {
-    base.push(sum);
-    sum += p.bits;
-  }
-  // One bottom box per bit of the field, in the field's own read order, so
-  // bottom box `i` and band `i` are both bit `i`.
-  const bottomBoxes: RibbonBox[] = layout.bottom.map((slot, i) => {
-    const p = layout.partOf[i] ?? 0;
-    const x = (bottomStart[p] ?? 0) + (slot - (base[p] ?? 0));
-    return { from: x, to: x + 1, label: digits[i] ?? "", color: partTint(parts[p]) };
-  });
-  const topEnd = layout.byteCount * 8.5 - 0.5;
-  const from = formatOffset(layout.firstByte * 8);
-  const to = formatOffset((layout.firstByte + layout.byteCount - 1) * 8);
-  return {
-    top: { from: 0, to: Math.max(topEnd, at - 0.5), caption: T.stored(from, to), boxes: topBoxes },
-    bottom: { from: 0, to: Math.max(topEnd, at - 0.5), caption: data.code ? T.read : T.readOne, boxes: bottomBoxes },
-    bands: layout.top.map((slot, i) => ({ top: slot, bottom: i, color: partColor(parts[layout.partOf[i] ?? 0]) })),
-  };
+  return { node: n, parts, colors, digits, bytes: read.bytes, code };
 }
 
 /** Whether the comparison with the wrong reading is on. Kept across fields,
@@ -210,7 +154,6 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "vb-toggle";
-  toggle.textContent = T.compare;
   toggle.title = T.compareTitle;
   head.append(title, toggle);
   const body = document.createElement("div");
@@ -227,13 +170,15 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
   const render = (): void => {
     const reading: BitReading = comparing ? "hex" : "format";
     layout = bitOrderLayout(n.offset_bits, count, data.parts, reading);
-    toggle.setAttribute("aria-pressed", String(comparing));
+    // The label says what a press does, so it changes with the state and is
+    // not also marked pressed.
+    toggle.textContent = comparing ? T.compareOff : T.compare;
     const rib = packRibbon(data, layout);
     const units = rib.top.to;
     const width = Math.max(80, Math.min(opts.width, units * MAX_DIGIT_PX));
     const svg = ribbon(rib, {
       width,
-      box: 14,
+      box: BOX_PX,
       gap: 34,
       charWidth: 5,
       strand: 0.3,
@@ -276,7 +221,7 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
       seen.add(text);
       const sw = document.createElement("span");
       sw.className = "vb-swatch";
-      sw.style.background = partColor(p);
+      sw.style.background = data.colors[i] ?? PART_COLORS.code;
       const item = document.createElement("span");
       item.append(sw, text);
       box.append(item);
@@ -295,19 +240,31 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
       }
       const bit = fileBit(slot);
       const digit = ((data.bytes[Math.floor(slot / 8)] ?? 0) >> (7 - (slot % 8))) & 1;
-      tipAt(tipCard(T.otherBit, [T.bitValue(digit), T.storedAs(7 - (slot % 8)), T.goToOther], formatOffset(Math.floor(bit / 8) * 8)), e.clientX, e.clientY);
+      const other = neighbour(slot);
+      const head = other === null ? T.otherBit : T.otherBitOf(other);
+      tipAt(tipCard(head, [T.bitValue(digit), T.storedAs(7 - (slot % 8)), T.goToOther], formatOffset(Math.floor(bit / 8) * 8)), e.clientX, e.clientY);
       bus.publish({ hover: { startBit: bit, endBit: bit + 1 } });
       return;
     }
     const slot = layout.top[band] ?? 0;
-    const p = layout.partOf[band] ?? 0;
-    const part = data.parts[p];
-    const base = data.parts.slice(0, p).reduce((t, q) => t + q.bits, 0);
-    const digitNo = (layout.bottom[band] ?? 0) - base + 1;
     const bit = fileBit(slot);
     const lines = [T.bitValue(data.digits[band] === "1" ? 1 : 0), T.storedAs(7 - (slot % 8))];
-    tipAt(tipCard(T.digit(part?.label ?? n.name, digitNo, part?.bits ?? count), lines, formatOffset(Math.floor(bit / 8) * 8)), e.clientX, e.clientY);
+    tipAt(tipCard(digitName(layout, data.parts, band, n.name), lines, formatOffset(Math.floor(bit / 8) * 8)), e.clientX, e.clientY);
     bus.publish({ hover: { startBit: bit, endBit: bit + 1 } });
+  };
+
+  /** The name of the field a faint bit of the top row belongs to, found the
+   *  first time the pointer rests on it. `Doc.locate` counts bits as the hex
+   *  view does, high bit first, which is how the top row counts them too. */
+  const names = new Map<number, string | null>();
+  const neighbour = (slot: number): string | null => {
+    const known = names.get(slot);
+    if (known !== undefined) return known;
+    const path = doc.locate(fileBit(slot));
+    const node = path.status === "ok" ? doc.templateNode(path.node) : null;
+    const name = node !== null && node.status === "ok" && !samePath(node.node.path, n.path) ? node.node.name : null;
+    names.set(slot, name);
+    return name;
   };
 
   /** A click on a bit, either end of a band or the band, goes to that bit. */
@@ -343,8 +300,15 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
     goToField(doc, { path: s.path, startBit: s.offset_bits, endBit: s.offset_bits + s.size_bits });
   };
   fig.addEventListener("keydown", key);
-  const leave = (): void => bus.publish({ hover: null });
+  const leave = (): void => {
+    hideTip();
+    bus.publish({ hover: null });
+  };
   fig.addEventListener("pointerleave", leave);
+  // A press is not a hover, and a click on a bit moves the cursor, which
+  // draws the figure again under the pointer: the card goes now, not when
+  // the pointer next moves.
+  fig.addEventListener("pointerdown", hideTip);
 
   render();
   return {
@@ -353,6 +317,7 @@ export function drawBitPack(doc: Doc, data: BitPackData, opts: { readonly width:
       hideTip();
       fig.removeEventListener("keydown", key);
       fig.removeEventListener("pointerleave", leave);
+      fig.removeEventListener("pointerdown", hideTip);
     },
   };
 }
@@ -372,4 +337,8 @@ export function register(): void {
       return data === null ? null : drawBitPack(doc, data, { width }).el;
     },
   });
+}
+
+function samePath(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((s, i) => s === b[i]);
 }

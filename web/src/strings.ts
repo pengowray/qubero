@@ -4015,13 +4015,14 @@ export const VIZ = {
     label: "How this field's bits are reordered between the bytes and the value",
     stored: (from: string, to: string): string => (from === to ? `As stored: byte ${from}, high bit first` : `As stored: bytes ${from} to ${to}, each high bit first`),
     read: "As read: each part as the number it is",
-    readOne: "As read: the number, high digit first",
+    readOne: "As read: the number, high bit first",
     /** The bottom row while the comparison is on. */
     readHex: "Wrong reading: high bit first, as the hex view shows the bits",
-    compare: "Compare with high bit first",
+    compare: "Compare with the high-bit-first reading",
+    compareOff: "Hide the high-bit-first reading",
     compareTitle: "Show the number these bits make when read high bit first, as the hex view shows them",
     caption: "Deflate takes each byte's bits from the low end. A Huffman code is read in that order, so its digits come out mirrored; extra bits are a number stored low bit first, so their digits keep the byte's order.",
-    captionNumber: "Packed low bit first: the bits in the first byte are the number's lowest digits, and each later byte adds higher ones.",
+    captionNumber: "Packed low bit first: the field's bits in its first byte are the lowest bits of the number, and each later byte holds the next higher bits.",
     huffman: "Huffman code",
     extra: "Extra bits",
     lengthCode: "Length code",
@@ -4033,11 +4034,13 @@ export const VIZ = {
     partStored: (label: string, stored: string, value: string): string => `${label} = ${stored} as stored, read as ${value}`,
     partCompare: (label: string, right: string, wrong: string): string => `${label} = ${right} (high bit first: ${wrong})`,
     /** The hover card on one bit of the field. */
-    digit: (part: string, digit: number, of: number): string => `${part}: digit ${digit} of ${of}`,
+    codeBit: (part: string, bit: number, of: number): string => `${part}: bit ${bit} of ${of}, in the order the code is read`,
+    numberBit: (part: string, bit: number): string => `${part}: bit ${bit} of the number (bit 0 is the lowest)`,
     bitValue: (v: number): string => `Bit value: ${v}`,
     storedAs: (low: number): string => `Stored as bit ${low} of its byte (bit 0 is the lowest)`,
     /** The hover card on a bit of the same bytes that belongs to another field. */
-    otherBit: "Bit of a neighbouring field",
+    otherBit: "Bit of another field",
+    otherBitOf: (name: string): string => `Bit of ${name}`,
     goToOther: "Click to go to that field",
   },
   /** The varint figure (`viz/varintfigure.ts`): a variable-length number's
@@ -4047,9 +4050,9 @@ export const VIZ = {
     stored: (from: string, to: string): string => (from === to ? `As stored: byte ${from}, high bit first` : `As stored: bytes ${from} to ${to}, each high bit first`),
     number: (width: number): string => `The number: ${width === 1 ? "1 value bit" : `${width} value bits`}, high bit first`,
     /** How the value bits of several bytes join, by the order the type uses. */
-    joinLowFirst: "The first byte's value bits are the lowest bits of the number; each later byte's go above them.",
-    joinHighFirst: "The first byte's value bits are the highest bits of the number; each later byte's go below them.",
-    joinSevenZip: "The first byte's value bits are the highest bits of the number; the bytes after it follow, lowest first.",
+    joinLowFirst: "The first byte holds the lowest value bits of the number, and each later byte holds the next higher value bits.",
+    joinHighFirst: "The first byte holds the highest value bits of the number, and each later byte holds the next lower value bits.",
+    joinSevenZip: "The first byte holds the highest value bits of the number. The bytes after it hold the rest, lowest byte first.",
     value: (v: string): string => `Value: ${v}`,
     valueSigned: (v: string, raw: string): string => `Value: ${v} (signed; ${raw} unsigned)`,
     valueZigzag: (v: string, raw: string): string => `Value: ${v} (zigzag; ${raw} before decoding)`,
@@ -4075,11 +4078,13 @@ export const VIZ = {
     titleFlags: (name: string): string => `Bits of ${name}`,
     titleBytes: (from: string, to: string): string => (from === to ? `Fields in byte ${from}` : `Fields in bytes ${from} to ${to}`),
     titleRecords: (name: string, records: string): string => `${name} in each of ${records}`,
-    order: "Bits in each byte",
+    /** Stacked rows when only some of the list's elements have the field. */
+    titleSome: (name: string, shown: number, records: string): string => `${name} in ${shown.toLocaleString()} of the ${records}`,
+    order: "Bit order in each byte",
     highFirst: "7 to 0",
     highFirstTitle: "High bit first, as the hex view shows them",
     lowFirst: "0 to 7",
-    lowFirstTitle: "Low bit first, the order a stream packed from the low end of each byte reads them",
+    lowFirstTitle: "Low bit first, the order that low-bit-first formats such as deflate read them",
     perRow: "Bits per row",
     set: "Set",
     clear: "Clear",
@@ -4093,8 +4098,10 @@ export const VIZ = {
     /** The row glyph's hover card: the bytes' bits as the glyph draws them. */
     glyphBits: (bits: string): string => `Bits, high bit first: ${bits}`,
     setIn: (n: number, of: number): string => (n === of ? `set in all ${of}` : n === 0 ? `clear in all ${of}` : `set in ${n} of ${of}`),
-    showClear: (n: number): string => (n === 1 ? "Show the 1 clear bit" : `Show the ${n} clear bits`),
-    hideClear: (n: number): string => (n === 1 ? "Hide the 1 clear bit" : `Hide the ${n} clear bits`),
+    showClear: (n: number): string => (n === 1 ? "Show the 1 clear flag" : `Show the ${n} clear flags`),
+    hideClear: (n: number): string => (n === 1 ? "Hide the 1 clear flag" : `Hide the ${n} clear flags`),
+    /** A legend entry for a field the format adjusts after reading it. */
+    storedRead: (name: string, stored: string, value: string): string => `${name} = ${stored} as stored, read as ${value}`,
   },
   childStrip: {
     /** The section's heading in the At cursor panel: the structure the
