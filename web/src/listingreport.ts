@@ -399,7 +399,9 @@ export class ListingReport {
       // under one of them puts the middle entry past sixteen bytes.
       saysItself: (node, kids) => FAMILIAR_PICKLE.has(template) && entrySaysItself(node, kids),
       density: (_parent, kids) => (FAMILIAR_PICKLE.has(template) && kids.some((k) => k.type === "entry") ? "rows" : null),
-      formatCard: (node) => formatCardKind(this.doc, node),
+      // The card set also holds the cards a heading button asked for by node
+      // kind (`askedCardKey`), which is how one stands in for the fields.
+      formatCard: (node) => formatCardKind(this.doc, node, this.cards),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,
       hideMachinery: offersSwitch && !this.showMachinery,
@@ -751,6 +753,13 @@ export class ListingReport {
   private toggleCard(key: string): void {
     if (this.cards.has(key)) this.cards.delete(key);
     else this.cards.add(key);
+    // A card asked for by kind replaces the fields under a heading, which is a
+    // different list of items, so the tree is walked again rather than the one
+    // card measured again. See `askedCardKey` in `formatcards.ts`.
+    if (key.startsWith("ask:")) {
+      this.rebuild();
+      return;
+    }
     for (const k of [...this.measured.keys()]) if (k.startsWith("fc:")) this.measured.delete(k);
 
     this.layout();
