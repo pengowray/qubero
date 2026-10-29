@@ -3738,6 +3738,23 @@ button.insp-xrow-where:hover {
 .rp-h1 .fmap {
   margin-inline-start: 8px;
 }
+/* A heading's buttons (`drawHeading` in listingdraw.ts). The group is the
+   part of the line that narrows when the listing is narrow, so the size and
+   the file map stay in view. One line high: a button that does not fit wraps
+   onto a second line that is cut off, so it is left off whole instead of
+   being cut through. The height is a button's: the 32px every button has
+   at least (`button` near the top of this file). */
+.rp-tools {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 0 8px;
+  min-width: 0;
+  height: 32px;
+  overflow: hidden;
+}
 /* A strip that goes to the part clicked. */
 .fmap-live {
   cursor: pointer;

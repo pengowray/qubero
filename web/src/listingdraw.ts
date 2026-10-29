@@ -229,19 +229,25 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   // decoded field has none: its bytes came out of a stream and are nowhere in
   // the file to point at. See DESIGN.md, "A stream read as the fields inside
   // it".
-  if (space === 0) row.append(bytesButton(c, item.key));
-  offerUnpacked(c, row, item, item.node);
+  // The buttons go in a group of their own that gives up its width before the
+  // size and the file map do: a heading can carry more buttons than a narrow
+  // listing has room for, and a button that does not fit is left off whole
+  // rather than cut through (`.rp-tools` in style.css).
+  const tools = el("span", "rp-tools");
+  if (space === 0) tools.append(bytesButton(c, item.key));
+  offerUnpacked(c, tools, item, item.node);
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
-  if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
+  if (item.node !== null && item.node.child_count > PAGE) tools.append(listButton(item.path));
   // Beside it, where the list reads as rows under columns: the pane shows a
   // long list one element to a line, and a table shows the same elements as
   // the records they are. The two are different questions about one list, so
   // both are offered rather than one replacing the other.
-  offerTable(c, row, item.node);
+  offerTable(c, tools, item.node);
   // And whatever the diagram pieces offer for this heading
   // (`viz/headingbuttons.ts`), after the listing's own.
-  row.append(...headingButtonsFor(c, item));
+  tools.append(...headingButtonsFor(c, item));
+  if (tools.childElementCount > 0) row.append(tools);
   // The facts about the part's place in the file sit together at the right:
   // how big it is, how much of the file that is, and where.
   const share = space === 0 ? shareText(item.sizeBits, fileBits) : "";
