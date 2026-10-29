@@ -8,7 +8,8 @@
 // then shows one of three bodies: a record table for several records, a field
 // table for a short structure, or a hex strip for bytes with no structure.
 
-import type { TemplateNode } from "../doc.ts";
+import type { Doc, TemplateNode } from "../doc.ts";
+import { fileMap, type MapSegment } from "../filemap.ts";
 import { formatOffset } from "../format.ts";
 import { entropyDecoded, scanEntropy } from "../jpegcards.ts";
 import { childWord } from "../strings.ts";
@@ -17,7 +18,6 @@ import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./b
 import { nameInPart } from "./bytes.ts";
 import { formatCard } from "./cards.ts";
 import { ok, type Group, type PartsModel, type Unit } from "./model.ts";
-import { positionBar } from "./posbar.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { bitsText, counted, RV, shareOfFile } from "./text.ts";
@@ -94,6 +94,42 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   return h;
 }
 
+/** How wide the position map under a part's range is drawn: the report's
+ *  narrowest reading column, so it never runs past the text above it. */
+const POSITION_MAP_PX = 480;
+
+/** Every part of the report, each in its group's colour, for the position
+ *  map. Made once per model, so the strip's cells are worked out once for
+ *  every part drawn from it. */
+const reportSegments = new WeakMap<PartsModel, MapSegment[]>();
+
+function segmentsOf(model: PartsModel): MapSegment[] {
+  let segs = reportSegments.get(model);
+  if (segs === undefined) {
+    segs = [];
+    for (const g of model.groups) {
+      for (const u of g.units) {
+        if (u.gap) continue;
+        segs.push({ offsetBits: u.offsetBits, sizeBits: u.sizeBits, color: g.color, name: u.label, ...(u.node !== null ? { path: u.path } : {}) });
+      }
+    }
+    reportSegments.set(model, segs);
+  }
+  return segs;
+}
+
+/** Where a part's pieces are in the whole file: the file map with every
+ *  part of the report on it and this group's lit, so a reader arriving from
+ *  a link sees where in the file they are without scrolling back to the map.
+ *  Pointing at the strip names the part under the pointer, and a click goes
+ *  to it. */
+function positionMap(doc: Doc, model: PartsModel, g: Group): HTMLElement {
+  const lit = g.units.map((u) => ({ offsetBits: u.offsetBits, sizeBits: u.sizeBits }));
+  const map = fileMap(segmentsOf(model), 0, 0, g.label, null, { width: POSITION_MAP_PX, lit, lengthBits: model.fileBits, doc });
+  map.classList.add("rv-posmap");
+  return map;
+}
+
 function partSection(ctx: ReportCtx, model: PartsModel, g: Group): HTMLElement | typeof WAIT {
   const sec = document.createElement("section");
   sec.className = "rv-section rv-part";
@@ -110,7 +146,7 @@ function partSection(ctx: ReportCtx, model: PartsModel, g: Group): HTMLElement |
     RV.rangeTo,
     byteRef({ startBit: Math.max(first.offsetBits, last.offsetBits + last.sizeBits - 8), endBit: last.offsetBits + last.sizeBits }, g.label, formatOffset(Math.max(0, last.offsetBits + last.sizeBits - 8))),
   );
-  where.append(positionBar(model.fileBits, g.units, g.color));
+  where.append(positionMap(ctx.doc, model, g));
   sec.append(where);
   const doc = first.node?.doc;
   if (doc !== undefined) {
