@@ -466,7 +466,7 @@ export function drawSpaceBands(doc: Doc, pic: Picture, opts: SpaceBandsOptions):
     }
     for (const c of cutBoxes) {
       if (c.y1 < top || c.y0 > bottom) continue;
-      right.push({ y0: c.y0, y1: c.y1, name: formatBytes(c.value.end - c.value.start), value: c.value, priority: -1 });
+      right.push({ y0: c.y0, y1: c.y1, name: S.cutLabel(formatBytes(c.value.end - c.value.start)), value: c.value, priority: -1 });
     }
     const rowsR = placeLabels(right.map((r) => ({ y: visible(r.y0, r.y1), priority: r.priority })), ROW_H, top, bottom);
     namesR = [];

@@ -185,11 +185,14 @@ export function elfPicture(elf: ElfIn): Picture {
   if (elf.phnum > 0) header("ph-table", "Program header table", { start: elf.phoff, end: elf.phoff + elf.phnum * elf.phentsize }, elf.phEntry);
   if (elf.shnum > 0) header("sh-table", "Section header table", { start: elf.shoff, end: elf.shoff + elf.shnum * elf.shentsize }, elf.shEntry);
 
+  // A relocatable object (`.o`) has no LOAD segment: its allocated sections
+  // all say address 0 until a linker places them, so none is loaded yet.
+  const loads = elf.segments.some((s) => s.type === "load");
   for (const s of elf.sections) {
     // Section 0 is the null entry every ELF starts its table with.
     if (s.type === 0 || (s.index === 0 && s.size === 0)) continue;
     const nobits = s.type === NOBITS;
-    const alloc = new Set(s.flags.toLowerCase().split(/[^a-z]+/)).has(SHF_ALLOC);
+    const alloc = loads && new Set(s.flags.toLowerCase().split(/[^a-z]+/)).has(SHF_ALLOC);
     const mem = alloc && s.size > 0 ? { start: s.address, end: s.address + s.size } : null;
     const file = nobits || s.size === 0 ? null : clip({ start: s.offset, end: s.offset + s.size });
     if (file === null && mem === null) continue;
@@ -203,13 +206,13 @@ export function elfPicture(elf: ElfIn): Picture {
   const segments: Region[] = [];
   for (const s of elf.segments) {
     const file = s.fileSize > 0 ? clip({ start: s.offset, end: s.offset + s.fileSize }) : null;
-    const mem = s.memSize > 0 && s.type === "load" ? { start: s.vaddr, end: s.vaddr + s.memSize } : null;
+    const mem = s.memSize > 0 ? { start: s.vaddr, end: s.vaddr + s.memSize } : null;
     // A segment with neither (`gnu_stack` states only flags) has nothing to
     // draw; its flags are in the listing.
     if (file === null && mem === null) continue;
     segments.push({
       key: `p${s.index}`, name: `${s.type} ${s.index + 1}`, kind: "segment", file, filePoint: null, mem, imageBase: null,
-      access: accessOf(s.flags, mem !== null || s.type !== "load"), flags: s.flags, entry: s.entry,
+      access: accessOf(s.flags, mem !== null), flags: s.flags, entry: s.entry,
       entryKind: s.entry !== null ? "program-header" : null, body: null,
     });
   }

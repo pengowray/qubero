@@ -147,6 +147,12 @@ test("an ELF NOBITS section has no file bytes, a point in the file, and memory",
   assert.deepEqual(sectionCounts(pic.regions).memOnly.map((r) => r.name), [".bss"]);
 });
 
+test("a relocatable ELF with no LOAD segment has nothing in memory", () => {
+  const pic = elfPicture({ ...BUSYBOX_ELF, phnum: 0, segments: [] });
+  assert.equal(pic.regions.filter((r) => r.mem !== null).length, 0);
+  assert.equal(sectionCounts(pic.regions).loaded, 0);
+});
+
 // ----- PE -----
 
 test("busybox PE: headers, sections at image base plus RVA, .bss memory only", () => {

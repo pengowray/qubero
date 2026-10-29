@@ -4059,11 +4059,13 @@ export const VIZ = {
      *  which is the number the section table states. */
     inMemoryRva: (at: string, size: string, rva: string): string => `Memory: ${at} (RVA ${rva}), ${size}`,
     notLoaded: "Memory: not loaded",
-    inSegment: (segment: string): string => `Loaded by segment ${segment}`,
+    inSegment: (segment: string): string => `Segment: ${segment}`,
     noSection: "Not in any section",
     unmapped: "Unmapped addresses",
     unmappedRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,
-    notToScale: "Drawn shorter than to scale",
+    notToScale: "Not drawn to scale",
+    /** Beside a cut on the memory side. */
+    cutLabel: (size: string): string => `${size} unmapped`,
     /** The hover card's foot: what a click on this part of the drawing selects. */
     click: {
       bytes: "Click to select its bytes",

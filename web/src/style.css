@@ -7469,12 +7469,20 @@ table.rec td.is-invalid {
   border-radius: 2px;
   background: var(--sb-c);
 }
+/* Only as wide as its words, so the checkbox's target is the label and not
+   the whole width of the window in the full-window mode. */
 .sb-link {
+  align-self: flex-start;
+  min-height: 24px;
   font-size: 11px;
   color: var(--muted);
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+.sb-bar .tmp-grow {
+  width: 24px;
+  height: 24px;
 }
 /* Drag pans and the wheel zooms, so the drawing asks for the grab cursor and
    keeps the page from selecting its text under a drag. */
