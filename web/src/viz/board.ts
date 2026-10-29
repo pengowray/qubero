@@ -69,6 +69,10 @@ export type Board = {
   zoomBy(factor: number): void;
   /** The view is a new size. `content` changes with it when given. */
   resize(width: number, height: number, content?: Box): void;
+  /** A new largest zoom, for a piece whose deepest zoom is set by its width
+   *  and whose width just changed. A view zoomed in past it is zoomed out to
+   *  it about the middle. */
+  setMaxScale(max: number): void;
   /** Whether the picture is zoomed all the way out. */
   fullyOut(): boolean;
   /** Take the listeners off the host. */
@@ -95,6 +99,9 @@ const CLICK_SLOP_PX = 4;
 /** How long an animated Fit or Home takes. Short: it says where the picture
  *  went, and nobody wants to wait for it. */
 const ANIMATE_MS = 200;
+/** How far past the content's edges a drag may take it, as a share of the
+ *  view's width and height on screen. */
+const SLACK = 0.25;
 
 /** Give `host` pan and zoom. `host` is the element the pointer is over: the
  *  SVG, the canvas, or a div around either. */
@@ -104,7 +111,7 @@ export function board(host: Element, opts: BoardOptions): Board {
   let content: Box = opts.content ?? { x0: 0, y0: 0, x1: width, y1: height };
   const xOnly = opts.xOnly === true;
   const minScale = opts.minScale ?? 1;
-  const maxScale = opts.maxScale ?? 64;
+  let maxScale = opts.maxScale ?? 64;
   let current: View = IDENTITY;
   let destroyed = false;
   /** What to do once d3 has arrived, for a call made before it did. */
@@ -152,17 +159,16 @@ export function board(host: Element, opts: BoardOptions): Board {
 
   const configure = (): void => {
     if (behaviour === null) return;
+    behaviour.scaleExtent([minScale, maxScale]);
     behaviour.extent([
       [0, 0],
       [width, height],
     ]);
-    // A little room past the edges, so the first and last bar can be pulled
-    // into the middle of the view to be looked at, and no further.
-    const slackX = width * 0.25;
-    const slackY = xOnly ? 0 : height * 0.25;
+    // The content itself. The room past its edges is added by `constrain`
+    // below, where the zoom is known.
     behaviour.translateExtent([
-      [content.x0 - slackX, content.y0 - slackY],
-      [content.x1 + slackX, content.y1 + slackY],
+      [content.x0, content.y0],
+      [content.x1, content.y1],
     ]);
   };
 
@@ -171,7 +177,6 @@ export function board(host: Element, opts: BoardOptions): Board {
     d3 = loaded;
     const z = loaded.zoom.zoom<Element, unknown>();
     behaviour = z;
-    z.scaleExtent([minScale, maxScale]);
     z.clickDistance(CLICK_SLOP_PX);
     // d3's own rule (no ctrl-drag, no right button) for everything but the
     // wheel, which goes by the page's rule instead.
@@ -180,13 +185,21 @@ export function board(host: Element, opts: BoardOptions): Board {
       const e = event as MouseEvent;
       return !e.ctrlKey && !e.button;
     });
-    if (xOnly) {
-      const base = z.constrain();
-      z.constrain((t, extent, translateExtent) => {
-        const c = base(t, extent, translateExtent);
-        return new loaded.zoom.ZoomTransform(c.k, c.x, 0);
-      });
-    }
+    // A little room past the edges, so the first and last bar can be pulled
+    // into the middle of the view to be looked at, and no further. The room
+    // is a quarter of the view on screen at every zoom: given in layout
+    // pixels, it would be a quarter of the view at no zoom and thousands of
+    // blank screens at a deep one, with the picture lost somewhere past them.
+    const base = z.constrain();
+    z.constrain((t, extent, inner) => {
+      const sx = ((extent[1][0] - extent[0][0]) * SLACK) / t.k;
+      const sy = xOnly ? 0 : ((extent[1][1] - extent[0][1]) * SLACK) / t.k;
+      const c = base(t, extent, [
+        [inner[0][0] - sx, inner[0][1] - sy],
+        [inner[1][0] + sx, inner[1][1] + sy],
+      ]);
+      return xOnly ? new loaded.zoom.ZoomTransform(c.k, c.x, 0) : c;
+    });
     z.on("zoom", (e: { transform: ZoomTransform }) => {
       current = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
       opts.onZoom(current);
@@ -219,6 +232,13 @@ export function board(host: Element, opts: BoardOptions): Board {
       // The same transform under the new extent, put through the constraint
       // again so a picture made narrower is not left panned off its edge.
       if (behaviour !== null && sel !== null) sel.call(behaviour.transform, toD3(current));
+    },
+    setMaxScale: (max) => {
+      maxScale = Math.max(minScale, max);
+      configure();
+      // d3-zoom keeps the scale inside its extent only on the wheel and
+      // scaleBy, so a view already past the new limit is brought back here.
+      if (behaviour !== null && sel !== null && current.k > maxScale) behaviour.scaleTo(sel, maxScale, [width / 2, height / 2]);
     },
     fullyOut: () => current.k <= minScale + 1e-9,
     destroy: () => {

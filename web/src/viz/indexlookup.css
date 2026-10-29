@@ -1,0 +1,208 @@
+/* The index-lookup figure (`indexlookup.ts`): the field holding a number,
+   the table it picks from, and the entry it picks. It shares the example
+   piece's heading, strip and note rules (`.viz-strip*` in style.css); these
+   are only what it adds. Its own file, so the batch agents adding pieces at
+   the same time do not all append to the end of style.css. */
+
+.viz-lookup-tools {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+/* The step buttons are one character each; the minimum width keeps them a
+   target a pointer can hit (24px). */
+.viz-lookup-step {
+  min-width: 24px;
+  min-height: 24px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* The two rows above and below the strip: the index, and the entry it picks.
+   Each is a button, since a click goes to the field. Its parts wrap onto a
+   second line rather than being cut, so the whole name and value are always
+   on the row; only a part longer than the row by itself is cut short, and
+   its hover card has it in full. */
+.viz-lookup-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 0;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--fg);
+  font: 12px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+.viz-lookup-box:hover {
+  border-color: var(--accent);
+}
+.viz-lookup-box > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+/* The field's name and its value are what the row is for; the bytes and the
+   alpha are there to check them against, so they are quieter. */
+.viz-lookup-name {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.viz-lookup-bytes,
+.viz-lookup-detail {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A value longer than the row wraps inside itself: a structure's one-line
+   reading can run to forty characters. */
+.viz-lookup-value {
+  font-family: var(--mono);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.viz-lookup-value.is-empty,
+.viz-lookup-none {
+  color: var(--muted);
+  font-family: var(--sans);
+}
+.viz-lookup-box.is-none {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+/* A palette entry's colour beside its numbers, ringed so a white or black
+   entry still shows as a swatch against the panel. */
+.viz-lookup-chip {
+  flex: none;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+/* The line under the index row: the working for the address, as the core
+   writes it, or after a step how many more fields point at the entry. Both
+   sit in one grid cell, the one not shown hidden but still taking its room,
+   so the line is the same height at every step and the strip under it stays
+   put. The working wraps rather than being cut: every term of it is needed
+   to check the sum. The line is one line tall when both are empty. */
+.viz-lookup-via {
+  display: grid;
+  min-height: 15px;
+  margin: 2px 0 0 8px;
+  color: var(--muted);
+  font: 11px var(--mono);
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+.viz-lookup-via[hidden] {
+  display: none;
+}
+.viz-lookup-work,
+.viz-lookup-also {
+  grid-area: 1 / 1;
+}
+.viz-lookup-work.is-off {
+  visibility: hidden;
+}
+.viz-lookup-also {
+  font-family: var(--sans);
+}
+
+.viz-lookup-svg {
+  margin-top: 2px;
+}
+/* The strip takes focus so the arrow keys step through the table. A click
+   or drag focuses it too, and draws no ring for that; the keyboard does. */
+.viz-lookup-svg:focus {
+  outline: none;
+}
+.viz-lookup-svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Entries other than the one looked up are faint, so the lit one is the
+   first thing seen; hovering one brings it up. */
+.viz-lookup-cell {
+  fill: var(--field-color, var(--muted));
+  fill-opacity: 0.14;
+  stroke: var(--muted);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+/* A structure a pointer reached is lit whole until a step picks one field. */
+.viz-lookup-svg.is-whole .viz-lookup-cell {
+  fill: var(--accent);
+  fill-opacity: 0.16;
+  stroke: var(--accent);
+  stroke-opacity: 0.7;
+}
+.viz-lookup-cell.is-empty {
+  fill-opacity: 0;
+  stroke-dasharray: 2 2;
+}
+.viz-lookup-cell.is-hover {
+  fill-opacity: 0.3;
+  stroke-opacity: 1;
+}
+.viz-lookup-cell.is-on {
+  fill: var(--accent);
+  fill-opacity: 0.22;
+  stroke: var(--accent);
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+/* A palette's cells are its colours, drawn as they are: fading them would
+   show the wrong colour. The lit one gets the accent ring instead. */
+/* Once a cell is wide enough to have a gap beside it, a thin outline in the
+   panel's line colour, so black entries on a dark panel (and white ones on a
+   light panel) still show where each one is. A narrower cell is all colour. */
+.viz-lookup-swatch {
+  stroke: none;
+}
+.viz-lookup-swatch.is-wide {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.viz-lookup-swatch.is-hover {
+  stroke: var(--fg);
+  stroke-width: 1;
+}
+.viz-lookup-swatch.is-on {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.viz-lookup-names text {
+  font: 11px var(--mono);
+  fill: var(--muted);
+}
+.viz-lookup-names text.is-on {
+  fill: var(--fg);
+  font-weight: 600;
+}
+.viz-lookup-arrow,
+.viz-lookup-bracket {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.viz-lookup-head {
+  fill: var(--accent);
+}
+/* The number the index holds, as a tick on the axis. */
+.viz-axis .tick.is-hit text {
+  fill: var(--accent);
+  font-weight: 600;
+}
+.viz-axis .tick.is-hit line {
+  stroke: var(--accent);
+}

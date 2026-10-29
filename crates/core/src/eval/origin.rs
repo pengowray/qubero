@@ -917,6 +917,15 @@ impl Evaluator {
             }
             // A number written into words comes from the fields its number does.
             Expr::Words { value, .. } => self.from_expr(doc, at, value, role, out)?,
+            // A word in lower case comes from the field it was read from.
+            Expr::Lower(a) => self.from_expr(doc, at, a, role, out)?,
+            // A search for text the file holds was decided by the field that
+            // holds it: a MIME part ends where its boundary is written, and the
+            // row to go to is the parameter that says what the boundary is.
+            Expr::FindText(f) => {
+                let f = f.clone();
+                self.from_expr(doc, at, &f.text, role, out)?
+            }
             _ => {}
         }
         Ok(())
