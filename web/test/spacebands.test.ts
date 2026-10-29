@@ -13,6 +13,7 @@ import {
   axisY,
   bandAt,
   bandEdges,
+  columnsFor,
   elfPicture,
   enumWord,
   fileAxis,
@@ -64,6 +65,7 @@ const BUSYBOX_PE: PeIn = {
   imageBase: 5368709120,
   headersSize: 1024,
   headersEntry: null,
+  imageBaseEntry: null,
   sections: [
     [".text", 534912, 4096, 535040, 1024, "cnt code, mem execute, mem read"],
     [".data", 1104, 540672, 1536, 536064, "cnt initialized data, mem read, mem write"],
@@ -218,6 +220,21 @@ test("the file axis is the whole file to scale", () => {
   const axis = fileAxis(1000, 500);
   assert.equal(axisY(axis, 500), 250);
   assert.equal(axisAt(axis, 125).at, 250);
+});
+
+// ----- across -----
+
+test("the columns run left to right without overlapping, at rail width and window width", () => {
+  for (const [width, lanes] of [[256, 2], [256, 0], [160, 2], [1560, 2]] as const) {
+    const c = columnsFor(width, lanes);
+    const order = [c.namesL, c.stripL, c.file, c.memory, c.stripR, c.namesR];
+    for (let i = 1; i < order.length; i++) assert.ok((order[i]?.start ?? 0) >= (order[i - 1]?.end ?? 0) - 1e-9, `${width}: part ${i} overlaps the one before`);
+    assert.ok(c.namesR.end <= width + 1e-9, `${width}: runs off the right edge`);
+    assert.ok(c.memory.start - c.file.end >= 32, `${width}: no room for the bands`);
+    assert.ok(c.middle > c.file.end && c.middle < c.memory.start);
+  }
+  // At the rail's width the names on the file side get some 70 pixels.
+  assert.ok(columnsFor(256, 2).namesL.end - columnsFor(256, 2).namesL.start >= 64);
 });
 
 // ----- names -----

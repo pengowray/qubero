@@ -4015,4 +4015,63 @@ export const VIZ = {
     firstOf: (shown: number, total: number, noun: string): string =>
       `Showing the first ${countText(shown, noun)} of ${total.toLocaleString()}`,
   },
+  /** The rail tab that draws an executable's sections twice, at their file
+   *  offsets and at their virtual addresses, joined by bands
+   *  (`viz/spacebands.ts`). */
+  spaceBands: {
+    tab: "Memory map",
+    tabTitle: "Where each section is in the file and where it is loaded in memory",
+    title: "Sections in the file and in memory",
+    fileHead: "File",
+    memoryHead: "Memory",
+    /** The colour key. Each name is the access the loader gives a stretch. */
+    access: {
+      exec: "Code",
+      "write-exec": "Writable code",
+      write: "Writable data",
+      read: "Read-only data",
+      unloaded: "Not loaded",
+    },
+    /** The sentence over the drawing. `fileOnly` and `memoryOnly` are section
+     *  names; a long list is cut to its first few and a count. */
+    summary: (total: number, loaded: number, fileOnly: readonly string[], memoryOnly: readonly string[]): string => {
+      const names = (list: readonly string[]): string =>
+        list.length <= 4 ? list.join(", ") : `${list.slice(0, 3).join(", ")} and ${(list.length - 3).toLocaleString()} more`;
+      const parts = [`${loaded.toLocaleString()} of ${countText(total, "section")} loaded into memory.`];
+      if (fileOnly.length > 0) parts.push(`In the file only: ${names(fileOnly)}.`);
+      if (memoryOnly.length > 0) parts.push(`No bytes in the file: ${names(memoryOnly)}.`);
+      return parts.join(" ");
+    },
+    /** Under the summary, when long gaps of unmapped addresses are cut out of
+     *  the memory column. */
+    cutNote: (bytes: string): string => `Not to scale at the zigzag: ${bytes} of unmapped addresses are left out of the memory column.`,
+    linked: "Zoom both columns together",
+    linkedTitle: "When off, the wheel zooms only the column under the pointer",
+    reading: "Reading the section table…",
+    nothingLoaded: "No section in this file has a memory address.",
+    failed: (message: string): string => `Could not read the section table: ${message}`,
+    /** Hover card lines. */
+    flags: (access: string, flags: string): string => (flags === "" ? access : `${access} · flags: ${flags}`),
+    inFile: (at: string, size: string): string => `File: ${at}, ${size}`,
+    noFileBytes: "File: no bytes, filled with zeros when loaded",
+    inMemory: (at: string, size: string): string => `Memory: ${at}, ${size}`,
+    /** A PE address is the image base plus the address relative to it,
+     *  which is the number the section table states. */
+    inMemoryRva: (at: string, size: string, rva: string): string => `Memory: ${at} (RVA ${rva}), ${size}`,
+    notLoaded: "Memory: not loaded",
+    inSegment: (segment: string): string => `Loaded by segment ${segment}`,
+    noSection: "Not in any section",
+    unmapped: "Unmapped addresses",
+    unmappedRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,
+    notToScale: "Drawn shorter than to scale",
+    /** The hover card's foot: what a click on this part of the drawing selects. */
+    click: {
+      bytes: "Click to select its bytes",
+      "section-header": "Click to select its section header",
+      "section-entry": "Click to select its entry in the section table",
+      "program-header": "Click to select its program header",
+      "loading-header": "Click to select the program header that loads it",
+      "image-base": "Click to select the image base field",
+    },
+  },
 } as const;

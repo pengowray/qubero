@@ -43,6 +43,9 @@ export type EntryPick = { readonly path: readonly number[]; readonly startBit: n
 
 export type RegionKind = "section" | "headers" | "segment";
 
+/** The kinds of header entry a click on the memory side can select. */
+export type EntryKind = "section-header" | "section-entry" | "program-header" | "loading-header" | "image-base";
+
 export type Region = {
   /** Unique within one picture, stable across redraws. */
   readonly key: string;
@@ -63,6 +66,8 @@ export type Region = {
   /** The header entry that states where it goes: a section header, a
    *  program header. Null for a stretch no one entry describes. */
   readonly entry: EntryPick | null;
+  /** What `entry` is, for the hover card to say where a click goes. */
+  readonly entryKind: EntryKind | null;
   /** The field holding its bytes, when the template has one. */
   readonly body: EntryPick | null;
 };
@@ -136,12 +141,12 @@ const SHF_ALLOC = "alloc";
 
 /** Where a stretch of the file lands in memory, by the LOAD segment that
  *  holds it, or null when none does. */
-function loadedAt(segments: readonly ElfSegmentIn[], file: Range): { mem: Range; flags: string } | null {
+function loadedAt(segments: readonly ElfSegmentIn[], file: Range): { mem: Range; flags: string; entry: EntryPick | null } | null {
   for (const s of segments) {
     if (s.type !== "load") continue;
     if (file.start >= s.offset && file.end <= s.offset + s.fileSize) {
       const at = s.vaddr + (file.start - s.offset);
-      return { mem: { start: at, end: at + (file.end - file.start) }, flags: s.flags };
+      return { mem: { start: at, end: at + (file.end - file.start) }, flags: s.flags, entry: s.entry };
     }
   }
   return null;
@@ -163,13 +168,17 @@ export function elfPicture(elf: ElfIn): Picture {
     const end = Math.max(start, Math.min(r.end, elf.fileBytes));
     return end > start ? { start, end } : null;
   };
-  const header = (key: string, name: string, range: Range, entry: EntryPick | null): void => {
+  // A header's own field is its body; the entry that places it in memory is
+  // the program header of the LOAD segment it is inside.
+  const header = (key: string, name: string, range: Range, body: EntryPick | null): void => {
     const file = clip(range);
     if (file === null) return;
     const at = loadedAt(elf.segments, file);
+    const entry = at?.entry ?? null;
     regions.push({
       key, name, kind: "headers", file, filePoint: null, mem: at?.mem ?? null, imageBase: null,
-      access: accessOf(at?.flags ?? "", at !== null), flags: "", entry, body: entry,
+      access: accessOf(at?.flags ?? "", at !== null), flags: "", entry,
+      entryKind: entry !== null ? "loading-header" : null, body,
     });
   };
   header("elf-header", "ELF header", { start: 0, end: elf.headerSize }, elf.headerEntry);
@@ -187,7 +196,8 @@ export function elfPicture(elf: ElfIn): Picture {
     regions.push({
       key: `s${s.index}`, name: s.name === "" ? `Section ${s.index}` : s.name, kind: "section",
       file, filePoint: nobits ? s.offset : null, mem, imageBase: null,
-      access: accessOf(s.flags, mem !== null), flags: s.flags, entry: s.entry, body: s.body,
+      access: accessOf(s.flags, mem !== null), flags: s.flags, entry: s.entry,
+      entryKind: s.entry !== null ? "section-header" : null, body: s.body,
     });
   }
   const segments: Region[] = [];
@@ -199,7 +209,8 @@ export function elfPicture(elf: ElfIn): Picture {
     if (file === null && mem === null) continue;
     segments.push({
       key: `p${s.index}`, name: `${s.type} ${s.index + 1}`, kind: "segment", file, filePoint: null, mem, imageBase: null,
-      access: accessOf(s.flags, mem !== null || s.type !== "load"), flags: s.flags, entry: s.entry, body: null,
+      access: accessOf(s.flags, mem !== null || s.type !== "load"), flags: s.flags, entry: s.entry,
+      entryKind: s.entry !== null ? "program-header" : null, body: null,
     });
   }
   return { fileBytes: elf.fileBytes, regions: sortRegions(regions), segments };
@@ -224,7 +235,10 @@ export type PeIn = {
   readonly fileBytes: number;
   readonly imageBase: number;
   readonly headersSize: number;
+  /** The headers' own stretch, for a click on their file side. */
   readonly headersEntry: EntryPick | null;
+  /** The field stating the image base, which is where the headers load. */
+  readonly imageBaseEntry: EntryPick | null;
   readonly sections: readonly PeSectionIn[];
 };
 
@@ -237,7 +251,7 @@ export function pePicture(pe: PeIn): Picture {
     regions.push({
       key: "pe-headers", name: "Headers", kind: "headers", file: { start: 0, end }, filePoint: null,
       mem: { start: base, end: base + pe.headersSize }, imageBase: base, access: "read", flags: "",
-      entry: pe.headersEntry, body: pe.headersEntry,
+      entry: pe.imageBaseEntry, entryKind: pe.imageBaseEntry !== null ? "image-base" : null, body: pe.headersEntry,
     });
   }
   let fileEnd = pe.headersSize;
@@ -252,7 +266,7 @@ export function pePicture(pe: PeIn): Picture {
     regions.push({
       key: `s${s.index}`, name: s.name === "" ? `Section ${s.index + 1}` : s.name, kind: "section",
       file, filePoint: null, mem, imageBase: base, access: accessOf(s.flags, mem !== null), flags: s.flags,
-      entry: s.entry, body: s.body,
+      entry: s.entry, entryKind: s.entry !== null ? "section-entry" : null, body: s.body,
     });
   }
   // Bytes past the last section (a signature, an installer's payload) are in
@@ -260,7 +274,7 @@ export function pePicture(pe: PeIn): Picture {
   if (fileEnd < pe.fileBytes) {
     regions.push({
       key: "pe-overlay", name: "Data after the last section", kind: "headers", file: { start: fileEnd, end: pe.fileBytes },
-      filePoint: null, mem: null, imageBase: null, access: "unloaded", flags: "", entry: null, body: null,
+      filePoint: null, mem: null, imageBase: null, access: "unloaded", flags: "", entry: null, entryKind: null, body: null,
     });
   }
   return { fileBytes: pe.fileBytes, regions: sortRegions(regions), segments: [] };
@@ -393,6 +407,69 @@ export function axisAt(axis: Axis, y: number): { readonly at: number; readonly c
   const last = axis.pieces[axis.pieces.length - 1];
   if (first === undefined || last === undefined) return { at: 0, cut: null };
   return { at: y < first.y0 ? first.start : last.end, cut: null };
+}
+
+// ----- across -----
+
+/** Where everything goes across the drawing, left to right: the file side's
+ *  names, the lane of segment brackets beside the file column, the file
+ *  column, the gap the bands cross, the memory column, its bracket lane, and
+ *  the memory side's names. All in pixels from the left edge. */
+export type Columns = {
+  readonly namesL: Range;
+  readonly stripL: Range;
+  readonly file: Range;
+  readonly memory: Range;
+  readonly stripR: Range;
+  readonly namesR: Range;
+  /** Where the two halves meet, for the two zoom surfaces. */
+  readonly middle: number;
+};
+
+/** Room between a name and its column, for the leader line. */
+const LEADER_PX = 8;
+/** One lane of segment brackets. */
+export const BRACKET_LANE_PX = 5;
+
+/**
+ * The columns for a drawing `width` wide with `lanes` lanes of segment
+ * brackets. At the rail's width (about 256 pixels) the bands get some 70
+ * pixels and each side's names what is left; over the whole window the
+ * columns widen and the gap is held to a width where a band's slope still
+ * reads, with the whole centred.
+ */
+export function columnsFor(width: number, lanes: number): Columns {
+  const strip = lanes > 0 ? lanes * BRACKET_LANE_PX + 2 : 0;
+  const col = Math.round(Math.max(16, Math.min(64, width * 0.07)));
+  let namesL = Math.round(Math.max(44, Math.min(220, width * 0.28)));
+  let namesR = Math.round(Math.max(32, Math.min(180, width * 0.16)));
+  const fixed = (): number => namesL + namesR + 2 * (LEADER_PX + strip + col);
+  // Narrower than the least it can be drawn at: the names give way first.
+  const minGap = 32;
+  if (width - fixed() < minGap) {
+    const over = minGap - (width - fixed());
+    const cutL = Math.min(namesL - 24, Math.ceil((over * namesL) / (namesL + namesR)));
+    namesL -= Math.max(0, cutL);
+    namesR -= Math.max(0, Math.min(namesR - 16, over - cutL));
+  }
+  const gap = Math.max(minGap, Math.min(480, width - fixed()));
+  const total = fixed() + gap;
+  let x = Math.max(0, (width - total) / 2);
+  const take = (w: number): Range => {
+    const r = { start: x, end: x + w };
+    x += w;
+    return r;
+  };
+  const nl = take(namesL);
+  x += LEADER_PX;
+  const sl = take(strip);
+  const file = take(col);
+  x += gap;
+  const memory = take(col);
+  const sr = take(strip);
+  x += LEADER_PX;
+  const nr = take(namesR);
+  return { namesL: nl, stripL: sl, file, memory, stripR: sr, namesR: nr, middle: (file.end + memory.start) / 2 };
 }
 
 // ----- names on rows -----
