@@ -4180,6 +4180,82 @@ export const VIZ = {
     readingScanlines: "Reading the scanlines to draw over the picture…",
     alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
   },
+  /** A run of numbers as a plot (`viz/valueplot.ts`): a line per channel, or
+   *  a grid of colours for a run with two dimensions. */
+  valuePlot: {
+    /** The listing heading's button, and what it does. */
+    button: "Plot",
+    buttonTitle: (count: number, unit: string): string => `Plot all ${countText(count, unit)} in the pane beside the listing`,
+    /** The list pane's two ways of showing its list. */
+    paneRows: "List",
+    paneRowsTitle: (unit: string): string => `Show one row per ${unit}`,
+    panePlot: "Plot",
+    panePlotTitle: "Show the values as a plot",
+    /** While the bytes of the run are still arriving. */
+    reading: "Reading the values…",
+    /** In place of the plot when uPlot's module did not arrive (a dropped
+     *  connection, or a chunk gone after a deploy). No Try again button:
+     *  Chrome keeps a failed module import and answers a second import of it
+     *  with the same failure, so only a reload asks the server again. */
+    loadFailed: "Couldn't load the plotting library. Reload the page to try again.",
+    /** A run longer than the plot reads. */
+    firstOf: (shown: number, total: number, unit: string): string =>
+      `Plotting the first ${shown.toLocaleString()} of ${countText(total, unit)}`,
+    /** Hover card over the line. The title is the element's number in its run,
+     *  counted from 0 as the listing counts, and its time when the run has a
+     *  rate. */
+    at: (word: string, index: number): string => `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()}`,
+    atTime: (word: string, index: number, seconds: string): string =>
+      `${word.charAt(0).toUpperCase()}${word.slice(1)} ${index.toLocaleString()} at ${seconds}`,
+    /** One channel's value, or the one value of a run with one channel. */
+    channelValue: (channel: string, value: string): string => `${channel}: ${value}`,
+    oneValue: (value: string): string => `Value: ${value}`,
+    /** The card's title over a run that is not a table: the element's index,
+     *  as the listing writes it. */
+    index: (index: number): string => `[${index.toLocaleString()}]`,
+    /** When one pixel of the line stands for several elements, the card says
+     *  which, and the lowest and highest of them, which is what the line drawn
+     *  there shows. */
+    inPixel: (word: string, from: number, to: number): string =>
+      `In this pixel, ${plural(word)} ${from.toLocaleString()} to ${to.toLocaleString()}:`,
+    channelRange: (channel: string, low: string, high: string): string => `${channel}: ${low} to ${high}`,
+    oneRange: (low: string, high: string): string => `Lowest ${low}, highest ${high}`,
+    /** The muted foot of the card: where the element is and what type. */
+    where: (offset: string, type: string): string => `${offset} · ${type}`,
+    /** A miniSEED record's decoded samples in the At cursor panel. A sample of
+     *  a Steim record is a sum of differences, so it is at no one place; the
+     *  card names the 64-byte frame its difference was read from, which is
+     *  what a click selects, and the offset is where that frame starts.
+     *  Sample 0 is stored whole, as the forward integration constant in the
+     *  second word of frame 0, and its card says so ("forward integration
+     *  constant" is the samples panel's name for it). */
+    samplesTitle: "Decoded samples",
+    fromFrame: (frame: number, offset: string): string => `Difference read from frame ${frame.toLocaleString()}, which starts at ${offset}`,
+    fromConstant: (offset: string): string => `Read from the forward integration constant at ${offset}`,
+    /** The choice over a run with two dimensions. */
+    grid: "Grid",
+    gridTitle: "Show the values as a grid of colours, one cell per value",
+    line: "Line",
+    lineTitle: "Show the values as one line, in the order they are stored",
+    /** Over the grid: its shape, in the order the values are stored. */
+    shape: (rows: number, columns: number): string =>
+      `${countText(rows, "row")} of ${countText(columns, "value")}`,
+    /** Over the grid when it is drawn smaller than one pixel a value. `n` is
+     *  the most values any one pixel averages; a pixel at the grid's edge, or
+     *  where the cells do not divide evenly, averages fewer. */
+    meanOf: (n: number): string => `Each pixel shows the mean of up to ${n.toLocaleString()} values`,
+    /** The colour scale's range. */
+    rangeFull: "Full range",
+    rangeFullTitle: "Colours run from the lowest value to the highest",
+    rangeClip: "Middle 99%",
+    rangeClipTitle: "Colours run over the middle 99% of values; values outside that take the end colours",
+    /** Hover card over the grid. */
+    cell: (row: number, column: number): string => `Row ${row.toLocaleString()}, column ${column.toLocaleString()}`,
+    /** The foot of a card over one element: its index in the run, counted
+     *  from 0 as the listing counts, where it is, and its type. */
+    element: (index: number, offset: string, type: string): string => `[${index.toLocaleString()}] · ${offset} · ${type}`,
+    cellMean: (n: number, value: string): string => `Mean of ${n.toLocaleString()} values: ${value}`,
+  },
   icicle: {
     /** The treemap heading's tooltip while the panel shows In order, where
      *  `TREEMAP.what` ("every box's area is its share") is not true. */

@@ -1,0 +1,33 @@
+/* ---- two or three buttons side by side, one of them pressed ---- */
+/* List or Plot in the list pane's bar, Grid or Line over a two-dimensional
+   run, the plot's colour range. The pressed one wears the accent fill the app
+   gives a selection. A stylesheet of its own, imported by `listpane.ts` and
+   by `viz/valueplot.ts`, so the pane's buttons are styled whether or not the
+   plot has loaded. The app's other `.seg` is a radio group (aria-checked) and
+   is a size larger; these sit in a 22px bar. */
+.toggle-seg {
+  display: inline-flex;
+  flex: none;
+}
+.toggle-seg button {
+  min-height: 0;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 0;
+}
+.toggle-seg button:first-child {
+  border-start-start-radius: 4px;
+  border-end-start-radius: 4px;
+}
+.toggle-seg button:last-child {
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
+}
+.toggle-seg button + button {
+  margin-inline-start: -1px;
+}
+.toggle-seg button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
