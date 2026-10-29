@@ -134,12 +134,18 @@ export class ListPane {
       return b;
     };
     this.modeButtons = {
-      rows: modeButton("rows", VIZ.valuePlot.paneRows, VIZ.valuePlot.paneRowsTitle),
+      rows: modeButton("rows", VIZ.valuePlot.paneRows, VIZ.valuePlot.paneRowsTitle(this.unit)),
       plot: modeButton("plot", VIZ.valuePlot.panePlot, VIZ.valuePlot.panePlotTitle),
     };
     this.modes.hidden = true;
     this.plotHost = el("div", "lp-plot");
     this.plotHost.hidden = true;
+    // Escape closes the pane from the plot too, as it does from the rows.
+    this.plotHost.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      this.close();
+    });
     const bar = el("header", "lp-bar");
     bar.append(this.title, this.modes, close);
     this.el.append(bar, this.scroller, this.plotHost);
@@ -175,6 +181,7 @@ export class ListPane {
     this.scroller.scrollTop = 0;
     this.title.textContent = REPORT.paneTitle(node.name, node.child_count, this.unit);
     this.canvas.style.height = `${Math.min(MAX_CANVAS, this.count * ROW)}px`;
+    this.modeButtons.rows.title = VIZ.valuePlot.paneRowsTitle(this.unit);
     const plots = plotter !== null && plotter.applies(node);
     this.modes.hidden = !plots;
     this.setMode(plots ? mode : "rows");

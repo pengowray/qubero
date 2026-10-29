@@ -767,7 +767,18 @@ const SECTION_PX = 150;
  *  `applies` and then `draw` of the same field on one render. */
 let lastAsked: { doc: Doc; key: string; info: SamplesInfo | null } | null = null;
 
+/** The documents whose edits already forget `lastAsked`. */
+const watched = new WeakSet<Doc>();
+
 function samplesAt(doc: Doc, path: readonly number[]): SamplesInfo | null {
+  if (!watched.has(doc)) {
+    watched.add(doc);
+    // An edit to a Steim word changes the samples, and the bytes arriving can
+    // turn a record that would not decode into one that does.
+    doc.onChange(() => {
+      if (lastAsked?.doc === doc) lastAsked = null;
+    });
+  }
   const key = path.join(".");
   if (lastAsked !== null && lastAsked.doc === doc && lastAsked.key === key) return lastAsked.info;
   const reply = doc.typeInfo(path);
@@ -864,10 +875,10 @@ export function register(): void {
     id: "value-plot-samples",
     applies: (doc, node) => samplesAt(doc, node.path) !== null,
     // The record's data, so moving between its frames keeps the figure and
-    // its zoom.
+    // its zoom; and the samples, so an edit that changes them draws again.
     key: (doc, node, path) => {
       const info = samplesAt(doc, path);
-      return info === null ? path.join(".") : `samples:${dataStart(doc, path, info) ?? path.join(".")}:${info.total}`;
+      return info === null ? path.join(".") : `samples:${dataStart(doc, path, info) ?? path.join(".")}:${info.total}:${info.values.join(",")}`;
     },
     draw: ({ doc, path, width }) => samplesSection(doc, path, width),
   });

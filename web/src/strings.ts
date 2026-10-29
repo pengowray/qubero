@@ -4023,7 +4023,7 @@ export const VIZ = {
     buttonTitle: (count: number, unit: string): string => `Plot all ${countText(count, unit)} in the pane beside the listing`,
     /** The list pane's two ways of showing its list. */
     paneRows: "List",
-    paneRowsTitle: "Show one row per element",
+    paneRowsTitle: (unit: string): string => `Show one row per ${unit}`,
     panePlot: "Plot",
     panePlotTitle: "Show the values as a plot",
     /** While the bytes of the run are still arriving. */
