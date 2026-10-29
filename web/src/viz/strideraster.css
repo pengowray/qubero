@@ -27,10 +27,13 @@
   font-variant-numeric: tabular-nums;
   padding: 2px 4px;
 }
-.sr-grow {
+/* Small text, but 24 pixels tall, the smallest a target near another may
+   be; Reset zoom beside it takes the same height. */
+.sr-grow,
+.sr-panel .viz-reset {
   font-size: 11px;
   padding: 1px 6px;
-  min-height: 0;
+  min-height: 24px;
 }
 .sr-controls .sr-grow {
   margin-left: auto;
@@ -48,6 +51,12 @@
 
 /* The autocorrelation line. */
 .sr-lag-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sr-lag-title {
   font-weight: 600;
 }
 .sr-lag-plot {
@@ -86,13 +95,22 @@
 .sr-peak {
   font: 11px var(--mono);
   padding: 1px 6px;
-  min-height: 0;
+  min-height: 24px;
 }
 /* The peak in use: the selection colour, as `.seg` marks its choice. */
 .sr-peak[aria-pressed="true"] {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+/* The dark theme's accent is a light blue, and white on it is 2.5:1; the
+   ground colour on it is over 7:1. The shared `.seg` has the same white, so
+   this panel's radio pair takes the fix too. */
+@media (prefers-color-scheme: dark) {
+  .sr-peak[aria-pressed="true"],
+  .sr-mode button[aria-checked="true"] {
+    color: var(--bg);
+  }
 }
 
 /* The grid. Drag pans and the wheel zooms, so it asks for the grab cursor and

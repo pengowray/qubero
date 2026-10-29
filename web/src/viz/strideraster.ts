@@ -83,7 +83,7 @@ const LAG_MIN_BYTES = 64;
 const DEFAULT_STRIDE = 64;
 /** The grid's height in the rail: every row at full height when they fit,
  *  between these. */
-const RAIL_MIN_H = 120;
+const RAIL_MIN_H = 48;
 const RAIL_MAX_H = 420;
 /** The rail's inner width when it has not been laid out yet. */
 const RAIL_FALLBACK_W = 220;
@@ -358,7 +358,7 @@ export type StrideGrid = {
  * in `state`, which it follows. `rowAxis` puts the address of each row down
  * the left, when there is room for it. The grid never measures its host.
  */
-function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: number; rowAxis: boolean; onZoomed?: (zoomed: boolean) => void }): StrideGrid {
+function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: number; rowAxis: boolean; onZoomed?: (zoomed: boolean) => void; onWaiting?: (waiting: boolean) => void }): StrideGrid {
   const host = el("div", "sr-grid");
   const axisSvg = svg("svg", { class: "viz-axis sr-cols", height: AXIS_H });
   const body = el("div", "sr-grid-body");
@@ -566,7 +566,10 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
       data.set(line, py * W * 4);
     }
     ctx.putImageData(img, 0, 0);
-    waiting = incomplete;
+    if (incomplete !== waiting) {
+      waiting = incomplete;
+      opts.onWaiting?.(waiting);
+    }
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -830,7 +833,12 @@ export type LagLine = { readonly el: HTMLElement; resize(width: number): void; d
  */
 function drawLagLine(state: StrideState, opts: { width: number; height: number }): LagLine {
   const host = el("div", "sr-lag");
-  const head = el("div", "sr-lag-head", S.autocorrelation);
+  const head = el("div", "sr-lag-head");
+  const reset = el("button", "viz-reset", VIZ.resetZoom);
+  reset.type = "button";
+  reset.disabled = true;
+  reset.addEventListener("click", () => zoom?.home(false));
+  head.append(el("span", "sr-lag-title", S.autocorrelation), reset);
   const plotHost = el("div", "sr-lag-plot");
   const note = el("div", "sr-note");
   host.append(head, plotHost, note);
@@ -844,6 +852,7 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
   const teardown = (): void => {
     zoom?.destroy();
     zoom = null;
+    reset.disabled = true;
     stopTip?.();
     stopTip = null;
     plot?.destroy();
@@ -856,6 +865,7 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
     if (lag.status !== "done") {
       teardown();
       plotHost.style.height = lag.status === "computing" ? `${opts.height}px` : "0px";
+      reset.hidden = lag.status !== "computing";
       note.textContent = lag.status === "computing" ? S.computing : lag.status === "short" ? S.tooShort : "";
       return;
     }
@@ -869,6 +879,7 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
     if (destroyed) return;
     teardown();
     plotHost.style.height = "";
+    reset.hidden = false;
     drawn = lag.r;
     const xs = new Float64Array(maxLag);
     const ys = new Float64Array(maxLag);
@@ -942,6 +953,7 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
       minScale: 1,
       maxScale: Math.max(1, Math.log10(maxLag) * 40),
       onZoom: (v) => {
+        reset.disabled = v.k <= 1 + 1e-9 && Math.abs(v.x) < 0.5;
         const [a, b] = rescaleDomain(v, logDomain, [0, plotW()]);
         u.setScale("x", { min: Math.pow(10, Math.max(0, a)), max: Math.pow(10, Math.min(logDomain[1], b)) });
       },
@@ -958,13 +970,17 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
       for (let l = lo; l <= hi; l++) if ((lag.r[l] as number) > (lag.r[best] as number)) best = l;
       return best;
     };
+    // The lag the card last named, so a click where the pointer stopped sets
+    // that lag, and not a neighbour half a pixel away.
+    let shown: { x: number; lag: number } | null = null;
     stopTip = hoverTip(over, (e) => {
       const l = lagAt(e);
+      shown = l === null ? null : { x: e.clientX, lag: l };
       if (l === null) return null;
       return tipCard(S.lagTitle(l), [S.lagValue(lag.r[l] as number)], S.lagClick(l));
     });
     over.addEventListener("click", (e) => {
-      const l = lagAt(e);
+      const l = shown !== null && Math.abs(shown.x - e.clientX) < 2 ? shown.lag : lagAt(e);
       if (l !== null) state.setStride(l, "reader");
     });
   };
@@ -1055,6 +1071,7 @@ class StridePanel implements OverviewTabPanel {
       width: this.contentWidth(),
       height: this.gridHeight(),
       rowAxis: large !== null,
+      onWaiting: () => this.drawLegend(),
       onZoomed: (z) => {
         this.reset.disabled = !z;
       },
@@ -1122,6 +1139,8 @@ class StridePanel implements OverviewTabPanel {
   }
 
   private drawLegend(): void {
+    // The grid's first drawing reports on its bytes before the legend exists.
+    if ((this.legend as HTMLElement | undefined) === undefined) return;
     const c = palette();
     const items: HTMLElement[] = [];
     if (this.state.mode === "value") {
@@ -1166,9 +1185,7 @@ class StridePanel implements OverviewTabPanel {
   pump(): void {
     if (!this.shown) return;
     this.state.guessFromTemplate();
-    const was = this.grid.waiting;
     this.grid.pump();
-    if (was) this.drawLegend();
   }
 
   destroy(): void {
