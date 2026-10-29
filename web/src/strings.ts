@@ -4022,7 +4022,7 @@ export const VIZ = {
     tab: "Stride",
     tabTitle: "Each byte of the file as one cell of a grid. Set the bytes per row to the record size and fixed-size records line up in columns.",
     perRow: "Bytes per row",
-    perRowTitle: "Up and down arrow keys change it by one, with the grid or this box focused",
+    perRowTitle: "The up and down arrow keys change the bytes per row by one, in this box or with the grid focused",
     larger: "Show larger",
     close: "Close",
     /** The canvas, for a screen reader. */

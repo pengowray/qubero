@@ -15,6 +15,8 @@ import {
   followZoom,
   greyLevel,
   inkOn,
+  lagSplits,
+  lagTicks,
   MAX_CELL_PX,
   MAX_STRIDE,
   maxZoom,
@@ -170,6 +172,31 @@ test("hex digits are black on light cells and white on dark ones", () => {
   assert.equal(inkOn([20, 20, 20]), "white");
   assert.equal(inkOn([0x90, 0x90, 0x90]), "black");
   assert.equal(inkOn([0x60, 0x60, 0x60]), "white");
+});
+
+test("the lag axis labels decades, and 2s and 5s once zoomed between them", () => {
+  const splits = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 1000];
+  // Zoomed out: 1 to 1,000 over 160 of 170 pixels, about 53 a decade.
+  const out = lagTicks(splits, (v) => (Math.log10(v) / 3) * 160, (v) => v.toLocaleString().length * 6, 170);
+  assert.deepEqual(out.filter((v) => [1, 10, 100, 1000].includes(v)), [1, 10, 100, 1000]);
+  // Zoomed in on 20 to 90: no power of ten in view, so 20 and 50 carry it.
+  const span = [Math.log10(20), Math.log10(90)] as const;
+  const at = (v: number): number => ((Math.log10(v) - span[0]) / (span[1] - span[0])) * 170;
+  const zoomed = lagTicks([20, 30, 40, 50, 60, 70, 80, 90], at, () => 12, 170);
+  assert.ok(zoomed.includes(20) && zoomed.includes(50));
+  // No two kept labels meet.
+  const w = 12;
+  for (let i = 1; i < zoomed.length; i++) assert.ok(at(zoomed[i] as number) - at(zoomed[i - 1] as number) >= w + 8);
+});
+
+test("zoomed in under a few log ticks, the lag axis steps by a round number", () => {
+  assert.equal(lagSplits(1, 17248).linear, false);
+  const near = lagSplits(85.6, 191.3);
+  assert.equal(near.linear, true);
+  assert.deepEqual(near.values, [100, 120, 140, 160, 180]);
+  // Every tick a round step apart is a candidate for a label.
+  const at = (v: number): number => ((v - 85.6) / (191.3 - 85.6)) * 170;
+  assert.ok(lagTicks(near.values, at, () => 18, 170, true).length >= 4);
 });
 
 // ----- the row width a template suggests -----

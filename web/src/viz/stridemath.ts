@@ -318,3 +318,62 @@ export function inkOn(rgb: readonly [number, number, number]): "black" | "white"
   const l = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
   return (l + 0.05) / 0.05 >= 1.05 / (l + 0.05) ? "black" : "white";
 }
+
+/**
+ * The ticks along the lag axis from `min` to `max` bytes, a log scale: 1 to
+ * 9 times each power of ten, which is what a log axis is read by. Zoomed in
+ * to under a few of those, whole numbers a round step apart instead (90, 100,
+ * 110), so the axis has numbers at every zoom. `linear` says which.
+ */
+export function lagSplits(min: number, max: number): { values: number[]; linear: boolean } {
+  const lo = Math.max(1, min);
+  const hi = Math.max(lo, max);
+  const values: number[] = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) {
+    for (let m = 1; m <= 9; m++) {
+      const v = m * Math.pow(10, e);
+      if (v >= lo - 1e-9 && v <= hi + 1e-9) values.push(v);
+    }
+  }
+  if (values.length >= 4) return { values, linear: false };
+  let step = 1;
+  for (const s of [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000]) {
+    step = s;
+    if ((hi - lo) / s <= 8) break;
+  }
+  const out: number[] = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return { values: out, linear: true };
+}
+
+/**
+ * Which ticks along the lag axis get a label: powers of ten first, then 2s
+ * and 5s (20, 50, 200), then the rest, each kept only if its label, centred
+ * on its tick, clears every label kept before it by `gap` pixels and stays
+ * within `slack` pixels of the plot's ends. Zoomed out that is a label per
+ * decade, or every other decade when they are narrow, and the other log
+ * ticks (3, 40, 9,000) are labelled only when the 1s, 2s and 5s left fewer
+ * than two numbers. Ticks a round step apart (`linear`) are all candidates.
+ */
+export function lagTicks(splits: readonly number[], at: (v: number) => number, labelWidth: (v: number) => number, width: number, linear = false, gap = 8, slack = 12): number[] {
+  const rank = (v: number): number => {
+    const e = Math.floor(Math.log10(v) + 1e-9);
+    const m = v / Math.pow(10, e);
+    if (Math.abs(m - 1) < 1e-6) return 0;
+    if (Math.abs(m - 2) < 1e-6 || Math.abs(m - 5) < 1e-6) return 1;
+    return 2;
+  };
+  const order = splits.filter((v) => v >= 1 && Number.isInteger(v)).sort((a, b) => rank(a) - rank(b) || a - b);
+  const kept: { v: number; start: number; end: number }[] = [];
+  for (const v of order) {
+    if (!linear && rank(v) === 2 && kept.length >= 2) break;
+    const x = at(v);
+    const w = labelWidth(v);
+    const start = x - w / 2;
+    const end = x + w / 2;
+    if (start < -slack || end > width + slack) continue;
+    if (kept.some((k) => start < k.end + gap && end > k.start - gap)) continue;
+    kept.push({ v, start, end });
+  }
+  return kept.map((k) => k.v).sort((a, b) => a - b);
+}

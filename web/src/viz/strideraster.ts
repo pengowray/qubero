@@ -55,6 +55,8 @@ import {
   followZoom,
   greyLevel,
   inkOn,
+  lagSplits,
+  lagTicks,
   MAX_STRIDE,
   maxZoom,
   OTHER,
@@ -368,7 +370,6 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
   const canvas = el("canvas", "sr-canvas");
   canvas.tabIndex = 0;
   canvas.setAttribute("role", "img");
-  canvas.title = S.perRowTitle;
   body.append(rowSvg, canvas);
   host.append(axisSvg, body);
   const axisG = svg("g", { transform: `translate(0,${AXIS_H - 1})` });
@@ -388,6 +389,7 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
   let waiting = false;
   let hover: { row: number; from: number; to: number } | null = null;
   let frame = 0;
+  let buffer: ImageData | null = null;
   const bus = linkedFor(doc);
 
   // Rows of the current width, by row index.
@@ -483,7 +485,10 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
     const dpr = canvas.width / Math.max(1, g.width);
     const W = canvas.width;
     const H = canvas.height;
-    const img = ctx.createImageData(W, H);
+    // One buffer per size, kept between frames: at twice the pixels over the
+    // whole window a new one each wheel tick would be megabytes of garbage.
+    if (buffer === null || buffer.width !== W || buffer.height !== H) buffer = ctx.createImageData(W, H);
+    const img = buffer;
     const data = img.data;
     const c = colours;
     const rowH = rowHeight(g, view.k);
@@ -737,14 +742,22 @@ function drawGrid(doc: Doc, state: StrideState, opts: { width: number; height: n
   });
   canvas.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    // The keys are the grid's while it has focus, not the page's shortcuts.
     e.preventDefault();
+    e.stopPropagation();
     state.setStride(state.stride + (e.key === "ArrowUp" ? 1 : -1), "reader");
   });
   const stopLinked = subscribeWhileConnected(bus, host, (_s, changed) => {
     if (changed === "selection") schedule();
   });
   const dark = matchMedia("(prefers-color-scheme: dark)");
+  // The rail never says when it drops a panel, so the theme listener lets
+  // go the first time it fires after the grid has left the page.
   const themed = (): void => {
+    if (!host.isConnected) {
+      dark.removeEventListener("change", themed);
+      return;
+    }
     colours = palette();
     schedule();
   };
@@ -817,19 +830,29 @@ function loadUPlot(): Promise<UPlot> {
   return uplotLoading;
 }
 
-/** The lag ticks to label: powers of ten only, the rest of uPlot's log
- *  splits left out, and every other power when a decade is too narrow for
- *  "10,000" with room to spare, so no two labels meet. */
-function decades(u: InstanceType<UPlot>, splits: number[]): (number | null)[] {
-  const min = u.scales.x?.min ?? 1;
-  const max = u.scales.x?.max ?? 10;
-  const span = Math.max(1e-9, Math.log10(max) - Math.log10(Math.max(1, min)));
-  const perDecade = u.bbox.width / devicePixelRatio / span;
-  const every = perDecade >= TICK_MEASURE("10,000", TICK_PX) + 10 ? 1 : 2;
-  return splits.map((v) => {
-    const e = Math.round(Math.log10(v) * 1e6) / 1e6;
-    return Number.isInteger(e) && e % every === 0 ? v : null;
-  });
+/** Whether the ticks last made for each line were a round step apart. */
+const linearTicks = new WeakMap<object, boolean>();
+
+/** The lag ticks (`lagSplits`), for uPlot's axis. */
+function lagAxisSplits(u: InstanceType<UPlot>, _axis: number, min: number, max: number): number[] {
+  const { values, linear } = lagSplits(min, max);
+  linearTicks.set(u, linear);
+  return values;
+}
+
+/** The lag ticks to label (`lagTicks`), as uPlot's axis filter wants them:
+ *  each tick kept, or null for one left bare. */
+function lagAxisLabels(u: InstanceType<UPlot>, splits: number[]): (number | null)[] {
+  const keep = new Set(
+    lagTicks(
+      splits,
+      (v) => u.valToPos(v, "x"),
+      (v) => TICK_MEASURE(v.toLocaleString(), TICK_PX),
+      u.bbox.width / devicePixelRatio,
+      linearTicks.get(u) === true,
+    ),
+  );
+  return splits.map((v) => (keep.has(v) ? v : null));
 }
 
 export type LagLine = { readonly el: HTMLElement; resize(width: number): void; destroy(): void };
@@ -920,7 +943,8 @@ function drawLagLine(state: StrideState, opts: { width: number; height: number }
             gap: 2,
             ticks: { size: 3, stroke: muted },
             grid: { show: false },
-            filter: (self, splits) => decades(self, splits),
+            splits: lagAxisSplits,
+            filter: (self, splits) => lagAxisLabels(self, splits),
             values: (_u, vals) => vals.map((v) => (v === null ? "" : v.toLocaleString())),
           },
           { show: false },

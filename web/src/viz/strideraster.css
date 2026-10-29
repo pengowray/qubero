@@ -22,7 +22,7 @@
 /* Wide enough for 65536 and the browser's spinner, in the digits the
    addresses are written in, so the number does not shift as it changes. */
 .sr-input {
-  width: 8ch;
+  width: 11ch;
   font: 12px var(--mono);
   font-variant-numeric: tabular-nums;
   padding: 2px 4px;
