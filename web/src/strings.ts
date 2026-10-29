@@ -4256,6 +4256,63 @@ export const VIZ = {
     element: (index: number, offset: string, type: string): string => `[${index.toLocaleString()}] · ${offset} · ${type}`,
     cellMean: (n: number, value: string): string => `Mean of ${n.toLocaleString()} values: ${value}`,
   },
+  structLayout: {
+    /** The listing heading's button, beside `bytes`, `list` and `table`. */
+    button: "layout",
+    buttonTitle: (name: string): string => `Show the byte layout of ${name}: each field at its offset, gaps between fields marked`,
+    buttonTitleOn: (name: string): string => `Show the fields of ${name} as a list again`,
+    /** The figure's heading. A struct layout is what pahole prints. */
+    title: (name: string): string => `Struct layout of ${name}`,
+    rowWidth: "Bytes per row",
+    rowWidthTitle: (n: number): string => `${n} bytes per row`,
+    /** The summary line under the heading, its parts joined with ` · `. */
+    size: (bytes: number, fields: number): string => `${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    /** For a list whose elements are all one size: `4 segments, each 56
+     *  bytes in 8 fields`. */
+    elementsEach: (count: number, noun: string, bytes: number, fields: number): string =>
+      `${countText(count, noun)}, each ${countText(bytes, "byte")} in ${countText(fields, "field")}`,
+    padding: (bytes: number): string => `${countText(bytes, "byte")} padding`,
+    /** Bytes no field anywhere covers, in the word the hex view and the
+     *  listing use for them (`GAP_LABEL`). */
+    unmapped: (bytes: number): string => `${countText(bytes, "byte")} ${GAP_LABEL}`,
+    noGaps: "no gaps between fields",
+    misaligned: (n: number): string => countText(n, "misaligned number"),
+    /** Inside a gap's box: the full label, and the one used when it does not
+     *  fit. */
+    gapShort: (bytes: number): string => `${bytes} B`,
+    gapPaddingNext: (next: string, align: number): string => `No field covers these bytes. After them, ${next} starts at a multiple of ${align} bytes.`,
+    gapPaddingTail: (name: string, align: number): string => `No field covers these bytes. They make ${name} a multiple of ${align} bytes long.`,
+    gapUnread: "No field covers these bytes.",
+    /** A gap in this structure that fields elsewhere in the file are read
+     *  from: `224 bytes of program_headers`. */
+    gapOf: (bytes: number, owner: string): string => `${countText(bytes, "byte")} of ${owner}`,
+    gapOfOthers: (bytes: number): string => `${countText(bytes, "byte")} of other parts of the file`,
+    gapOther: (name: string, owners: readonly string[]): string => `Not part of ${name}. Fields of ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""} are read from these bytes.`,
+    /** In the summary line, for those gaps. Not "in other fields", which
+     *  reads as more fields of this structure and invites adding the count to
+     *  the size before it. */
+    other: (bytes: number): string => `${countText(bytes, "byte")} belong to other parts of the file`,
+    /** On a field the format itself calls padding. */
+    namedPadding: "The format calls this field padding",
+    /** Hover card lines for a field. `rel` is an offset like `+0x08`, and
+     *  `record` is the name of the structure the rows count from. */
+    fromStart: (rel: string, record: string, size: string): string => `${rel} from the start of ${record} · ${size}`,
+    /** For a member of a structure inside the record: its offset in that
+     *  structure as well. */
+    inGroup: (rel: string, group: string): string => `${rel} from the start of ${group}`,
+    aligned: (align: number): string => `Aligned to ${align} bytes`,
+    notAligned: (bytes: number, rel: string): string => `Not aligned: ${bytes}-byte number at ${rel}`,
+    /** A break standing for rows that are wholly one field. */
+    folded: (rows: number, name: string, bytes: number): string => `${countText(rows, "more row")} of ${name} (${countText(bytes, "byte")})`,
+    /** The same for rows that are wholly one gap, whose box says what it is. */
+    foldedGap: (rows: number, bytes: number): string => `${countText(rows, "more row")} (${countText(bytes, "byte")})`,
+    /** A row's key, when more names are keyed than fit beside it. */
+    keyMore: (n: number): string => `+${n} more`,
+    /** Under the figure: fields of the structure stored somewhere else. */
+    placed: "Fields read from elsewhere in the file:",
+    reading: "Reading the fields…",
+    tooLarge: (size: string, limit: string): string => `Too large to draw as rows of bytes: ${size} (the limit is ${limit})`,
+  },
   icicle: {
     /** The treemap heading's tooltip while the panel shows In order, where
      *  `TREEMAP.what` ("every box's area is its share") is not true. */
