@@ -85,7 +85,7 @@ export class SearchBar {
     this.status = el("span", { className: "sb-status" });
     this.status.setAttribute("role", "status");
 
-    this.expand = this.button(SEARCH_LABELS.showReplace, () => this.setReplace(this.replaceRow.hidden));
+    this.expand = this.button(SEARCH_LABELS.showReplace, () => this.setReplace(this.replaceRow.hidden !== false));
     this.expand.className = "sb-expand";
     this.replaceRow = el("div", { className: "sb-row sb-replace" }, this.repl, one, all);
     this.el = el(

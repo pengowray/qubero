@@ -22,8 +22,8 @@
     "@types/d3-shape": "^3.2.0",
     "@types/d3-zoom": "^3.0.9",
     "@types/node": "^26.4.0",
-    "typescript": "^5.9",
-    "vite": "^7"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
   },
   "dependencies": {
     "@types/d3-hierarchy": "^3.1.7",
