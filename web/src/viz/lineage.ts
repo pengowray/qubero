@@ -205,18 +205,24 @@ function rootInHome(c: Crumb): { readonly home: Doc; readonly path: readonly num
   return { home, path: [...c.from.spaceOrigin(), 0, ...c.step.root] };
 }
 
-/** Whether a tab showing a crumb's stream, or the file, is open now. */
-function isOpen(c: Crumb): boolean {
-  if (c.step === null) return routes.open().includes(c.from);
+/** The document of the open tab showing a crumb's stream, or the file's.
+ *  Null when there is none. */
+function openTabOf(c: Crumb): Doc | null {
+  if (c.step === null) return routes.open().includes(c.from) ? c.from : null;
   const want = rootInHome(c);
-  if (want === null) return false;
-  return routes.open().some((d) => {
+  if (want === null) return null;
+  const found = routes.open().find((d) => {
     if (d === c.from || d.isFile) return false;
     const up = parents.get(d);
     if (up === undefined || homeOf(up) !== want.home) return false;
     const root = [...d.spaceOrigin(), 0];
     return root.length === want.path.length && root.every((v, i) => v === want.path[i]);
   });
+  return found ?? null;
+}
+
+function isOpen(c: Crumb): boolean {
+  return openTabOf(c) !== null;
 }
 
 /** How long a run's address waits for its stream to finish unpacking before
@@ -236,13 +242,17 @@ const RUN_WAIT_MS = 100;
 function goToRun(c: Crumb, parent: Crumb, tries = 0): void {
   const step = c.step;
   if (step === null || step.joined) return;
-  const there = showCrumb(parent);
+  // The tab is asked for once. Asking again would start the unpacking over,
+  // or say again why a stream will not open.
+  const there = tries === 0 ? showCrumb(parent) : openTabOf(parent);
   if (there === null) {
     // Still unpacking, most likely: the tab opens by itself when it is done,
-    // and the run is gone to then.
+    // and the run is gone to then. A stream that will not open is given up
+    // on quietly.
     if (tries < RUN_TRIES) setTimeout(() => goToRun(c, parent, tries + 1), RUN_WAIT_MS);
     return;
   }
+  if (tries > 0) routes.focus(there);
   let path: readonly number[];
   if (there === c.from) path = step.opener;
   else if (parent.step !== null && parent.from === c.from && startsWith(step.opener, parent.step.root)) path = step.opener.slice(parent.step.root.length);
@@ -377,7 +387,9 @@ export function drawLineage(doc: Doc, path: readonly number[]): HTMLElement | nu
       run.type = "button";
       run.className = "viz-lineage-at";
       run.textContent = formatOffset(c.step.atBits);
-      if (parent !== null) {
+      // The tab the parent stream would be opened from has been closed.
+      if (parent !== null && parent.step !== null && !openers.has(parent.from)) run.disabled = true;
+      else if (parent !== null) {
         run.setAttribute("aria-label", VIZ.lineage.goToRun(parent.label));
         run.addEventListener("click", () => {
           hideTip();
