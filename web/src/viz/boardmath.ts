@@ -62,3 +62,38 @@ export function fitTransform(box: Box, width: number, height: number, xOnly: boo
   const y = xOnly ? 0 : (height - bh * k) / 2 - box.y0 * k;
   return { k, x, y };
 }
+
+/**
+ * Where one edge of the picture may be on screen along one axis, so that the
+ * picture is never pulled out of the view. `start` is the screen position of
+ * the picture's first edge (`content0 * k + x`), `size` its length on screen
+ * (`(content1 - content0) * k`), `view` the view's length, and `slack` how
+ * many screen pixels of empty view may show past either edge.
+ *
+ * A picture longer than the view may be pulled until its edge is `slack`
+ * pixels inside the view, and no further. A picture shorter than the view
+ * stays where it is drawn at no zoom (its first edge at 0) and may be moved
+ * anywhere between there and its far edge `slack` pixels from the far side,
+ * so a short row of tiles at the left of a wide figure is not jumped to the
+ * middle, and no drag can leave the view empty.
+ */
+export function holdEdge(start: number, size: number, view: number, slack: number): number {
+  const lo = Math.min(0, view - slack - size);
+  const hi = Math.max(slack, view - slack - size);
+  return Math.max(lo, Math.min(hi, start));
+}
+
+/**
+ * `t` moved so that `content` stays in a view `width` by `height`, with
+ * `share` of the view the most that may show empty past the picture's edges
+ * at any zoom. Measured in screen pixels, so it holds at every zoom: a slack
+ * counted in layout pixels grows with the zoom until a view zoomed in far
+ * enough fits inside the slack and shows nothing at all.
+ */
+export function holdInView(t: View, content: Box, width: number, height: number, share: number, xOnly: boolean): View {
+  const x0 = holdEdge(content.x0 * t.k + t.x, (content.x1 - content.x0) * t.k, width, width * share);
+  const x = x0 - content.x0 * t.k;
+  if (xOnly) return { k: t.k, x, y: 0 };
+  const y0 = holdEdge(content.y0 * t.k + t.y, (content.y1 - content.y0) * t.k, height, height * share);
+  return { k: t.k, x, y: y0 - content.y0 * t.k };
+}

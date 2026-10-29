@@ -13,11 +13,35 @@
 //
 // Kept apart from the drawing so that `node --test` can run it with no page.
 
-/** One step of the way from a record down to the field: the child's name and
- *  type, which is how the same field is found in another record. Index alone
- *  would find a different field in a record of another kind (a MIDI meta
- *  event and a note event both have four children). */
-export type Step = { readonly name: string; readonly type: string };
+/** One step of the way from a record down to the field: the child's name,
+ *  which is how the same field is found in another record, and where it is in
+ *  the first record, which is where it usually is in the others too. By name
+ *  and not by type: the records of one list are often of several types (a ZIP
+ *  holds local file headers, data descriptors and central directory entries,
+ *  each with its own `compressed_size`), and the field is still the same
+ *  field. By name and not by place: a MIDI meta event and a note event both
+ *  have four children, and the fourth is a different thing in each. */
+export type Step = { readonly name: string; readonly index: number };
+
+/** Which of `kids` is the step's field: the one at the step's place when its
+ *  name agrees, else the first with that name, else none. */
+export function findStep(kids: readonly { readonly name: string }[], step: Step): number | null {
+  if (kids[step.index]?.name === step.name) return step.index;
+  const at = kids.findIndex((k) => k.name === step.name);
+  return at < 0 ? null : at;
+}
+
+/** The points either side of point `i` with the same value as it, as a range
+ *  of points, end exclusive: a flat stretch of the line, which the hover card
+ *  names as one run rather than one point at a time. */
+export function sameRun(values: readonly number[], i: number): { readonly from: number; readonly to: number } {
+  const v = values[i];
+  let from = i;
+  let to = i + 1;
+  while (from > 0 && values[from - 1] === v) from--;
+  while (to < values.length && values[to] === v) to++;
+  return { from, to };
+}
 
 /** A value written as the core writes a number for editing: decimal, or hex
  *  with `0x`, perhaps with a sign. Null for anything else, which is a field

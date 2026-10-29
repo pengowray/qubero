@@ -36,7 +36,7 @@
 import type { ZoomBehavior, ZoomTransform } from "d3-zoom";
 import type { Selection } from "d3-selection";
 import { figureTakesWheel } from "../report/wheel.ts";
-import { fitTransform, IDENTITY, type Box, type View } from "./boardmath.ts";
+import { fitTransform, holdInView, IDENTITY, type Box, type View } from "./boardmath.ts";
 
 export type BoardOptions = {
   readonly width: number;
@@ -51,6 +51,13 @@ export type BoardOptions = {
   /** The drawn picture's box in layout pixels: what Fit fits, and how far a
    *  drag may take it. Defaults to the view. */
   readonly content?: Box;
+  /** Keep the picture on screen at every zoom: at most this share of the
+   *  view may show empty past the picture's edges, counted in screen pixels
+   *  (`holdInView`). A picture smaller than the view stays where it is drawn
+   *  rather than being moved to the middle, as d3 would move it. Without it,
+   *  a quarter of the view may show past each edge, and a picture smaller
+   *  than the view is kept in the middle. */
+  readonly hold?: number;
   /** Called with the transform after every change, and once with the
    *  starting one when the board is made. */
   readonly onZoom: (view: View) => void;
@@ -185,21 +192,29 @@ export function board(host: Element, opts: BoardOptions): Board {
       const e = event as MouseEvent;
       return !e.ctrlKey && !e.button;
     });
-    // A little room past the edges, so the first and last bar can be pulled
-    // into the middle of the view to be looked at, and no further. The room
-    // is a quarter of the view on screen at every zoom: given in layout
-    // pixels, it would be a quarter of the view at no zoom and thousands of
-    // blank screens at a deep one, with the picture lost somewhere past them.
-    const base = z.constrain();
-    z.constrain((t, extent, inner) => {
-      const sx = ((extent[1][0] - extent[0][0]) * SLACK) / t.k;
-      const sy = xOnly ? 0 : ((extent[1][1] - extent[0][1]) * SLACK) / t.k;
-      const c = base(t, extent, [
-        [inner[0][0] - sx, inner[0][1] - sy],
-        [inner[1][0] + sx, inner[1][1] + sy],
-      ]);
-      return xOnly ? new loaded.zoom.ZoomTransform(c.k, c.x, 0) : c;
-    });
+    const hold = opts.hold;
+    if (hold !== undefined) {
+      z.constrain((t) => {
+        const v = holdInView({ k: t.k, x: t.x, y: t.y }, content, width, height, hold, xOnly);
+        return new loaded.zoom.ZoomTransform(v.k, v.x, v.y);
+      });
+    } else {
+      // A little room past the edges, so the first and last bar can be pulled
+      // into the middle of the view to be looked at, and no further. The room
+      // is a quarter of the view on screen at every zoom: given in layout
+      // pixels, it would be a quarter of the view at no zoom and thousands of
+      // blank screens at a deep one, with the picture lost somewhere past them.
+      const base = z.constrain();
+      z.constrain((t, extent, inner) => {
+        const sx = ((extent[1][0] - extent[0][0]) * SLACK) / t.k;
+        const sy = xOnly ? 0 : ((extent[1][1] - extent[0][1]) * SLACK) / t.k;
+        const c = base(t, extent, [
+          [inner[0][0] - sx, inner[0][1] - sy],
+          [inner[1][0] + sx, inner[1][1] + sy],
+        ]);
+        return xOnly ? new loaded.zoom.ZoomTransform(c.k, c.x, 0) : c;
+      });
+    }
     z.on("zoom", (e: { transform: ZoomTransform }) => {
       current = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
       opts.onZoom(current);

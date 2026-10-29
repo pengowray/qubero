@@ -162,3 +162,50 @@ export function recordWord(list: { readonly unit?: string; readonly type: string
   if (/^[A-Z][a-z]+$/.test(element)) return element.toLowerCase();
   return "item";
 }
+
+/**
+ * Records in a row that are the same are one tile with a count on it, the
+ * repeat glyph of the design: three hundred IDAT chunks of 8,192 bytes are a
+ * run that the eye reads as one thing, and drawing it once leaves room for the
+ * records that differ. `keys` says what makes two records the same (their
+ * type and their size); a null key is a record that is never folded into a
+ * run, such as one with a wrong value inside it, which has to stay a tile of
+ * its own to be found.
+ */
+export type Cells = {
+  /** The first record of each cell, in file order. */
+  readonly first: readonly number[];
+  /** How many records each cell stands for: 1, or the length of the run. */
+  readonly count: readonly number[];
+};
+
+export function collapseRuns(keys: readonly (string | null)[]): Cells {
+  const first: number[] = [];
+  const count: number[] = [];
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i] ?? null;
+    const last = first.length - 1;
+    if (k !== null && last >= 0 && keys[first[last] as number] === k) {
+      count[last] = (count[last] ?? 0) + 1;
+      continue;
+    }
+    first.push(i);
+    count.push(1);
+  }
+  return { first, count };
+}
+
+/** The cell record `record` is in, or null for a record past the last. */
+export function cellOf(cells: Cells, record: number): number | null {
+  const { first, count } = cells;
+  let lo = 0;
+  let hi = first.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const f = first[mid] as number;
+    if (record < f) hi = mid - 1;
+    else if (record >= f + (count[mid] as number)) lo = mid + 1;
+    else return mid;
+  }
+  return null;
+}

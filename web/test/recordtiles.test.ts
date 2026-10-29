@@ -5,8 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { assignCategories, fillPx, HUE_SLOTS, OTHER_SLOT, recordWord, tileAt, tileBox, tileGrid } from "../src/viz/tilelayout.ts";
-import { binOf, binRecords, envelope, parseNumber, shortNumber, worthDrawing } from "../src/viz/sparkmath.ts";
+import { assignCategories, cellOf, collapseRuns, fillPx, HUE_SLOTS, OTHER_SLOT, recordWord, tileAt, tileBox, tileGrid } from "../src/viz/tilelayout.ts";
+import { binOf, binRecords, envelope, findStep, parseNumber, sameRun, shortNumber, worthDrawing } from "../src/viz/sparkmath.ts";
 import { figureKey, figureOpenOn, figurePath, isFigureKey } from "../src/viz/headingfigures.ts";
 
 // ----- categories -----
@@ -198,4 +198,47 @@ test("a heading is measured only while a figure is open under it", () => {
   // A heading whose path only starts like an open one's is not it.
   assert.equal(figureOpenOn(new Set([figureKey("record-tiles", [2, 1])]), [2]), false);
   assert.equal(figureOpenOn(new Set([figureKey("record-tiles", [12])]), [2]), false);
+});
+
+// ----- runs of the same record -----
+
+test("records in a row with the same key are one cell with a count", () => {
+  const cells = collapseRuns(["IHDR", "IDAT:8192", "IDAT:8192", "IDAT:8192", "IDAT:100", "IEND"]);
+  assert.deepEqual(cells.first, [0, 1, 4, 5]);
+  assert.deepEqual(cells.count, [1, 3, 1, 1]);
+});
+
+test("the same key apart, or a null key, is not a run", () => {
+  const cells = collapseRuns(["a", "b", "a", null, null, "c", "c"]);
+  assert.deepEqual(cells.first, [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(cells.count, [1, 1, 1, 1, 1, 2]);
+});
+
+test("each record is found in the cell that stands for it", () => {
+  const cells = collapseRuns(["x", "y", "y", "y", "z", "z", "w"]);
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((r) => cellOf(cells, r)), [0, 1, 1, 1, 2, 2, 3]);
+  assert.equal(cellOf(cells, 7), null);
+  assert.equal(cellOf(collapseRuns([]), 0), null);
+});
+
+// ----- the same field in records of other types -----
+
+test("a field is found by name in records of other types", () => {
+  // A ZIP's records: the body of each is a LocalFile, a DataDescriptor or a
+  // CentralDirectoryFile, and each has a compressed_size somewhere else.
+  const local = [{ name: "version" }, { name: "flags" }, { name: "method" }, { name: "compressed_size" }];
+  const descriptor = [{ name: "crc32" }, { name: "compressed_size" }, { name: "uncompressed_size" }];
+  const central = [{ name: "made_by" }, { name: "version" }, { name: "flags" }, { name: "method" }, { name: "compressed_size" }];
+  const step = { name: "compressed_size", index: 3 };
+  assert.equal(findStep(local, step), 3);
+  assert.equal(findStep(descriptor, step), 1);
+  assert.equal(findStep(central, step), 4);
+  assert.equal(findStep([{ name: "signature" }], step), null);
+});
+
+test("a flat stretch of a run is found either side of a point", () => {
+  const values = [1, 5, 5, 5, 2, 2, 9];
+  assert.deepEqual(sameRun(values, 2), { from: 1, to: 4 });
+  assert.deepEqual(sameRun(values, 0), { from: 0, to: 1 });
+  assert.deepEqual(sameRun(values, 5), { from: 4, to: 6 });
 });

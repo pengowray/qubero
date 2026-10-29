@@ -21,7 +21,16 @@
 // record the cursor is in is marked, whichever view moved the cursor, so the
 // line still says where a reader is in the run. Only for a number that varies
 // across at least three records, and not for a checksum, whose values are
-// meant to look like noise.
+// meant to look like noise. The records of a list need not all be of one type:
+// the field is found in each by its name, so a ZIP's `compressed_size` is one
+// run across its local file headers, data descriptors and central directory
+// entries, and a record without the field is left out of the line.
+//
+// The run is read a slice at a time with the page given its turn in between
+// (`readahead.ts`), so opening a directory of thousands of records does not
+// stop the page; the line appears in the row when the reading is done. It
+// sits at the right of the value cell, apart from the field's own value, so
+// the run's smallest value is not read as part of it.
 //
 // Explorable: hovering the line gives the record and its value (`tip.ts`) and
 // marks the field's bytes in the hex view (`linked.ts`); a click goes to that
@@ -38,13 +47,13 @@ import { bitSizeText, VIZ } from "../strings.ts";
 import { linkedFor } from "./linked.ts";
 import { goToField } from "./pick.ts";
 import { registerRowGlyph } from "./rowglyphs.ts";
-import { binOf, binRecords, envelope, parseNumber, shortNumber, worthDrawing, type Envelope, type Step } from "./sparkmath.ts";
+import { recordsOf, queued, walk, WAIT, type Wait, type Walk } from "./readahead.ts";
+import { binOf, binRecords, envelope, findStep, parseNumber, sameRun, shortNumber, worthDrawing, type Envelope, type Step } from "./sparkmath.ts";
 import { recordWord } from "./tilelayout.ts";
 import { hideTip, tipAt, tipCard } from "./tip.ts";
 
 /** Records read for one run. */
 const READ_MAX = 4096;
-const READ_PAGE = 512;
 /** How far above the field the record may be: a ZIP entry's sizes are in its
  *  `body`, two steps down. */
 const RECORD_DEPTH_MAX = 3;
@@ -59,11 +68,18 @@ type Point = { readonly record: number; readonly name: string; readonly node: Te
 export type Run = {
   readonly list: TemplateNode;
   readonly field: TemplateNode;
+  /** How many records were read. More than the points where some records
+   *  are of a type without the field. */
+  readonly records: number;
   readonly points: readonly Point[];
   readonly min: number;
   readonly max: number;
   readonly env: Envelope;
 };
+
+/** The names of a checksum or hash field, whose values are meant to look
+ *  like noise. */
+const CHECKSUM_NAME = /^(crc\d*|adler\d*|checksum|hash|md5|sha\d*)(_|$)|_(crc\d*|checksum|hash)$/i;
 
 /** Whether a row could have a sparkline, from the node alone: a number with
  *  bytes, with a first element of a list a few steps above it. */
@@ -75,27 +91,15 @@ function candidate(n: TemplateNode): boolean {
   return false;
 }
 
-/** Every child of `path`, or null while some are being read. */
-function children(doc: Doc, path: readonly number[], count: number): TemplateNode[] | null {
-  const out: TemplateNode[] = [];
-  for (let from = 0; from < count; from += READ_PAGE) {
-    const reply = doc.templateChildren(path, from, Math.min(count, from + READ_PAGE));
-    if (reply.status === "error") return out;
-    if (reply.status !== "ok") return null;
-    out.push(...reply.node);
-  }
-  return out;
-}
-
-/** Waiting on bytes, so ask again when they land. */
-const WAIT = Symbol("wait");
-
 /**
  * The run the field at `n` is one value of: the list whose first record holds
- * it, and the same field in every record, found by the names and types of the
- * steps from the record down to it. Null where there is no run worth a line.
+ * it, and the same field in every record, found by the names of the steps
+ * from the record down to it (`findStep`). Null where there is no run worth a
+ * line. Read a slice at a time (`readahead.ts`): a directory of thousands of
+ * records takes longer than a press may.
  */
-function runOf(doc: Doc, n: TemplateNode): Run | null | typeof WAIT {
+async function runOf(w: Walk, n: TemplateNode): Promise<Run | null | Wait> {
+  const doc = w.doc;
   const p = n.path;
   for (let d = 1; d <= RECORD_DEPTH_MAX && p.length - d - 1 >= 0; d++) {
     const recordPath = p.slice(0, p.length - d);
@@ -112,10 +116,10 @@ function runOf(doc: Doc, n: TemplateNode): Run | null | typeof WAIT {
     for (let s = recordPath.length + 1; s <= p.length; s++) {
       const at = doc.templateNode(p.slice(0, s));
       if (at.status !== "ok") return WAIT;
-      steps.push({ name: at.node.name, type: at.node.type });
+      steps.push({ name: at.node.name, index: p[s - 1] as number });
     }
-    const records = children(doc, list.path, Math.min(list.child_count, READ_MAX));
-    if (records === null) return WAIT;
+    const records = await recordsOf(w, list, Math.min(list.child_count, READ_MAX));
+    if (records === WAIT || !w.alive()) return WAIT;
     const points: Point[] = [];
     for (const [i, r] of records.entries()) {
       let at: TemplateNode | undefined = r;
@@ -124,19 +128,39 @@ function runOf(doc: Doc, n: TemplateNode): Run | null | typeof WAIT {
           at = undefined;
           break;
         }
-        const kids = doc.templateChildren(at.path, 0, Math.min(at.child_count, 64));
-        if (kids.status === "pending") return WAIT;
-        at = kids.status === "ok" ? kids.node.find((k) => k.name === step.name && k.type === step.type) : undefined;
+        const next = childAt(doc, at, step);
+        if (next === WAIT_CHILD) return WAIT;
+        at = next;
       }
       if (at === undefined) continue;
       const value = parseNumber(at.edit_text);
       if (value !== null) points.push({ record: i, name: r.name, node: at, value });
+      await w.step();
+      if (!w.alive()) return WAIT;
     }
     const values = points.map((q) => q.value);
     if (!worthDrawing(values)) return null;
-    return { list, field: n, points, min: Math.min(...values), max: Math.max(...values), env: envelope(values, W) };
+    return { list, field: n, records: records.length, points, min: Math.min(...values), max: Math.max(...values), env: envelope(values, W) };
   }
   return null;
+}
+
+const WAIT_CHILD = Symbol("wait for a child");
+
+/** The child of `parent` that is `step`'s field: one call for the child at
+ *  the step's place, which is where it is in most records, and a read of the
+ *  first children only when that one has another name. */
+function childAt(doc: Doc, parent: TemplateNode, step: Step): TemplateNode | undefined | typeof WAIT_CHILD {
+  if (step.index < parent.child_count) {
+    const one = doc.templateChildren(parent.path, step.index, step.index + 1);
+    if (one.status === "ok" && one.node[0]?.name === step.name) return one.node[0];
+    if (one.status !== "ok" && one.status !== "error") return WAIT_CHILD;
+  }
+  const kids = doc.templateChildren(parent.path, 0, Math.min(parent.child_count, 64));
+  if (kids.status === "error") return undefined;
+  if (kids.status !== "ok") return WAIT_CHILD;
+  const at = findStep(kids.node, step);
+  return at === null ? undefined : kids.node[at];
 }
 
 type UPlot = typeof uPlotType;
@@ -160,13 +184,13 @@ function faint(hex: string): string {
   return /^#[0-9a-f]{6}$/i.test(hex) ? `${hex}55` : hex;
 }
 
-/** Draw the line for a run. */
-export function drawSparkline(doc: Doc, run: Run): Drawn {
+/** Draw the line for a run into `host`, a fresh one unless given. */
+export function drawSparkline(doc: Doc, run: Run, host: HTMLElement = document.createElement("span")): Drawn {
   const word = recordWord(run.list);
-  const host = document.createElement("span");
   host.className = "viz-spark";
+  host.hidden = false;
   host.setAttribute("role", "img");
-  host.setAttribute("aria-label", VIZ.spark.label(run.field.name, run.points.length, word, shortNumber(run.min), shortNumber(run.max)));
+  host.setAttribute("aria-label", VIZ.spark.label(run.field.name, run.points.length, run.records, word, shortNumber(run.min), shortNumber(run.max)));
   const lo = document.createElement("span");
   lo.className = "viz-spark-end";
   lo.textContent = shortNumber(run.min);
@@ -180,6 +204,7 @@ export function drawSparkline(doc: Doc, run: Run): Drawn {
   host.append(lo, plot, hi);
 
   const env = run.env;
+  const values = run.points.map((q) => q.value);
   const bins = env.min.length;
   const n = run.points.length;
   const listDepth = run.list.path.length;
@@ -280,7 +305,16 @@ export function drawSparkline(doc: Doc, run: Run): Drawn {
     const j = binOf(at, n, bins);
     const span = binRecords(j, n, bins);
     if (env.exact || span.to - span.from <= 1) {
-      tipAt(tipCard(VIZ.spark.pointTitle(run.field.name, q.name), [q.node.value], `${formatOffset(q.node.offset_bits)} · ${bitSizeText(q.node.size_bits)}`), e.clientX, e.clientY);
+      // A flat stretch of the line is said once, on whichever point of it is
+      // under the pointer: the run of records that hold the same value.
+      const lines = [q.node.value];
+      const same = sameRun(values, at);
+      if (same.to - same.from > 1) {
+        const first = run.points[same.from]?.record ?? 0;
+        const last = run.points[same.to - 1]?.record ?? 0;
+        lines.push(VIZ.spark.sameRun(same.to - same.from, word, first, last));
+      }
+      tipAt(tipCard(VIZ.spark.pointTitle(run.field.name, q.name), lines, `${formatOffset(q.node.offset_bits)} · ${bitSizeText(q.node.size_bits)}`), e.clientX, e.clientY);
     } else {
       const first = run.points[span.from]?.record ?? 0;
       const last = run.points[span.to - 1]?.record ?? 0;
@@ -358,6 +392,40 @@ function memoFor(doc: Doc): Memo {
   return m;
 }
 
+/** A line still being worked out: an empty, hidden span in the row, filled
+ *  when the run has been read. The listing puts the same element in the row
+ *  on every paint, so the line appears where the row is without the row being
+ *  drawn again. */
+function pending(doc: Doc, n: TemplateNode, key: string, m: Memo): Drawn {
+  const host = document.createElement("span");
+  host.hidden = true;
+  let inner: Drawn | null = null;
+  let gone = false;
+  const w = walk(doc);
+  void queued(async () => {
+    if (gone || !w.alive()) return;
+    const run = await runOf(w, n);
+    if (gone || !w.alive()) return;
+    if (run === WAIT) {
+      // Asked again when the bytes land: that change drops this entry.
+      return;
+    }
+    if (run === null) {
+      m.none.add(key);
+      return;
+    }
+    inner = drawSparkline(doc, run, host);
+  });
+  return {
+    el: host,
+    refresh: () => inner?.refresh(),
+    destroy: () => {
+      gone = true;
+      inner?.destroy();
+    },
+  };
+}
+
 /** Add the sparkline to the listing's rows. */
 export function register(): void {
   registerRowGlyph({
@@ -374,18 +442,15 @@ export function register(): void {
       if (m.none.has(key)) return null;
       // A checksum's values are meant to look like noise; a line of them
       // says nothing.
+      // Not every checksum has a check on it: a ZIP local header's crc32 is
+      // checked only where the data descriptor repeats it, so its name says
+      // what it is too.
       const check = doc.checkOf(n.path);
-      if (check.status === "ok" && check.node !== null) {
+      if ((check.status === "ok" && check.node !== null) || CHECKSUM_NAME.test(n.name)) {
         m.none.add(key);
         return null;
       }
-      const run = runOf(doc, n);
-      if (run === WAIT) return null;
-      if (run === null) {
-        m.none.add(key);
-        return null;
-      }
-      const drawn = drawSparkline(doc, run);
+      const drawn = pending(doc, n, key, m);
       m.lines.set(key, drawn);
       return drawn.el;
     },

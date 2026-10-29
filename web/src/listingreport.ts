@@ -739,6 +739,7 @@ export class ListingReport {
       toggleBytes: (key) => this.toggleBytes(key),
       toggleDump: (at) => this.toggleDump(at),
       toggleCard: (key) => this.toggleCard(key),
+      figuresChanged: () => this.figuresChanged(),
       toggleSwitch: (key) => this.toggleSwitch(key),
       verdict: (item) => this.verdict(item),
       // The streams that have a row of their own in this listing. What a stream
@@ -768,16 +769,22 @@ export class ListingReport {
     // where it stands; one closed leaves its measured height behind, which has
     // to go before the heading is placed again at its fixed one.
     if (isFigureKey(key)) {
-      for (const k of [...this.measured.keys()]) if (k.startsWith("h:")) this.measured.delete(k);
-      const anchor = this.anchor();
-      this.layout();
-      if (anchor !== null) this.restore(anchor);
-      this.paint();
+      this.figuresChanged();
       return;
     }
     for (const k of [...this.measured.keys()]) if (k.startsWith("fc:")) this.measured.delete(k);
 
     this.layout();
+    this.paint();
+  }
+
+  /** A heading's figure is a new height, opened, closed or drawn at last:
+   *  its measured height goes, and the headings are built and placed again. */
+  private figuresChanged(): void {
+    for (const k of [...this.measured.keys()]) if (k.startsWith("h:")) this.measured.delete(k);
+    const anchor = this.anchor();
+    this.layout();
+    if (anchor !== null) this.restore(anchor);
     this.paint();
   }
 

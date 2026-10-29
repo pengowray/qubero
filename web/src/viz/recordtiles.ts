@@ -28,6 +28,15 @@
 // bytes of its own fields as a strip along its top, and then its type.
 // Clicking a type in the legend dims every other type.
 //
+// Records in a row of the same type and size are one tile, with a cut corner
+// and the count on it (`collapseRuns`): a run of three hundred equal IDAT
+// chunks is one thing to the eye, and drawing it once leaves the room to the
+// records that differ. A record with a wrong value is never folded into a run.
+//
+// The records are read a slice at a time with the page given its turn in
+// between (`readahead.ts`); the heading says the list is being read until the
+// tiles are drawn, and the listing then lays itself out again around them.
+//
 // Drawn on a canvas, one rectangle per tile, so a list of thousands costs
 // one draw per frame; the arithmetic is `tilelayout.ts`.
 
@@ -37,7 +46,7 @@ import { fieldClass, UNMAPPED_COLOR } from "../fieldstyle.ts";
 import { isElementName } from "../elementname.ts";
 import type { DrawContext } from "../listingdraw.ts";
 import { stripIndex, typeWords, variantText } from "../report/partrules.ts";
-import { bitSizeText, REPORT, VIZ } from "../strings.ts";
+import { bitSizeText, PROBLEMS, REPORT, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { applyX, applyY, invertX, invertY, type View } from "./boardmath.ts";
 import { canvasMeasure, ellipsise, type Measure } from "./fit.ts";
@@ -46,14 +55,13 @@ import { figureKey, figurePath, registerHeadingFigure } from "./headingfigures.t
 import { linkedFor, type LinkedBus } from "./linked.ts";
 import { LOD } from "./lod.ts";
 import { goToField } from "./pick.ts";
-import { assignCategories, fillPx, OTHER_SLOT, recordWord, tileAt, tileBox, tileGrid, type Categories, type TileGrid } from "./tilelayout.ts";
+import { queued, recordsOf, walk, WAIT, type Wait, type Walk } from "./readahead.ts";
+import { assignCategories, cellOf, collapseRuns, fillPx, OTHER_SLOT, recordWord, tileAt, tileBox, tileGrid, type Categories, type Cells } from "./tilelayout.ts";
 import { hideTip, hoverTip, tipCard } from "./tip.ts";
 
 /** Most records read for one grid. Past this the grid says how many it left
  *  out; reading every record of a list of a million is a different piece. */
 const READ_MAX = 4096;
-/** Records read per call to the core. */
-const READ_PAGE = 512;
 /** Records whose type is looked for in what decided it (`origins`) rather
  *  than in their names alone. Each costs a few calls to the core. */
 const VARIANT_MAX = 2048;
@@ -71,6 +79,11 @@ const STRIP_FROM_PX = 32;
 const NAME_FROM_PX = 48;
 const NAME_TALL_PX = 24;
 const NAME_PX = 11;
+/** The count on a tile that stands for a run of records. */
+const COUNT_PX = 10;
+/** How much of the figure may show empty past the tiles when it is dragged
+ *  or zoomed as far as it goes: the last tile can reach the middle. */
+const HOLD = 0.5;
 
 // ----- the data -----
 
@@ -80,24 +93,20 @@ export type TilesData = {
   readonly records: readonly TemplateNode[];
   /** Each record's type, as the legend names it. */
   readonly kinds: readonly string[];
+  /** What the kinds are, for the key: `type` where what decided some record's
+   *  case named it (a PNG chunk's type field, a ZIP signature), `name` where
+   *  every kind is only the record's own name, as a WAD lump's is. Calling
+   *  3,298 lump names "types" would say the directory holds 3,298 kinds of
+   *  thing. */
+  readonly what: "type" | "name";
   readonly categories: Categories;
   /** The index of the largest record, which the fill is measured against. */
   readonly largest: number;
+  /** Whether every record is the same size, so the fill says nothing. */
+  readonly sameSize: boolean;
+  /** One tile per run of records of the same type and size. */
+  readonly cells: Cells;
 };
-
-/** The children of `path`, the first `READ_MAX` of them, or null while any
- *  are still being read. */
-function readRecords(doc: Doc, list: TemplateNode): TemplateNode[] | null {
-  const n = Math.min(list.child_count, READ_MAX);
-  const out: TemplateNode[] = [];
-  for (let from = 0; from < n; from += READ_PAGE) {
-    const reply = doc.templateChildren(list.path, from, Math.min(n, from + READ_PAGE));
-    if (reply.status === "error") return out;
-    if (reply.status !== "ok") return null;
-    out.push(...reply.node);
-  }
-  return out;
-}
 
 /**
  * What kind of record this is, in the words the legend uses. What decided the
@@ -108,37 +117,55 @@ function readRecords(doc: Doc, list: TemplateNode): TemplateNode[] | null {
  * header from its central directory entry for the same file, which share a
  * name.
  */
-function kindOf(doc: Doc, n: TemplateNode, probe: boolean): string {
+function kindOf(doc: Doc, n: TemplateNode, probe: boolean): { readonly text: string; readonly decided: boolean } {
   if (probe && n.composite) {
     const own = doc.origins(n.path);
     const direct = own.status === "ok" ? own.node.find((o) => o.role === "type" && o.value !== "") : undefined;
     const v = direct === undefined ? null : variantText(direct.value);
-    if (v !== null) return v;
+    if (v !== null) return { text: v, decided: true };
     const kids = doc.templateChildren(n.path, 0, Math.min(n.child_count, 8));
     if (kids.status === "ok") {
       for (const k of kids.node.filter((c) => c.composite).slice(0, 2)) {
         const o = doc.origins(k.path);
         const t = o.status === "ok" ? o.node.find((x) => x.role === "type" && x.value !== "") : undefined;
         const kv = t === undefined ? null : variantText(t.value);
-        if (kv !== null) return kv;
+        if (kv !== null) return { text: kv, decided: true };
       }
     }
   }
   const bare = stripIndex(n.name);
-  return bare !== "" ? bare : typeWords(n.type);
+  return bare !== "" ? { text: bare, decided: false } : { text: typeWords(n.type), decided: true };
 }
 
-/** The tiles for the list at `listPath`, or null while it is being read. */
-export function tilesData(doc: Doc, list: TemplateNode): TilesData | null {
-  const records = readRecords(doc, list);
-  if (records === null) return null;
+/** The tiles for `list`, read a slice at a time (`readahead.ts`), or `WAIT`
+ *  while some of its records have not arrived or the document changed. */
+export async function readTiles(w: Walk, list: TemplateNode): Promise<TilesData | Wait> {
+  const records = await recordsOf(w, list, Math.min(list.child_count, READ_MAX));
+  if (records === WAIT || !w.alive()) return WAIT;
   const probe = records.length <= VARIANT_MAX;
-  const kinds = records.map((r) => kindOf(doc, r, probe));
+  const kinds: string[] = [];
+  let decided = false;
+  for (const r of records) {
+    const k = kindOf(w.doc, r, probe);
+    kinds.push(k.text);
+    decided ||= k.decided;
+    await w.step();
+    if (!w.alive()) return WAIT;
+  }
   let largest = 0;
   records.forEach((r, i) => {
     if (r.size_bits > (records[largest]?.size_bits ?? 0)) largest = i;
   });
-  return { list, records, kinds, categories: assignCategories(kinds), largest };
+  const sameSize = records.every((r) => r.size_bits === records[0]?.size_bits);
+  // A record with a wrong value inside it keeps a tile of its own, so its red
+  // edge is there to be found.
+  const keys = records.map((r, i) => (hasProblem(r) ? null : `${kinds[i] ?? ""}\u0000${r.size_bits}`));
+  return { list, records, kinds, what: decided ? "type" : "name", categories: assignCategories(kinds), largest, sameSize, cells: collapseRuns(keys) };
+}
+
+function hasProblem(r: TemplateNode): boolean {
+  const [invalid, undef] = r.problems_within;
+  return invalid > 0 || undef > 0 || r.problem !== undefined;
 }
 
 // ----- colours -----
@@ -216,7 +243,9 @@ export type TilesFigure = {
 export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly width: number; readonly word: string }): TilesFigure {
   const width = Math.max(120, Math.floor(opts.width));
   const word = opts.word;
-  const grid = tileGrid(data.records.length, width - 2 * PAD, GRID_MAX_H);
+  const cells = data.cells;
+  const cellCount = cells.first.length;
+  const grid = tileGrid(cellCount, width - 2 * PAD, GRID_MAX_H);
   // A list that fits one row zooms across only, so its tiles grow wider at
   // their own height, with room for their fields and their type; zooming it
   // both ways would grow each tile past the top and bottom of a figure one
@@ -224,6 +253,9 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   const oneRow = grid.rows <= 1;
   const height = grid.height + 2 * PAD;
   const maxBits = data.records[data.largest]?.size_bits ?? 0;
+  /** The record a tile starts with, and how many it stands for. */
+  const recordOf = (cell: number): TemplateNode | undefined => data.records[cells.first[cell] ?? -1];
+  const runOf = (cell: number): number => cells.count[cell] ?? 1;
 
   const host = document.createElement("figure");
   host.className = "viz-tiles";
@@ -266,11 +298,17 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     swatch.style.background = slotColor(entry.slot);
     const name = document.createElement("span");
     name.className = "viz-tiles-kind";
-    name.textContent = entry.name ?? VIZ.tiles.otherTypes(entry.kinds.length);
-    const count = document.createElement("span");
-    count.className = "viz-tiles-count";
-    count.textContent = entry.count.toLocaleString();
-    b.append(swatch, name, count);
+    b.append(swatch, name);
+    if (entry.name !== null) {
+      name.textContent = entry.name;
+      const count = document.createElement("span");
+      count.className = "viz-tiles-count";
+      count.textContent = entry.count.toLocaleString();
+      b.append(count);
+    } else {
+      // Two counts, so each says what it counts.
+      name.textContent = VIZ.tiles.otherTypes(entry.kinds.length, entry.count, word, data.what);
+    }
     const says = entry.name === null ? VIZ.tiles.highlightOther : VIZ.tiles.highlight(entry.name);
     b.title = says;
     b.setAttribute("aria-pressed", "false");
@@ -294,7 +332,12 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   if (largest !== undefined && maxBits > 0) {
     const key = document.createElement("div");
     key.className = "viz-tiles-note";
-    key.textContent = VIZ.tiles.key(word, data.kinds[data.largest] ?? largest.name, bitSizeText(maxBits));
+    // When every record is one size, every tile is full and the fill carries
+    // nothing; the key says the size once instead of naming a largest.
+    key.textContent = data.sameSize
+      ? VIZ.tiles.keySameSize(word, data.what, bitSizeText(maxBits))
+      : VIZ.tiles.key(word, data.what, data.kinds[data.largest] ?? largest.name, bitSizeText(maxBits));
+    if (cellCount < data.records.length) key.textContent += ` ${VIZ.tiles.keyRuns(word, data.what)}`;
     host.append(key);
   }
 
@@ -302,12 +345,11 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   const bus: LinkedBus = linkedFor(doc);
   let hovered: number | null = null;
   const listDepth = data.list.path.length;
-  /** Which record the cursor is in, from the shared selection. */
+  /** Which tile holds the record the cursor is in, from the shared selection. */
   const selectedOf = (path: readonly number[] | undefined): number | null => {
     if (path === undefined || path.length <= listDepth) return null;
     for (let i = 0; i < listDepth; i++) if (path[i] !== data.list.path[i]) return null;
-    const j = path[listDepth] as number;
-    return j < data.records.length ? j : null;
+    return cellOf(cells, path[listDepth] as number);
   };
   let selected = selectedOf(bus.state.selection?.path);
 
@@ -336,6 +378,7 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     if (ctx === null) return;
     const colours = ink(host);
     const dark = isDark();
+    const font = getComputedStyle(document.body).fontFamily;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
     // Only the rows and columns on screen: at the deepest zoom a few tiles of
@@ -344,14 +387,15 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     const col1 = Math.min(grid.cols - 1, Math.ceil(invertX(view, width) / grid.pitch) + 1);
     const row0 = oneRow ? 0 : Math.max(0, Math.floor(invertY(view, 0) / grid.pitch) - 1);
     const row1 = oneRow ? 0 : Math.min(grid.rows - 1, Math.ceil(invertY(view, height) / grid.pitch) + 1);
-    const names: { x: number; y: number; w: number; text: string }[] = [];
+    const labels: { x: number; y: number; w: number; text: string; px: number }[] = [];
     for (let row = row0; row <= row1; row++) {
       for (let col = col0; col <= col1; col++) {
         const i = row * grid.cols + col;
-        const r = data.records[i];
-        if (r === undefined) continue;
+        const first = cells.first[i];
+        const r = recordOf(i);
+        if (r === undefined || first === undefined) continue;
         const { x, y, w, h } = screenBox(i);
-        const slot = data.categories.slot[i] ?? OTHER_SLOT;
+        const slot = data.categories.slot[first] ?? OTHER_SLOT;
         const alpha = only === null || only === slot ? 1 : 0.15;
         // The square in a pale tint of its type, then its fill from the
         // bottom in the full colour: an empty record is still its colour.
@@ -361,13 +405,51 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
         ctx.globalAlpha = alpha;
         const fill = fillPx(r.size_bits, maxBits, grid.cell) * (h / grid.cell);
         ctx.fillRect(x, y + h - fill, w, fill);
-        const strip = w >= STRIP_FROM_PX ? drawFields(ctx, i, x, y, w, h, colours) : 0;
-        if (w >= NAME_FROM_PX && h >= NAME_TALL_PX) {
-          const text = ellipsise(data.kinds[i] ?? "", w - 8, NAME_PX, measurer(), 3);
-          if (text !== null) names.push({ x: x + 4, y: y + strip + 3, w: w - 8, text });
+        const strip = w >= STRIP_FROM_PX ? drawFields(ctx, first, x, y, w, h, colours) : 0;
+        // What of the tile is on screen. Its type and its count are written
+        // inside that part and only where they fit whole, so a tile half off
+        // the edge never shows half a word.
+        const vx0 = Math.max(x, 0) + 4;
+        const vx1 = Math.min(x + w, width) - 4;
+        const vy1 = Math.min(y + h, height);
+        const run = runOf(i);
+        const count = run > 1 ? `×${run.toLocaleString()}` : "";
+        const countW = count === "" ? 0 : measurer()(count, COUNT_PX);
+        // The count goes in the bottom corner where the tile is tall enough
+        // to hold it under the type, and on the type's line, after it, where
+        // it is not: a one-row grid zoomed in is wide and short.
+        const ty = y + strip + 3;
+        const countBelowY = vy1 - COUNT_PX - 3;
+        const countBelow = count !== "" && countBelowY >= ty + NAME_PX + 3;
+        let countDone = false;
+        if (w >= NAME_FROM_PX && h >= NAME_TALL_PX && vx1 - vx0 >= 12 && ty >= 0 && ty + NAME_PX + 2 <= vy1) {
+          const side = count !== "" && !countBelow ? countW + 6 : 0;
+          const text = ellipsise(data.kinds[first] ?? "", vx1 - vx0 - side, NAME_PX, measurer(), 3);
+          if (text !== null) labels.push({ x: vx0, y: ty, w: vx1 - vx0 - side, text, px: NAME_PX });
+          if (text !== null && side > 0) {
+            labels.push({ x: vx1 - countW, y: ty + 1, w: countW, text: count, px: COUNT_PX });
+            countDone = true;
+          }
         }
-        const [invalid] = r.problems_within;
-        if (invalid > 0 || r.problem?.tier === "invalid") {
+        if (run > 1) {
+          // The repeat glyph: a corner cut in the text colour on every tile
+          // that stands for several records, and their count on it when the
+          // count fits.
+          const m = Math.min(7, Math.floor(Math.min(w, h) / 3));
+          if (m >= 2) {
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = colours.fg;
+            ctx.beginPath();
+            ctx.moveTo(x + w - m, y);
+            ctx.lineTo(x + w, y);
+            ctx.lineTo(x + w, y + m);
+            ctx.closePath();
+            ctx.fill();
+          }
+          const top = Math.max(y, 0) + strip + 1;
+          if (!countDone && vx0 + countW <= vx1 && countBelowY >= top) labels.push({ x: vx0, y: countBelowY, w: countW, text: count, px: COUNT_PX });
+        }
+        if (hasProblem(r) && (r.problems_within[0] > 0 || r.problem?.tier === "invalid")) {
           ctx.globalAlpha = 1;
           ctx.strokeStyle = colours.warn;
           ctx.lineWidth = 2;
@@ -376,14 +458,13 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
       }
     }
     ctx.globalAlpha = 1;
-    // Names on a plate of the background, so a dark fill under one does not
-    // take it. A name only where it fits inside its own tile, so two never
-    // meet.
-    if (names.length > 0) {
-      ctx.font = `${NAME_PX}px ${getComputedStyle(document.body).fontFamily}`;
+    // Labels on a plate of the background, so a dark fill under one does not
+    // take it. Each only where it fits inside its own tile, so two never meet.
+    if (labels.length > 0) {
       ctx.textBaseline = "top";
       ctx.lineJoin = "round";
-      for (const n of names) {
+      for (const n of labels) {
+        ctx.font = `${n.px}px ${font}`;
         ctx.strokeStyle = colours.bg;
         ctx.lineWidth = 3;
         ctx.strokeText(n.text, n.x, n.y, n.w);
@@ -444,7 +525,11 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     // Deep enough that a tile is as big as the figure has room for, and in
     // one row about as wide as a field strip needs to be read.
     maxScale: Math.max(1, (oneRow ? MAX_TILE_PX : Math.min(MAX_TILE_PX, height - 2 * PAD - 4)) / grid.cell),
-    content: { x0: 0, y0: 0, x1: width, y1: height },
+    // The tiles, not the canvas: a row of six chunks covers the first two
+    // hundred pixels of a figure as wide as the listing, and the limits
+    // keep some of them on screen however far it is dragged or zoomed.
+    content: { x0: 0, y0: 0, x1: grid.width + 2 * PAD, y1: height },
+    hold: HOLD,
     onZoom: (v) => {
       view = v;
       reset.disabled = v.k === 1 && v.x === 0 && v.y === 0;
@@ -456,8 +541,8 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
     zoom.home(true);
   });
 
-  /** The record under a pointer event, by grid arithmetic. */
-  const recordAt = (e: MouseEvent): number | null => {
+  /** The tile under a pointer event, by grid arithmetic. */
+  const cellAt = (e: MouseEvent): number | null => {
     const r = canvas.getBoundingClientRect();
     const x = invertX(view, e.clientX - r.left - PAD);
     const y = oneRow ? e.clientY - r.top - PAD : invertY(view, e.clientY - r.top - PAD);
@@ -465,15 +550,27 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   };
 
   const stopTip = hoverTip(canvas, (e) => {
-    const i = recordAt(e);
+    const i = cellAt(e);
     if (i !== hovered) {
       hovered = i;
       draw();
     }
-    const r = i === null ? undefined : data.records[i];
-    bus.publish({ hover: r === undefined ? null : { startBit: r.offset_bits, endBit: r.offset_bits + r.size_bits } });
-    if (r === undefined || i === null) return null;
-    return tipCard(r.name, tipLines(data, i), `${formatOffset(r.offset_bits)} · ${bitSizeText(r.size_bits)}`);
+    const first = i === null ? undefined : cells.first[i];
+    const r = first === undefined ? undefined : data.records[first];
+    if (r === undefined || i === null || first === undefined) {
+      bus.publish({ hover: null });
+      return null;
+    }
+    const run = runOf(i);
+    const last = data.records[first + run - 1] ?? r;
+    const endBit = last.space === r.space ? last.offset_bits + last.size_bits : r.offset_bits + r.size_bits;
+    bus.publish({ hover: { startBit: r.offset_bits, endBit } });
+    if (run > 1) {
+      const kind = data.kinds[first] ?? "";
+      const lines = [data.what === "type" ? VIZ.tiles.typeLine(kind) : VIZ.tiles.nameLine(kind), VIZ.tiles.runLine(run, word, bitSizeText(r.size_bits))];
+      return tipCard(VIZ.tiles.runTitle(word, first, first + run - 1), lines, `${formatOffset(r.offset_bits)} · ${bitSizeText(endBit - r.offset_bits)}`);
+    }
+    return tipCard(r.name, tipLines(data, first), `${formatOffset(r.offset_bits)} · ${bitSizeText(r.size_bits)}`);
   });
   const leave = (): void => {
     bus.publish({ hover: null });
@@ -487,12 +584,13 @@ export function drawRecordTiles(doc: Doc, data: TilesData, opts: { readonly widt
   // would otherwise read it as a press on the heading and fold the part.
   host.addEventListener("click", (e) => e.stopPropagation());
   canvas.addEventListener("click", (e) => {
-    const i = recordAt(e);
-    const r = i === null ? undefined : data.records[i];
+    const i = cellAt(e);
+    const r = i === null ? undefined : recordOf(i);
     if (r === undefined) return;
+    // A tile that stands for a run goes to the first record of it.
     goToField(doc, { path: r.path, startBit: r.offset_bits, endBit: r.offset_bits + r.size_bits });
   });
-  // The record the cursor is in is outlined, whichever view moved the cursor.
+  // The tile the cursor is in is outlined, whichever view moved the cursor.
   // Subscribed for as long as the figure lives rather than while it is on the
   // page: the listing takes the heading off the page and puts the same
   // figure back in the next one, and a figure that let go the first time it
@@ -542,7 +640,7 @@ function tipLines(data: TilesData, i: number): string[] {
   const kind = data.kinds[i] ?? "";
   if (kind !== "" && kind !== stripIndex(r.name)) lines.push(VIZ.tiles.typeLine(kind));
   const [invalid, undef] = r.problems_within;
-  const problems = VIZ.tiles.problems(invalid, undef);
+  const problems = PROBLEMS.overview(invalid, undef);
   if (problems !== "") lines.push(problems);
   return lines;
 }
@@ -576,6 +674,9 @@ function innerList(doc: Doc, node: TemplateNode): TemplateNode | null {
  *  from tiles that have gone is drawn again the next time it is asked for. */
 type Memo = {
   readonly data: Map<string, TilesData>;
+  /** The lists being read now, so a heading painted again while its list is
+   *  read does not start a second read. */
+  readonly reading: Set<string>;
   readonly figures: Map<string, { readonly data: TilesData; readonly width: number; readonly fig: TilesFigure }>;
 };
 const memo = new WeakMap<Doc, Memo>();
@@ -586,23 +687,39 @@ const KEEP = 8;
 function memoFor(doc: Doc): Memo {
   let m = memo.get(doc);
   if (m === undefined) {
-    const fresh: Memo = { data: new Map(), figures: new Map() };
+    const fresh: Memo = { data: new Map(), reading: new Set(), figures: new Map() };
     m = fresh;
     memo.set(doc, fresh);
-    doc.onChange(() => fresh.data.clear());
+    doc.onChange(() => {
+      fresh.data.clear();
+      fresh.reading.clear();
+    });
   }
   return m;
+}
+
+/** Read the tiles of `list` a slice at a time, and lay the listing out again
+ *  once they are there, so the heading is built again with its figure. */
+function startReading(c: DrawContext, m: Memo, list: TemplateNode, listKey: string): void {
+  if (m.reading.has(listKey)) return;
+  m.reading.add(listKey);
+  const w = walk(c.doc);
+  const done = c.figuresChanged;
+  void queued(() => readTiles(w, list)).then((got) => {
+    if (!w.alive()) return;
+    m.reading.delete(listKey);
+    if (got === WAIT) return;
+    m.data.set(listKey, got);
+    done?.();
+  });
 }
 
 function figureFor(c: DrawContext, key: string, list: TemplateNode, width: number): HTMLElement {
   const m = memoFor(c.doc);
   const listKey = list.path.join(".");
-  let data = m.data.get(listKey) ?? null;
-  if (data === null) {
-    data = tilesData(c.doc, list);
-    if (data !== null) m.data.set(listKey, data);
-  }
-  if (data === null) {
+  const data = m.data.get(listKey);
+  if (data === undefined) {
+    startReading(c, m, list, listKey);
     const wait = document.createElement("div");
     wait.className = "viz-tiles-note";
     wait.textContent = REPORT.reading;

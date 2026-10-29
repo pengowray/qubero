@@ -7529,15 +7529,18 @@ table.rec td.is-invalid {
 .viz-tiles-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 4px;
+  gap: 4px;
   margin-top: 6px;
 }
+/* 24px tall, the smallest target the design allows (section 3.3): taller
+   than the listing's own heading buttons, which sit in a row of fixed
+   height, where these have the figure's room. */
 .viz-tiles-key {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 0;
-  padding: 1px 6px;
+  min-height: 24px;
+  padding: 2px 8px;
   font: 11px var(--sans);
   color: var(--fg);
   background: transparent;
@@ -7573,20 +7576,31 @@ table.rec td.is-invalid {
 /* ---- run sparkline beside a value in the listing (`viz/sparkline.ts`) ---- */
 /* No taller than the row's text, so the row keeps its fixed height. The two
    numbers are the run's smallest and largest value, in the muted colour the
-   listing writes secondary values in. */
+   listing writes secondary values in. At the right of the value cell, apart
+   from the field's own value, so the run's smallest value is not read as a
+   second value of the field; the lines of one record's fields then line up
+   in a column. */
 .viz-spark {
   display: inline-flex;
+  float: inline-end;
   align-items: center;
   gap: 4px;
   height: 14px;
-  margin-inline-start: 10px;
-  vertical-align: -3px;
+  margin-block-start: 1px;
+  margin-inline: 16px 12px;
   cursor: pointer;
 }
 .viz-spark-end {
+  min-width: 5ch;
   color: var(--muted);
   font: 10px var(--mono);
   font-variant-numeric: tabular-nums;
+}
+/* Each end as wide as the longest `shortNumber` ("22.2M"), the smallest
+   value against the line and the largest after it, so the lines of one
+   record's fields start and end at the same place. */
+.viz-spark-end:first-child {
+  text-align: end;
 }
 .viz-spark-plot {
   display: inline-block;

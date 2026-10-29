@@ -55,6 +55,10 @@ export type DrawContext = {
    *  so nothing the reader opened can live in the element. */
   readonly cards: ReadonlySet<string>;
   readonly toggleCard: (key: string) => void;
+  /** A figure under a heading has finished reading what it draws and is a
+   *  new height: build the headings again and lay the list out again.
+   *  Absent where nothing lays the figure out, such as a card in the report. */
+  readonly figuresChanged?: () => void;
   /** Turn the listing's own switch over, by the key the switch item carries. */
   readonly toggleSwitch: (key: string) => void;
   readonly toggleBytes: (key: string) => void;
