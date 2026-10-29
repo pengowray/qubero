@@ -4032,8 +4032,9 @@ export const VIZ = {
     /** Caption of a level of the stack that is a stream's unpacked bytes,
      *  named after the field holding the packed bytes. */
     unpacked: (name: string): string => `${name}, unpacked`,
-    /** Under the first strip of a deep path, where the strips of the levels
-     *  between the file and the last few are left out. */
-    levelsLeftOut: (n: number): string => (n === 1 ? "1 level left out here" : `${n} levels left out here`),
+    /** Caption of the second strip of a deep path, when the strips of the
+     *  levels between it and the first are not drawn. Written the way the
+     *  trail above writes the crumbs it hides. */
+    levelsBetween: (n: number, name: string): string => `… ${n} internal ${n === 1 ? "level" : "levels"} › ${name}`,
   },
 } as const;

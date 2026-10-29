@@ -256,10 +256,15 @@ function hitOf(strip: HTMLElement, drawn: Drawn, e: MouseEvent): { part: number;
   return { part: partAt(drawn.segments, cell, bit), bit };
 }
 
-function rangeOf(s: Stretch, space: number): string {
-  if (s.sizeBits <= 0) return formatAddress(s.offsetBits, space);
+/** Where a stretch is, for a hover card: `@0x1000 – @0x1fff` for whole
+ *  bytes, and only where it starts for a stretch that is a byte or less or
+ *  does not start and end on a byte, whose last byte would say nothing. */
+export function rangeWords(s: Stretch, space: number): string {
+  if (s.sizeBits <= 8 || s.offsetBits % 8 !== 0 || s.sizeBits % 8 !== 0) return formatAddress(s.offsetBits, space);
   return `${formatAddress(s.offsetBits, space)} – ${formatAddress(s.offsetBits + s.sizeBits - 8, space)}`;
 }
+
+const rangeOf = rangeWords;
 
 /** A share of the whole, said the way the listing says it. */
 export function shareWords(sizeBits: number, totalBits: number): string {
