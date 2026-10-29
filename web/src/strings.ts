@@ -1179,7 +1179,7 @@ export const TREEMAP = {
    *  the 256 values. A category and a number, and the value map's four groups
    *  (00, 01-1F, 20-7F, 80-FF) are not called classes anywhere, so the two
    *  words do not collide. */
-  modes: { structure: "Structure", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
+  modes: { structure: "Structure", order: "In order", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
   /** Rectangles too small to point at, drawn as one. The leading ellipsis is
    *  the mark this app uses for content cut short rather than absent. */
   pooled: (n: number): string => `… ${n.toLocaleString()} more`,
@@ -2283,12 +2283,6 @@ export const REPORT = {
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
   imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
-  /** The picture is scaled to fit the column, or magnified when it is a few
-   *  pixels across; a click shows it pixel for pixel, and another puts it
-   *  back. "actual" covers both directions where "full" would promise the
-   *  magnified one gets bigger. Tooltips on the picture itself. */
-  imageShowFull: "Show at actual size",
-  imageShowFit: "Scale to fit",
 } as const;
 
 /**
@@ -4000,6 +3994,30 @@ export function strideSegment(bytes: number, every: boolean, unit: string | null
   return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
 }
 
+/** The file map strips (`filemap.ts`), the bars under the inspector's
+ *  trail, and the stack of maps in the At cursor panel (`viz/zoomstack.ts`).
+ *  Its own block rather than a key of `VIZ`, whose end every batch piece
+ *  appends to. */
+export const LOCATOR = {
+  /** Hover card title over bytes that none of the fields the strip is
+   *  drawn from covers: the gaps between a PDF's objects. */
+  notInAnyField: "Bytes not in any field",
+  /** Hover card line: the part's share of the whole file. */
+  shareOfFile: (share: string): string => `${share} of the file`,
+  /** Hover card line: a field's share of the structure it is in, named as
+   *  the inspector's trail names it (`entries[3]`, `file (ZIP)`). */
+  shareOf: (share: string, parent: string): string => `${share} of ${parent}`,
+  /** The At cursor section heading. */
+  title: "Position in the file",
+  /** Under the heading while the structures on the way down to the field
+   *  are still being read. */
+  reading: "Reading the fields…",
+  /** Caption of the second strip of a deep path, when the strips of the
+   *  structures between it and the first are left out. Counts strips, not
+   *  the trail's crumbs. */
+  levelsNotDrawn: (n: number, name: string): string => `${name} (${n} ${n === 1 ? "level" : "levels"} above it not drawn)`,
+} as const;
+
 /** The diagram pieces in `viz/`, starting with the example piece every batch
  *  piece is modelled on (`viz/childstrip.ts`). Each piece adds its own block
  *  of words under its own key, so two pieces never edit the same lines. */
@@ -4047,5 +4065,226 @@ export const VIZ = {
     /** Under the strip, when a large table is read only around the entry. */
     window: (from: number, to: number, count: number): string =>
       `Showing entries ${from.toLocaleString()} to ${to.toLocaleString()} of ${count.toLocaleString()}`,
+  },
+  /** The rail tab that draws an executable's sections twice, at their file
+   *  offsets and at their virtual addresses, joined by bands
+   *  (`viz/spacebands.ts`). */
+  spaceBands: {
+    tab: "Memory map",
+    tabTitle: "Where each section is in the file and where it is loaded in memory",
+    title: "Sections in the file and in memory",
+    fileHead: "File",
+    memoryHead: "Memory",
+    /** The colour key: the permissions a stretch has in memory. */
+    access: {
+      exec: "Executable",
+      "write-exec": "Writable and executable",
+      write: "Writable",
+      read: "Read-only",
+      unloaded: "Not loaded",
+    },
+    /** Names of the stretches that are not sections. */
+    names: {
+      elfHeader: "ELF header",
+      programHeaderTable: "Program header table",
+      sectionHeaderTable: "Section header table",
+      peHeaders: "Headers",
+      overlay: "Data after the last section",
+      /** A section with no name, by its index in the section table. */
+      section: (index: number): string => `Section ${index}`,
+      /** A program header by its index from 0 and its type, as `LOAD`. */
+      programHeader: (index: number, type: string): string => `Program header ${index} (${type})`,
+    },
+    /** The sentence over the drawing. `fileOnly` and `memoryOnly` are section
+     *  names; a long list is cut to its first few and a count. */
+    summary: (loaded: number, fileOnly: readonly string[], memoryOnly: readonly string[]): string => {
+      const names = (list: readonly string[]): string =>
+        list.length <= 4 ? list.join(", ") : `${list.slice(0, 3).join(", ")} and ${(list.length - 3).toLocaleString()} more`;
+      const parts = [loaded === 0 ? "No section is loaded into memory." : `Loaded into memory: ${countText(loaded, "section")}.`];
+      if (fileOnly.length > 0 && loaded > 0) parts.push(`In the file only: ${names(fileOnly)}.`);
+      if (memoryOnly.length > 0) parts.push(`No bytes in the file: ${names(memoryOnly)}.`);
+      return parts.join(" ");
+    },
+    /** Under the summary, when long gaps of unmapped addresses are cut out of
+     *  the memory column. */
+    cutNote: (bytes: string): string => `The memory column skips ${bytes} of unmapped addresses at the zigzag marks.`,
+    linked: "Zoom both columns together",
+    linkedTitle: "When off, the wheel zooms only the column under the pointer",
+    reading: "Reading the section table…",
+    failed: (message: string): string => `Could not read the headers: ${message}`,
+    /** Why the headers could not be read, after `failed`. */
+    missing: {
+      elfHeader: "the ELF header is missing",
+      peHeader: "the PE header is missing",
+      optionalHeader: "the PE optional header is missing",
+      imageBase: "the PE optional header has no image base",
+      sectionTable: "the PE section table is missing",
+      format: "not an ELF or PE file",
+    },
+    /** Hover card lines. `perms` is three letters, as `r-x`. */
+    perms: (perms: string): string => `Permissions: ${perms}`,
+    permsFrom: (perms: string, index: number, type: string): string => `Permissions: ${perms}, from program header ${index} (${type})`,
+    permsFromFlags: (perms: string): string => `Permissions: ${perms}, from the section flags`,
+    sectionFlags: (flags: string): string => `Section flags: ${flags}`,
+    inFile: (at: string, size: string): string => `File: ${at}, ${size}`,
+    noFileBytes: "File: no bytes, filled with zeros when loaded",
+    inMemory: (at: string, size: string): string => `Memory: ${at}, ${size}`,
+    /** A PE address is the image base plus the address relative to it,
+     *  which is the number the section table states. */
+    inMemoryRva: (at: string, size: string, rva: string): string => `Memory: ${at} (RVA ${rva}), ${size}`,
+    notLoaded: "Memory: not loaded",
+    noSection: "Not in any section",
+    unmapped: "Unmapped addresses",
+    unmappedRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,
+    notToScale: "Not drawn to scale",
+    /** Beside a cut on the memory side. */
+    cutLabel: (size: string): string => `${size} unmapped`,
+    /** The hover card's foot: what a click on this part of the drawing selects. */
+    click: {
+      bytes: "Click to select its bytes",
+      "section-header": "Click to select its section header",
+      "section-entry": "Click to select its entry in the section table",
+      "program-header": "Click to select its program header",
+      "loading-header": "Click to select the program header that loads it",
+      "image-base": "Click to select the image base field",
+    },
+  },
+  /** The picture of an image file in its content card, and in the report's
+   *  JPEG and PNG sections, with what is drawn over it (`viz/pixelgrid.ts`). */
+  pixelGrid: {
+    /** The buttons that choose what is drawn over the picture. */
+    modesLabel: "Overlay",
+    modes: {
+      picture: "Picture only",
+      blocks: "Blocks",
+      /** The legend under the picture says per what: MCU or block. */
+      bits: "Bits",
+      restart: "Restart intervals",
+      passes: "Passes",
+    },
+    channel: "Channel",
+    allChannels: "All channels",
+    opacity: "Opacity",
+    /** Zooms so one pixel of the picture is one pixel of the screen. */
+    actualSize: "Actual size",
+    // ----- the hover card -----
+    pixel: (x: number, y: number): string => `Pixel ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    /** A place the JPEG scan codes past the right or bottom edge of the
+     *  picture, which every scan does to make up whole MCUs. */
+    padding: (x: number, y: number): string => `Padding at ${x.toLocaleString()}, ${y.toLocaleString()}`,
+    paddingNote: "Padding the encoder added to fill the last MCU. Not part of the picture.",
+    decoded: (hex: string): string => `Colour as the browser decodes it: #${hex}`,
+    /** Separated as the At cursor panel separates them. */
+    samples: (values: readonly string[]): string => `Samples: ${values.join(" · ")}`,
+    mcu: (x: number, y: number, bits: string): string => `MCU ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    block: (channel: string, x: number, y: number, bits: string): string => `${channel} block ${x.toLocaleString()}, ${y.toLocaleString()}: ${bits}`,
+    interval: (n: number, of: number): string => `Restart interval ${(n + 1).toLocaleString()} of ${of.toLocaleString()}`,
+    scanline: (pass: number | null, row: number, filter: string): string =>
+      pass === null ? `Scanline ${row.toLocaleString()}, filter ${filter}` : `Pass ${pass}, scanline ${row.toLocaleString()} of the pass, filter ${filter}`,
+    /** The foot of a JPEG pixel's card: where the bits a click selects
+     *  start, the MCU's or, with one channel's bits shown, its block's. */
+    mcuStarts: (address: string): string => `MCU starts at ${address}`,
+    blockStarts: (channel: string, address: string): string => `${channel} block starts at ${address}`,
+    /** The foot of a PNG pixel's card: where its samples are. */
+    inUnfiltered: (address: string): string => `${address} in the unfiltered image data`,
+    // ----- the legend under the picture -----
+    heatAll: "Bits per MCU:",
+    heatChannel: (channel: string): string => `Bits per ${channel} block:`,
+    heatClass: (from: number, to: number): string => `${from.toLocaleString()}–${to.toLocaleString()}`,
+    passesLead: "Adam7 pass:",
+    restartLead: (n: number): string => `Restart intervals of ${countText(n, "MCU")}, alternating light and dark`,
+    blocksLead: (channel: string, bw: number, bh: number, mw: number, mh: number): string =>
+      `Thin lines: ${channel} blocks of ${bw} × ${bh} pixels. Thick lines: MCUs of ${mw} × ${mh} pixels.`,
+    /** No channel is subsampled, so a block of any channel is an MCU. */
+    blocksSame: (mw: number, mh: number): string => `Lines: MCUs of ${mw} × ${mh} pixels, each holding one 8 × 8 block of every channel.`,
+    filtersLead: "Scanline filter:",
+    filterItem: (filter: string, n: number): string => `${filter} (${countText(n, "scanline")})`,
+    /** Says what the strip down the left of a PNG is. */
+    stripOne: "The strip on the left shows the filter of each scanline.",
+    stripPasses: "The strip on the left shows the filter of each scanline, in one column for each pass, 1 to 7.",
+    stripCut: (shown: number, total: number): string => `Filters shown for the first ${shown.toLocaleString()} of ${countText(total, "scanline")}.`,
+    /** The caption of the picture in the report's PNG section. */
+    pngFigureLead: (interlaced: boolean): string =>
+      interlaced ? "The Adam7 pass that stores each pixel, drawn over the picture. Lower the opacity to see the picture." : "The picture, pixel for pixel.",
+    pngFigureCaption: "Hover a pixel for its stored samples and its scanline. Click a pixel to show its samples in the At cursor panel.",
+    /** Under the picture while what is drawn over it is read: a JPEG's scan,
+     *  or a PNG's scanlines. */
+    readingScan: "Reading the scan to draw over the picture…",
+    readingScanlines: "Reading the scanlines to draw over the picture…",
+    alt: (w: number, h: number): string => `The picture, ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
+  },
+  icicle: {
+    /** The treemap heading's tooltip while the panel shows In order, where
+     *  `TREEMAP.what` ("every box's area is its share") is not true. */
+    what: "The file's structure in file order. Each bar spans the bytes of one field, at its offset in the file, and each row down shows the fields inside the bars above it. Click a bar to go to its bytes. Double-click to open it.",
+    /** Under the picture, in place of the treemap's hint. The wheel and the
+     *  drag are said once, since nothing else in the rail zooms. */
+    hint: "Click a bar to go to its bytes. Double-click to open it. Scroll to zoom, drag to pan.",
+    /** For a screen reader, on the canvas. */
+    label: (name: string): string => `Fields of ${name} in file order`,
+    /** A bar of bytes inside a structure that none of its fields covers. */
+    gapDetail: "No field covers these bytes",
+    /** A bar standing for neighbouring fields too narrow to draw one by one.
+     *  Its name is the count, in the structure's own word for its children,
+     *  and `noun` is that word. */
+    foldDetail: (noun: string): string => `These ${plural(noun)} are too narrow to draw separately. Double-click to zoom in.`,
+    /** On a structure with invalid values somewhere under it, which its bar
+     *  marks with a red edge. "Invalid" is the listing's word for them. */
+    wrongInside: (n: number): string => `${n.toLocaleString()} invalid ${n === 1 ? "value" : "values"} inside`,
+    /** A structure whose children are not in file order and too many to read
+     *  all of, so only the first ones are drawn and zooming in will not show
+     *  the rest. */
+    unread: (shown: number, total: number, noun: string): string =>
+      `Showing the first ${shown.toLocaleString()} of ${countText(total, noun)}. The ${plural(noun)} are not stored in file order, so the rest are not drawn.`,
+  },
+  /**
+   * The lineage breadcrumb (`viz/lineage.ts`): which compressed runs and
+   * joined streams a tab, or the field under the cursor, sits inside, from the
+   * file down. "Unpacked" and "joined" are the words the listing and the
+   * report already use for the two ways a stream is made.
+   */
+  lineage: {
+    /** Heading of the At cursor section listing those streams, the file
+     *  first and the one holding the field last. */
+    title: "File and streams this field is in",
+    /** A tab's title: the streams' names, outermost first, as the At cursor
+     *  trail joins its steps. */
+    tabTitle: (names: readonly string[]): string => names.join(" › "),
+    /** The line under an unpacked stream's name: the stream's own size
+     *  first, since the row is the stream, then the run it came from. The
+     *  address at the end is a link to the run, so the line is drawn as this
+     *  and then the address: `48 bytes decoded from 18 bytes of deflate at
+     *  @0x2`. "Decoded" covers inflating and a PNG's unfiltering alike. */
+    unpackedBefore: (outBits: number, inBits: number, codec: string): string =>
+      `${bitSizeText(outBits)} decoded from ${bitSizeText(inBits)} of ${codec} at `,
+    /** The same in one string, for the hover card. */
+    unpacked: (inBits: number, codec: string, at: string, outBits: number): string =>
+      `${bitSizeText(outBits)} decoded from ${bitSizeText(inBits)} of ${codec} at ${at}`,
+    /** In place of those for a run stored without compression (a zip entry's
+     *  `stored` method), which is the same bytes out as in. */
+    storedBefore: (bits: number): string => `${bitSizeText(bits)} stored at `,
+    stored: (bits: number, at: string): string => `${bitSizeText(bits)} stored at ${at}`,
+    /** The line under a joined stream's name. `parts` is null when the core
+     *  has not said how many. */
+    joined: (outBits: number, parts: number | null): string =>
+      parts === null
+        ? `${bitSizeText(outBits)} joined from several parts`
+        : parts === 1
+          ? `${bitSizeText(outBits)} in one part`
+          : `${bitSizeText(outBits)} joined from ${countText(parts, "part")}`,
+    /** In the hover card of a joined stream: the run its first byte is in,
+     *  named as the listing names it (`chunks[2].image_data`). */
+    firstPart: (label: string): string => `First part: ${label}`,
+    /** The foot of a hover card: where the run is, in the stream or file one
+     *  row up. */
+    where: (at: string, parent: string): string => `${at} in ${parent}`,
+    /** Beside the name of the stream the tab shows. */
+    thisTab: "this tab",
+    /** On the name of a stream with no tab yet, which opens one. */
+    open: (name: string): string => `Open ${name} in its own tab`,
+    /** On the name of the file, or of a stream whose tab is open. */
+    goToTab: (name: string): string => `Go to the tab for ${name}`,
+    /** On the address of a run. */
+    goToRun: (parent: string): string => `Go to these bytes in ${parent}`,
   },
 } as const;

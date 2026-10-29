@@ -72,7 +72,7 @@ export type Identity = {
  * not one of them either: its evidence is the opcodes stopping exactly where
  * joblib writes an array's bytes, which no first-bytes rule can see.
  */
-export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "lzma", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
+export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "lzma", "mat", "bencode", "pickle", "com", "cue", "godottext", "eml"]);
 
 /**
  * The weakest rule a weak template yields to. A rule's strength is 20, plus
@@ -205,6 +205,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   godot: ["res", "scn", "tres", "tscn"],
   godottext: ["tres", "tscn"],
   godotpck: ["pck"],
+  eml: ["eml", "nws", "_nws"],
   lnk: ["lnk"],
   dtb: ["dtb"],
   journal: ["journal"],
@@ -257,7 +258,12 @@ export const templateExtensions = (template: string): string[] => {
  * used the same Intel object format, and the rule is those two bytes. The
  * template read the records, so the two are one answer and not a disagreement.
  */
-const ALSO_CALLED: Record<string, readonly string[]> = { omf: ["xenix"] };
+const ALSO_CALLED: Record<string, readonly string[]> = {
+  omf: ["xenix"],
+  // The rules call a message `news text`, `SMTP mail text`, `RFC 822 mail
+  // text` or `MIME entity text`, by the header field it opens with.
+  eml: ["mail", "news", "mime"],
+};
 
 /** Words in a file(1) sentence that say nothing about which format it is. */
 const STOP_WORDS = new Set(["data", "file", "archive", "image", "executable", "format", "document", "text", "binary", "compressed", "audio", "video", "the", "for", "with", "and", "or", "of", "a", "an", "v", "version"]);
