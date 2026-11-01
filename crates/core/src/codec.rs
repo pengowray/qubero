@@ -38,6 +38,7 @@ pub mod pytext;
 pub mod rar5;
 pub mod scanlines;
 pub mod snappy;
+pub mod tascam;
 pub mod xz;
 
 use std::ops::Range;
@@ -238,6 +239,10 @@ pub enum Codec {
     /// which is quoted-printable with `_` for a space and no line breaks. See
     /// [`crate::codec::mime::q_encoding`].
     QEncoding,
+    /// Not compression: every byte swapped for another through the one fixed
+    /// table Tascam scrambles a recorder's firmware update with. See
+    /// [`crate::codec::tascam`].
+    TascamScramble,
     /// Not compression: a whole PNG image's scanlines unfiltered, with the
     /// row lengths worked out from the header rather than fixed in the
     /// template. What [`Codec::PngUnfilter`] cannot be for an ordinary PNG,
@@ -302,6 +307,7 @@ impl Codec {
             Codec::Base64 => "base64",
             Codec::QuotedPrintable => "quoted-printable",
             Codec::QEncoding => "q encoding",
+            Codec::TascamScramble => "tascam scramble",
             Codec::PngScanlines { .. } => "png scanlines",
             Codec::JpegBaseline => "jpeg baseline",
         }
@@ -1496,6 +1502,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Base64 => mime::base64(data)?,
         Codec::QuotedPrintable => mime::quoted_printable(data)?,
         Codec::QEncoding => mime::q_encoding(data)?,
+        Codec::TascamScramble => tascam::unscramble(data)?,
         Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
             let shape = scanlines::Geometry::new(width as u64, height as u64, bits_per_pixel as u64, interlace);
             scanlines::unfilter_image(data, &shape.ok_or(Refusal::Settings)?)?
@@ -1594,6 +1601,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Base64
         | Codec::QuotedPrintable
         | Codec::QEncoding
+        | Codec::TascamScramble
         | Codec::PngScanlines { .. }
         | Codec::Zstd
         | Codec::FastLz => {
