@@ -40,6 +40,14 @@ pub enum Checksum {
     /// and twelve bytes reaches 0x1fe00, and the bottom eight bits of that are
     /// a different number that no tar wrote down.
     ByteSum,
+    /// Every byte added up and kept to thirty-two bits, so a run of tens of
+    /// megabytes still has a sum that has not wrapped. What a Tascam firmware
+    /// update writes in its header about the flash image it carries.
+    ///
+    /// Not [`Checksum::ByteSum`] with a wider field, for the same reason that
+    /// one is not [`Checksum::Sum8`]: a 25 MB image sums to 0x7b86741b, and
+    /// the bottom twenty-four bits of that are a number nobody wrote down.
+    Sum32,
     /// The *unreflected* CRC-32 an Ogg page seals itself with: the same
     /// polynomial 0x04c11db7 as [`Checksum::Crc32`] and nothing else the
     /// same. The bits of each byte go in the other way round, nothing is
@@ -98,7 +106,7 @@ impl Checksum {
             Checksum::Crc32Low16 | Checksum::Crc16Arc => "crc16",
             Checksum::Crc32Ogg | Checksum::Crc32Bzip2 => "crc32",
             Checksum::Sum8 => "sum8",
-            Checksum::ByteSum => "sum",
+            Checksum::ByteSum | Checksum::Sum32 => "sum",
             Checksum::Adler32 => "adler32",
             Checksum::Crc64Xz => "crc64",
             Checksum::Sha1 => "sha1",
@@ -114,6 +122,7 @@ impl Checksum {
             Checksum::Crc32Low16 | Checksum::Crc16Arc => 4,
             Checksum::Sum8 => 2,
             Checksum::ByteSum => 6,
+            Checksum::Sum32 => 8,
             Checksum::Crc64Xz => 16,
             Checksum::Sha1 => 40,
             Checksum::Sha256 => 64,
@@ -145,6 +154,7 @@ impl Checksum {
             Checksum::Crc16Arc => hex(crc16_arc(bytes) as u128, self),
             Checksum::Sum8 => hex(sum8(bytes) as u128, self),
             Checksum::ByteSum => hex(byte_sum(bytes) as u128, self),
+            Checksum::Sum32 => hex(sum32(bytes) as u128, self),
             Checksum::Adler32 => hex(adler32(bytes) as u128, self),
         }
     }
@@ -303,6 +313,11 @@ pub fn sum8(bytes: &[u8]) -> u8 {
 /// wrap has a bug the arithmetic should not hide by widening under it.
 pub fn byte_sum(bytes: &[u8]) -> u32 {
     bytes.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32)) & 0xff_ffff
+}
+
+/// Every byte added up, kept to thirty-two bits. See [`Checksum::Sum32`].
+pub fn sum32(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32))
 }
 
 /// Adler-32, the zlib trailer. Two running sums modulo 65521, the second of
@@ -601,6 +616,7 @@ mod tests {
         assert_eq!(Checksum::Crc32.over(b"123456789"), "0xcbf43926");
         assert_eq!(Checksum::Crc32Low16.over(b"123456789"), "0x3926");
         assert_eq!(Checksum::Sum8.over(&[0xff, 0x02]), "0x01");
+        assert_eq!(Checksum::Sum32.over(&[0xff, 0x02]), "0x00000101");
         assert_eq!(Checksum::Sha1.over(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
         // A field wider than its sum: the bits above the sum are not compared,
         // so a `u32` holding a sixteen-bit check still reads as one.
