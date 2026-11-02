@@ -166,8 +166,10 @@ pub(crate) fn stream() -> T {
         vec![
             ("programs", T::repeat(program(), Until::While(first_block_ahead()))),
             // Blocks outside any program: a stream that does not open with a
-            // first block.
-            ("blocks", T::when(block_ahead(), T::repeat(block(), Until::Cond(flag(FINAL))))),
+            // first block. Up to a final block, or up to bytes that are not a
+            // block header, so that erased flash after a stream with no final
+            // block is read as erased flash.
+            ("blocks", T::when(block_ahead(), T::repeat(block(), Until::Cond(flag(FINAL).either(block_ahead().negate()))))),
             ("erased", T::when(E::Remaining.greater_than(E::lit(0)).both(E::peek(8, Big).equal_to(E::lit(0xff))), T::bytes(E::run(&[0xff])))),
             // Whatever is after the erased run. The stream does not say what
             // it is.
@@ -202,14 +204,25 @@ pub(crate) fn program() -> T {
                 ("after_last_block", T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining))),
             ],
         )
+        // The argument counts from the end of the first block's header, so a
+        // payload in the first block is part of it.
         .field_valid(
             "first_block",
             Valid::Expr {
-                expr: E::within(&["first_block", "header", "argument"]).equal_to(E::size_of("blocks")),
-                msg: Some("The argument does not match the total length of the blocks that follow".into()),
+                expr: E::within(&["first_block", "header", "argument"])
+                    .add(E::lit(HEADER_BYTES as i128))
+                    .equal_to(E::size_of("first_block").add(E::size_of("blocks"))),
+                msg: Some("The argument (next .dxe pointer) is not the number of bytes from the end of the first block's header to the end of the program's last block".into()),
             },
         )
-        .field_doc("after_last_block", "Bytes after the program's last whole block, up to where the first block's argument says the next program starts."),
+        .field_doc(
+            "first_block",
+            "The block with the first flag set (BFLAG_FIRST) that starts this program. This block's argument, ADI's next .dxe pointer, is the number of bytes from the end of this block's header to the end of the program. Usually an ignore block with a byte count of 0.",
+        )
+        .field_doc(
+            "after_last_block",
+            "Bytes between the end of this program's last complete block and the program's end as given by the first block's argument. Present only when the argument is wrong: these are bytes after a final block, which the boot ROM does not read, or the start of a block that the argument cuts short. The name is this template's.",
+        ),
     )
 }
 
@@ -569,6 +582,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn blocks_outside_a_program_stop_before_erased_flash() {
+        // One block with no final block after it, and then erased flash.
+        let mut v = block(DMA_1, 0x1000, 4, 0, b"code");
+        v.extend_from_slice(&[0xff; 20]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(bfldr());
+        let ev = &mut ev;
+        assert_eq!(node(ev, &d, &[], &["programs"]).child_count, 0);
+        assert_eq!(node(ev, &d, &[], &["blocks"]).child_count, 1);
+        assert_eq!(extent(ev, &d, &[], &["erased"]), (20, 20));
+        assert!(node(ev, &d, &[], &["rest"]).absent);
+    }
+
+    #[test]
+    fn a_first_block_with_a_payload_counts_it_in_the_argument() {
+        // The argument counts from the end of the first block's header, so
+        // the 4 bytes of the first block's payload are part of it.
+        let rest = [block(DMA_1, 0x1000, 4, 0, b"code"), block(DMA_1 | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[])].concat();
+        let mut v = block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK, 0xffa0_0000, 4, 4 + rest.len() as u32, b"skip");
+        v.extend_from_slice(&rest);
+        let d = Document::new(MemSource(v.clone()));
+        let mut ev = Evaluator::new(bfldr());
+        let ev = &mut ev;
+        let program = named(ev, &d, &[], &["programs", "0"]);
+        assert_eq!(extent(ev, &d, &program, &[]), (0, v.len() as u64));
+        assert_eq!(extent(ev, &d, &program, &["first_block", "payload"]), (16, 4));
+        assert!(verdict(ev, &d, &program, &["first_block"]).0, "a right argument passes the check");
+        assert_eq!(node(ev, &d, &program, &["blocks"]).child_count, 2);
+        assert!(node(ev, &d, &program, &["after_last_block"]).absent);
+    }
+
+    #[test]
     fn a_final_block_before_the_end_of_a_program_fails_the_first_blocks_check() {
         let mut v = program(0xffa0_0000, &[block(DMA_1 | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[]), block(DMA_1, 0x1000, 4, 0, b"late")]);
         v.extend_from_slice(&[0xff; 4]);
@@ -580,7 +625,10 @@ pub(crate) mod tests {
         assert_eq!(extent(ev, &d, &program, &["after_last_block"]), (32, 20));
         let (ok, text) = verdict(ev, &d, &program, &["first_block"]);
         assert!(!ok);
-        assert_eq!(text, "Fails the check: The argument does not match the total length of the blocks that follow");
+        assert_eq!(
+            text,
+            "Fails the check: The argument (next .dxe pointer) is not the number of bytes from the end of the first block's header to the end of the program's last block"
+        );
         assert_eq!(extent(ev, &d, &[], &["erased"]), (52, 4));
     }
 
