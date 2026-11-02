@@ -13,8 +13,8 @@
 //! the four bytes themselves.
 //!
 //! The image is the flash an NXP i.MX RT1060 boots from, and its first 8 KiB
-//! are read with the pieces `imxrt` reads such a flash with: the FlexSPI
-//! configuration block, the IVT, the boot data and the DCD. The IVT's entry
+//! are read with the same pieces as `imxrt`: the FlexSPI configuration block,
+//! the IVT, the boot data and the DCD. The IVT's entry
 //! points at Tascam's bootloader, and the application is at 0x20000. The
 //! bootloader copies everything from 0x20000 on into SDRAM at 0x80000000 and
 //! jumps to it without checking anything, so an application address is its
@@ -25,39 +25,38 @@
 //! each one fills, and the packed runs those routines unpack. Nothing marks
 //! where a table is, but IAR's linker puts it straight after the 36-byte
 //! routine that turns on the floating-point unit, `__iar_init_core`. So each
-//! program's code is read up to the end of that routine, wherever it turns
-//! up, and the init table after it. The bootloader's table zeroes two ranges
-//! and unpacks one `packbits` run into the DTCM. The application's zeroes
-//! seven, unpacks three `lz77` runs into SDRAM, the ITCM and the DTCM, and
-//! then runs the C++ constructors. Each run is read where its table entry
-//! points, and what it unpacks to is checked against the length the entry
-//! gives for it.
+//! program's code is read up to the end of that routine, wherever the routine
+//! is found, and the init table is read after it. The bootloader's table
+//! zeroes two ranges and unpacks one `packbits` run into the DTCM. The
+//! application's zeroes seven, unpacks three `lz77` runs into SDRAM, the ITCM
+//! and the DTCM, and then runs the C++ constructors. Each run is read where
+//! its table entry points, and what it unpacks to is checked against the
+//! length the entry gives for it.
 //!
 //! The application opens with its vector table, a stamp of the version and
-//! build that should agree with the header, and then data its code is linked
-//! around: a Qt for MCUs font map with the three TrueType fonts it lists, and
-//! four WAV files, sounds the recorder plays. Each font and each WAV is a
+//! build that should agree with the header, and then data the code uses: a
+//! Qt for MCUs font map with the three TrueType fonts it lists, and four WAV
+//! files, which are sounds the recorder plays. Each font and each WAV is a
 //! file of its own and opens as one. Two more WAVs and several hundred images
-//! are inside the code, where only the code says where they are, and are left
-//! as part of it.
+//! are inside the code run. Only the code says where they are, so they stay
+//! part of that run.
 //!
 //! The bootloader's code and the code that runs from the ITCM are read as
 //! Thumb instructions. The application's own code is not: its two runs, 11 MB
 //! before the init table and half a megabyte after it, are read as bytes.
-//! They are code mixed with string pools, vtables and images, so much of what
-//! a decoder made of them would be instructions nobody wrote, and a run of
-//! instructions is only counted by decoding every one of them: the 11 MB run
-//! took over a minute to count in a debug build, and a listing counts a run
-//! before it can draw the row that holds it.
+//! They mix code with string pools, vtables and images, so much of a
+//! disassembly of them would be data decoded as instructions. Counting the
+//! instructions in a run means decoding all of them, and a listing counts
+//! them before it shows the run's row: for the 11 MB run that took over a
+//! minute in a debug build.
 //!
-//! The ITCM code is linked to run at 0x400 and the IR has no way to say so, so
-//! its branch targets read as distances from the instruction rather than as
-//! addresses.
+//! The ITCM code is linked to run at 0x400, and the template IR has no way to
+//! give a run a load address, so its branch targets read as distances from
+//! the instruction rather than as addresses.
 //!
-//! The image's layout is this recorder's. Another product's update with the
-//! same header would need its own reading of the image, which is why the
-//! product code is a magic number here rather than a field that may hold
-//! anything.
+//! The image's layout is this recorder's. An update for another product with
+//! the same header would need its own reading of the image, so the product
+//! code is checked as a magic number.
 
 use crate::codec::Codec;
 use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Named, StrLen, Template, Ty as T, Until, Valid};
