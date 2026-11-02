@@ -604,6 +604,12 @@ fn named_through<'a>(t: &'a Template, ty: &'a Ty) -> &'a Ty {
     ty
 }
 
+/// Whether a field is a stream, whose contents are read from bytes of their
+/// own: see [`super::ledger::LedgerRow::stream`].
+fn is_stream(ty: &Ty) -> bool {
+    matches!(ty, Ty::Decoded { .. } | Ty::Stitched { .. })
+}
+
 /// The element type of a list, as declared.
 fn element_of(ty: &Ty) -> Option<&Ty> {
     match ty {
@@ -623,12 +629,12 @@ impl<S: Source> Watch<S> for Follow {
                 self.space = r.space;
                 self.part_chain = part_chain(ev, doc, path)?;
                 self.template = std::rc::Rc::new(ev.template().clone());
-                let part = self.books.part(path, &r.name.text());
+                let part = self.books.part(path, &r.name.text(), is_stream(&r.ty));
                 let group = self.books.group("", "none");
                 (part, group, r.machinery)
             }
             Some((ppath, ppart, pgroup, pmachinery, _)) => {
-                let part = if self.part_chain.contains(ppath) { self.books.part(path, &r.name.text()) } else { *ppart };
+                let part = if self.part_chain.contains(ppath) { self.books.part(path, &r.name.text(), is_stream(&r.ty)) } else { *ppart };
                 (part, *pgroup, *pmachinery)
             }
         };

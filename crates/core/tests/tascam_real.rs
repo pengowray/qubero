@@ -322,3 +322,47 @@ fn application(ev: &mut Evaluator, d: &Document<MemSource>, r: &Release) {
     assert_eq!(ev.node(d, &fourth).unwrap().offset_bits / 8, 8);
     assert_eq!(text(ev, d, &fourth), "push {r4, r5, r6, r7, r8, lr}", "{f}");
 }
+
+/// What the core tells a view about the two scrambled runs: that their codec
+/// scrambles rather than compresses, and that each run is a part of the file
+/// of its own rather than one of the root's plain fields.
+#[test]
+fn the_scrambled_runs_are_parts_of_their_own_and_say_they_are_scrambled() {
+    use qubero_core::codec::CodecKind;
+    use qubero_core::eval::ReportWalk;
+    let Some(path) = RELEASES.iter().find_map(|r| sample(r.file)) else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let d = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::template("tascamfw").expect("the tascamfw template"));
+    for p in [[1], [2]] {
+        let n = ev.node(&d, &p).unwrap();
+        assert!(n.decoded, "{p:?}");
+        assert_eq!(n.codec_kind, Some(CodecKind::Scrambling), "{p:?}");
+    }
+    assert_eq!(ev.node(&d, &[0]).unwrap().codec_kind, None);
+    let sum = named(&mut ev, &d, &[0], &["checksum"]);
+    let check = ev.check_of(&d, &sum).unwrap().expect("the header's checksum is a check");
+    assert_eq!(check.unpacked_kind, Some(CodecKind::Scrambling));
+
+    let mut w = ReportWalk::new(d.len_bits());
+    for _ in 0..1_000_000 {
+        ev.begin_slice();
+        ev.report_step(&d, &mut w).expect("a step");
+        if w.done() {
+            break;
+        }
+    }
+    assert!(w.done(), "the walk did not finish");
+    let l = w.ledger();
+    for (part, name) in [(vec![1], "image"), (vec![2], "checksum_copy")] {
+        let rows: Vec<_> = l.rows.iter().filter(|r| r.part == part).collect();
+        assert!(!rows.is_empty(), "{name} in the ledger");
+        assert!(rows.iter().all(|r| r.stream && r.part_name == name), "{name}: {rows:?}");
+    }
+    assert!(l.rows.iter().filter(|r| r.part == [0]).all(|r| !r.stream), "the header is not a stream");
+    let codecs: Vec<_> = w.profile().rows.into_iter().filter(|r| r.category == "codec").collect();
+    assert!(!codecs.is_empty());
+    assert!(codecs.iter().filter(|r| r.kind == "tascam scramble").all(|r| r.detail == "scrambling"), "{codecs:?}");
+}

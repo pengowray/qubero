@@ -162,6 +162,9 @@ pub(crate) struct LedgerDto {
 pub(crate) struct LedgerRowDto {
     pub(crate) part: Vec<usize>,
     pub(crate) part_name: String,
+    /// True when the part is a stream, a field whose contents are read from
+    /// the bytes it unpacks to. See `qubero_core::eval::LedgerRow::stream`.
+    pub(crate) stream: bool,
     /// Empty where no list element is above these bits.
     pub(crate) group: String,
     /// "key" | "case" | "name" | "type" | "none" | "other"
@@ -397,6 +400,7 @@ pub(crate) fn ledger_dto(l: qubero_core::eval::Ledger, reached_bits: u64) -> Led
             .map(|r| LedgerRowDto {
                 part: r.part,
                 part_name: r.part_name,
+                stream: r.stream,
                 group: r.group,
                 group_from: r.group_from,
                 role: r.role,
