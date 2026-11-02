@@ -69,7 +69,7 @@ impl Evaluator {
     fn record_named<S: Source>(&mut self, doc: &Document<S>, at: &[usize], records: &[String], want: &str) -> R<Option<i128>> {
         let list = self.within_path(doc, at, records)?;
         let count = self.child_count(doc, &list)?.min(MOST_RECORDS);
-        let space = self.memo.get(at).map_or(0, |r| r.space);
+        let space = self.space_at(at);
         let (named_field, last_field) = (parts(NAME_FIELD), parts(LAST_FIELD));
         for i in 0..count {
             let mut named = list.clone();
@@ -112,7 +112,7 @@ impl Evaluator {
     /// lays out. Nothing else can reach it, since such a file holds no ZIP
     /// records for an expression to name.
     fn directory_named<S: Source>(&mut self, doc: &Document<S>, at: &[usize], want: &str) -> R<i128> {
-        let space = self.memo.get(at).map_or(0, |r| r.space);
+        let space = self.space_at(at);
         let held = self.archive(doc, space)?;
         match held.iter().find(|e| e.name == want) {
             Some(entry) => Ok(entry.at as i128),

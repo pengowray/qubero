@@ -418,10 +418,11 @@ impl Evaluator {
                 // Offsets of two address spaces are two different numbers.
                 // Answering across them would give the start of a field in an
                 // unpacked stream as if it were a place in the file. The
-                // asking field may not be placed yet, as when this sizes it,
-                // or may be the slot one past a structure's last field, where
-                // a check or a constraint is worked out; either way it is in
-                // the space of whatever it sits in.
+                // asking field has no memo entry when StartOf is part of the
+                // expression for its own size, or when it is the slot one past
+                // a structure's last field, where checks and constraints are
+                // evaluated. space_at, and origin_of below, take the space
+                // from the nearest ancestor that has one.
                 let space = self.space_at(at);
                 let found = &self.memo[&p];
                 if found.space != space {

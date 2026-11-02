@@ -2151,8 +2151,12 @@ impl Evaluator {
     /// Where this copy of the format begins and how far it runs, for the
     /// nearest [`Ty::Origin`] around `path`. Nothing when there is none, which
     /// is the ordinary case of a format read on its own.
+    ///
+    /// The space comes from [`space_at`](Self::space_at), so a field that is
+    /// not placed yet inside an unpacked run looks for an origin in the run's
+    /// space and not in the file's.
     fn origin_of(&self, path: &[usize]) -> Option<(u64, u64)> {
-        let space = self.memo.get(path).map_or(0, |r| r.space);
+        let space = self.space_at(path);
         (0..path.len())
             .rev()
             .find_map(|k| self.memo.get(&path[..k]).filter(|r| r.origin && r.space == space))
