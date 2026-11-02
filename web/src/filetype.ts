@@ -54,6 +54,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   godotpck: "Godot PCK",
   grubenv: "GRUB environment block",
   hackrffw: "HackRF firmware",
+  imxrt: "i.MX RT flash image",
+  tascamfw: "Tascam firmware update",
   it: "Impulse Tracker IT",
   journal: "systemd journal",
   jxr: "JPEG XR",

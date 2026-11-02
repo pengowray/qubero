@@ -226,6 +226,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   whisper: ["wsp"],
   claudetheme: ["json"],
   hackrffw: ["bin"],
+  imxrt: ["bin"],
   gdbm: ["gdbm", "db"],
   bdb: ["db"],
   grubenv: ["env"],
