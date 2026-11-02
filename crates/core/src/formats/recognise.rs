@@ -99,6 +99,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (rar4::MAGIC, "rar4"),
     (rar5::MAGIC, "rar5"),
     (uf2::MAGIC, "uf2"),
+    // A Tascam Portacapture X8 firmware update, which names the recorder by
+    // its project code in the first eight bytes.
+    (tascamfw::MAGIC, "tascamfw"),
     // A Godot resource with its body compressed. The plain one shares its
     // four letters with LabVIEW and is a probe instead; this one does not.
     (godot::MAGIC_COMPRESSED, "godot"),
@@ -272,6 +275,10 @@ const PROBES: &[Probe] = &[
     // signatures, which would otherwise take every JSON file as plain json.
     Probe::Is("claudetheme", claudetheme::is_claude_theme),
     Probe::Is("hackrffw", |h, _| is_hackrf_firmware(h)),
+    // An i.MX RT1060 flash image, which has `FCFB` at the front and the boot
+    // ROM's image vector table 4 KiB in. Four letters on their own would be
+    // weak; the two together are not.
+    Probe::Is("imxrt", |h, _| imxrt::is_imxrt_flash(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),
     // A miniSEED record, which has no signature but does have a front: six

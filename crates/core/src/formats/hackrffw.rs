@@ -48,8 +48,8 @@ const PLATFORM: &[(u32, &str)] = &[
 /// The exceptions every Cortex-M defines, in the order they sit in, after the
 /// stack pointer that comes first. A reserved slot is a word the architecture
 /// never uses; the build fills it with the handler it fills everything else
-/// with.
-const EXCEPTIONS: &[&str] = &[
+/// with. Shared with `imxrt`, whose vector table opens with the same fifteen.
+pub(crate) const EXCEPTIONS: &[&str] = &[
     "reset",
     "nmi",
     "hard_fault",

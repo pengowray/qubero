@@ -109,6 +109,8 @@ mod recognise;
 pub mod sqlite_overflow;
 mod uf2;
 mod hackrffw;
+mod imxrt;
+mod tascamfw;
 pub mod hardening;
 mod hdf4;
 mod hdf4_records;
@@ -268,6 +270,8 @@ pub use gwf::gwf;
 pub use gzip::gzip;
 pub use uf2::{image as uf2_image, uf2, Image as Uf2Image};
 pub use hackrffw::hackrffw;
+pub use imxrt::imxrt;
+pub use tascamfw::tascamfw;
 pub use hdf4::hdf4;
 pub use hdf5::hdf5;
 pub use id3::id3;
@@ -489,6 +493,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("adioszip", |_| adios_zip()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
+    ("imxrt", |_| imxrt()),
+    ("tascamfw", |_| tascamfw()),
     ("gif", |_| gif()),
     ("aiff", |_| aiff()),
     ("ilbm", |_| ilbm()),
