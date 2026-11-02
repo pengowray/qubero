@@ -23,6 +23,7 @@ pub mod cdfhuff;
 pub mod cdfrle;
 pub mod compress;
 pub mod fastlz;
+pub mod iar;
 pub mod frames;
 pub mod inflate;
 pub mod jpeg;
@@ -243,6 +244,13 @@ pub enum Codec {
     /// table Tascam scrambles a recorder's firmware update with. See
     /// [`crate::codec::tascam`].
     TascamScramble,
+    /// The `lz77` packing IAR's linker writes initialised data and RAM code
+    /// in, which the startup code unpacks through the init table. See
+    /// [`crate::codec::iar::lz77`].
+    IarLz77,
+    /// The `packbits` packing IAR's linker writes the same runs in, a
+    /// run-length code. See [`crate::codec::iar::packbits`].
+    IarPackbits,
     /// Not compression: a whole PNG image's scanlines unfiltered, with the
     /// row lengths worked out from the header rather than fixed in the
     /// template. What [`Codec::PngUnfilter`] cannot be for an ordinary PNG,
@@ -308,6 +316,8 @@ impl Codec {
             Codec::QuotedPrintable => "quoted-printable",
             Codec::QEncoding => "q encoding",
             Codec::TascamScramble => "tascam scramble",
+            Codec::IarLz77 => "iar lz77",
+            Codec::IarPackbits => "iar packbits",
             Codec::PngScanlines { .. } => "png scanlines",
             Codec::JpegBaseline => "jpeg baseline",
         }
@@ -1503,6 +1513,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::QuotedPrintable => mime::quoted_printable(data)?,
         Codec::QEncoding => mime::q_encoding(data)?,
         Codec::TascamScramble => tascam::unscramble(data)?,
+        Codec::IarLz77 => iar::lz77(data)?,
+        Codec::IarPackbits => iar::packbits(data)?,
         Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
             let shape = scanlines::Geometry::new(width as u64, height as u64, bits_per_pixel as u64, interlace);
             scanlines::unfilter_image(data, &shape.ok_or(Refusal::Settings)?)?
@@ -1602,6 +1614,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::QuotedPrintable
         | Codec::QEncoding
         | Codec::TascamScramble
+        | Codec::IarLz77
+        | Codec::IarPackbits
         | Codec::PngScanlines { .. }
         | Codec::Zstd
         | Codec::FastLz => {
