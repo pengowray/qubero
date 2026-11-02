@@ -191,7 +191,7 @@ pub(crate) fn stream() -> T {
         "programs",
         "One program for each .dxe file in the stream: an initcode or an application. Each program starts with a block that has the first flag set, and that block's argument determines the program's length. The name program is this template's, not ADI's.",
     )
-    .field_doc("blocks", "Blocks that are not part of any program, as in a stream that does not start with a first block. They are read up to a block with the final flag.")
+    .field_doc("blocks", "Blocks that are not part of any program, as in a stream that does not start with a first block. They are read up to a block with the final flag, or up to bytes that are not a block header.")
     .field_doc("erased", "A run of 0xFF bytes after the boot stream. Erased flash memory reads as 0xFF.")
     .field_doc("rest", "Bytes after the boot stream and any erased flash, shown as raw bytes.")
 }
