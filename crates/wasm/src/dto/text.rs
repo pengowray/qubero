@@ -88,6 +88,10 @@ pub(crate) struct StringInsideDto {
     pub(crate) name: String,
     /// What one element is, such as `i16 le` or `x86-64`, or the codec.
     pub(crate) what: String,
+    /// For a packed stream, what its codec does: "compression" | "encoding" |
+    /// "scrambling" | "stored" | "filter" | "steganography". Null for numbers
+    /// and code.
+    pub(crate) codec_kind: Option<&'static str>,
     pub(crate) at: f64,
     pub(crate) len: f64,
 }

@@ -322,6 +322,87 @@ impl Codec {
             Codec::JpegBaseline => "jpeg baseline",
         }
     }
+
+    /// What the codec does to the bytes, so that a view can say "compressed",
+    /// "encoded" or "scrambled" and be right about each codec. Every codec is
+    /// listed by name, with no catch-all arm, so a codec added later has to
+    /// choose.
+    pub fn kind(self) -> CodecKind {
+        match self {
+            Codec::Zlib
+            | Codec::Deflate
+            | Codec::Zstd
+            | Codec::Lz4Block
+            | Codec::Lz4Frame
+            | Codec::Snappy
+            | Codec::Brotli
+            | Codec::Xz
+            | Codec::Lzip
+            | Codec::Lzma1 { .. }
+            | Codec::Lzma2
+            | Codec::Lha { .. }
+            | Codec::Rar5 { .. }
+            | Codec::Bzip2
+            | Codec::Compress
+            | Codec::Gzip
+            | Codec::FastLz
+            | Codec::Pico8Pxa
+            | Codec::Pico8Old
+            | Codec::PicotronPxu
+            | Codec::CdfRle
+            | Codec::CdfHuffman
+            | Codec::CdfAhuff
+            | Codec::IarLz77
+            | Codec::IarPackbits
+            | Codec::JpegBaseline => CodecKind::Compression,
+            Codec::Latin1Text | Codec::EscapedLatin1Text | Codec::Base64 | Codec::QuotedPrintable | Codec::QEncoding => CodecKind::Encoding,
+            Codec::TascamScramble => CodecKind::Scrambling,
+            Codec::Stored | Codec::CfbWorkbook => CodecKind::Stored,
+            Codec::PngUnfilter { .. } | Codec::PngScanlines { .. } => CodecKind::Filter,
+            Codec::LowBitsArgb | Codec::LowBitsRgba11 => CodecKind::Steganography,
+        }
+    }
+}
+
+/// What a codec does to the bytes it is given. See [`Codec::kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CodecKind {
+    /// The bytes were made smaller, and decoding makes them larger again:
+    /// deflate, LZMA, IAR's lz77, the Huffman codes of a JPEG scan.
+    Compression,
+    /// The bytes are written in another form, usually text, and decoding turns
+    /// them back into the bytes they stand for: base64, quoted-printable, the
+    /// Latin-1 text a pickle keeps bytes in. The data is about the same size or
+    /// larger.
+    Encoding,
+    /// Each byte was replaced by another to hide what the data is, and the
+    /// length did not change: Tascam's substitution table. An XOR with a key
+    /// would be this too.
+    Scrambling,
+    /// The bytes come out as they are in the file: a ZIP entry stored with
+    /// method 0, or the sectors of an OLE stream read in chain order.
+    Stored,
+    /// PNG's row filters: each byte was replaced by its difference from a
+    /// neighbouring byte, and undoing that gives the pixels. Nothing is made
+    /// smaller.
+    Filter,
+    /// Bytes kept in the low bits of other data, a picture's pixels, which is
+    /// how a PICO-8 or Picotron cartridge keeps its contents inside a PNG.
+    Steganography,
+}
+
+impl CodecKind {
+    /// The name a view switches on.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CodecKind::Compression => "compression",
+            CodecKind::Encoding => "encoding",
+            CodecKind::Scrambling => "scrambling",
+            CodecKind::Stored => "stored",
+            CodecKind::Filter => "filter",
+            CodecKind::Steganography => "steganography",
+        }
+    }
 }
 
 /// Why a run was left as bytes. A kind rather than a sentence: the core says
@@ -1636,6 +1717,24 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_codec_says_what_it_does_to_the_bytes() {
+        assert_eq!(Codec::Deflate.kind(), CodecKind::Compression);
+        assert_eq!(Codec::IarLz77.kind(), CodecKind::Compression);
+        assert_eq!(Codec::JpegBaseline.kind(), CodecKind::Compression);
+        assert_eq!(Codec::Base64.kind(), CodecKind::Encoding);
+        assert_eq!(Codec::Latin1Text.kind(), CodecKind::Encoding);
+        assert_eq!(Codec::TascamScramble.kind(), CodecKind::Scrambling);
+        assert_eq!(Codec::Stored.kind(), CodecKind::Stored);
+        assert_eq!(Codec::PngUnfilter { stride: 4, bpp: 1 }.kind(), CodecKind::Filter);
+        assert_eq!(Codec::LowBitsArgb.kind(), CodecKind::Steganography);
+        // A packing with settings is the codec of the same name.
+        use crate::template::{Expr, Packing};
+        let lzma = Packing::Lzma1 { props: Expr::lit(0), dict_size: Expr::lit(0), unpacked: None };
+        assert_eq!(lzma.kind(), Codec::Lzma1 { props: 0, dict_size: 0, unpacked: None }.kind());
+        assert_eq!(Packing::JpegScan { segments: Expr::lit(2) }.kind(), Codec::JpegBaseline.kind());
+    }
 
     #[test]
     fn a_zlib_stream_comes_back_as_what_went_in() {

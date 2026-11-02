@@ -45,6 +45,9 @@ pub struct CheckInfo {
     /// that a reader has somewhere to be sent even though the summed bytes are
     /// nowhere in the file.
     pub unpacked_from: Option<(u64, u64)>,
+    /// What the codec of that run does to its bytes, so a view can call them
+    /// compressed, scrambled or encoded. None when the sum is over the file.
+    pub unpacked_kind: Option<crate::codec::CodecKind>,
     /// How many bytes the sum is over: a run of the file, the unpacked length
     /// where the file writes one down, or, failing both, a stand-in used only
     /// to decide whether to take the sum unasked. See `covered_exact` for
@@ -177,6 +180,10 @@ impl Evaluator {
             algorithm: c.algorithm.as_str(),
             over: c.over,
             unpacked_from: c.unpacked.as_ref().map(|u| u.run),
+            unpacked_kind: c.unpacked.as_ref().and_then(|u| match &self.memo.get(&u.at[..])?.ty {
+                Ty::Decoded { codec, .. } => Some(codec.kind()),
+                _ => None,
+            }),
             covered_bytes: c.covered_bytes,
             covered_exact: c.covered_exact,
             unpacked_member: c.unpacked.as_ref().is_some_and(|u| u.member.is_some()),

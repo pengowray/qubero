@@ -80,6 +80,10 @@ pub(crate) struct NodeDto {
     /// True for a compressed run. One that opened can be opened as a document
     /// of its own, which is what the Open unpacked button does.
     pub(crate) decoded: bool,
+    /// For a decoded run, what its codec does: "compression" | "encoding" |
+    /// "scrambling" | "stored" | "filter" | "steganography". Null for every
+    /// other field.
+    pub(crate) codec_kind: Option<&'static str>,
     /// True for the one node a stream holds. Its parent is the stream, so this
     /// is where the listing offers Open unpacked.
     pub(crate) space_root: bool,
@@ -255,6 +259,7 @@ pub(crate) fn dto(n: NodeInfo) -> NodeDto {
         space: n.space as f64,
         refused: n.refused,
         decoded: n.decoded,
+        codec_kind: n.codec_kind.map(|k| k.as_str()),
         space_root: n.space_root,
         joined: n.joined,
         lsb_first: n.lsb_first,

@@ -3423,6 +3423,17 @@ impl Packing {
             Packing::JpegScan { .. } => "jpeg scan",
         }
     }
+    /// What the codec does to the bytes, without reading a byte. The packings
+    /// with settings read from the file are the codecs of the same names. See
+    /// [`crate::codec::Codec::kind`].
+    pub fn kind(&self) -> crate::codec::CodecKind {
+        use crate::codec::CodecKind;
+        match self {
+            Packing::Fixed(c) => c.kind(),
+            Packing::Lzma1 { .. } | Packing::Rar5 { .. } | Packing::JpegScan { .. } => CodecKind::Compression,
+            Packing::PngScanlines(_) => CodecKind::Filter,
+        }
+    }
     /// Whether the bytes come out as they went in, so a reader can be sent to
     /// them where they sit rather than to a stream standing in for them.
     pub fn is_stored(&self) -> bool {
