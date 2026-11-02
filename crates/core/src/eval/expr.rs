@@ -415,11 +415,15 @@ impl Evaluator {
                     return fail("nothing there to be the start of");
                 };
                 self.resolve(doc, &p)?;
-                let found = &self.memo[&p];
                 // Offsets of two address spaces are two different numbers.
                 // Answering across them would give the start of a field in an
-                // unpacked stream as if it were a place in the file.
-                let space = self.memo.get(at).map_or(0, |r| r.space);
+                // unpacked stream as if it were a place in the file. The
+                // asking field may not be placed yet, as when this sizes it,
+                // or may be the slot one past a structure's last field, where
+                // a check or a constraint is worked out; either way it is in
+                // the space of whatever it sits in.
+                let space = self.space_at(at);
+                let found = &self.memo[&p];
                 if found.space != space {
                     return fail("that field is read in another space");
                 }
