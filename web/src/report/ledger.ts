@@ -51,14 +51,82 @@ export type RoleShare = {
 
 const samePath = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 
+/** Paths in the order the template lists them, for parts that start at the
+ *  same bit. */
+function comparePaths(a: readonly number[], b: readonly number[]): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return a.length - b.length;
+}
+
+/** Whether a row is the bits of one plain value that is a whole part: not a
+ *  group of list elements, not a gap or padding, and not a stream. The walk
+ *  counts a stream (a `Decoded` or `Stitched` field) as one leaf of the file
+ *  too, so its row's `first_path` is the part's own path, as for a plain
+ *  value. But a stream has contents of its own: a firmware update's scrambled
+ *  image is `image`, not one of the fields of a trailer. */
+function plainRow(r: LedgerRow): boolean {
+  return r.group === "" && r.role !== "gap" && r.role !== "padding" && r.stream !== true && samePath(r.first_path, r.part);
+}
+
+/**
+ * The line each part that is one plain field goes on, by the part's path.
+ *
+ * A line is a run of plain fields of one structure that follow each other in
+ * the file with nothing between them, and it is keyed by the run's first
+ * part. Any other part ends the run: a structure, a list, a stream or a
+ * padding field. So does a gap, since then the next field does not start
+ * where the run ends. A zlib stream's header fields are one line, and its
+ * `adler32`, after the compressed data, is a line of its own. The report's
+ * map divides a file into the same runs (`unitsOf` in `model.ts`), and both
+ * name a run of more than one field by where it is in the file.
+ *
+ * A part is a plain field only when every row it has, other than gaps, is
+ * one: a JSON object's braces and commas are a row of its own whose
+ * `first_path` is the object, and they belong on the object's line.
+ */
+function plainRuns(rows: readonly LedgerRow[]): Map<string, string> {
+  type Part = { path: readonly number[]; plain: boolean; start: number; bits: number };
+  const parts = new Map<string, Part>();
+  for (const r of rows) {
+    if (r.role === "gap") continue;
+    const k = r.part.join("/");
+    let p = parts.get(k);
+    if (p === undefined) {
+      p = { path: r.part, plain: true, start: r.first_offset_bits, bits: 0 };
+      parts.set(k, p);
+    }
+    p.start = Math.min(p.start, r.first_offset_bits);
+    p.bits += r.bits;
+    if (!plainRow(r)) p.plain = false;
+  }
+  const order = [...parts.values()].sort((a, b) => a.start - b.start || comparePaths(a.path, b.path));
+  const lineOf = new Map<string, string>();
+  let run: { key: string; parent: string; end: number } | null = null;
+  for (const p of order) {
+    if (!p.plain) {
+      run = null;
+      continue;
+    }
+    const parent = p.path.slice(0, -1).join("/");
+    if (run === null || run.parent !== parent || run.end !== p.start) run = { key: `fields:${p.path.join("/")}`, parent, end: p.start };
+    run.end = p.start + p.bits;
+    lineOf.set(p.path.join("/"), run.key);
+  }
+  return lineOf;
+}
+
 /**
  * The ledger's rows as the report's lines, in file order.
  *
  * - A part with groups under it is a line per group: a ZIP's records are the
  *   local files, the central directory and its end.
- * - A part that is one plain field is taken together with the other plain
- *   fields of the same structure: the thirty fields of an ELF header are one
- *   line, not thirty. One such field on its own keeps its own name.
+ * - Parts that are one plain field each are taken together, a run of them
+ *   that are next to each other in the file to a line: the thirty fields of
+ *   an ELF header are one line, not thirty. See `plainRuns`. One such field
+ *   on its own keeps its own name.
  * - Bytes no field describes are one line, and padding another.
  */
 export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
@@ -80,16 +148,11 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     roles: Map<LedgerRole, RoleAcc>;
   };
   const lines = new Map<string, Acc>();
+  const runs = plainRuns(rows);
   for (const r of rows) {
-    const plain = r.group === "" && r.role !== "gap" && r.role !== "padding" && samePath(r.first_path, r.part);
-    const key =
-      r.role === "gap"
-        ? "gap"
-        : r.role === "padding"
-          ? "padding"
-          : plain
-            ? `fields:${r.part.slice(0, -1).join("/")}`
-            : `part:${r.part.join("/")}\u0000${r.group}`;
+    const run = r.role === "gap" || r.role === "padding" ? undefined : runs.get(r.part.join("/"));
+    const plain = run !== undefined;
+    const key = r.role === "gap" ? "gap" : r.role === "padding" ? "padding" : (run ?? `part:${r.part.join("/")}\u0000${r.group}`);
     let a = lines.get(key);
     if (a === undefined) {
       a = {

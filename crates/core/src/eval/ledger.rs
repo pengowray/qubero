@@ -41,6 +41,13 @@ pub struct LedgerRow {
     /// The top-level part, as a path from the walk's root.
     pub part: Vec<usize>,
     pub part_name: String,
+    /// True when the part is a stream: a `Decoded` field, whose contents are
+    /// read from the bytes it unpacks to, or a `Stitched` one. The walk counts
+    /// such a field as one leaf of the file, so its row's `first_path` is the
+    /// part's own path, as it is for a part that is one plain value. A view
+    /// that takes a structure's plain values together as one part must keep
+    /// a stream apart from them: it is a part with contents of its own.
+    pub stream: bool,
     /// The variant these bytes are grouped under. Empty when no list element
     /// is above them, where the part is the only grouping there is.
     pub group: String,
@@ -128,7 +135,8 @@ struct Placed {
 #[derive(Debug, Default)]
 pub(super) struct Tally {
     rows: BTreeMap<RowKey, RowCount>,
-    parts: Vec<(Vec<usize>, String)>,
+    /// Each part's path, its name, and whether it is a stream.
+    parts: Vec<(Vec<usize>, String, bool)>,
     groups: Vec<(String, &'static str)>,
     group_index: rustc_hash::FxHashMap<(String, &'static str), u32>,
     stretches: Vec<Stretch>,
@@ -164,12 +172,13 @@ const LOOK_BACK: usize = 100_000;
 const SCAN_CHUNK: u64 = 64 * 1024 * 8;
 
 impl Tally {
-    /// The part a path names, added the first time it is met.
-    pub(super) fn part(&mut self, path: &[usize], name: &str) -> u32 {
-        if let Some(i) = self.parts.iter().position(|(p, _)| p == path) {
+    /// The part a path names, added the first time it is met. `stream` says
+    /// whether the field there is a stream; see [`LedgerRow::stream`].
+    pub(super) fn part(&mut self, path: &[usize], name: &str, stream: bool) -> u32 {
+        if let Some(i) = self.parts.iter().position(|(p, ..)| p == path) {
             return i as u32;
         }
-        self.parts.push((path.to_vec(), name.to_string()));
+        self.parts.push((path.to_vec(), name.to_string(), stream));
         (self.parts.len() - 1) as u32
     }
 
@@ -353,11 +362,12 @@ impl Tally {
             // nothing to put in a ledger of where the bits go.
             .filter(|(_, c)| c.bits > 0)
             .map(|(&(part, group, role, align), c)| {
-                let (part_path, part_name) = self.parts.get(part as usize).cloned().unwrap_or_default();
+                let (part_path, part_name, stream) = self.parts.get(part as usize).cloned().unwrap_or_default();
                 let (group, group_from) = self.groups.get(group as usize).cloned().unwrap_or((String::new(), "none"));
                 LedgerRow {
                     part: part_path,
                     part_name,
+                    stream,
                     group,
                     group_from,
                     role,
@@ -405,7 +415,7 @@ mod tests {
     #[test]
     fn a_gap_loses_what_was_placed_over_it_but_not_what_it_is_inside() {
         let mut t = Tally::default();
-        let part = t.part(&[], "root");
+        let part = t.part(&[], "root", false);
         let g = t.group("", "none");
         // The root's frame, opened at 1, leaves 0..800 as a gap; a field placed
         // at 100..300, opened at 5, covers some of it; a frame inside that

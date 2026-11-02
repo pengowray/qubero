@@ -102,7 +102,19 @@ test("a match with no length falls back to the plain name", () => {
 });
 
 test("the tab is named for the stream and the file it came out of", () => {
-  assert.equal(UNPACKED.tabTitle("decoded", "hello.txt.zst"), "decoded unpacked from hello.txt.zst");
+  assert.equal(UNPACKED.tabTitle("decoded", "hello.txt.zst", "compression"), "decoded unpacked from hello.txt.zst");
+  assert.equal(UNPACKED.tabTitle("image", "update.203", "scrambling"), "image unscrambled from update.203");
+  assert.equal(UNPACKED.tabTitle("data", "stored.rar", "stored"), "data from stored.rar");
+  // A stream from a core that sent no kind keeps the words for compression.
+  assert.equal(UNPACKED.tabTitle("decoded", "hello.txt.zst", null), "decoded unpacked from hello.txt.zst");
+});
+
+test("the button that opens a stream says what its codec does", () => {
+  assert.equal(UNPACKED.open("compression"), "Open unpacked");
+  assert.equal(UNPACKED.open("scrambling"), "Open unscrambled");
+  assert.equal(UNPACKED.open("encoding"), "Open decoded");
+  assert.equal(UNPACKED.open("stored"), "Open stored");
+  assert.equal(UNPACKED.open(undefined), "Open unpacked");
 });
 
 test("the read-only line says what cannot be done and why it is not yet", () => {

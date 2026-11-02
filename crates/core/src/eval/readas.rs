@@ -47,6 +47,9 @@ pub struct ReadAs {
     /// What one element is, `i16 le` or `x86-64`, or the codec's name for a
     /// packed stream.
     pub what: String,
+    /// What the codec does, for a packed stream: compression, scrambling and
+    /// so on. None for numbers and code.
+    pub codec_kind: Option<crate::codec::CodecKind>,
     pub offset_bits: u64,
     pub size_bits: u64,
 }
@@ -89,7 +92,11 @@ impl Evaluator {
         let r = self.memo[&first].clone();
         let size = self.size_of(doc, &first)?;
         let name = self.label(doc, &first, &r)?;
-        Ok(Some(ReadAs { kind, path: first, name, what, offset_bits: r.offset, size_bits: size }))
+        let codec_kind = match &r.ty {
+            Ty::Decoded { codec, .. } => Some(codec.kind()),
+            _ => None,
+        };
+        Ok(Some(ReadAs { kind, path: first, name, what, codec_kind, offset_bits: r.offset, size_bits: size }))
     }
 
     /// The run holding `bit`, and what it is.
@@ -143,14 +150,15 @@ pub(super) fn plain<'t>(template: &'t Template, mut ty: &'t Ty) -> &'t Ty {
 }
 
 /// Whether what a codec reads is packed, so that printable bytes in it are
-/// chance. A stored stream is its own contents, and a text codec's input is
-/// the text.
+/// chance. A stored stream is its own contents, and a text encoding's input
+/// is mostly the text it stands for. Base64 is the exception among the
+/// encodings: its letters spell nothing, so a word found in them is chance.
 fn packs(codec: &Packing) -> bool {
-    use crate::codec::Codec;
-    !matches!(
-        codec,
-        Packing::Fixed(Codec::Stored | Codec::CfbWorkbook | Codec::Latin1Text | Codec::EscapedLatin1Text | Codec::QuotedPrintable | Codec::QEncoding)
-    )
+    use crate::codec::{Codec, CodecKind};
+    match codec {
+        Packing::Fixed(Codec::Base64) => true,
+        p => !matches!(p.kind(), CodecKind::Stored | CodecKind::Encoding),
+    }
 }
 
 impl<S: Source> Tab<'_, S> {

@@ -409,6 +409,10 @@ pub(crate) struct CheckDto {
     /// The compressed run whose contents are summed, as [offset, length], when
     /// the summed bytes are nowhere in the file.
     pub(crate) unpacked_from: Option<[f64; 2]>,
+    /// What the codec of that run does: "compression" | "encoding" |
+    /// "scrambling" | "stored" | "filter" | "steganography". Null when the sum
+    /// is over the file.
+    pub(crate) unpacked_kind: Option<&'static str>,
     /// How many bytes the sum is over. Real when `covered_exact` is true;
     /// otherwise a stand-in reached for because the true count would take
     /// decoding, which this call must not do. See

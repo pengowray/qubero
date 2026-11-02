@@ -408,6 +408,9 @@ pub struct NodeInfo {
     /// read over the bytes it comes to rather than over the file. A run that
     /// opened can be opened as a document of its own; see [`crate::eval::spaces`].
     pub decoded: bool,
+    /// For a `Decoded` field, what its codec does to the bytes: compression,
+    /// encoding, scrambling and so on. None for every other field.
+    pub codec_kind: Option<crate::codec::CodecKind>,
     /// True for the first node inside a space: the one thing a `Decoded` field
     /// holds, whose parent is the stream. There is exactly one per space and it
     /// is always drawn, which the stream itself is not: a template may fold the
@@ -1265,6 +1268,10 @@ impl Evaluator {
                 _ => None,
             },
             decoded: matches!(&r.ty, Ty::Decoded { .. }),
+            codec_kind: match &r.ty {
+                Ty::Decoded { codec, .. } => Some(codec.kind()),
+                _ => None,
+            },
             space_root: r.space != 0
                 && !path.is_empty()
                 && self.memo.get(&path[..path.len() - 1]).is_none_or(|p| p.space != r.space),

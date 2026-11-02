@@ -142,7 +142,14 @@ fixed section names.
    listing.
 9. **Decoded streams**, for every decoded space: the stages drawn to scale, and,
    for a traced codec, the ribbon from codes in the compressed stream to the
-   bytes they produce.
+   bytes they produce. The words follow what the codec does (the core's
+   `CodecKind`): compressed streams unpack, scrambled ones unscramble, encoded
+   ones decode, and stored ones have no verb, since their bytes come out as
+   they are. When the streams' codecs are of more than one kind, the heading
+   says N streams and uses the verb unpack. The ribbon is drawn only when it has
+   two codes or more, and its caption has a sentence for each kind of code it
+   draws. A stream the report does not open to draw (over 4 MiB,
+   past 32 streams or past 16 MiB in all) says which limit it passed.
 10. **How the format is built.** The format profile in full. It says how the
     format writes its values and finds its parts, counted over the template and
     over this file, so it can say "the template allows 12 kinds of chunk and

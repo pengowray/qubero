@@ -10,8 +10,10 @@ import type { LedgerRow, Profile, ProfileRow } from "../src/report/coredata.ts";
 import { sameOrder } from "../src/report/directories.ts";
 import { extentWindow } from "../src/report/extentfigure.ts";
 import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
+import { runPosition } from "../src/report/partrules.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { RV } from "../src/report/text.ts";
+import { codecWords, REPORT } from "../src/strings.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
 test("text inside a list of numbers is counted with its nouns, one and many", () => {
@@ -144,6 +146,91 @@ test("the plain fields of one structure are one line, and one field alone keeps 
   assert.equal(magic?.part, "magic");
 });
 
+test("a stream at the root is a part of its own, not one of the root's plain fields", () => {
+  // A Tascam firmware update: a header, then the scrambled image and the
+  // scrambled checksum copy, each one leaf of the file.
+  const lines = ledgerLines([
+    row([1], "image", "", "content", 203_948_000, [1], 256, { stream: true }),
+    row([0], "header", "", "content", 256, [0, 0], 0),
+    row([2], "checksum_copy", "", "content", 32, [2], 203_948_256, { stream: true }),
+  ]);
+  assert.deepEqual(lines.map((l) => l.part).sort(), ["checksum_copy", "header", "image"]);
+  assert.ok(lines.every((l) => l.parentPath === null));
+});
+
+/** What the report calls each line, the way `lineLabel` in bytes.ts does for
+ *  a line of plain fields at the top of the file. */
+function lineNames(rows: LedgerRow[], fileBits: number): string[] {
+  return ledgerLines(rows).map((l) => l.part ?? REPORT.unnamedPart(runPosition({ offsetBits: l.firstOffsetBits, sizeBits: l.bits }, fileBits)));
+}
+
+test("plain fields on either side of a stream are separate lines, each named by where it is", () => {
+  // compressed/hello.zz: the zlib header's bit fields, the deflate stream,
+  // then the Adler-32 at the end of the file.
+  const names = lineNames(
+    [
+      row([6], "compressed", "", "content", 544, [6], 16, { stream: true }),
+      row([7], "adler32", "", "content", 32, [7], 560),
+      row([4], "fcheck", "", "content", 5, [4], 11),
+      row([0], "cinfo", "", "content", 4, [0], 0),
+      row([1], "cm", "", "content", 4, [1], 4),
+      row([2], "flevel", "", "content", 2, [2], 8),
+      row([3], "fdict", "", "machinery", 1, [3], 10),
+    ],
+    592,
+  );
+  assert.deepEqual(names, ["Header", "compressed", "adler32"]);
+});
+
+test("plain fields after the lists of a file are a trailer, not part of the header", () => {
+  // git/pack-v2-thirteen-objects.idx: magic and version, four lists, then
+  // two SHA-1 checksums at the end of the file.
+  const names = lineNames(
+    [
+      row([2], "fanout", "", "machinery", 8192, [2, 0], 64),
+      row([3], "names", "", "content", 2080, [3, 0], 0x408 * 8),
+      row([4], "crcs", "", "content", 416, [4, 0], 0x50c * 8),
+      row([5], "offsets", "", "content", 416, [5, 0], 0x540 * 8),
+      row([7], "pack_checksum", "", "content", 160, [7], 0x574 * 8),
+      row([8], "checksum", "", "content", 160, [8], 0x588 * 8),
+      row([0], "magic", "", "content", 32, [0], 0),
+      row([1], "version", "", "content", 32, [1], 32),
+    ],
+    0x59c * 8,
+  );
+  assert.deepEqual(names, ["Header", "fanout", "names", "crcs", "offsets", "Trailer"]);
+});
+
+test("plain fields with a gap between them are separate lines", () => {
+  const lines = ledgerLines([
+    row([0], "magic", "", "content", 32, [0], 0),
+    row([1], "version", "", "content", 32, [1], 32),
+    row([], "file", "", "gap", 64, [], 64),
+    row([2], "count", "", "content", 32, [2], 128),
+    row([3], "flags", "", "content", 32, [3], 160),
+  ]);
+  assert.deepEqual(
+    lines.filter((l) => !isGapLine(l)).map((l) => l.fields),
+    [
+      ["magic", "version"],
+      ["count", "flags"],
+    ],
+  );
+});
+
+test("a JSON object's braces are on the object's own line", () => {
+  // json/jsontestsuite-unicode-escapes.json, whose root is the one part.
+  const lines = ledgerLines([
+    row([], "file", "", "content", 856, [0], 8),
+    row([], "file", "", "framing", 16, [], 0x6c * 8),
+    row([], "file", "", "gap", 8, [], 0),
+  ]);
+  const file = lines.filter((l) => !isGapLine(l));
+  assert.equal(file.length, 1);
+  assert.equal(file[0]?.part, "file");
+  assert.deepEqual(file[0]?.roles.map((r) => r.role), ["content", "framing"]);
+});
+
 test("bytes no field describes are one line, with their zero bytes kept", () => {
   const lines = ledgerLines([
     row([7], "header", "", "gap", 800, [7], 400, { zero_bits: 800 }),
@@ -175,6 +262,48 @@ test("the landmarks say the byte order and the widths the file uses", () => {
   const said = landmarks(p);
   assert.equal(said[0], "Big-endian.");
   assert.equal(said[1], "Integers are 8, 16, and 32 bits.");
+});
+
+test("the landmarks say what each kind of codec did, and leave out the ones that change nothing", () => {
+  const codec = (kind: string, detail: string): Partial<ProfileRow> => ({ category: "codec", kind, detail, width: 0, order: "" });
+  const said = landmarks(
+    profile([codec("tascam scramble", "scrambling"), codec("iar lz77", "compression"), codec("png scanlines", "filter"), codec("stored", "stored"), codec("base64", "encoding")]),
+  );
+  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam scramble."]);
+  // Rows from a core that sent no kind keep the old sentence.
+  assert.deepEqual(landmarks(profile([codec("deflate", ""), codec("png scanlines", "")])), ["Compressed with deflate."]);
+});
+
+test("the streams section names its streams by what their codec does", () => {
+  const scrambled = codecWords("scrambling");
+  assert.equal(RV.streamsHeading(2, 25_493_504, null, scrambled), "2 scrambled streams: 25,493,504 bytes");
+  assert.equal(RV.streamsHeading(1, 4, 4, scrambled), "1 scrambled stream: 4 bytes unscramble to 4 bytes");
+  assert.equal(RV.streamsHeading(1, 1, 4, codecWords("compression")), "1 compressed stream: 1 byte unpacks to 4 bytes");
+  // Streams of more than one kind.
+  assert.equal(RV.streamsHeading(3, 10, 40, null), "3 streams: 10 bytes unpack to 40 bytes");
+  assert.equal(RV.streamUnpacked(null), "Unpacked");
+  assert.equal(RV.streamUnpacked(scrambled), "Unscrambled");
+  assert.equal(RV.stagesCaption(4, 4, scrambled), "Each bar is drawn to scale. The unscrambled bytes are the same size as the scrambled ones.");
+  assert.equal(RV.stagesCaption(100, 380, codecWords("compression")), "Each bar is drawn to scale. The unpacked bytes are 3.8 times the size of the compressed ones.");
+  assert.equal(RV.unpacksTo("tascam scramble", "4 bytes", scrambled), "tascam scramble, unscrambles to 4 bytes");
+  assert.equal(RV.unpackedTo(1, "4 bytes", "scrambling"), "1 stream opened, unscrambled to 4 bytes");
+  assert.equal(RV.unpackedTo(2, "9 bytes", null), "2 streams opened, unpacked to 9 bytes");
+});
+
+test("a stored stream is not said to unpack", () => {
+  const stored = codecWords("stored");
+  assert.equal(RV.streamsHeading(1, 29, 29, stored), "1 stored stream: 29 bytes");
+  assert.equal(RV.streamHeading("data", 29, "stored", 29, stored), "data: 29 bytes, stored");
+  assert.equal(RV.unpacksTo("stored", "29 bytes", stored), "stored");
+  assert.equal(RV.unpackedTo(1, "29 bytes", "stored"), "1 stream opened");
+  assert.equal(RV.streamUnpacked(stored), "Opened");
+});
+
+test("a stream the report did not draw says which limit it passed", () => {
+  const limits = { size: "4.00 MiB", count: 32, total: "16.0 MiB" };
+  assert.equal(RV.streamNotDrawnNote("size", limits), "This stream is larger than 4.00 MiB, so the report does not draw it. Open it as a tab to read it.");
+  assert.equal(RV.streamNotDrawnNote("count", limits), "The report draws at most 32 streams, so it does not draw this one. Open it as a tab to read it.");
+  assert.equal(RV.streamNotDrawnNote("total", limits), "The report draws at most 16.0 MiB of streams in all, so it does not draw this one. Open it as a tab to read it.");
 });
 
 test("both byte orders are said with their counts", () => {

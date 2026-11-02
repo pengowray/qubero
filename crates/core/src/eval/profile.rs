@@ -53,7 +53,8 @@ pub struct ProfileRow {
     /// What else tells two rows of the same kind apart: a float's layout
     /// (`ieee754`, `bfloat16`, `x87`, `e4m3`, `e5m2`, `ibm`), a fixed-point
     /// split (`u16.16`), a text encoding (`utf8`, `utf16le`, ...), the
-    /// instruction set of machine code, the radix of digits.
+    /// instruction set of machine code, the radix of digits, what a codec
+    /// does ([`crate::codec::CodecKind::as_str`]).
     pub detail: String,
     /// How many fields. For the template, how many declarations.
     pub fields: u64,
@@ -333,7 +334,11 @@ pub(super) fn value_keys(ty: &Ty, bits: Option<u64>, out: &mut Vec<Key>) {
         Ty::Json(..) => out.push(Key::of("opaque", "json")),
         Ty::Pickle(..) => out.push(Key::of("opaque", "pickle")),
         Ty::CodeBits { .. } => out.push(Key::of("opaque", "entropy-coded")),
-        Ty::Decoded { codec, .. } => out.push(Key::of("codec", codec.as_str())),
+        // The detail is what the codec does (compression, scrambling and so
+        // on), so a view can say "compressed with" only of what is.
+        Ty::Decoded { codec, .. } => {
+            out.push(Key { category: "codec", kind: codec.as_str().to_string(), width: 0, order: "", detail: codec.kind().as_str().to_string() })
+        }
         // What holds or places other fields, and what reads as nothing: none
         // of it is a value.
         Ty::Struct(_)

@@ -8,6 +8,7 @@
 // one fact to a sentence. See "The format profile" in
 // docs/DESIGN-report-view.md.
 
+import { isCodecKind } from "../strings.ts";
 import type { Profile, ProfileRow } from "./coredata.ts";
 import { CATEGORY, CATEGORY_ORDER, readingWriting, rowKey, rowLabel, VALUE_CATEGORIES } from "./profiletext.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
@@ -148,7 +149,7 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
       let label = rowLabel(j.row);
       // What a codec's streams came to, where the file opened any.
       if (j.file !== null && j.file.category === "codec" && j.file.unpacked_fields > 0) {
-        label += `: ${RV.unpackedTo(j.file.unpacked_fields, bitsText(j.file.unpacked_bits))}`;
+        label += `: ${RV.unpackedTo(j.file.unpacked_fields, bitsText(j.file.unpacked_bits), isCodecKind(j.file.detail) ? j.file.detail : null)}`;
       }
       tr.append(
         cell(label, "rv-cell-name", ""),

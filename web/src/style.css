@@ -2837,6 +2837,12 @@ qubero-spinner svg {
   margin: 0;
   min-height: 0;
 }
+/* A label long enough to pass the width of a narrow window wraps rather than
+   making the page scroll sideways: the Strings view's Hide strings label,
+   which names five kinds of field. */
+.tb-check.tb-check-long {
+  white-space: normal;
+}
 .tb-min {
   width: 4rem;
   min-height: 24px;
