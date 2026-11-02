@@ -46,14 +46,14 @@
 //! WAVs and several hundred images are inside the code run. Only the code
 //! says where they are, so they stay part of that run.
 //!
-//! The bootloader's code and the code that runs from the ITCM are read as
-//! Thumb instructions. The application's own code is not: its two runs, 11 MB
-//! before the init table and half a megabyte after it, are read as bytes.
-//! They mix code with string pools, vtables and images, so much of a
-//! disassembly of them would be data decoded as instructions. Counting the
-//! instructions in a run means decoding all of them, and a listing counts
-//! them before it shows the run's row: for the 11 MB run that took over a
-//! minute in a debug build.
+//! All of the code is read as Thumb instructions: the bootloader's, the
+//! application's two runs, 11 MB before the init table and half a megabyte
+//! after it, and the code that runs from the ITCM. The application's runs mix
+//! code with string pools, vtables and images, so parts of them are data read
+//! as instructions. A listing counts a run's instructions before it shows the
+//! run's row. The count reads each instruction's length from its first
+//! halfword without decoding it (see `eval/insnrun.rs`), and the 11 MB run's
+//! 4.2 million instructions take about a third of a second in a debug build.
 //!
 //! The ITCM code is linked to run at 0x400, and the template IR has no way to
 //! give a run a load address, so its branch targets read as distances from
@@ -183,11 +183,10 @@ fn application() -> T {
             ("version_stamp", version_stamp()),
             ("font_map", font_map()),
             ("sounds", T::repeat(sound(), Until::While(riff_ahead()))),
-            // Code and data mixed, as bytes: see the module's notes for why
-            // these two are not read as instructions.
-            ("code", T::bytes(through_init_core())),
+            // Code with the data it uses mixed in: see the module's notes.
+            ("code", imxrt::thumb(through_init_core())),
             ("init_table", app_init_table()),
-            ("code_after_init_table", T::bytes(source(&entry("lz77_init_sdram")).sub(E::SpacePos))),
+            ("code_after_init_table", imxrt::thumb(source(&entry("lz77_init_sdram")).sub(E::SpacePos))),
             // The three runs are written one after another, in the order the
             // table lists them.
             ("sdram_data", packed_run(&entry("lz77_init_sdram"), Codec::IarLz77, ("data", T::bytes(E::Remaining)))),
@@ -673,6 +672,15 @@ mod tests {
         assert_eq!(extent(&mut ev, &d, &[&sounds[..], &[0]].concat(), &["padding"]).1, 2);
         assert_eq!(extent(&mut ev, &d, &[&sounds[..], &[1]].concat(), &["wav"]).1, 16);
 
+        // The code before the init table is the two instructions of `CODE`
+        // and the eleven of `__iar_init_core`, and the code after it is
+        // `CODE` again.
+        let code = named(&mut ev, &d, &app, &["code"]);
+        assert_eq!(ev.node(&d, &code).unwrap().child_count, 13);
+        let first = ev.node(&d, &[&code[..], &[0]].concat()).unwrap();
+        assert!(matches!(&first.value, Value::Str(text) if text.starts_with("push")), "{:?}", first.value);
+        let after = named(&mut ev, &d, &app, &["code_after_init_table"]);
+        assert_eq!(ev.node(&d, &after).unwrap().child_count, 2);
         assert_eq!(extent(&mut ev, &d, &app, &["init_table"]).1, 0x10 + 3 * 0x1c + 4);
         for (name, n) in [("sdram_data", 6), ("itcm_code", 4), ("dtcm_data", 2)] {
             assert_eq!(int(&mut ev, &d, &app, &[name, "0", "unpacked_length"]), n, "{name}");

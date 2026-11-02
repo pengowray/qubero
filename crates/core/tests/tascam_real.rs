@@ -7,7 +7,9 @@
 //! by searching for IAR's FPU routine, the fonts by the offsets in the font
 //! map, and the packed runs by the pointers in the init tables. The numbers
 //! below differ between the two releases wherever the application's code
-//! grew.
+//! grew. The instruction counts are the template's own. They were checked
+//! once against counting the same runs one placed element at a time, which
+//! is how a run of instructions was counted before `insnrun.rs`.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -33,6 +35,9 @@ struct Release {
     /// The three lz77 runs: where each starts, how long it is, and what it
     /// unpacks to.
     runs: [(u64, u64, i128); 3],
+    /// How many Thumb instructions the application's code runs hold, before
+    /// the init table and after it.
+    instructions: (u64, u64),
 }
 
 const RELEASES: &[Release] = &[
@@ -44,6 +49,7 @@ const RELEASES: &[Release] = &[
         app_reset: 0x8173_1c9d,
         app_init_table: 0x17a_43dc,
         runs: [(0x182_6fcc, 0x5c69, 0xa_3486), (0x182_cc35, 0x2_27a1, 0x3_1692), (0x184_f3d6, 0x4e3, 0x416c)],
+        instructions: (4_174_301, 253_108),
     },
     Release {
         file: "#PortaX8_0217.203",
@@ -53,6 +59,7 @@ const RELEASES: &[Release] = &[
         app_reset: 0x8173_206d,
         app_init_table: 0x17a_47ac,
         runs: [(0x182_739c, 0x5c5f, 0xa_3482), (0x182_cffb, 0x2_279c, 0x3_1692), (0x184_f797, 0x4e3, 0x416c)],
+        instructions: (4_173_515, 253_158),
     },
 ];
 
@@ -289,12 +296,33 @@ fn application(ev: &mut Evaluator, d: &Document<MemSource>, r: &Release) {
     }
 
     // The code runs from the end of the WAVs to the end of IAR's FPU
-    // routine, which is where the init table starts.
+    // routine, which is where the init table starts. It is read as Thumb, and
+    // its last three instructions are the routine's: it sets the FPSCR,
+    // returns, and is padded to a word with two zero bytes.
     assert_eq!(extent(ev, d, &app, &["code"]), (0xd3_580c, r.app_init_table - 0xd3_580c), "{f}");
+    let code = named(ev, d, &app, &["code"]);
+    let n = count(ev, d, &app, &["code"]);
+    assert_eq!(n, r.instructions.0, "{f}");
+    assert_eq!(text(ev, d, &[&code[..], &[0]].concat()), "push {r4, r5, lr}", "{f}");
+    let end = [(n - 3, 8, "vmsr fpscr, r0"), (n - 2, 4, "bx lr"), (n - 1, 2, "lsls r0, r0, 0x0")];
+    for (k, back, said) in end {
+        let insn = [&code[..], &[k as usize]].concat();
+        assert_eq!(ev.node(d, &insn).unwrap().offset_bits / 8, r.app_init_table - back, "{f}: instruction {k}");
+        assert_eq!(text(ev, d, &insn), said, "{f}: instruction {k}");
+    }
     let table = named(ev, d, &app, &["init_table"]);
     assert_eq!(extent(ev, d, &table, &[]), (r.app_init_table, 0x98), "{f}");
     let zeroed = named(ev, d, &table, &["zero_init", "ranges"]);
     assert_eq!(ev.node(d, &zeroed).unwrap().child_count, 7);
+    // IAR's startup code and the interrupt stubs, up to the first lz77 run.
+    // The last instruction is a four-byte branch that ends where the run
+    // starts.
+    let after = named(ev, d, &app, &["code_after_init_table"]);
+    let n = count(ev, d, &app, &["code_after_init_table"]);
+    assert_eq!(n, r.instructions.1, "{f}");
+    let last = [&after[..], &[n as usize - 1]].concat();
+    assert_eq!(extent(ev, d, &last, &[]), (r.runs[0].0 - 4, 4), "{f}");
+    assert!(text(ev, d, &last).starts_with("b.w "), "{f}");
 
     // The three lz77 runs, each where its entry points, as long as its entry
     // says, and unpacking to the length its entry gives.
