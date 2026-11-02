@@ -111,6 +111,13 @@ const HEADER_BYTES: i128 = 0x20;
 /// Bytes in the product code that opens the header.
 const PRODUCT_CODE_BYTES: usize = 8;
 
+/// The product codes of the updates there are samples of: the Portacapture
+/// X8's and the DR-05X's. The table of signatures takes a file that starts
+/// with one of them, so an update of a known product that has been cut short
+/// is still recognised, though [`is_update`] refuses it.
+pub const X8_CODE: &[u8] = b"DR-TURBO";
+pub const DR05X_CODE: &[u8] = b"DR-05X\0\0";
+
 /// The three kinds of image there is a reading for, as [`image`] numbers
 /// them: the X8's flash, any other i.MX RT flash, and a Blackfin boot stream.
 const X8_FLASH: i128 = 1;
@@ -152,10 +159,11 @@ const RIFF: i128 = 0x5249_4646;
 /// with no sample here is recognised too. The length and the zero bytes are
 /// most of the evidence.
 ///
-/// So a file that has been cut short, or has bytes added at the end, is not
-/// recognised: its length is not the one at byte 20. This is deliberate. Such
-/// a file can still be read by choosing the template, and the header's
-/// `file_size` check then fails.
+/// So a file that has been cut short, or has bytes added at the end, fails
+/// this test: its length is not the one at byte 20. If its product code is
+/// [`X8_CODE`] or [`DR05X_CODE`], the table of signatures still takes it, and
+/// the header's `file_size` check then fails. Any other such file can still
+/// be read by choosing the template.
 pub fn is_update(head: &[u8], len: u64) -> bool {
     let Some(h) = head.get(..HEADER_BYTES as usize) else { return false };
     let code = &h[..PRODUCT_CODE_BYTES];
@@ -185,7 +193,7 @@ pub fn tascamfw() -> Template {
         )
         .field_doc(
             "image",
-            "The firmware image, unscrambled. Offsets in this note are counted from the start of the image, which is at 0x20 in the file. An image that starts with FCFB, the tag of an i.MX RT FlexSPI configuration block, and has an image vector table (IVT) header at 0x1000 is an i.MX RT flash image. If it also has FTMP at 0x20410, where the Portacapture X8's font map starts, it is read with the X8's flash layout. Otherwise it is read with the same fields as the i.MX RT flash image template: the boot header, padding, and the program at the IVT's entry address. An image that starts with the 16-byte header of a program's first block is read as a Blackfin boot stream. That header has the signature 0xAD at offset 3, the flags \"first\" (BFLAG_FIRST) and \"ignore\" (BFLAG_IGNORE) set, the flags \"fill\" (BFLAG_FILL) and \"final\" (BFLAG_FINAL) clear, and a byte count of 0. Its 16 bytes XOR to zero. Any other image is read as bytes.",
+            "The firmware image, unscrambled. Offsets in this note are counted from the start of the image, which is at 0x20 in the file. An image that starts with FCFB, the tag of an i.MX RT FlexSPI configuration block, and has an image vector table (IVT) header at 0x1000 is an i.MX RT flash image. If it also has FTMP at 0x20410, where the Portacapture X8's font map starts, it is read with the X8's flash layout; otherwise it is read with the same fields as the i.MX RT flash image template. An image that starts with the header of a Blackfin boot stream's first block is read as a Blackfin boot stream. Any other image is read as bytes.",
         ),
     )
 }
@@ -744,6 +752,15 @@ mod tests {
     const X8_LEN: u64 = 25_493_536;
     const DR05X_HEAD: [u8; 32] = *b"DR-05X\0\0\x00\x74\x00\x47\x07\xe7\x0c\x0f\x0a\xdd\x23\x53\x00\x1f\x30\x20\0\0\0\0\0\0\0\0";
     const DR05X_LEN: u64 = 2_043_936;
+
+    #[test]
+    fn a_cut_short_update_of_a_known_product_is_still_recognised() {
+        assert_eq!(crate::formats::sniff(&X8_HEAD, 1_000_000), Some("tascamfw"));
+        assert_eq!(crate::formats::sniff(&DR05X_HEAD, 1_000_000), Some("tascamfw"));
+        let mut other = DR05X_HEAD;
+        other[..8].copy_from_slice(b"DR-40X\0\0");
+        assert_eq!(crate::formats::sniff(&other, DR05X_LEN), Some("tascamfw"), "whole, an unknown product is recognised by the probe");
+    }
 
     #[test]
     fn the_probe_takes_both_products_headers_and_refuses_near_misses() {

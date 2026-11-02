@@ -1,7 +1,8 @@
 //! Analog Devices Blackfin boot streams: the `.ldr` files that ADI's loader
 //! (`elfloader` in VisualDSP++ and CrossCore Embedded Studio, `bfin-elf-ldr`
 //! in the GNU toolchain) writes for the boot ROM of the ADSP-BF50x, BF51x,
-//! BF52x, BF54x and BF59x. ADI's loader writes Intel hex by default for a
+//! BF52x, BF54x and BF59x, and of the later BF60x and BF70x, whose boot ROMs
+//! read the same block header (see the sources below). ADI's loader writes Intel hex by default for a
 //! flash boot; this template reads the binary form, which is what a flash
 //! image or a firmware update holds.
 //!
@@ -209,6 +210,7 @@ pub(crate) fn stream() -> T {
             ("rest", T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining))),
         ],
     )
+    .doc("A Blackfin boot stream with 16-byte block headers, the format that ADI's loader writes to .ldr files and that the boot ROMs of the ADSP-BF50x, BF51x, BF52x, BF54x, BF59x, BF60x and BF70x read. The BF53x and BF56x use an older format with 10-byte block headers, which this template does not read.")
     .field_doc(
         "programs",
         "One program for each .dxe file in the stream: an initcode or an application. Each program starts with a block that has the flag \"first\" (BFLAG_FIRST) set, and that block's argument determines the program's length. The name program is this template's, not ADI's.",

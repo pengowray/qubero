@@ -43,6 +43,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
+    // Tascam firmware updates of the products there are samples of, by their
+    // product code, so that one cut short is still recognised. A whole update
+    // of any product is taken earlier, by `tascamfw::is_update`.
+    (tascamfw::X8_CODE, "tascamfw"),
+    (tascamfw::DR05X_CODE, "tascamfw"),
     (b"PK\x03\x04", "zip"),
     (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
@@ -351,8 +356,9 @@ const PROBES: &[Probe] = &[
     // product code, which is different for each recorder, so the header is
     // recognised by its other fields: the file's length at byte 20, eight
     // zero bytes after it, and a build date that can be a real date. An update
-    // that has been cut short is deliberately not recognised, since its length
-    // is not the one at byte 20.
+    // that has been cut short fails this test, since its length is not the
+    // one at byte 20; the table of signatures still takes one whose product
+    // code is a known one.
     Probe::Is("tascamfw", tascamfw::is_update),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the

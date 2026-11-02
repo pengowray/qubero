@@ -55,7 +55,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   grubenv: "GRUB environment block",
   hackrffw: "HackRF firmware",
   imxrt: "i.MX RT flash image",
-  bfldr: "Blackfin boot stream",
+  bfldr: "Blackfin boot stream (LDR, BF50x/51x/52x/54x/59x/60x/70x)",
   tascamfw: "Tascam firmware update",
   it: "Impulse Tracker IT",
   journal: "systemd journal",
