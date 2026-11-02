@@ -52,9 +52,10 @@
 //! run's row, and counting the X8's 25 MB as instructions took nearly three
 //! minutes in a debug build.
 //!
-//! Field names are NXP's own, put into snake case: the configuration block's
-//! from the SDK's `fsl_flexspi_nor_config.h`, the IVT's and the boot data's
-//! from `fsl_flexspi_nor_boot.h`, and the DCD's from the reference manual.
+//! Fields of NXP's structures keep NXP's names, put into snake case: the
+//! configuration block's from the SDK's `fsl_flexspi_nor_config.h`, the IVT's
+//! and the boot data's from `fsl_flexspi_nor_boot.h`, and the DCD's from the
+//! reference manual. The other names are this template's.
 
 use crate::code::Isa;
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until, Valid};
