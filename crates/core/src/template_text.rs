@@ -329,12 +329,6 @@ fn pad(ind: usize) -> String {
     "  ".repeat(ind)
 }
 
-/// Write `ty` starting with `head` on its first line and ending with `tail` on
-/// its last, at `ind` levels of indentation.
-///
-/// Wrappers push their word onto `head` and recurse, so `sized(length) switch
-/// type {` is one line rather than three, and a structure several wrappers deep
-/// still opens its brace at the end of the field's own line.
 /// One type on its own, written the way [`render`] writes it inside a template.
 ///
 /// The diagram tells two type definitions apart by what they say rather than by
@@ -347,12 +341,52 @@ fn pad(ind: usize) -> String {
 ///
 /// Unwrapped and unfolded: no line is broken to a width, since nothing reads
 /// this and a fold would only make two spellings of one type.
+///
+/// One part is written differently: an enumeration is its name and a hash of
+/// its values, not the values themselves (see [`enum_cases`]). Two
+/// enumerations that [`render`] writes differently get different hashes,
+/// barring a 64-bit collision, so the key still tells apart every two types
+/// the template text tells apart. The i.MX RT template names about 800
+/// registers in one enumeration. Writing them all out put 40 KB into the key
+/// of every structure that holds a DCD address, and made the diagram three
+/// times slower to build.
 pub(crate) fn ty_text(ty: &Ty) -> String {
+    let _keyed = WritingKey::start();
     let mut out = Vec::new();
     write_ty(&mut out, 0, "", ty, "");
     out.join("\n")
 }
 
+thread_local! {
+    /// True while [`ty_text`] is writing a key, so that [`enum_cases`] writes a
+    /// hash instead of every value. A flag, not an argument: `enum_cases` is
+    /// the only function that reads it, and an argument would have to pass
+    /// through every writer in this file to reach it.
+    static WRITING_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets [`WRITING_KEY`] for as long as it lives, and puts back what was there
+/// when it is dropped, a panic included.
+struct WritingKey(bool);
+
+impl WritingKey {
+    fn start() -> WritingKey {
+        WritingKey(WRITING_KEY.with(|k| k.replace(true)))
+    }
+}
+
+impl Drop for WritingKey {
+    fn drop(&mut self) {
+        WRITING_KEY.with(|k| k.set(self.0));
+    }
+}
+
+/// Write `ty` starting with `head` on its first line and ending with `tail` on
+/// its last, at `ind` levels of indentation.
+///
+/// Wrappers push their word onto `head` and recurse, so `sized(length) switch
+/// type {` is one line rather than three, and a structure several wrappers deep
+/// still opens its brace at the end of the field's own line.
 fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) {
     if let Some(head) = wrapper(head, ty) {
         return write_ty(out, ind, &head.0, head.1, tail);
@@ -951,13 +985,48 @@ fn unset_text(u: &Unset) -> String {
     }
 }
 
+/// The values of an enumeration and their names, one item each, and then its
+/// spans.
+///
+/// In a diagram key ([`ty_text`]) it is one item instead: how many values and
+/// spans there are, and a hash of everything the full list is written from.
+/// That is the numbers, the names, the spans and whether the numbers are in
+/// hex. The prose in `docs` is left out, because the full list does not
+/// write it either.
 fn enum_cases(def: &EnumDef) -> Vec<String> {
+    if WRITING_KEY.with(|k| k.get()) {
+        return vec![enum_hash(def)];
+    }
     let num = |v: i128| if def.hex { hex_lit(v) } else { v.to_string() };
     let mut out: Vec<String> = def.cases.iter().map(|(v, n)| format!("{} = {n}", num(*v))).collect();
     for s in &def.spans {
         out.push(format!("from {} by {} = {:?}", num(s.from), s.step, s.label));
     }
     out
+}
+
+/// What [`enum_cases`] writes for a diagram key: `802 values, 232 spans, hash
+/// 0123456789abcdef`.
+///
+/// The hasher is `DefaultHasher::new()`, whose keys are fixed, so every key
+/// written in one run of the program agrees with every other. The diagram and
+/// the census are matched by key, so a hasher seeded afresh each time would
+/// make them disagree.
+fn enum_hash(def: &EnumDef) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    def.hex.hash(&mut h);
+    h.write_usize(def.cases.len());
+    for (v, n) in &def.cases {
+        h.write_i128(*v);
+        n.hash(&mut h);
+    }
+    for s in &def.spans {
+        h.write_i128(s.from);
+        h.write_i128(s.step);
+        s.label.hash(&mut h);
+    }
+    format!("{} values, {} spans, hash {:016x}", def.cases.len(), def.spans.len(), h.finish())
 }
 
 /// A type on one line, or nothing for the types that cannot be written on one.
@@ -1687,5 +1756,23 @@ mod tests {
         assert!(inline(&fixed).expect("one line").ends_with("key \"TList\")"));
         // The declared type says only that the file will say.
         assert_eq!(read.display_name(), "schema");
+    }
+
+    /// A diagram key writes an enumeration as a hash, so a list of a thousand
+    /// names does not go into every key that holds it. The key still tells
+    /// two lists apart when one name differs, and the template text still
+    /// writes every name.
+    #[test]
+    fn a_key_writes_an_enumeration_as_a_hash() {
+        let colours = |third: &str| {
+            Ty::structure("Pixel", vec![("colour", Ty::enumeration("Colour", Ty::u8(), &[(0, "red"), (1, "green"), (2, third)]))])
+        };
+        let (blue, black) = (ty_text(&colours("blue")), ty_text(&colours("black")));
+        assert!(blue.contains("colour: u8be enum Colour {3 values, 0 spans, hash "), "{blue}");
+        assert!(!blue.contains("green"), "{blue}");
+        assert_ne!(blue, black);
+        assert_eq!(blue, ty_text(&colours("blue")));
+        let t = Template::new("pixel", colours("blue"));
+        assert!(render(&t).contains("colour: u8be enum Colour {0 = red, 1 = green, 2 = blue}"), "{}", render(&t));
     }
 }
