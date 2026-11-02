@@ -1,21 +1,20 @@
-//! Tascam Portacapture X8 firmware updates: the `#PortaX8_0217.203` a user
-//! copies to the recorder's card to update it.
+//! Tascam Portacapture X8 firmware updates: files such as
+//! `#PortaX8_0217.203`, which a user copies to the recorder's memory card to
+//! update it.
 //!
-//! The file is a 32-byte header and then an image of the recorder's whole
-//! flash chip, with every byte of the image passed through the fixed table
-//! Tascam scrambles its updates with (see [`crate::codec::tascam`]). The header
-//! names the recorder by its project code, `DR-TURBO`, gives the version, the
-//! build and the date of the build, and ends with a checksum and the length of
-//! the file. The checksum is the sum of the image's bytes once the table is
-//! undone, kept to 32 bits, and the last four bytes of the image are the same
-//! number again, scrambled like the rest. So the image is read as two runs:
-//! everything up to those four bytes, which the header's checksum covers, and
-//! the four bytes themselves.
+//! The file is a 32-byte header, the flash image, and a 4-byte copy of the
+//! header's checksum. The image and the copy are scrambled: every byte is
+//! passed through a fixed substitution table (see [`crate::codec::tascam`]).
+//! The header names the recorder by its project code, `DR-TURBO`, and then
+//! gives the version, the build, the build date, a checksum, the length of
+//! the file and 8 reserved bytes. The checksum is the byte sum, kept to 32
+//! bits, of the unscrambled image. The image and the checksum copy are read as
+//! two separate runs, so that the header's checksum covers the image alone.
 //!
 //! The image is the flash an NXP i.MX RT1060 boots from, and its first 8 KiB
 //! are read with the same pieces as `imxrt`: the FlexSPI configuration block,
-//! the IVT, the boot data and the DCD. The IVT's entry
-//! points at Tascam's bootloader, and the application is at 0x20000. The
+//! the IVT, the boot data and the DCD. The IVT's `entry` field holds the
+//! address of Tascam's bootloader, and the application is at 0x20000. The
 //! bootloader copies everything from 0x20000 on into SDRAM at 0x80000000 and
 //! jumps to it without checking anything, so an application address is its
 //! flash offset plus 0x7ffe0000.
@@ -28,18 +27,24 @@
 //! program's code is read up to the end of that routine, wherever the routine
 //! is found, and the init table is read after it. The bootloader's table
 //! zeroes two ranges and unpacks one `packbits` run into the DTCM. The
-//! application's zeroes seven, unpacks three `lz77` runs into SDRAM, the ITCM
-//! and the DTCM, and then runs the C++ constructors. Each run is read where
-//! its table entry points, and what it unpacks to is checked against the
-//! length the entry gives for it.
+//! application's table zeroes seven ranges, unpacks three `lz77` runs into
+//! SDRAM, the ITCM and the DTCM, and then runs the C++ constructors.
+//!
+//! The bootloader's packed run and the application's first packed run are
+//! read where their table entries point. The application's other two runs
+//! are read straight after the run before them, and each is checked against
+//! its entry's pointer: in the X8 the three runs are back to back, in the
+//! order the table lists them. If a release puts them somewhere else, they
+//! are read from the wrong place and the check on each of them fails. What
+//! each run unpacks to is checked against the length its entry gives.
 //!
 //! The application opens with its vector table, a stamp of the version and
 //! build that should agree with the header, and then data the code uses: a
 //! Qt for MCUs font map with the three TrueType fonts it lists, and four WAV
-//! files, which are sounds the recorder plays. Each font and each WAV is a
-//! file of its own and opens as one. Two more WAVs and several hundred images
-//! are inside the code run. Only the code says where they are, so they stay
-//! part of that run.
+//! files, which are sounds the recorder plays. Each font and each WAV is read
+//! as an embedded file that can be opened as a document of its own. Two more
+//! WAVs and several hundred images are inside the code run. Only the code
+//! says where they are, so they stay part of that run.
 //!
 //! The bootloader's code and the code that runs from the ITCM are read as
 //! Thumb instructions. The application's own code is not: its two runs, 11 MB
@@ -54,9 +59,9 @@
 //! give a run a load address, so its branch targets read as distances from
 //! the instruction rather than as addresses.
 //!
-//! The image's layout is this recorder's. An update for another product with
-//! the same header would need its own reading of the image, so the product
-//! code is checked as a magic number.
+//! The layout of the image is the X8's. An update for another Tascam product
+//! with this header layout would need a different template for its image, so
+//! the product code `DR-TURBO` is checked as a magic number.
 
 use crate::codec::Codec;
 use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Named, StrLen, Template, Ty as T, Until, Valid};
@@ -75,8 +80,8 @@ const CHECKSUM_BYTES: i128 = 4;
 
 /// IAR's `__iar_init_core`, the routine that turns on the floating-point unit,
 /// and the two bytes that pad it to a word. IAR's linker puts the init table
-/// straight after it, in both programs and both releases, and nowhere else in
-/// either image are these 36 bytes written.
+/// straight after it, in both programs and both releases. These 36 bytes
+/// occur exactly twice in each image, once in each program.
 const INIT_CORE: &[u8] = &[
     0x4e, 0xf6, 0x88, 0x51, 0xce, 0xf2, 0x00, 0x01, 0x08, 0x68, 0x40, 0xf4, 0x70, 0x00, 0x08, 0x60, 0xbf, 0xf3,
     0x4f, 0x8f, 0xbf, 0xf3, 0x6f, 0x8f, 0x4f, 0xf0, 0x00, 0x70, 0xe1, 0xee, 0x10, 0x0a, 0x70, 0x47, 0x00, 0x00,
@@ -192,8 +197,20 @@ fn application() -> T {
             ("padding", T::bytes(E::run(&[0xff]))),
         ],
     )
-    .field_valid("itcm_code", Valid::Expr { expr: E::start_of(E::field("itcm_code")).equal_to(source(&entry("lz77_init_itcm"))), msg: None })
-    .field_valid("dtcm_data", Valid::Expr { expr: E::start_of(E::field("dtcm_data")).equal_to(source(&entry("lz77_init_dtcm"))), msg: None })
+    .field_valid(
+        "itcm_code",
+        Valid::Expr {
+            expr: E::start_of(E::field("itcm_code")).equal_to(source(&entry("lz77_init_itcm"))),
+            msg: Some("Not where the init table's lz77_init_itcm entry points".into()),
+        },
+    )
+    .field_valid(
+        "dtcm_data",
+        Valid::Expr {
+            expr: E::start_of(E::field("dtcm_data")).equal_to(source(&entry("lz77_init_dtcm"))),
+            msg: Some("Not where the init table's lz77_init_dtcm entry points".into()),
+        },
+    )
 }
 
 /// From here to the end of `__iar_init_core`, which is where the init table
@@ -207,8 +224,8 @@ fn path<'a>(path: &[&'a str], last: &'a str) -> Vec<&'a str> {
     path.iter().copied().chain([last]).collect()
 }
 
-/// Where the packed run an init table entry names starts: its first source
-/// range holds an offset counted from that range's own first byte.
+/// The start of the packed run that an init table entry points to: the offset
+/// in the entry's first source range, added to the position of that range.
 fn source(entry: &[&str]) -> E {
     let sources = path(entry, "sources");
     E::start_of(E::elem_within(&sources, E::lit(0), &[])).add(E::elem_within(&sources, E::lit(0), &["offset"]))
@@ -236,7 +253,7 @@ fn zero_init() -> T {
         vec![
             ("routine", routine()),
             ("ranges", T::repeat(T::structure("ZeroRange", vec![("size", T::u32(Little)), ("destination", T::u32(Little))]), Until::While(more))),
-            ("end", T::u32(Little)),
+            ("end_marker", T::u32(Little)),
         ],
     )
 }
@@ -257,7 +274,9 @@ fn packed_init() -> T {
         "PackedInit",
         vec![
             ("routine", routine()),
-            ("source_count", T::inline_structure("SourceCount", vec![("flag", bits(1)), ("count", bits(31))])),
+            // The low bit's meaning for source ranges is not known. It is 0 in
+            // every X8 entry.
+            ("source_count", T::inline_structure("SourceCount", vec![("unknown_low_bit", bits(1)), ("count", bits(31))])),
             // The low bit says the addresses count from the static base
             // register rather than from zero.
             ("destination_count", T::inline_structure("DestinationCount", vec![("sb_relative", bits(1)), ("count", bits(31))])),
@@ -305,9 +324,10 @@ fn version_stamp() -> T {
 /// offset from the start of the map, and then the fonts. Big-endian, and as
 /// long as it says eight bytes in.
 ///
-/// Monotype does not publish the layout. What is named here is what the X8's
-/// map holds and how its numbers line up; the three words nothing lines up
-/// with are named by their offset.
+/// Monotype does not publish the layout. The names here come from what the
+/// X8's map holds and which of its values match each other. Words whose
+/// meaning is unknown are named by their offset: three in the map header and
+/// two in each range.
 fn font_map() -> T {
     let names = |count: &str| T::array(T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Ascii), E::field(count));
     T::sized(
@@ -350,7 +370,7 @@ fn font_range() -> T {
             ("first_code_point", T::u32(Big)),
             ("last_code_point", T::u32(Big)),
             ("font_offset", T::u32(Big)),
-            ("font_size", T::u32(Big)),
+            ("font_length", T::u32(Big)),
             ("font_index", T::u32(Big)),
             ("unknown_14", T::u32(Big)),
             ("unknown_18", T::u32(Big)),
@@ -359,17 +379,18 @@ fn font_range() -> T {
 }
 
 /// One of the map's fonts: where the first range that names it says, and as
-/// long as that range says. A TrueType file, which opens as one.
+/// long as that range says. A TrueType file, which can be opened as a
+/// document of its own.
 fn font() -> T {
     let range = |field: &str| E::tagged_by_expr("ranges", &["font_index"], E::idx(), &[field]);
     T::structure(
         "Font",
         vec![
-            // Whatever lies between the end of the last thing read and this
-            // font. Two bytes before the second font in the X8's map, and
-            // nothing before the others.
+            // Any bytes between the end of the previous field and the offset
+            // this font's range gives. There are none in the X8's map: the two
+            // zero bytes after the first font are counted in its length.
             ("padding", T::bytes(range("font_offset").sub(E::Pos))),
-            ("file", T::decoded(range("font_size"), Codec::Stored, super::decoded_object())),
+            ("file", T::decoded(range("font_length"), Codec::Stored, super::decoded_object())),
         ],
     )
 }
@@ -601,7 +622,7 @@ mod tests {
         assert!(matches!(ev.node(&d, &tag).unwrap().value, Value::Magic { ok: true, .. }), "{:?}", ev.node(&d, &tag).unwrap().value);
         assert_eq!(int(&mut ev, &d, &FLASH, &["boot_header", "ivt", "entry"]), (XIP + 0x2000) as i128);
         assert!(holds(&mut ev, &d, &FLASH, &["boot_header", "dcd"]));
-        assert_eq!(extent(&mut ev, &d, &FLASH, &["boot_header", "dcd", "not_a_known_command"]), (0x1054, 8));
+        assert_eq!(extent(&mut ev, &d, &FLASH, &["boot_header", "dcd", "rest_from_unknown_tag"]), (0x1054, 8));
         assert_eq!(extent(&mut ev, &d, &FLASH, &["padding"]).1, 0x2000 - 0x105c);
     }
 

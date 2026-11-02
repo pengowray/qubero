@@ -275,9 +275,10 @@ const PROBES: &[Probe] = &[
     // signatures, which would otherwise take every JSON file as plain json.
     Probe::Is("claudetheme", claudetheme::is_claude_theme),
     Probe::Is("hackrffw", |h, _| is_hackrf_firmware(h)),
-    // An i.MX RT1060 flash image, which has `FCFB` at the front and the boot
-    // ROM's image vector table 4 KiB in. Four letters on their own would be
-    // weak; the two together are not.
+    // An i.MX RT flash image, which has `FCFB` at the front and the boot
+    // ROM's image vector table 4 KiB in. The template names the RT1060's
+    // interrupts, but any i.MX RT part with this layout matches. Four letters
+    // on their own would be weak; the two together are not.
     Probe::Is("imxrt", |h, _| imxrt::is_imxrt_flash(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),

@@ -9,44 +9,48 @@
 //! sequences the chip answers to. The block opens with `FCFB`. That tag and
 //! the image vector table at 0x1000 identify the file.
 //!
-//! The image vector table (IVT) is the boot ROM's index to the rest. Every
-//! pointer in it is an address in the processor's memory map, and the IVT
-//! gives its own address as well, so a pointer's offset in the flash is the
-//! pointer less the IVT's own address, plus 0x1000. It points at the boot
-//! data, which says where the image starts and how big it is, at the device
-//! configuration data (DCD), and at the program's entry point.
+//! The image vector table (IVT) holds the addresses the boot ROM needs: the
+//! program's entry point, the boot data, and the device configuration data
+//! (DCD). The boot data gives the start address and size of the whole image.
+//! Every pointer in the IVT is an address in the processor's memory map, and
+//! the IVT also holds its own address, so a pointer's offset in the flash is
+//! the pointer minus the IVT's own address, plus 0x1000.
 //!
 //! The DCD is a short list of register writes and polls that the boot ROM runs
 //! before the program: NXP's own boards use it to bring up the SDRAM
 //! controller. It is big-endian, a header and then commands, each with its own
 //! tag and length, and the boot ROM steps from one command to the next by that
-//! length. So does this template. A tag that is not one of the four commands
-//! the boot ROM knows ends the commands, and what is left of the DCD, up to the
-//! length its header gives, is one run of bytes: NXP does not say what the ROM
-//! does with a tag it does not know.
+//! length. This template reads the commands the same way. At the first tag
+//! that is not one of the four command tags the boot ROM knows, the template
+//! stops reading commands. It reads the rest of the DCD, up to the length in
+//! the DCD header, as one bytes field. NXP does not say what the ROM does with
+//! an unknown tag.
 //!
 //! The boot data and the DCD are read straight after the IVT, one after the
 //! other, which is where NXP's SDK puts them, and each is checked against the
 //! IVT's pointer to it. If a file keeps them somewhere else, they are read
 //! from the wrong place and the check on each of them fails.
 //!
-//! The IVT's entry points at the program, and NXP's startup code puts the
-//! Cortex-M7's vector table there: the stack pointer, the fifteen exceptions
-//! every Cortex-M has, then the RT1060's interrupts as NXP's `MIMXRT1062.h`
-//! names them, filled out to 256 words with interrupt numbers the part does
-//! not use. What follows the table is read as Thumb code, the way `hackrffw`
-//! reads a HackRF image: nothing in the flash says where the code stops and
-//! the data starts.
+//! The IVT's `entry` field holds the address of the program, and NXP's
+//! startup code puts the Cortex-M7's vector table there: the stack pointer,
+//! the fifteen exceptions every Cortex-M has, then the RT1060's interrupts as
+//! NXP's `MIMXRT1062.h` names them, filled out to 256 words with interrupt
+//! numbers the part does not use. What follows the table is read as Thumb
+//! code, the way `hackrffw` reads a HackRF image: nothing in the flash says
+//! where the code stops and the data starts.
 //!
-//! The code stops at the first 4 KiB of erased flash (0xff bytes), which is
-//! the smallest piece a NOR chip erases, and everything from there on is
-//! bytes: the erased run, and whatever is programmed after it. A file written
-//! by NXP's tools holds only the program, so this changes nothing for one of
-//! those. It is for a dump of the whole chip, which is mostly erased bytes
-//! after the program and may hold a second program further on, as the Tascam
-//! X8's flash does. Read as instructions to the end, the X8's 25 MB took
-//! nearly three minutes to count in a debug build, and a listing counts the
-//! instructions in a run before it shows the run's row.
+//! Other i.MX RT parts that lay out their flash the same way are recognised
+//! too, and their vector tables get the RT1060's interrupt names.
+//!
+//! The code run ends at the first run of 4096 0xff bytes (4 KiB is the
+//! smallest piece of a NOR chip that can be erased), and everything from
+//! there on is read as bytes: the erased run, and whatever is programmed
+//! after it. Files written by NXP's tools end with the program, so they have
+//! no erased run. A dump of the whole chip has mostly erased bytes after the
+//! program, and may have a second program further on, as the Tascam X8's
+//! flash does. A listing counts the instructions in a run before it shows the
+//! run's row, and counting the X8's 25 MB as instructions took nearly three
+//! minutes in a debug build.
 //!
 //! Field names are NXP's own, put into snake case: the configuration block's
 //! from the SDK's `fsl_flexspi_nor_config.h`, the IVT's and the boot data's
@@ -57,8 +61,8 @@ use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until, Valid};
 
 use super::hackrffw::EXCEPTIONS;
 
-/// What the configuration block opens with, and the first half of what says a
-/// file is one of these.
+/// The tag at the start of the configuration block. A file is recognised by
+/// this tag together with an IVT header at 0x1000.
 pub const TAG: &[u8] = b"FCFB";
 
 /// Where the boot ROM looks for the IVT when it boots from FlexSPI NOR: fixed
@@ -72,8 +76,8 @@ const CONFIG_BYTES: i128 = 0x200;
 /// fifteen exceptions and 240 interrupts.
 const VECTORS: usize = 256;
 
-/// Whether the head of a file is an RT1060 boot image: `FCFB` at the front and
-/// an IVT header where the boot ROM looks for one. The IVT's header is its tag,
+/// Whether the head of a file is an i.MX RT boot image: `FCFB` at the front
+/// and an IVT header where the boot ROM looks for one. The IVT's header is its tag,
 /// its length written big-endian, and a version the ROM accepts as 0x40 or
 /// 0x41.
 pub fn is_imxrt_flash(head: &[u8]) -> bool {
@@ -88,27 +92,29 @@ pub fn imxrt() -> Template {
             vec![
                 ("boot_header", boot_header()),
                 ("padding", padding_to_entry()),
-                ("image", image()),
+                ("program", program()),
             ],
         ),
     )
 }
 
-/// The smallest stretch a NOR flash erases, and so the shortest run of 0xff
-/// that says the program has ended rather than paused for padding.
+/// 4 KiB, the smallest piece of a NOR chip that can be erased. A run of this
+/// many 0xff bytes, aligned or not, is taken as the end of the program; a
+/// shorter run is taken as padding inside it.
 const ERASED_SECTOR: usize = 0x1000;
 
 /// The program at the IVT's entry: the vector table, the code up to the
-/// first erased sector, and what comes after that as bytes.
-fn image() -> T {
+/// first run of 4096 0xff bytes, and what comes after that as bytes.
+fn program() -> T {
     let more = || E::Remaining.greater_than(E::lit(0));
     T::structure(
-        "Image",
+        "Program",
         vec![
             ("vectors", vectors()),
             ("code", thumb(E::to_bytes(&[0xff; ERASED_SECTOR]))),
             ("erased", T::when(more(), T::bytes(E::run(&[0xff])))),
-            // A second program, a file system, settings: nothing here says.
+            // Whatever is programmed after the erased run. The image does not
+            // say what it is: a second program, a file system or settings.
             ("rest", T::when(more(), T::bytes(E::Remaining))),
         ],
     )
@@ -148,8 +154,9 @@ pub(crate) fn boot_header() -> T {
         "BootHeader",
         vec![
             ("flash_config", flash_config()),
-            // Erased flash: the SDK reserves the first 4 KiB for the block and
-            // the boot ROM looks for the IVT at the end of it.
+            // Erased flash from the end of the 512-byte block to the IVT at
+            // 0x1000. The SDK reserves the first 4 KiB of the flash for the
+            // block.
             ("padding", T::bytes(E::lit(IVT_AT as i128 - CONFIG_BYTES))),
             ("ivt", ivt()),
             ("boot_data", boot_data()),
@@ -158,19 +165,25 @@ pub(crate) fn boot_header() -> T {
             ("dcd", T::when(E::within(&["ivt", "dcd"]).not_equal(E::lit(0)), dcd())),
         ],
     )
-    .field_valid("boot_data", Valid::Expr { expr: E::start_of(E::field("boot_data")).equal_to(pointer(&["ivt"], "boot_data")), msg: None })
+    .field_valid(
+        "boot_data",
+        Valid::Expr {
+            expr: E::start_of(E::field("boot_data")).equal_to(pointer(&["ivt"], "boot_data")),
+            msg: Some("Not where the IVT's boot_data pointer points".into()),
+        },
+    )
     .field_valid(
         "dcd",
         Valid::Expr {
             expr: E::within(&["ivt", "dcd"]).equal_to(E::lit(0)).either(E::start_of(E::field("dcd")).equal_to(pointer(&["ivt"], "dcd"))),
-            msg: None,
+            msg: Some("Not where the IVT's dcd pointer points".into()),
         },
     )
 }
 
-/// What is left between the boot header and the program the IVT's entry
-/// points at, for a structure that holds `boot_header` as a field. Erased
-/// flash in every image NXP's tools write.
+/// The bytes between the boot header and the address in the IVT's `entry`
+/// field, for a structure that holds `boot_header` as a field. Erased flash in
+/// every image NXP's tools write.
 pub(crate) fn padding_to_entry() -> T {
     T::bytes(pointer(&["boot_header", "ivt"], "entry").sub(E::SpacePos))
 }
@@ -195,8 +208,8 @@ pub(crate) fn thumb(len: E) -> T {
 /// The vector table, one named word at a time. Shared with `tascamfw`, whose
 /// bootloader and application each start with one.
 pub(crate) fn vectors() -> T {
-    // The slots past the last interrupt NXP names, which the startup code
-    // fills with its default handler all the same.
+    // The slots past the last interrupt NXP names. In the X8's two programs
+    // they mostly hold the default handler, and the last word is 0xffffffff.
     let unnamed: Vec<String> = (IRQS.len()..VECTORS - 1 - EXCEPTIONS.len()).map(|n| format!("irq_{n}")).collect();
     // Not a handler: the core loads the first word into the stack pointer
     // before it runs anything, so it is an address in RAM.
@@ -268,7 +281,7 @@ fn mem_config() -> T {
             ("command_interval", T::u32(Little)),
             ("data_valid_time", T::array(T::u16(Little), E::lit(2))),
             ("busy_offset", T::u16(Little)),
-            ("busy_bit_polarity", T::enumeration("BusyBitPolarity", T::u16(Little), &[(0, "1 means busy"), (1, "0 means busy")])),
+            ("busy_bit_polarity", T::enumeration("BusyBitPolarity", T::u16(Little), &[(0, "busy when bit is 1"), (1, "busy when bit is 0")])),
             ("lookup_table", lookup_table()),
             ("lut_custom_seq", T::array(lut_seq(), E::lit(12))),
             ("reserved4", T::bytes(E::lit(16))),
@@ -281,11 +294,12 @@ fn mem_config() -> T {
 /// V1.4.0. Read a byte at a time from the bottom, which is the order the file
 /// holds them in.
 fn version() -> T {
-    T::inline_structure("ConfigVersion", vec![("bugfix", T::u8()), ("minor", T::u8()), ("major", T::u8()), ("v", T::magic(b"V"))])
+    T::inline_structure("ConfigVersion", vec![("bugfix", T::u8()), ("minor", T::u8()), ("major", T::u8()), ("letter_v", T::magic(b"V"))])
 }
 
 /// The clock the boot ROM drives the flash at, as the RT1060's
-/// `kFlexSpiSerialClk_*` numbers it. Any other number is 30 MHz.
+/// `kFlexSpiSerialClk_*` numbers it. The boot ROM uses 30 MHz for any other
+/// value.
 const SERIAL_CLOCK: &[(i128, &str)] = &[
     (1, "30 MHz"),
     (2, "50 MHz"),
@@ -345,8 +359,8 @@ fn lut_seq() -> T {
     T::structure("LutSeq", vec![("seq_num", T::u8()), ("seq_id", T::u8()), ("reserved", T::u16(Little))])
 }
 
-/// The sixteen sequences of the lookup table, by the index the boot ROM uses
-/// each one for. The reference manual assigns nine of them and the SDK three
+/// The sixteen lookup table sequences, each named for what the boot ROM uses
+/// that index for. The reference manual assigns nine of them and the SDK three
 /// more; the other four are free for a custom sequence.
 const LUT_SEQUENCES: &[&str] = &[
     "read",
@@ -428,8 +442,8 @@ fn hdr(name: &str, tag: u8) -> T {
     T::structure(name, vec![("tag", T::magic(&[tag])), ("length", T::u16(Big)), ("version", T::u8())])
 }
 
-/// `struct ivt`: eight words, every one but the header an address in the
-/// processor's memory map.
+/// `struct ivt`: a header and seven words. entry, dcd, boot_data, self and
+/// csf are addresses in the processor's memory map.
 fn ivt() -> T {
     T::structure(
         "Ivt",
@@ -471,9 +485,10 @@ fn dcd() -> T {
             vec![
                 ("hdr", hdr("DcdHeader", 0xd2)),
                 ("commands", T::repeat(dcd_command(), Until::While(command_ahead()))),
-                // The rest of the DCD, from a tag that is not a command on.
-                // Absent when every command was one the boot ROM knows.
-                ("not_a_known_command", T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining))),
+                // The rest of the DCD, from the first tag that is not one of
+                // the four commands the boot ROM knows to the length in the
+                // DCD header. Absent when the commands fill the DCD.
+                ("rest_from_unknown_tag", T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining))),
             ],
         ),
     )
@@ -487,8 +502,8 @@ fn command_ahead() -> E {
     E::Remaining.greater_than(E::lit(3)).both(known)
 }
 
-/// One command: a header of its own, then whatever its tag says, up to the
-/// length it gives, which counts the header.
+/// One command: a tag, a length that includes this 4-byte header, a
+/// parameter byte, and a body whose layout depends on the tag.
 fn dcd_command() -> T {
     let tag = || E::field("tag");
     T::structure_named(
@@ -498,8 +513,9 @@ fn dcd_command() -> T {
         vec![
             ("tag", T::enumeration_hex("DcdTag", T::u8(), DCD_TAGS)),
             ("length", T::u16(Big)),
-            // How wide each write or check is and what it does. Unlock puts
-            // the engine it unlocks here, and nop ignores it.
+            // The width and action of each write or check. For an unlock
+            // command, this byte names the engine to unlock. A nop command
+            // ignores it.
             ("parameter", T::switch(tag(), vec![(0xcc, write_parameter()), (0xcf, check_parameter())], T::u8())),
             (
                 "body",
@@ -526,7 +542,7 @@ fn write_parameter() -> T {
     T::inline_structure(
         "WriteParameter",
         vec![
-            ("flags", T::enumeration("WriteAction", T::UInt { bits: 5, endian: Big }, &[(0, "write value"), (1, "clear bitmask"), (2, "write value"), (3, "set bitmask")])),
+            ("flags", T::enumeration("WriteAction", T::UInt { bits: 5, endian: Big }, &[(0, "write value"), (1, "clear bitmask"), (2, "write value (set flag ignored)"), (3, "set bitmask")])),
             ("bytes", T::UInt { bits: 3, endian: Big }),
         ],
     )
@@ -687,7 +703,7 @@ pub(crate) mod tests {
         // 0x1C: poll until any bit of the mask is set.
         assert_eq!(value(&mut ev, &d, &check, &["parameter", "flags"]).as_int(), Some(3));
         assert_eq!(value(&mut ev, &d, &check, &["body", "mask"]).as_int(), Some(1));
-        let stray = named(&mut ev, &d, &dcd, "not_a_known_command");
+        let stray = named(&mut ev, &d, &dcd, "rest_from_unknown_tag");
         let stray = ev.node(&d, &stray).unwrap();
         assert_eq!((stray.offset_bits / 8, stray.size_bits / 8), (0x1054, 8));
         // Both pieces are where the IVT says.
@@ -704,7 +720,8 @@ pub(crate) mod tests {
         let mut ev = Evaluator::new(imxrt());
         let dcd = named(&mut ev, &d, &[0], "dcd");
         assert!(ev.node(&d, &dcd).unwrap().absent);
-        // A pointer of zero is no DCD, which is no fault to report.
+        // A dcd pointer of 0 means the image has no DCD, so the constraint
+        // passes.
         assert!(ev.valid_of(&d, &dcd).unwrap().is_none_or(|v| v.ok));
         // So the padding runs from the end of the boot data to the entry.
         let padding = ev.node(&d, &[1]).unwrap();
@@ -721,10 +738,11 @@ pub(crate) mod tests {
         let at = named(&mut ev, &d, &[0], "boot_data");
         let verdict = ev.valid_of(&d, &at).unwrap().expect("a constraint");
         assert!(!verdict.ok);
+        assert_eq!(verdict.text, "Fails the check: Not where the IVT's boot_data pointer points");
     }
 
     #[test]
-    fn the_image_at_the_entry_is_a_vector_table_and_thumb_code() {
+    fn the_program_at_the_entry_is_a_vector_table_and_thumb_code() {
         let d = Document::new(MemSource(image(&dcd_with_a_stray())));
         let mut ev = Evaluator::new(imxrt());
         let vectors = ev.node(&d, &[2, 0]).unwrap();

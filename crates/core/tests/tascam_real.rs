@@ -1,13 +1,13 @@
 //! The two Tascam Portacapture X8 firmware updates in the sample collection,
 //! V2.01 and V2.03, read against what is known to be in them.
 //!
-//! The values asserted here were worked out from the unscrambled images by
-//! hand, and every one of them is something the template finds rather than
-//! something it was told: the init tables are found by searching for IAR's
-//! FPU routine, the fonts by the offsets in the font map, and the packed runs
-//! by the pointers in the init table. So a release that moved anything would
-//! move it here too, and the numbers below differ between the two releases
-//! wherever the application's code grew.
+//! The values asserted here were worked out by hand from the unscrambled
+//! images. Apart from the boot header at 0 and the application at 0x20000,
+//! which are fixed, the template finds every position itself: the init tables
+//! by searching for IAR's FPU routine, the fonts by the offsets in the font
+//! map, and the packed runs by the pointers in the init tables. The numbers
+//! below differ between the two releases wherever the application's code
+//! grew.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -56,8 +56,8 @@ const RELEASES: &[Release] = &[
     },
 ];
 
-/// Every update file is this long, and the image inside it is the flash less
-/// the copy of the checksum at its end.
+/// Every update file is this long. The flash image is the file less the
+/// 32-byte header and the 4-byte checksum copy at the end.
 const FILE_SIZE: u64 = 0x185_0020;
 const IMAGE_SIZE: u64 = 0x184_fffc;
 
@@ -194,10 +194,10 @@ fn boot_header(ev: &mut Evaluator, d: &Document<MemSource>, f: &str) {
     assert_eq!(int(ev, d, &header, &["boot_data", "start"]), XIP);
     assert_eq!(int(ev, d, &header, &["boot_data", "size"]), 0x0200_0000);
 
-    // Read by its lengths, the DCD is nine commands. The ninth says it is
-    // one pair long and a second pair follows it, so what the boot ROM would
-    // read next has the tag 0x40, which is no command, and the rest of the
-    // DCD is left as one run of bytes.
+    // Read by the lengths in their headers, the DCD has nine commands. The
+    // ninth command's length covers one address-value pair, but a second pair
+    // follows it, so the next byte the boot ROM would read as a tag is 0x40,
+    // which is not a command tag. The rest of the DCD is one bytes field.
     let dcd = named(ev, d, &header, &["dcd"]);
     assert_eq!(extent(ev, d, &dcd, &[]), (0x1030, 0x4b8));
     let commands = named(ev, d, &dcd, &["commands"]);
@@ -210,7 +210,7 @@ fn boot_header(ev: &mut Evaluator, d: &Document<MemSource>, f: &str) {
     let check = [&commands[..], &[1]].concat();
     assert_eq!(int(ev, d, &check, &["tag"]), 0xcf);
     assert_eq!(int(ev, d, &check, &["parameter", "flags"]), 3, "{f}: poll until any bit is set");
-    let stray = named(ev, d, &dcd, &["not_a_known_command"]);
+    let stray = named(ev, d, &dcd, &["rest_from_unknown_tag"]);
     assert_eq!(extent(ev, d, &stray, &[]), (0x1460, 0x88), "{f}");
     let Value::Bytes { preview, .. } = ev.node(d, &stray).unwrap().value else { panic!("{f}: not bytes") };
     assert_eq!(preview[0], 0x40);
@@ -237,7 +237,7 @@ fn bootloader(ev: &mut Evaluator, d: &Document<MemSource>, f: &str) {
     assert_eq!(extent(ev, d, &boot, &["padding"]), (0xa83e, 0x2_0000 - 0xa83e));
 }
 
-/// The application at 0x20000, which moves about between the releases.
+/// The application at 0x20000. Offsets inside it differ between the releases.
 fn application(ev: &mut Evaluator, d: &Document<MemSource>, r: &Release) {
     let f = r.file;
     let app = named(ev, d, &FLASH, &["application"]);
