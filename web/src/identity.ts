@@ -227,6 +227,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   claudetheme: ["json"],
   hackrffw: ["bin"],
   imxrt: ["bin"],
+  bfldr: ["ldr"],
   gdbm: ["gdbm", "db"],
   bdb: ["db"],
   grubenv: ["env"],
