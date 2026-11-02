@@ -14,8 +14,9 @@
 //! 16 bytes of the header XOR to zero, which is the test U-Boot's `ldrinfo`
 //! and ldrshrink both make. Here it is a constraint on the header check field,
 //! worked out from the header's fields, rather than a checksum: a checksum is
-//! only taken over bytes of the file, and `tascamfw` reads a stream like this
-//! one from inside a scrambled run.
+//! only taken over bytes of the file, and this template is meant to be reused
+//! by `tascamfw` to read the stream in Tascam's DR-05X update, which is inside
+//! a scrambled run.
 //!
 //! The boot ROM copies each payload to the block's target address. A fill
 //! block has no payload: the boot ROM writes the argument, a 32-bit value,
@@ -37,33 +38,37 @@
 //! block, and the boot ROM carries on into the next program after it runs the
 //! initcode.
 //! In every stream these sources describe, a first block is an ignore block
-//! with a byte count of zero. ldrshrink writes the program's entry point as a
-//! first block's target address. A first block with a payload would be read
-//! the same way, but none has been seen.
+//! with a byte count of zero. ldrshrink takes a first block's target address
+//! as the program's entry point. A first block with a payload is read the
+//! same way, and its payload counts toward the argument, but none has been
+//! seen in a real stream.
 //!
 //! Blocks that no first block groups into a program, in a stream that does
 //! not open with a first block, are read as a list of their own up to a final
-//! block. After the stream, a run of 0xff is read as erased flash, and
-//! anything after that as bytes.
+//! block, or up to bytes that are not a block header. After the stream, a run
+//! of 0xff is read as erased flash, and anything after that as bytes.
 //!
-//! Field names are ADI's. U-Boot's `bootrom.h` names the four words of a
-//! header in `ADI_BOOT_HEADER` (`dBlockCode`, `pTargetAddress`, `dByteCount`,
-//! `dArgument`) and the pieces of the block code with its `BFLAG_*` masks. The
-//! flags keep ADI's names without the `BFLAG_` prefix. Where ADI's name is an
-//! abbreviation, the field has a plain name and gives ADI's in its
-//! description: `header_check` is `HDRCHK`, `signature` is `HDRSIGN`,
-//! `dma_code` is `DMACODE`. The names `programs`, `first_block`,
-//! `after_last_block`, `erased` and `rest` are this template's.
+//! Field names are ADI's. ADI's `bfrom.h` and U-Boot's `bootrom.h` both name
+//! the four words of a header in `ADI_BOOT_HEADER` (`dBlockCode`,
+//! `pTargetAddress`, `dByteCount`, `dArgument`) and the pieces of the block
+//! code with `BFLAG_*` masks. The flags keep ADI's names without the `BFLAG_`
+//! prefix. Where ADI's name is an abbreviation, the field has a plain name and
+//! gives ADI's in its description: `header_check` is `HDRCHK`, `signature` is
+//! `HDRSGN` (`BFLAG_HDRSIGN_MASK` in U-Boot), `dma_code` is `DMACODE`. The
+//! names `programs`, `first_block`, `after_last_block`, `erased` and `rest`
+//! are this template's.
 //!
-//! Bit 4 of the block code is `BFLAG_SAVE` in ADI's loader manual, whose
-//! `-save` switch marks the blocks to keep for low-power and power-fail
-//! cycles, and in the DR-05 homebrew project's structures. U-Boot's
-//! `bootrom.h` spells it `BFLAG_SAFE`. This template calls it `save`. The
-//! other `BFLAG_*` masks in `bootrom.h`, from `BFLAG_HOOK` up, are flags for
-//! the boot ROM's functions (`ADI_BOOT_DATA`'s `dFlags`), not bits of a block
-//! header, and they overlap `HDRCHK` and `HDRSIGN`; they are not here. None of
-//! the sources says what each DMA code means or what `aux` is for, so the DMA
-//! code is a plain number.
+//! Bit 4 of the block code is `BFLAG_SAVE` in ADI's `bfrom.h` ("save block on
+//! power down -- reserved"), in ADI's loader manual, whose `-save` switch
+//! marks the blocks to keep for low-power and power-fail cycles, and in the
+//! DR-05 homebrew project's structures. U-Boot's `bootrom.h` spells it
+//! `BFLAG_SAFE`. This template calls it `save`, and its description gives both
+//! spellings. `bfrom.h` describes bit 5, `BFLAG_AUX`, as "load auxiliary
+//! header -- reserved". The other `BFLAG_*` masks in both headers, the ones
+//! above bit 15, are flags for the boot ROM's functions (`ADI_BOOT_DATA`'s
+//! `dFlags`), not bits of a block header, and they overlap `HDRCHK` and
+//! `HDRSGN`; they are not here. None of the sources says what
+//! each DMA code means, so the DMA code is a plain number.
 //!
 //! The ADSP-BF53x and BF56x boot streams are a different format and are not
 //! read here: their block headers are 10 bytes (an address, a count and 16
@@ -77,6 +82,11 @@
 //! part in the DR-05X.
 //!
 //! Sources:
+//! - ADI's `bfrom.h` (copyright Analog Devices 2008-2010), the boot ROM header
+//!   from ADI's toolchain, as copied into the styx-emulator repository at
+//!   `styx/generated/styx-blackfin-sys/include/bfrom.h`: the block code masks
+//!   `HDRSGN`, `HDRCHK`, `DMACODE` and `BFLAG_SAVE` to `BFLAG_FINAL`, and
+//!   `ADI_BOOT_HEADER`.
 //! - U-Boot v2015.01 (Blackfin support was removed later):
 //!   `arch/blackfin/include/asm/mach-common/bits/bootrom.h` for
 //!   `ADI_BOOT_HEADER` and the `BFLAG_*` masks, `common/cmd_ldrinfo.c` for
@@ -158,8 +168,9 @@ pub fn bfldr() -> Template {
     Template::new("bfldr", stream())
 }
 
-/// A whole boot stream, and whatever follows it. Shared with `tascamfw`,
-/// whose DR-05X update holds one.
+/// A whole boot stream, and whatever follows it. `pub(crate)` so that
+/// `tascamfw` can read the stream in Tascam's DR-05X update with it, which it
+/// does not do yet.
 pub(crate) fn stream() -> T {
     T::structure(
         "BootStream",
@@ -176,6 +187,13 @@ pub(crate) fn stream() -> T {
             ("rest", T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining))),
         ],
     )
+    .field_doc(
+        "programs",
+        "One program for each .dxe file in the stream: an initcode or an application. Each program starts with a block that has the first flag set, and that block's argument determines the program's length. The name program is this template's, not ADI's.",
+    )
+    .field_doc("blocks", "Blocks that are not part of any program, as in a stream that does not start with a first block. They are read up to a block with the final flag.")
+    .field_doc("erased", "A run of 0xFF bytes after the boot stream. Erased flash memory reads as 0xFF.")
+    .field_doc("rest", "Bytes after the boot stream and any erased flash, shown as raw bytes.")
 }
 
 /// One program: its first block, and the blocks after it, up to where the
@@ -255,15 +273,24 @@ pub(crate) fn block_header() -> T {
         ],
     )
     .field_valid("header_check", Valid::Expr { expr: header_xor().equal_to(E::lit(0)), msg: Some("The 16 header bytes do not XOR to zero".into()) })
-    .field_doc("dma_code", "DMACODE: a code for the DMA width the boot ROM uses to read this block. ADI's loader sets it from its -dmawidth option.")
-    .field_doc("flags", "ADI's BFLAG_ flags, named without the BFLAG_ prefix.")
+    .field_doc(
+        "dma_code",
+        "DMACODE: the DMA width code for this block. ADI's elfloader sets it from its -dmawidth switch. The code is shown as a number; which code means which width is not decoded.",
+    )
+    .field_doc(
+        "flags",
+        "Bits 4 to 15 of the block code. Each flag is named after ADI's mask: fill is BFLAG_FILL, first is BFLAG_FIRST. The flag save is BFLAG_SAVE in ADI's bfrom.h and BFLAG_SAFE in U-Boot.",
+    )
     .field_doc("header_check", "HDRCHK: set so that the 16 bytes of this header XOR to zero.")
-    .field_doc("signature", "HDRSIGN: 0xAD in every block header.")
-    .field_doc("target_address", "TARGET ADDRESS: where the boot ROM writes this block's payload or fill value.")
-    .field_doc("byte_count", "BYTE COUNT: the length of the payload in bytes. For a fill block, the number of bytes to fill; a fill block has no payload.")
+    .field_doc("signature", "HDRSGN: 0xAD in every block header. U-Boot spells it HDRSIGN.")
+    .field_doc("target_address", "Where the boot ROM writes this block's payload or fill value. In a first block, the program's entry point.")
+    .field_doc(
+        "byte_count",
+        "The length of this block's payload in bytes. For a fill block, the number of bytes the boot ROM fills with the argument, starting at the target address; a fill block has no payload.",
+    )
     .field_doc(
         "argument",
-        "ARGUMENT: for a first block, the number of bytes from the end of this header to the next program. For a fill block, the 32-bit fill value. For other blocks, a value for the boot ROM, such as a callback's argument or a CRC-32.",
+        "For a first block, ADI's next .dxe pointer: the number of bytes from the end of this header to the next first block, or to the end of the boot stream for the last program. For a fill block, the 32-bit fill value. For other blocks, a value for the boot ROM, such as a callback's argument or a CRC-32.",
     )
 }
 
