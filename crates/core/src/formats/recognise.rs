@@ -282,8 +282,8 @@ const PROBES: &[Probe] = &[
     Probe::Is("imxrt", |h, _| imxrt::is_imxrt_flash(h)),
     // A Blackfin boot stream, which opens with the header of a program's
     // first block: signed with 0xAD in byte 3, the 16 bytes XORing to zero,
-    // and the first flag set. One head of random bytes in about 130,000 passes
-    // all three.
+    // and the first flag set. About one in 130,000 random 16-byte heads
+    // passes all three tests.
     Probe::Is("bfldr", |h, _| bfldr::is_bfldr(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),

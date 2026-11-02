@@ -399,8 +399,8 @@ pub(crate) mod tests {
         let image = crate::formats::imxrt::tests::image(&[]);
         assert!(!is_bfldr(&image));
         assert_ne!(crate::formats::sniff(&image, image.len() as u64), Some("bfldr"));
-        // Bytes from a fixed-seed xorshift: one head in about 130,000 random
-        // ones passes all three tests, so none of these should.
+        // Bytes from a fixed-seed xorshift. About one in 130,000 random heads
+        // passes all three tests, so none of these 2,000 should.
         let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
         for _ in 0..2000 {
             let mut head = [0u8; HEADER_BYTES];
