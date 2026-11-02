@@ -251,6 +251,33 @@ fn start_of_counts_from_the_nearest_origin() {
     assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(2), "from the front of this copy of the format");
 }
 
+/// Inside an unpacked run, from a field that is not placed yet and from the
+/// end of a structure, which is where a size and a constraint are asked.
+/// Neither has a place of its own to say which space it is in, and both used
+/// to be taken for the file's, so every such question failed as asking across
+/// two spaces.
+#[test]
+fn start_of_works_inside_an_unpacked_run() {
+    let inner = T::structure(
+        "Inner",
+        vec![
+            ("head", T::u8()),
+            ("body", T::bytes(E::lit(2))),
+            // As long as `body` is far in: one byte.
+            ("sized", T::bytes(E::start_of(E::field("body")))),
+        ],
+    )
+    .field_valid("body", crate::template::Valid::Expr { expr: E::start_of(E::field("body")).equal_to(E::lit(1)), msg: None });
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("preamble", T::bytes(E::lit(3))), ("run", T::decoded(E::lit(4), crate::codec::Codec::Stored, inner))]),
+    );
+    let d = doc(&[9, 9, 9, 0, 1, 2, 3]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[1, 0, 2]).unwrap().size_bits, 8);
+    assert!(ev.valid_of(&d, &[1, 0, 1]).unwrap().expect("a constraint").ok);
+}
+
 /// A field placed at where a search landed covers that element's bytes: the
 /// two halves together are how the Nth element of a list whose elements vary
 /// in size is read.
