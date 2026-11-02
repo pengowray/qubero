@@ -8,6 +8,7 @@ mod census;
 mod explain;
 mod expressions;
 mod graph;
+mod insnrun;
 mod lookups;
 mod optional;
 mod placement;

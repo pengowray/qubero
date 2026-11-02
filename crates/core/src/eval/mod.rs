@@ -29,6 +29,7 @@ mod explain;
 mod gather;
 mod go;
 mod graph;
+mod insnrun;
 mod jpegscan;
 mod jsontree;
 mod kinds;

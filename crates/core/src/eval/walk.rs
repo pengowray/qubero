@@ -11,6 +11,10 @@
 //! ask the one before it for a value, and everything else is dropped as the
 //! walk passes it. Reaching an element later starts from the nearest kept
 //! offset rather than from the beginning: bounded memory, and a bounded walk.
+//!
+//! A run of instructions on a machine that says how long each one is needs
+//! none of this: `insnrun.rs` steps along its bytes without placing anything,
+//! and keeps the same checkpoints.
 
 use std::collections::VecDeque;
 
@@ -42,6 +46,11 @@ impl Evaluator {
     /// Where child `idx` of a list of variable-size elements starts.
     pub(super) fn walk_to<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], idx: usize) -> R<u64> {
         let pr = self.memo[parent].clone();
+        // A run of instructions is measured from its bytes. If it ends before
+        // `idx`, the ordinary walk below finds that out and says so.
+        if let Some(at) = self.insn_run_start(doc, parent, &pr, idx)? {
+            return Ok(at);
+        }
         // A short list is remembered whole: every element stays in the memo,
         // and placing the next one is a lookup.
         if !self.guarded(doc, parent, &pr)? {
@@ -80,6 +89,11 @@ impl Evaluator {
     ) -> R<u64> {
         if self.list(path).repeat_done {
             return Ok(self.list(path).repeat_len as u64);
+        }
+        // A run of instructions is counted from its bytes, and leaves nothing
+        // in the memo to drop.
+        if let Some(n) = self.count_insn_run(doc, path, r)? {
+            return Ok(n);
         }
         // The journal is opened part way through, once the run turns out to be
         // a long one, so a short run costs nothing to count: see `count_from`.
@@ -453,6 +467,11 @@ impl Evaluator {
         if bit < pr.offset {
             return Ok(None);
         }
+        // A run of instructions is stepped along from its bytes. A bit past
+        // its end is left to the ordinary walk, which says what is there.
+        if let Some(found) = self.insn_run_covering(doc, path, &pr, n, bit)? {
+            return Ok(found);
+        }
         let (mut j, mut at) = self.nearest_start_before(path, bit);
         if j as u64 >= n {
             return Ok(None);
@@ -572,11 +591,14 @@ impl Evaluator {
     /// it is the start of: where the last walk stopped, if that was before
     /// `idx`, else the nearest kept offset, else the list's own start. Reading
     /// a list in order then starts each step where the last one ended.
-    fn nearest_start(&self, parent: &[usize], idx: usize) -> (usize, u64) {
+    pub(super) fn nearest_start(&self, parent: &[usize], idx: usize) -> (usize, u64) {
         let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
-        if let Some(&(j, at)) = state.checkpoints.iter().rev().find(|(j, _)| *j <= idx) {
-            best = (j, at);
+        // Checkpoints rise in index, so the last one at or before `idx` is
+        // found by halving. A run of instructions keeps thousands of them.
+        let k = state.checkpoints.partition_point(|(j, _)| *j <= idx);
+        if k > 0 {
+            best = state.checkpoints[k - 1];
         }
         match state.walk_at {
             Some((j, at)) if j <= idx && j >= best.0 => (j, at),
@@ -584,7 +606,7 @@ impl Evaluator {
         }
     }
 
-    fn checkpoint(&mut self, parent: &[usize], j: usize, at: u64) {
+    pub(super) fn checkpoint(&mut self, parent: &[usize], j: usize, at: u64) {
         let l = self.list_mut(parent);
         if l.checkpoints.last().is_none_or(|(last, _)| *last < j) {
             l.checkpoints.push((j, at));
