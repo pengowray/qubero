@@ -74,12 +74,13 @@
 //! gets one of two kinds of name, worked out from the registers of all the
 //! peripherals the header defines:
 //!
-//! - `in` and a peripheral's name, such as `in LPUART1`, for a register of that
-//!   peripheral outside the seven ranges, for an address partway into one of
-//!   its registers, and for a reserved address whose nearest register below and
-//!   nearest register above both belong to that peripheral. 0x402F0088 reads as
-//!   `in SEMC` because it is between SEMC_DBICR1 and SEMC_IPCR0.
-//! - `not a peripheral register` for every other address. That includes the
+//! - `unnamed address in` and a peripheral's name, such as `unnamed address in
+//!   LPUART1`, for a register of that peripheral outside the seven ranges, for
+//!   an address partway into one of its registers, and for a reserved address
+//!   whose nearest register below and nearest register above both belong to
+//!   that peripheral. 0x402F0088 reads as `unnamed address in SEMC` because it
+//!   is between SEMC_DBICR1 and SEMC_IPCR0.
+//! - `unnamed address` for every other address. That includes the
 //!   reserved addresses before a peripheral's first register and after its
 //!   last, even inside the seven ranges: 0x402F0100 is past SEMC's last
 //!   register. It also includes a reserved address between registers of two
@@ -650,9 +651,13 @@ fn register_names() -> &'static Arc<EnumDef> {
             .map(|&(from, peripheral)| EnumSpan {
                 from: i128::from(from),
                 step: 1,
+                // Not `not in any peripheral`: some of these addresses are
+                // inside a peripheral's block of the memory map, past its last
+                // register (0x402F0100 in SEMC's 16 KiB) or between the
+                // registers of two (USBNC1 and USBNC2).
                 label: match peripheral {
-                    Some(p) => format!("in {p}"),
-                    None => "not a peripheral register".to_string(),
+                    Some(p) => format!("unnamed address in {p}"),
+                    None => "unnamed address".to_string(),
                 },
             })
             .collect();
@@ -873,8 +878,11 @@ pub(crate) mod tests {
             0x0000_0000,
         ]));
         assert!(!marked, "{names:?}");
-        let outside = "not a peripheral register";
-        assert_eq!(names, [outside, outside, "in LPUART1", "in SEMC", "in SEMC", "in USB_ANALOG", outside, outside, outside]);
+        let outside = "unnamed address";
+        assert_eq!(
+            names,
+            [outside, outside, "unnamed address in LPUART1", "unnamed address in SEMC", "unnamed address in SEMC", "unnamed address in USB_ANALOG", outside, outside, outside]
+        );
     }
 
     /// Registers checked one by one against the offsets in the comments of
