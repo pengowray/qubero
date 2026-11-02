@@ -127,15 +127,31 @@ const FLAGS: &[(u32, &str)] = &[
 ];
 
 const FILL: u32 = 4;
+const IGNORE: u32 = 8;
 const FIRST: u32 = 10;
 const FINAL: u32 = 11;
 
-/// Whether the head of a file is a boot stream: a block header that is
-/// signed, whose 16 bytes XOR to zero, and that has the first flag set.
+/// Whether the head of a file is a boot stream: the header of a first block,
+/// the way every known stream starts. The header is signed, its 16 bytes XOR
+/// to zero, the first and ignore flags are set, the fill and final flags are
+/// clear, and the byte count is zero. U-Boot's `bootldr` takes the signature
+/// and the zero byte count as the mark of a stream.
+///
+/// Bits 6 and 7 of the block code are reserved on these parts, but they are
+/// not tested, because the BF609 uses the same header and has a flag in bit 7
+/// (`BFLAG_FORWARD` in Amaury Pouly's onkyo_teac_tools, `bfin_boot.h`).
 pub fn is_bfldr(head: &[u8]) -> bool {
     let Some(h) = head.get(..HEADER_BYTES) else { return false };
-    let first = 1u8 << (FIRST + 4 - 8);
-    h[3] == SIGNATURE && h.iter().fold(0, |a, b| a ^ b) == 0 && h[1] & first != 0
+    let word = |at: usize| u32::from_le_bytes([h[at], h[at + 1], h[at + 2], h[at + 3]]);
+    let flags = (word(0) >> 4) & 0xfff;
+    let set = |bit: u32| (flags >> bit) & 1 != 0;
+    h[3] == SIGNATURE
+        && h.iter().fold(0, |a, b| a ^ b) == 0
+        && set(FIRST)
+        && set(IGNORE)
+        && !set(FILL)
+        && !set(FINAL)
+        && word(8) == 0
 }
 
 pub fn bfldr() -> Template {
@@ -392,6 +408,29 @@ pub(crate) mod tests {
         let mut unchecked = v.clone();
         unchecked[4] ^= 1;
         assert!(!is_bfldr(&unchecked), "a header that does not XOR to zero");
+        // A first block with a payload reads, but U-Boot would not take it
+        // for a stream, and neither does the probe.
+        assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK, 0xffa0_0000, 4, 4, b"skip")));
+        assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK, 0xffa0_0000, 0, 0, &[])), "a first block without the ignore flag");
+        assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FILL_BLOCK, 0xffa0_0000, 0, 0, &[])));
+        assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[])));
+    }
+
+    #[test]
+    fn a_bmp_and_utf8_text_that_xor_to_zero_are_not_taken_for_a_boot_stream() {
+        // A 117 x 1988 24-bit BMP of 699,830 bytes. The M has the first
+        // flag's bit, byte 3 of the file size is 0xAD, and the 16 bytes XOR
+        // to zero, which was all the probe used to ask.
+        let bmp = [0x42, 0x4d, 0xb6, 0xad, 0x0a, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0];
+        assert_eq!(bmp.iter().fold(0, |a, b| a ^ b), 0);
+        assert!(!is_bfldr(&bmp));
+        assert_ne!(crate::formats::sniff(&bmp, 699_830), Some("bfldr"));
+        // Markdown in Chinese: E4 B8 AD is 中, so byte 3 is 0xAD, and this
+        // line happens to XOR to zero.
+        let text = "#中文说明 io".as_bytes();
+        assert_eq!((text.len(), text[3], text.iter().fold(0, |a, b| a ^ b)), (16, SIGNATURE, 0));
+        assert!(!is_bfldr(text));
+        assert_ne!(crate::formats::sniff(text, text.len() as u64), Some("bfldr"));
     }
 
     #[test]
@@ -399,8 +438,8 @@ pub(crate) mod tests {
         let image = crate::formats::imxrt::tests::image(&[]);
         assert!(!is_bfldr(&image));
         assert_ne!(crate::formats::sniff(&image, image.len() as u64), Some("bfldr"));
-        // Bytes from a fixed-seed xorshift. About one in 130,000 random heads
-        // passes all three tests, so none of these 2,000 should.
+        // Bytes from a fixed-seed xorshift. A random head passes about once
+        // in 2^52, so none of these 2,000 should.
         let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
         for _ in 0..2000 {
             let mut head = [0u8; HEADER_BYTES];
