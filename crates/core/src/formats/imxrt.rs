@@ -56,11 +56,40 @@
 //! configuration block's from the SDK's `fsl_flexspi_nor_config.h`, the IVT's
 //! and the boot data's from `fsl_flexspi_nor_boot.h`, and the DCD's from the
 //! reference manual. The other names are this template's.
+//!
+//! The address in each DCD write and check is shown as the name of the RT1060
+//! register at that address, in the form the reference manual writes it:
+//! `CCM_CCGR0`, `IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00`, `SEMC_MCR`. That form is
+//! one word, so a search of the manual or the SDK finds it. Table 9-42 of the
+//! manual lists the seven address ranges the boot ROM lets a DCD write to
+//! (IOMUXC_SNVS_GPR, IOMUXC_SNVS, IOMUXC_GPR, IOMUXC, the CCM analog block,
+//! CCM and SEMC), and every register NXP's device header places in those
+//! ranges has its name here, 802 of them. An address in any other
+//! peripheral's registers reads as that peripheral, `in LPUART1`; an address
+//! between two registers of one peripheral, or partway into one, reads the
+//! same way. Any other address reads as `not a peripheral register`. Every
+//! address gets a name, so no address in a DCD is marked as a value the
+//! format does not define. An address outside the seven ranges is not an
+//! error in the image: the boot ROM skips a write command that has one, and a
+//! check command may poll any address.
+//!
+//! The names come from `registers`, which `node tools/imxrtregisters.mjs`
+//! writes from two files of NXP's MCUXpresso SDK at a fixed commit:
+//! `MIMXRT1062.h`, the device header, for each peripheral's base address and
+//! the offset of each of its registers, and `fsl_iomuxc.h` for the IOMUXC
+//! pads the header does not name one by one. The script works out every
+//! offset from the header's structs and stops if one disagrees with the
+//! offset the header writes in the comment beside it. The register names are
+//! the RT1060's, and an image for another i.MX RT part gets them too.
+
+use std::sync::{Arc, OnceLock};
 
 use crate::code::Isa;
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until, Valid};
+use crate::template::{EnumDef, EnumSpan, Endian::*, Expr as E, Template, Ty as T, Until, Valid};
 
 use super::hackrffw::EXCEPTIONS;
+
+mod registers;
 
 /// The tag at the start of the configuration block. A file is recognised by
 /// this tag together with an IVT header at 0x1000.
@@ -525,7 +554,7 @@ fn dcd_command() -> T {
                     T::switch(
                         tag(),
                         vec![
-                            (0xcc, T::repeat(T::structure("WriteData", vec![("address", T::u32(Big)), ("value", T::u32(Big))]), Until::End)),
+                            (0xcc, T::repeat(T::structure_named("WriteData", "address", "", vec![("address", register_address()), ("value", T::u32(Big))]), Until::End)),
                             (0xcf, check_data()),
                             (0xb2, T::repeat(T::u32(Big), Until::End)),
                         ],
@@ -564,14 +593,56 @@ fn check_parameter() -> T {
 /// What a check polls: an address and a mask, and how many times to try. With
 /// no count the boot ROM polls until the condition holds.
 fn check_data() -> T {
-    T::structure(
+    T::structure_named(
         "CheckData",
+        "address",
+        "",
         vec![
-            ("address", T::u32(Big)),
+            ("address", register_address()),
             ("mask", T::u32(Big)),
             ("count", T::when(E::Remaining.greater_than(E::lit(0)), T::u32(Big))),
         ],
     )
+}
+
+/// The address in a DCD write or check, named for the RT1060 register there.
+/// See the module docs for what the names are and where they come from.
+fn register_address() -> T {
+    T::Enum { inner: Box::new(T::u32(Big)), def: Arc::clone(register_names()) }
+}
+
+/// The names of the RT1060's registers as one enum, built the first time a
+/// template asks for it and shared after that, so building the template
+/// clones an `Arc` instead of allocating a thousand strings.
+///
+/// The registers are its cases. Every other address takes its name from
+/// the span it falls in: an enum tries its spans in order and takes the first
+/// that starts at or below the value, so the areas of the address space go in
+/// from the top down, and each one names everything from its start to the
+/// start of the one above it.
+fn register_names() -> &'static Arc<EnumDef> {
+    static NAMES: OnceLock<Arc<EnumDef>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        let spans = registers::AREAS
+            .iter()
+            .rev()
+            .map(|&(from, peripheral)| EnumSpan {
+                from: i128::from(from),
+                step: 1,
+                label: match peripheral {
+                    Some(p) => format!("in {p}"),
+                    None => "not a peripheral register".to_string(),
+                },
+            })
+            .collect();
+        Arc::new(EnumDef {
+            name: "Rt1060Register".to_string(),
+            cases: registers::REGISTERS.iter().map(|&(at, name)| (i128::from(at), name.to_string())).collect(),
+            docs: Vec::new(),
+            spans,
+            hex: true,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -712,6 +783,129 @@ pub(crate) mod tests {
             let at = named(&mut ev, &d, &[0], name);
             let verdict = ev.valid_of(&d, &at).unwrap().expect("a constraint");
             assert!(verdict.ok, "{name}: {}", verdict.text);
+        }
+    }
+
+    /// A DCD of one write command, with a zero to write at each address.
+    fn dcd_writing(addresses: &[u32]) -> Vec<u8> {
+        let mut d = vec![0xd2, 0x00, 0x00, 0x41, 0xcc];
+        d.extend_from_slice(&(4 + 8 * addresses.len() as u16).to_be_bytes());
+        d.push(0x04);
+        for at in addresses {
+            d.extend_from_slice(&at.to_be_bytes());
+            d.extend_from_slice(&[0; 4]);
+        }
+        let len = d.len() as u16;
+        d[1..3].copy_from_slice(&len.to_be_bytes());
+        d
+    }
+
+    /// The name each address in a DCD's first command reads as, and whether
+    /// any of them is marked as a problem.
+    fn written_names(dcd: &[u8]) -> (Vec<String>, bool) {
+        let d = Document::new(MemSource(image(dcd)));
+        let mut ev = Evaluator::new(imxrt());
+        let dcd = named(&mut ev, &d, &[0], "dcd");
+        let commands = named(&mut ev, &d, &dcd, "commands");
+        let body = named(&mut ev, &d, &[&commands[..], &[0]].concat(), "body");
+        let mut names = Vec::new();
+        let mut marked = false;
+        for i in 0..ev.node(&d, &body).unwrap().child_count as usize {
+            let at = named(&mut ev, &d, &[&body[..], &[i]].concat(), "address");
+            let node = ev.node(&d, &at).unwrap();
+            marked |= node.problem.is_some();
+            let Value::Enum { name: Some(name), hex: true, .. } = node.value else { panic!("not a named address: {:?}", node.value) };
+            names.push(name);
+        }
+        (names, marked)
+    }
+
+    #[test]
+    fn each_address_in_the_dcd_is_named_for_its_register() {
+        let d = Document::new(MemSource(image(&dcd_with_a_stray())));
+        let mut ev = Evaluator::new(imxrt());
+        let commands = named(&mut ev, &d, &[0, 4], "commands");
+        let write = named(&mut ev, &d, &[&commands[..], &[0]].concat(), "body");
+        let check = named(&mut ev, &d, &[&commands[..], &[1]].concat(), "body");
+        let name = |ev: &mut Evaluator, path: &[usize]| match value(ev, &d, path, &["address"]) {
+            Value::Enum { raw, name: Some(name), .. } => (raw, name),
+            other => panic!("not a named address: {other:?}"),
+        };
+        assert_eq!(name(&mut ev, &[&write[..], &[0]].concat()), (0x400f_c068, "CCM_CCGR0".to_string()));
+        assert_eq!(name(&mut ev, &[&write[..], &[1]].concat()), (0x400f_c06c, "CCM_CCGR1".to_string()));
+        assert_eq!(name(&mut ev, &check), (0x402f_003c, "SEMC_INTR".to_string()));
+        // Each pair is named for the register it writes.
+        assert!(ev.node(&d, &[&write[..], &[1]].concat()).unwrap().name.contains("CCM_CCGR1"));
+    }
+
+    #[test]
+    fn an_address_that_is_not_a_register_is_named_for_where_it_is_and_not_marked() {
+        let (names, marked) = written_names(&dcd_writing(&[
+            0x2000_0000, // DTCM
+            0x402f_0100, // SEMC's 16 KiB, past its last register
+            0x4018_4010, // LPUART1's BAUD, which is not in a DCD range
+            0x402f_0002, // two bytes into SEMC_MCR
+            0x402f_0088, // reserved, between SEMC_DBICR1 and SEMC_IPCR0
+            0x400d_81c4, // reserved, inside USB_ANALOG's registers for USB1
+            0x402e_0808, // between USBNC2's first register and USBNC1's second
+            0xffff_fffc,
+            0x0000_0000,
+        ]));
+        assert!(!marked, "{names:?}");
+        let outside = "not a peripheral register";
+        assert_eq!(names, [outside, outside, "in LPUART1", "in SEMC", "in SEMC", "in USB_ANALOG", outside, outside, outside]);
+    }
+
+    /// Registers checked one by one against the offsets in the comments of
+    /// NXP's `MIMXRT1062.h` and the base addresses it defines, and against
+    /// the pad macros of `fsl_iomuxc.h` for the GPIO_SPI pads.
+    #[test]
+    fn the_register_names_match_nxps_header() {
+        let names = register_names();
+        let want = [
+            (0x400f_c000 + 0x14, "CCM_CBCDR"),
+            (0x400f_c000 + 0x68, "CCM_CCGR0"),
+            (0x400d_8000 + 0x30, "CCM_ANALOG_PLL_SYS"),
+            (0x400d_8000 + 0x100, "CCM_ANALOG_PFD_528"),
+            // PMU_MISC0 and XTALOSC24M_MISC0 are the same register.
+            (0x400d_8000 + 0x150, "CCM_ANALOG_MISC0"),
+            // USB_ANALOG's second INSTANCE in the header.
+            (0x400d_8000 + 0x1a0 + 0x60, "USB_ANALOG_USB2_VBUS_DETECT"),
+            // DEBUGr in the header.
+            (0x400d_9000 + 0x50, "USBPHY1_DEBUG"),
+            (0x402f_0000, "SEMC_MCR"),
+            (0x402f_0000 + 0x10, "SEMC_BR0"),
+            (0x402f_0000 + 0x30, "SEMC_BR8"),
+            (0x402f_0000 + 0x3c, "SEMC_INTR"),
+            (0x402f_0000 + 0x9c, "SEMC_IPCMD"),
+            // The first element of each IOMUXC array.
+            (0x401f_8000 + 0x14, "IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00"),
+            (0x401f_8000 + 0x204, "IOMUXC_SW_PAD_CTL_PAD_GPIO_EMC_00"),
+            (0x401f_8000 + 0x3f4, "IOMUXC_ANATOP_USB_OTG1_ID_SELECT_INPUT"),
+            (0x401f_8000 + 0x65c, "IOMUXC_SW_MUX_CTL_PAD_GPIO_SPI_B0_00"),
+            (0x401f_8000 + 0x6b0, "IOMUXC_SW_MUX_CTL_PAD_GPIO_SPI_B1_07"),
+            (0x401f_8000 + 0x6b4, "IOMUXC_SW_PAD_CTL_PAD_GPIO_SPI_B0_00"),
+            (0x401f_8000 + 0x70c, "IOMUXC_ENET2_IPG_CLK_RMII_SELECT_INPUT"),
+            (0x400a_c000, "IOMUXC_GPR_GPR0"),
+            (0x400a_8000, "IOMUXC_SNVS_SW_MUX_CTL_PAD_WAKEUP"),
+            (0x400a_4000, "IOMUXC_SNVS_GPR_GPR0"),
+        ];
+        for (at, name) in want {
+            assert_eq!(names.label(at), Some(name), "{at:#x}");
+        }
+    }
+
+    /// The lookup reads the areas from the top down and takes the first one
+    /// at or below an address, which is only right if they are in order.
+    #[test]
+    fn the_generated_tables_are_in_address_order_and_inside_the_dcd_ranges() {
+        assert!(registers::REGISTERS.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(registers::AREAS.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 != w[1].1));
+        assert_eq!(registers::AREAS[0], (0, None));
+        // Table 9-42 of the reference manual.
+        let ranges = [0x400a_4000, 0x400a_8000, 0x400a_c000, 0x401f_8000, 0x400d_8000, 0x400f_c000, 0x402f_0000];
+        for (at, name) in registers::REGISTERS {
+            assert!(ranges.iter().any(|r| (*r..r + 0x4000).contains(at)), "{name} at {at:#x}");
         }
     }
 

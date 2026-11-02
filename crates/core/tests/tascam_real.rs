@@ -215,7 +215,47 @@ fn boot_header(ev: &mut Evaluator, d: &Document<MemSource>, f: &str) {
     let Value::Bytes { preview, .. } = ev.node(d, &stray).unwrap().value else { panic!("{f}: not bytes") };
     assert_eq!(preview[0], 0x40);
 
+    // Every address in the nine commands is named for the RT1060 register it
+    // writes or polls, and none is marked. The extra pair at 0x1460 is in the
+    // bytes after the ninth command, so it is not read as an address.
+    let mut writes = Vec::new();
+    let mut checks = Vec::new();
+    for i in 0..9 {
+        let command = [&commands[..], &[i]].concat();
+        let body = named(ev, d, &command, &["body"]);
+        match int(ev, d, &command, &["tag"]) {
+            0xcc => {
+                for j in 0..ev.node(d, &body).unwrap().child_count as usize {
+                    writes.push(register(ev, d, &[&body[..], &[j]].concat(), f));
+                }
+            }
+            0xcf => checks.push(register(ev, d, &body, f)),
+            tag => panic!("{f}: command {i} has tag {tag:#x}"),
+        }
+    }
+    assert_eq!((writes.len(), checks.len()), (125, 4), "{f}");
+    assert_eq!(writes[0], "CCM_CCGR0");
+    assert_eq!(writes[7], "CCM_ANALOG_PLL_SYS");
+    assert_eq!(writes[9], "CCM_CBCDR");
+    assert_eq!(writes[10], "IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00");
+    assert_eq!(writes[93], "IOMUXC_SW_PAD_CTL_PAD_GPIO_EMC_41");
+    assert_eq!(writes[94], "SEMC_MCR");
+    assert_eq!(writes[124], "SEMC_IPCR0");
+    assert!(checks.iter().all(|c| c == "SEMC_INTR"), "{f}: {checks:?}");
+
     assert_eq!(extent(ev, d, &FLASH, &["padding"]), (0x14e8, 0x2000 - 0x14e8));
+}
+
+/// The register a DCD write or check at `pair` names by its address, which
+/// must be one of the registers in the table rather than a peripheral or an
+/// area, and must not be marked.
+fn register(ev: &mut Evaluator, d: &Document<MemSource>, pair: &[usize], f: &str) -> String {
+    let at = named(ev, d, pair, &["address"]);
+    let node = ev.node(d, &at).unwrap();
+    assert_eq!(node.problem, None, "{f}: {pair:?}");
+    let Value::Enum { raw, name: Some(name), .. } = node.value else { panic!("{f}: {pair:?} is {:?}", node.value) };
+    assert!(name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'), "{f}: {raw:#x} is {name}");
+    name
 }
 
 /// The bootloader at the IVT's entry, which is the same in both releases.
