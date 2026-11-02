@@ -211,9 +211,9 @@ pub(crate) fn stream() -> T {
     )
     .field_doc(
         "programs",
-        "One program for each .dxe file in the stream: an initcode or an application. Each program starts with a block that has the first flag set, and that block's argument determines the program's length. The name program is this template's, not ADI's.",
+        "One program for each .dxe file in the stream: an initcode or an application. Each program starts with a block that has the flag \"first\" (BFLAG_FIRST) set, and that block's argument determines the program's length. The name program is this template's, not ADI's.",
     )
-    .field_doc("blocks", "Blocks that are not part of any program, as in a stream that does not start with a first block. They are read up to a block with the final flag, or up to bytes that are not a block header.")
+    .field_doc("blocks", "Blocks that are not part of any program, as in a stream that does not start with a first block. They are read up to a block that has the flag \"final\" (BFLAG_FINAL) set, or up to bytes that are not a block header.")
     .field_doc("erased", "A run of 0xFF bytes after the boot stream. Erased flash memory reads as 0xFF.")
     .field_doc("rest", "Bytes after the boot stream and any erased flash, shown as raw bytes.")
 }
@@ -257,7 +257,7 @@ pub(crate) fn program() -> T {
         )
         .field_doc(
             "first_block",
-            "The block with the first flag set (BFLAG_FIRST) that starts this program. This block's argument, ADI's next .dxe pointer, is the number of bytes from the end of this block's header to the end of the program. Usually an ignore block with a byte count of 0.",
+            "The block that starts this program, which has the flag \"first\" (BFLAG_FIRST) set. This block's argument, ADI's next .dxe pointer, is the number of bytes from the end of this block's header to the end of the program. Usually an ignore block with a byte count of 0.",
         )
         .field_doc(
             "after_last_block",
