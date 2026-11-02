@@ -806,7 +806,7 @@ function buildDocument(tab: Tab): Page {
     tabs.add({
       doc: unpacked,
       title:
-        crumbs !== null ? tabTitleText(crumbs) : unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name),
+        crumbs !== null ? tabTitleText(crumbs) : unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name, n.node.codec_kind),
       origin: UNPACKED.openTitle(n.node.name),
       label: crumbs === null ? null : () => tabTitleLabel(titleCrumbs(crumbs, fileTab()?.doc ?? null)),
       tip: crumbs === null ? null : () => lineageCard(crumbs),
@@ -1421,7 +1421,7 @@ function buildDocument(tab: Tab): Page {
   });
   const hideInsideBox = el(
     "label",
-    { className: "tb-check", title: STRINGSVIEW.hideInsideTitle },
+    { className: "tb-check tb-check-long", title: STRINGSVIEW.hideInsideTitle },
     hideInside,
     el("span", { textContent: STRINGSVIEW.hideInsideToggle }),
   );

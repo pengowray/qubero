@@ -10,7 +10,7 @@
 
 import { formatAddress, formatBytes, formatOffset, percentText } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
-import type { Doc, TemplateNode } from "./doc.ts";
+import type { CodecKind, Doc, TemplateNode } from "./doc.ts";
 import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
 import { DUMP_MIN_BYTES, isComputed, pathKey, PAGE } from "./flatten.ts";
 import type { Item } from "./flatten.ts";
@@ -577,18 +577,22 @@ function bytesButton(c: DrawContext, key: string): HTMLElement {
 function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: TemplateNode | null): void {
   if (n === null) return;
   if (n.decoded && n.refused === null) {
-    row.append(unpackedButton(item.path, n.name, false));
+    row.append(unpackedButton(item.path, n.name, false, n.codec_kind));
     return;
   }
   if (!n.space_root || item.path.length === 0) return;
   const stream = item.path.slice(0, -1);
-  if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name, n.joined));
+  if (c.streams.has(pathKey(stream))) return;
+  // The button is worded by what the stream's codec does, and the stream is
+  // the node above this one.
+  const up = n.joined ? null : c.doc.templateNode(stream);
+  row.append(unpackedButton(stream, n.name, n.joined, up?.status === "ok" ? up.node.codec_kind : null));
 }
 
 /** The control that opens a compressed run, or a stream joined from several
- *  runs, as a document of its own. */
-function unpackedButton(path: readonly number[], name: string, joined: boolean): HTMLElement {
-  const b = el("button", "rp-bytes rp-unpacked", joined ? JOINED.open : UNPACKED.open);
+ *  runs, as a document of its own. `kind` is what the run's codec does. */
+function unpackedButton(path: readonly number[], name: string, joined: boolean, kind: CodecKind | null | undefined): HTMLElement {
+  const b = el("button", "rp-bytes rp-unpacked", joined ? JOINED.open : UNPACKED.open(kind));
   b.type = "button";
   b.title = UNPACKED.openTitle(name);
   b.dataset["unpacked"] = pathKey(path);

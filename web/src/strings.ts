@@ -27,11 +27,13 @@ export function bitSizeText(bits: number): string {
  * (`CodecKind`). Real compression keeps the words the app has always used for
  * it: compressed bytes, which unpack. The other kinds say what was done
  * instead: Tascam's firmware image is scrambled and unscrambles, a base64
- * part is encoded and decodes, a PNG's rows are filtered and unfilter.
+ * part is encoded and decodes, a PNG's rows are filtered and unfilter. Stored
+ * bytes are not changed, so they have no verb.
  *
  * Where no one codec is at hand, "unpacked" stays the app's word for what any
- * codec gives back: the Open unpacked button, an offset within the unpacked
- * stream, a tab's title, and a report heading over streams of several kinds.
+ * codec gives back: an offset within the unpacked stream, the inspector's
+ * `Unpacked from` heading, and a report heading over streams of several
+ * kinds.
  */
 export type CodecWords = {
   /** In front of "stream": `2 scrambled streams`. */
@@ -46,15 +48,24 @@ export type CodecWords = {
    *  leaves out: stored bytes are not changed, and PNG's row filters are a
    *  step before deflate rather than a way the file is packed. */
   readonly with: string | null;
-  /** What came out, as an adjective: `the unscrambled bytes`. */
+  /** What came out, as an adjective: `the unscrambled bytes`. For stored
+   *  bytes, `opened`, the word the format profile uses for a stream the
+   *  template read inside. */
   readonly out: string;
   /** The verb, for a plural subject and for a singular one: `24 bytes
-   *  unscramble to`, `tascam scramble, unscrambles to`. */
-  readonly verb: string;
-  readonly verbs: string;
+   *  unscramble to`, `tascam scramble, unscrambles to`. Null for stored
+   *  bytes, which come out as they are: the clause is left out. */
+  readonly verb: string | null;
+  readonly verbs: string | null;
   /** What a checksum over everything the run gives back is a checksum of:
    *  `CRC-32 of the unpacked file`. */
   readonly summed: string;
+  /** The button that opens what the run gives back as a tab: `Open
+   *  unpacked`, `Open unscrambled`. */
+  readonly open: string;
+  /** Between the field and the file in a tab's title: `image unscrambled
+   *  from update.203`. A stored stream's tab is `data from archive.rar`. */
+  readonly from: string;
 };
 
 const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
@@ -67,6 +78,8 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     verb: "unpack",
     verbs: "unpacks",
     summed: "the unpacked file",
+    open: "Open unpacked",
+    from: "unpacked from",
   },
   encoding: {
     stream: "encoded",
@@ -77,6 +90,8 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     verb: "decode",
     verbs: "decodes",
     summed: "the decoded data",
+    open: "Open decoded",
+    from: "decoded from",
   },
   scrambling: {
     stream: "scrambled",
@@ -87,16 +102,20 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     verb: "unscramble",
     verbs: "unscrambles",
     summed: "the unscrambled data",
+    open: "Open unscrambled",
+    from: "unscrambled from",
   },
   stored: {
     stream: "stored",
     data: "stored data",
     bytes: "Stored bytes",
     with: null,
-    out: "unpacked",
-    verb: "unpack",
-    verbs: "unpacks",
+    out: "opened",
+    verb: null,
+    verbs: null,
     summed: "the stored data",
+    open: "Open stored",
+    from: "from",
   },
   filter: {
     stream: "filtered",
@@ -107,6 +126,8 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     verb: "unfilter",
     verbs: "unfilters",
     summed: "the unfiltered data",
+    open: "Open unfiltered",
+    from: "unfiltered from",
   },
   steganography: {
     stream: "steganographic",
@@ -117,6 +138,8 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     verb: "decode",
     verbs: "decodes",
     summed: "the decoded data",
+    open: "Open decoded",
+    from: "decoded from",
   },
 };
 
@@ -610,14 +633,18 @@ export const UNPACKED = {
    *  heads that line only for a run that was unpacked, under the rows saying
    *  where the byte is kept (`JOINED.underCursor`). */
   originHead: "Unpacked from",
-  /** Names the tab: what was unpacked, and what out of. */
-  tabTitle: (field: string, file: string): string => `${field} unpacked from ${file}`,
-  /** On the listing heading and in the inspector, for a stream that opened. */
-  open: "Open unpacked",
+  /** Names the tab: what was unpacked, and what out of, in the words for what
+   *  the stream's codec does: `image unscrambled from update.203`. */
+  tabTitle: (field: string, file: string, kind: CodecKind | null | undefined): string => `${field} ${codecWords(kind).from} ${file}`,
+  /** On the listing heading, in the inspector and in the report, for a
+   *  stream that opened: `Open unpacked`, `Open unscrambled`. */
+  open: (kind: CodecKind | null | undefined): string => codecWords(kind).open,
   /** In the status bar after Open unpacked was pressed on a stream large
    *  enough to take several goes, until the tab opens. `percent` is how much
    *  of the compressed data has been read and `size` what it has unpacked to
-   *  so far; the final size is not known until the end. */
+   *  so far; the final size is not known until the end. Only deflate, zstd
+   *  and xz streams unpack in goes (`codec/lazy.rs`), so these words are
+   *  always the ones for compression. */
   unpacking: (field: string, percent: string, size: string): string =>
     `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   openTitle: (field: string): string => `Open ${field} as a document of its own`,
@@ -3641,12 +3668,14 @@ export const STRINGSVIEW = {
       "UTF-16, big-endian, searched for at every byte offset. A match is found only when the bytes around it mark it as a string: a null terminator after it, or a length prefix of more than 2 bytes in front. Not found: unterminated text with no length prefix, and text that is only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
   } as Readonly<Record<string, string>>,
   /** Only offered when a template is reading the file, since it is the
-   *  template that says which bytes are numbers or code. `packed data`
-   *  covers every codec whose input text turns up in by chance: compressed,
-   *  scrambled, base64. The status line names which kind a file has. */
-  hideInsideToggle: "Hide strings inside numeric data, machine code or packed data",
+   *  template that says which bytes are numbers or code. The streams are
+   *  named by the same words the status line counts them under (`9 in
+   *  scrambled data`). The label names the three kinds a file is likely to
+   *  have, and the hover text all five. `packed data` lost: it is the code's
+   *  word, and a programmer can read it as bit-packed fields. */
+  hideInsideToggle: "Hide strings inside numeric data, machine code, or compressed, encoded or scrambled data",
   hideInsideTitle:
-    "Hide strings that lie inside fields the template reads as numeric data, machine code, or data that a codec decodes, such as compressed or scrambled data. Printable bytes appear in such fields by chance. The status line still counts them.",
+    "Hide strings that lie inside fields the template reads as numeric data, machine code, or compressed, encoded (base64), scrambled, filtered or steganographic data. A string found in such a field is most likely there by chance. The status line still counts the hidden strings.",
   /** "Filter" alone, beside the app's Find, would be taken for it. */
   filterPlaceholder: "Filter strings",
   filterLabel: "Filter strings by text",
@@ -3752,8 +3781,11 @@ export const STRINGSVIEW = {
       case "code":
         return `Inside "${name}", which the template reads as machine code (${where}). Machine code often contains printable bytes by chance.`;
       case "packed": {
+        // Base64, the one encoding marked here, is printable throughout: what
+        // is chance is a word spelled by it, not the printable bytes.
         const w = codecWords(codec);
-        return `Inside "${name}", which the template reads as ${w.data} (${where}). ${sentenceStart(w.data)} often contains printable bytes by chance. Click to open the ${w.out} data in a tab of its own, which has its own Strings view.`;
+        const chance = codec === "encoding" ? `${sentenceStart(w.data)} is printable throughout, so a word found in it is most likely there by chance.` : `${sentenceStart(w.data)} often contains printable bytes by chance.`;
+        return `Inside "${name}", which the template reads as ${w.data} (${where}). ${chance} Click to open the ${w.out} data in a tab of its own, which has its own Strings view.`;
       }
     }
   },

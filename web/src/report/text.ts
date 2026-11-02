@@ -299,8 +299,8 @@ export const RV = {
   colValue: "Value",
   /** A compressed stream in the value column, beside its size in the file:
    *  `jpeg scan, unpacks to 115,200 bytes`, `tascam scramble, unscrambles to
-   *  4 bytes`. */
-  unpacksTo: (codec: string, size: string, w: CodecWords): string => `${codec}, ${w.verbs} to ${size}`,
+   *  4 bytes`. A stored stream is its codec's name alone, `stored`. */
+  unpacksTo: (codec: string, size: string, w: CodecWords): string => (w.verbs === null ? codec : `${codec}, ${w.verbs} to ${size}`),
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   /** Neighbouring fields of one name, as one row. */
   runOf: (name: string, n: number): string => `${name} × ${n.toLocaleString()}`,
@@ -317,31 +317,40 @@ export const RV = {
   // The words follow what the codec does: `2 compressed streams` that unpack,
   // `2 scrambled streams` that unscramble. `w` is null where the streams are
   // of more than one kind, and then they are `streams` that unpack, the
-  // app's word for what any codec gives back.
+  // app's word for what any codec gives back. Stored streams have no verb,
+  // so their headings give the size in the file alone: `1 stored stream: 29
+  // bytes`, `data: 29 bytes, stored`.
   streamsHeading: (n: number, packed: number, unpacked: number | null, w: CodecWords | null): string => {
     const streams = sentenceCase(counted(n, w === null ? "stream" : `${w.stream} stream`));
-    if (unpacked === null) return `${streams}: ${bytesText(packed)}`;
+    if (unpacked === null || w?.verb === null) return `${streams}: ${bytesText(packed)}`;
     return `${streams}: ${bytesText(packed)} ${agree(packed, w?.verbs ?? "unpacks", w?.verb ?? "unpack")} to ${bytesText(unpacked)}`;
   },
   streamHeading: (name: string, packed: number, codec: string, unpacked: number | null, w: CodecWords): string =>
-    unpacked === null
-      ? `${name}: ${bytesText(packed)} of ${codec}`
-      : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, w.verbs, w.verb)} to ${bytesText(unpacked)}`,
+    w.verb === null || w.verbs === null
+      ? `${name}: ${bytesText(packed)}, ${codec}`
+      : unpacked === null
+        ? `${name}: ${bytesText(packed)} of ${codec}`
+        : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, w.verbs, w.verb)} to ${bytesText(unpacked)}`,
   streamName: "Stream",
   streamPacked: "In the file",
   /** Over the column of what each stream came to: `Unpacked`, or
-   *  `Unscrambled` where every stream is scrambled. */
+   *  `Unscrambled` where every stream is scrambled, or `Opened` where every
+   *  stream is stored. */
   streamUnpacked: (w: CodecWords | null): string => sentenceCase(w?.out ?? "unpacked"),
   /** Over the ratio column, whose cells say `3.8×`: unpacked over packed. */
   streamRatio: "Ratio",
   streamRowTitle: "Click to draw this stream below",
-  streamNotUnpacked: (w: CodecWords): string => `not ${w.out} here`,
+  /** In the ratio column, for a stream the report did not open to draw.
+   *  `not unpacked here` lost: the format profile in the same report says the
+   *  template opened that stream, and the fields read inside it are in the
+   *  listing. */
+  streamNotDrawn: "not drawn",
   ratio: (r: number): string => `${r.toFixed(r < 10 ? 1 : 0)}×`,
   stageCompressed: "In the file",
   stageUnpacked: (w: CodecWords): string => sentenceCase(w.out),
   /** Under the two bars. Bytes that come out the same size as they went in,
-   *  as scrambled and stored ones do, are said to be the same size rather
-   *  than `1.0 times` it. */
+   *  as scrambled ones do, are said to be the same size rather than `1.0
+   *  times` it. Stored bytes of the same size get no bars at all. */
   stagesCaption: (packed: number, unpacked: number, w: CodecWords): string => {
     const lead = "Each bar is drawn to scale.";
     if (packed === 0) return lead;
@@ -356,11 +365,35 @@ export const RV = {
     from === 0
       ? `The first ${counted(to, "code")} of the stream, joined to the bytes each one writes.`
       : `Codes ${(from + 1).toLocaleString()} to ${to.toLocaleString()} of the stream, joined to the bytes each one writes.`,
-  ribbonCaption:
-    "A literal is one code for one byte. A copy is one code that repeats earlier bytes, so its band widens toward the bytes. Hover a band for its bits and bytes.",
-  streamNotOpened: (limit: string, w: CodecWords): string =>
-    `Not ${w.out} here: the report ${w.verbs} streams up to ${limit} on its own. Open it as a tab to read it.`,
-  openUnpacked: "Open unpacked",
+  /** After the lead, one sentence for each kind of code the figure draws,
+   *  in this order, then `ribbonHover`. A kind of code with no sentence here
+   *  (a deflate block header, a zstd frame) is grey in the figure and named
+   *  when its band is hovered. */
+  ribbonKinds: {
+    literal: "A literal is one code for one byte.",
+    match: "A copy is one code that repeats earlier bytes, so its band widens toward the bytes.",
+    stored: "A stored run is one code for bytes copied as they are.",
+    base64: "A base64 group is 4 characters that stand for 3 bytes. The last group of a stream can stand for 1 or 2 bytes.",
+    ignored: "A blank or a line break produces no bytes, so its band narrows to a point.",
+  } as Readonly<Record<string, string>>,
+  ribbonHover: "Hover a band for its bits and bytes.",
+  /** The note in place of a stream's figures, for a stream the report did
+   *  not open to draw, before the button that opens it as a tab. The report
+   *  opens streams on its own up to three limits, and says which one this
+   *  stream passed. Not `not unpacked here`: the template may well have
+   *  opened the stream to read fields inside it. */
+  streamNotDrawnNote: (why: "size" | "count" | "total" | "failed", limits: { readonly size: string; readonly count: number; readonly total: string }): string => {
+    switch (why) {
+      case "size":
+        return `This stream is larger than ${limits.size}, so the report does not draw it. Open it as a tab to read it.`;
+      case "count":
+        return `The report draws at most ${limits.count.toLocaleString()} streams, so it does not draw this one. Open it as a tab to read it.`;
+      case "total":
+        return `The report draws at most ${limits.total} of streams in all, so it does not draw this one. Open it as a tab to read it.`;
+      case "failed":
+        return "The report could not open this stream to draw it.";
+    }
+  },
   moreStreams: (n: number): string => `${counted(n, "more stream")} not shown.`,
   /** For a file whose only streams are joined ones. */
   joinsHeading: (n: number): string => sentenceCase(counted(n, "joined stream")),
@@ -415,8 +448,12 @@ export const RV = {
   profileDeclared: "Declared in the template",
   notInFile: "none",
   /** After a codec's row in the format profile: `1 stream opened, unpacked
-   *  to 4 bytes`, or `unscrambled to` for a scrambling codec. */
-  unpackedTo: (streams: number, size: string, kind: CodecKind | null): string => `${counted(streams, "stream")} opened, ${codecWords(kind).out} to ${size}`,
+   *  to 4 bytes`, or `unscrambled to` for a scrambling codec. A stored
+   *  stream comes out as it is: `1 stream opened`. */
+  unpackedTo: (streams: number, size: string, kind: CodecKind | null): string => {
+    const w = codecWords(kind);
+    return w.verb === null ? `${counted(streams, "stream")} opened` : `${counted(streams, "stream")} opened, ${w.out} to ${size}`;
+  },
   profileCaption:
     "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows.",
   /** Under the table, for the rows folded away: what the template declares

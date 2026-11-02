@@ -1249,7 +1249,7 @@ export class Inspector {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "insp-check-button";
-      button.textContent = offer.joined ? JOINED.open : UNPACKED.open;
+      button.textContent = offer.joined ? JOINED.open : UNPACKED.open(n.codec_kind);
       button.title = UNPACKED.openTitle(n.name);
       button.addEventListener("click", () => this.onOpenUnpacked(offer.open));
       parts.push(button);

@@ -283,14 +283,27 @@ test("the streams section names its streams by what their codec does", () => {
   assert.equal(RV.streamsHeading(3, 10, 40, null), "3 streams: 10 bytes unpack to 40 bytes");
   assert.equal(RV.streamUnpacked(null), "Unpacked");
   assert.equal(RV.streamUnpacked(scrambled), "Unscrambled");
-  assert.equal(RV.streamNotUnpacked(scrambled), "not unscrambled here");
-  assert.equal(RV.streamNotOpened("4 MiB", scrambled), "Not unscrambled here: the report unscrambles streams up to 4 MiB on its own. Open it as a tab to read it.");
-  assert.equal(RV.streamNotOpened("4 MiB", codecWords("compression")), "Not unpacked here: the report unpacks streams up to 4 MiB on its own. Open it as a tab to read it.");
   assert.equal(RV.stagesCaption(4, 4, scrambled), "Each bar is drawn to scale. The unscrambled bytes are the same size as the scrambled ones.");
   assert.equal(RV.stagesCaption(100, 380, codecWords("compression")), "Each bar is drawn to scale. The unpacked bytes are 3.8 times the size of the compressed ones.");
   assert.equal(RV.unpacksTo("tascam scramble", "4 bytes", scrambled), "tascam scramble, unscrambles to 4 bytes");
   assert.equal(RV.unpackedTo(1, "4 bytes", "scrambling"), "1 stream opened, unscrambled to 4 bytes");
   assert.equal(RV.unpackedTo(2, "9 bytes", null), "2 streams opened, unpacked to 9 bytes");
+});
+
+test("a stored stream is not said to unpack", () => {
+  const stored = codecWords("stored");
+  assert.equal(RV.streamsHeading(1, 29, 29, stored), "1 stored stream: 29 bytes");
+  assert.equal(RV.streamHeading("data", 29, "stored", 29, stored), "data: 29 bytes, stored");
+  assert.equal(RV.unpacksTo("stored", "29 bytes", stored), "stored");
+  assert.equal(RV.unpackedTo(1, "29 bytes", "stored"), "1 stream opened");
+  assert.equal(RV.streamUnpacked(stored), "Opened");
+});
+
+test("a stream the report did not draw says which limit it passed", () => {
+  const limits = { size: "4.00 MiB", count: 32, total: "16.0 MiB" };
+  assert.equal(RV.streamNotDrawnNote("size", limits), "This stream is larger than 4.00 MiB, so the report does not draw it. Open it as a tab to read it.");
+  assert.equal(RV.streamNotDrawnNote("count", limits), "The report draws at most 32 streams, so it does not draw this one. Open it as a tab to read it.");
+  assert.equal(RV.streamNotDrawnNote("total", limits), "The report draws at most 16.0 MiB of streams in all, so it does not draw this one. Open it as a tab to read it.");
 });
 
 test("both byte orders are said with their counts", () => {

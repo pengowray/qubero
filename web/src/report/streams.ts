@@ -3,19 +3,21 @@
 // `CodecWords` in strings.ts.
 //
 // Each stream gets its stages drawn to scale: the run in the file and the
-// bytes it unpacks to. A stream whose codec keeps a trace (deflate) also gets
-// the ribbon from its first codes to the bytes they write, from
-// `Space::map_out`: a literal is one code for one byte, a copy one code for a
-// run of earlier bytes, so its band widens toward them.
+// bytes it unpacks to. A stored stream that comes out the same size gets
+// none. A stream whose codec keeps a trace of two codes or more (deflate,
+// base64) also gets the ribbon from its first codes to the bytes they write,
+// from `Space::map_out`: a literal is one code for one byte, a copy one code
+// for a run of earlier bytes, so its band widens toward them.
 //
 // Unpacking is a whole decode of the stream, so the report does it on its own
-// only for streams up to `OPEN_BYTES`, and only for the first `OPEN_MAX` of
-// them. The rest say so and offer to open the stream as a tab, which is the
-// same unpacking the listing's button does.
+// only for streams up to `OPEN_BYTES`, for the first `OPEN_MAX` of them, and
+// up to `OPEN_TOTAL` in all. The rest say which limit they passed and offer
+// to open the stream as a tab, which is the same unpacking the listing's
+// button does.
 
 import type { Doc, MapStep, TemplateNode } from "../doc.ts";
 import { byteText, formatAddress, formatBytes, formatOffset } from "../format.ts";
-import { codecWords, type CodecWords } from "../strings.ts";
+import { codecWords, UNPACKED, type CodecWords } from "../strings.ts";
 import { ok } from "./model.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { ribbon, type RibbonData } from "./ribbon.ts";
@@ -38,7 +40,12 @@ const STEPS = 48;
 const SCAN_STEPS = 400;
 const LEAD_STEPS = 12;
 
-type Opened = { readonly node: TemplateNode; readonly label: string; readonly space: Doc | null };
+/** Why the report did not open a stream to draw it: the stream is over
+ *  `OPEN_BYTES`, the report had opened `OPEN_MAX` streams already, opening it
+ *  would pass `OPEN_TOTAL`, or it would not open. */
+type NotDrawn = "size" | "count" | "total" | "failed";
+
+type Opened = { readonly node: TemplateNode; readonly label: string; readonly space: Doc | null; readonly notDrawn: NotDrawn | null };
 
 export const streamsSection: Section = {
   id: "streams",
@@ -57,17 +64,20 @@ export const streamsSection: Section = {
       if (label === WAIT) return WAIT;
       let space: Doc | null = null;
       const bytes = node.size_bits / 8;
-      if (opened.filter((o) => o.space !== null).length < OPEN_MAX && bytes <= OPEN_BYTES && openedBytes + bytes <= OPEN_TOTAL) {
+      let notDrawn: NotDrawn | null =
+        bytes > OPEN_BYTES ? "size" : opened.filter((o) => o.space !== null).length >= OPEN_MAX ? "count" : openedBytes + bytes > OPEN_TOTAL ? "total" : null;
+      if (notDrawn === null) {
         const r = ctx.doc.openSpace(node.path);
         // A large stream is unpacked over several goes, and the section waits
         // for it as it waits for bytes.
         if (r !== null && "working" in r) return WAIT;
         space = r !== null && !("refused" in r) ? r : null;
         if (space !== null) openedBytes += bytes;
+        else notDrawn = "failed";
       }
       if (space === null) allOpened = false;
       else unpackedTotal += space.lengthBytes;
-      opened.push({ node, label, space });
+      opened.push({ node, label, space, notDrawn });
     }
     if (streams.length > ROWS_MAX) allOpened = false;
     const packed = streams.reduce((n, s) => n + s.size_bits / 8, 0);
@@ -166,7 +176,7 @@ function streamTable(
     bar.className = "rv-ratiobar";
     bar.style.width = `${Math.max(1, (ratio / most) * 60)}px`;
     const own = codecWords(o.node.codec_kind);
-    const ratioCell = cell(o.space === null ? RV.streamNotUnpacked(own) : "", "rv-ratio", RV.streamRatio);
+    const ratioCell = cell(o.space === null ? RV.streamNotDrawn : "", "rv-ratio", RV.streamRatio);
     if (o.space !== null) ratioCell.append(bar, ` ${RV.ratio(ratio)}`);
     tr.append(
       name,
@@ -265,17 +275,19 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   if (o.space === null) {
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.append(`${RV.streamNotOpened(formatBytes(OPEN_BYTES), words)} `);
+    p.append(`${RV.streamNotDrawnNote(o.notDrawn ?? "failed", { size: formatBytes(OPEN_BYTES), count: OPEN_MAX, total: formatBytes(OPEN_TOTAL) })} `);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rv-button";
-    b.textContent = RV.openUnpacked;
+    b.textContent = UNPACKED.open(o.node.codec_kind);
     b.addEventListener("click", () => ctx.host.openUnpacked(o.node.path));
     p.append(b);
     box.append(p);
     return box;
   }
-  box.append(stages(packed, o.space.lengthBytes, words));
+  // Stored bytes that come out the same size get no bars: two bars of one
+  // length would only repeat the size in the heading.
+  if (words.verb !== null || packed !== o.space.lengthBytes) box.append(stages(packed, o.space.lengthBytes, words));
   const r = traceRibbon(ctx, o);
   if (r !== null) box.append(r);
   return box;
@@ -330,9 +342,6 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
   // 8×8 block carries all 128 of its coefficients. The JPEG section draws
   // that stream its own way (see `jpeg.ts`).
   if (read.some((s) => s.kind === "eob" || s.kind === "dc" || s.kind === "ac")) return null;
-  // The caption explains literals and copies. A trace with neither, such as
-  // the one step a scrambled or stored run is, has nothing for it to explain.
-  if (!read.some((s) => s.kind === "literal" || s.kind === "match")) return null;
   // The window starts a little before the first copy, so it shows both kinds
   // of code: most streams open with a run of literals, since there is nothing
   // earlier to copy yet.
@@ -341,7 +350,10 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
   const steps = read.slice(start, start + STEPS);
   const first = steps[0];
   const last = steps[steps.length - 1];
-  if (first === undefined || last === undefined) return null;
+  // One step is one band from the whole run to everything it gave back: the
+  // trace of a scrambled run, a stored one, or a zstd stream of one frame.
+  // The bars above already show that.
+  if (first === undefined || last === undefined || steps.length < 2) return null;
   const outBytes = space.read(first.out_start, last.out_end - first.out_start);
   const textOf = (s: MapStep): string => {
     if (!outBytes.complete) return "";
@@ -407,7 +419,12 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
   const cap = document.createElement("figcaption");
   const lead = document.createElement("b");
   lead.textContent = RV.ribbonCaptionLead(start, start + steps.length);
-  cap.append(lead, ` ${RV.ribbonCaption}`);
+  // A sentence for each kind of code that is drawn, and none for the rest: a
+  // base64 stream has no copies to explain.
+  const said = Object.entries(RV.ribbonKinds)
+    .filter(([kind]) => steps.some((s) => s.kind === kind))
+    .map(([, text]) => text);
+  cap.append(lead, ` ${[...said, RV.ribbonHover].join(" ")}`);
   fig.append(svg, cap);
   return fig;
 }

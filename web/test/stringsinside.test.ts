@@ -29,6 +29,13 @@ test("packed data is named by what its codec does", () => {
   assert.match(SV.insideTitle("packed", "data", "deflate", 0, 10), /reads as compressed data .* Compressed data often .* open the unpacked data/);
 });
 
+test("a string inside base64 is chance because of the word it spells, not its printable bytes", () => {
+  const title = SV.insideTitle("packed", "body", "base64", 0x340, 30, "encoding");
+  assert.match(title, /reads as encoded data \(base64, /);
+  assert.match(title, /Encoded data is printable throughout, so a word found in it is most likely there by chance\. Click to open the decoded data/);
+  assert.doesNotMatch(title, /printable bytes by chance/);
+});
+
 test("a list with every string hidden says none are shown", () => {
   assert.equal(SV.statusShown(0), "No strings shown");
   assert.equal(SV.statusShown(8108), "8,108 strings shown");
