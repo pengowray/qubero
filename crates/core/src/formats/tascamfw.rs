@@ -14,9 +14,9 @@
 //! image alone.
 //!
 //! The product code is Tascam's code for the product. The X8's code is
-//! `DR-TURBO`, its internal project name, which is also in the source paths in
-//! its firmware (`C:\Perforce\projects\SSR\DR-TURBO\...`). The DR-05X's code
-//! is `DR-05X`. [`is_update`] recognises a file by the other fields of its
+//! `DR-TURBO`, Tascam's internal project name for the X8. The same name is in
+//! the source file paths in the X8's firmware
+//! (`C:\Perforce\projects\SSR\DR-TURBO\...`). The DR-05X's code is `DR-05X`. [`is_update`] recognises a file by the other fields of its
 //! header and accepts any product code.
 //!
 //! How the image is read depends on its first unscrambled bytes, and not on
@@ -214,7 +214,7 @@ fn header() -> T {
     .field_valid("file_size", Valid::Eq(E::SpaceSize))
     .field_doc(
         "product_code",
-        "Tascam's code for the product this update is for, in ASCII, padded with NULs to 8 bytes. The Portacapture X8's code is DR-TURBO, its internal project name, which also appears in the source file paths in the X8's firmware (C:\\Perforce\\projects\\SSR\\DR-TURBO\\...). The DR-05X's code is DR-05X.",
+        "Tascam's code for the product this update is for, in ASCII, padded with NULs to 8 bytes. The Portacapture X8's code is DR-TURBO, Tascam's internal project name for the X8. The same name appears in the source file paths in the X8's firmware (C:\\Perforce\\projects\\SSR\\DR-TURBO\\...). The DR-05X's code is DR-05X.",
     )
 }
 
