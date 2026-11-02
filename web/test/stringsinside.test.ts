@@ -24,16 +24,29 @@ test("packed data is named by what its codec does", () => {
   assert.equal(SV.statusInside({ numbers: 0, code: 0, packed: { scrambling: 9, compression: 3 } }), "(3 in compressed data, 9 in scrambled data)");
   const title = SV.insideTitle("packed", "image", "tascam scramble", 0x20, 1024, "scrambling");
   assert.match(title, /reads as scrambled data \(tascam scramble, /);
-  assert.match(title, /Scrambled data often contains printable bytes by chance\. Click to open the unscrambled data/);
+  assert.match(title, /Scrambled data often contains printable bytes by chance\. Click to open the unscrambled data in a tab, which has its own Strings view\.$/);
   // A string from a core that sent no kind keeps the words for compression.
   assert.match(SV.insideTitle("packed", "data", "deflate", 0, 10), /reads as compressed data .* Compressed data often .* open the unpacked data/);
 });
 
-test("a string inside base64 is chance because of the word it spells, not its printable bytes", () => {
+test("a string inside base64 is most likely the base64 text itself, not printable bytes by chance", () => {
   const title = SV.insideTitle("packed", "body", "base64", 0x340, 30, "encoding");
   assert.match(title, /reads as encoded data \(base64, /);
-  assert.match(title, /Encoded data is printable throughout, so a word found in it is most likely there by chance\. Click to open the decoded data/);
+  assert.match(title, /Encoded data is printable throughout, so this string is most likely part of the base64 text, not readable text\. Click to open the decoded data in a tab/);
   assert.doesNotMatch(title, /printable bytes by chance/);
+});
+
+test("the hide checkbox's hover text names every kind of stream it hides", () => {
+  for (const kind of ["compressed", "encoded (base64)", "scrambled", "filtered", "steganographic"]) assert.ok(SV.hideInsideTitle.includes(kind), kind);
+  assert.match(SV.hideInsideTitle, /most likely not meant as text\./);
+});
+
+test("a stored stream's string is not said to be chance", () => {
+  // The core marks none (`packs()` in readas.rs), and the words would be
+  // wrong if it did: stored bytes are the text as it is.
+  const title = SV.insideTitle("packed", "data", "stored", 0, 29, "stored");
+  assert.doesNotMatch(title, /by chance/);
+  assert.match(title, /Click to open the contents in a tab/);
 });
 
 test("a list with every string hidden says none are shown", () => {

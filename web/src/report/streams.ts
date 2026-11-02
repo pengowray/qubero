@@ -3,17 +3,21 @@
 // `CodecWords` in strings.ts.
 //
 // Each stream gets its stages drawn to scale: the run in the file and the
-// bytes it unpacks to. A stored stream that comes out the same size gets
-// none. A stream whose codec keeps a trace of two codes or more (deflate,
-// base64) also gets the ribbon from its first codes to the bytes they write,
-// from `Space::map_out`: a literal is one code for one byte, a copy one code
-// for a run of earlier bytes, so its band widens toward them.
+// bytes it unpacks to. A stream that comes out the same size as it is in the
+// file, as a scrambled or stored one does, gets none: two bars of one length
+// would only repeat the size in the heading. A stream whose codec keeps a
+// trace of two codes or more (deflate, base64) also gets the ribbon from its
+// first codes to the bytes they write, from `Space::map_out`: a literal is
+// one code for one byte, a copy one code for a run of earlier bytes, so its
+// band widens toward them.
 //
 // Unpacking is a whole decode of the stream, so the report does it on its own
-// only for streams up to `OPEN_BYTES`, for the first `OPEN_MAX` of them, and
-// up to `OPEN_TOTAL` in all. The rest say which limit they passed and offer
-// to open the stream as a tab, which is the same unpacking the listing's
-// button does.
+// only for streams up to `OPEN_BYTES` in the file, for the first `OPEN_MAX` of
+// them, and up to `OPEN_TOTAL` of the file in all. The rest say which limit
+// they passed and offer to open the stream in a tab, which is the same
+// unpacking the listing's button does. Where the template has already
+// decoded one of those, its size after decoding is still known, and the
+// table gives it.
 
 import type { Doc, MapStep, TemplateNode } from "../doc.ts";
 import { byteText, formatAddress, formatBytes, formatOffset } from "../format.ts";
@@ -40,12 +44,21 @@ const STEPS = 48;
 const SCAN_STEPS = 400;
 const LEAD_STEPS = 12;
 
-/** Why the report did not open a stream to draw it: the stream is over
- *  `OPEN_BYTES`, the report had opened `OPEN_MAX` streams already, opening it
- *  would pass `OPEN_TOTAL`, or it would not open. */
+/** Why the report did not decode a stream to draw it: the stream is over
+ *  `OPEN_BYTES`, the report had drawn `OPEN_MAX` streams already, decoding it
+ *  would pass `OPEN_TOTAL`, or it would not decode. */
 type NotDrawn = "size" | "count" | "total" | "failed";
 
-type Opened = { readonly node: TemplateNode; readonly label: string; readonly space: Doc | null; readonly notDrawn: NotDrawn | null };
+/** One stream, and what it came to. `space` is what the report decoded to
+ *  draw it, or null. `unpacked` is its size after decoding, in bytes, or null
+ *  when neither the report nor the template decoded it. */
+type Opened = {
+  readonly node: TemplateNode;
+  readonly label: string;
+  readonly space: Doc | null;
+  readonly unpacked: number | null;
+  readonly notDrawn: NotDrawn | null;
+};
 
 export const streamsSection: Section = {
   id: "streams",
@@ -58,7 +71,7 @@ export const streamsSection: Section = {
     const opened: Opened[] = [];
     let unpackedTotal = 0;
     let openedBytes = 0;
-    let allOpened = true;
+    let allKnown = true;
     for (const node of streams.slice(0, ROWS_MAX)) {
       const label = streamLabel(ctx.doc, node);
       if (label === WAIT) return WAIT;
@@ -75,17 +88,19 @@ export const streamsSection: Section = {
         if (space !== null) openedBytes += bytes;
         else notDrawn = "failed";
       }
-      if (space === null) allOpened = false;
-      else unpackedTotal += space.lengthBytes;
-      opened.push({ node, label, space, notDrawn });
+      const unpacked = space !== null ? space.lengthBytes : decodedSize(ctx.doc, node);
+      if (unpacked === WAIT) return WAIT;
+      if (unpacked === null) allKnown = false;
+      else unpackedTotal += unpacked;
+      opened.push({ node, label, space, unpacked, notDrawn });
     }
-    if (streams.length > ROWS_MAX) allOpened = false;
+    if (streams.length > ROWS_MAX) allKnown = false;
     const packed = streams.reduce((n, s) => n + s.size_bits / 8, 0);
     const words = sharedWords(streams);
     const sec = document.createElement("section");
     sec.className = "rv-section rv-streams";
     const h = document.createElement("h2");
-    h.textContent = streams.length === 0 ? RV.joinsHeading(walk.joins.length) : RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null, words);
+    h.textContent = streams.length === 0 ? RV.joinsHeading(walk.joins.length) : RV.streamsHeading(streams.length, packed, allKnown ? unpackedTotal : null, words);
     sec.append(h);
     if (streams.length === 0) {
       sec.append(joinList(ctx, walk.joins));
@@ -114,6 +129,17 @@ export const streamsSection: Section = {
     return sec;
   },
 };
+
+/** A stream's size after decoding, in bytes, from the node the template read
+ *  inside it, the way the parts listing gives it (`valueText` in bodies.ts).
+ *  Null when the template has not decoded the stream. */
+function decodedSize(doc: Doc, node: TemplateNode): number | null | typeof WAIT {
+  if (node.child_count === 0) return null;
+  const kids = ok(doc.templateChildren(node.path, 0, Math.min(node.child_count, 8)));
+  if (kids === WAIT) return WAIT;
+  const root = kids?.find((k) => k.space_root);
+  return root === undefined ? null : root.size_bits / 8;
+}
 
 /** The words for what every one of these streams' codecs does, or null where
  *  the streams are of more than one kind. */
@@ -153,7 +179,7 @@ function streamTable(
   t.append(thead);
   const body = document.createElement("tbody");
   const rows = new Map<Opened, HTMLTableRowElement>();
-  const ratios = opened.map((o) => (o.space === null || o.node.size_bits === 0 ? 0 : (o.space.lengthBytes * 8) / o.node.size_bits));
+  const ratios = opened.map((o) => (o.unpacked === null || o.node.size_bits === 0 ? 0 : (o.unpacked * 8) / o.node.size_bits));
   const most = Math.max(1, ...ratios);
   opened.forEach((o, i) => {
     const tr = document.createElement("tr");
@@ -176,14 +202,14 @@ function streamTable(
     bar.className = "rv-ratiobar";
     bar.style.width = `${Math.max(1, (ratio / most) * 60)}px`;
     const own = codecWords(o.node.codec_kind);
-    const ratioCell = cell(o.space === null ? RV.streamNotDrawn : "", "rv-ratio", RV.streamRatio);
-    if (o.space !== null) ratioCell.append(bar, ` ${RV.ratio(ratio)}`);
+    const ratioCell = cell(o.unpacked === null ? RV.streamNotMeasured : "", "rv-ratio", RV.streamRatio);
+    if (o.unpacked !== null) ratioCell.append(bar, ` ${RV.ratio(ratio)}`);
     tr.append(
       name,
       cell(bytesText(o.node.size_bits / 8), "rv-num", RV.streamPacked),
       // The label a narrow screen shows beside the number is this stream's
       // own word, since there the column's heading is not above it.
-      cell(o.space === null ? "" : bytesText(o.space.lengthBytes), "rv-num", RV.streamUnpacked(own)),
+      cell(o.unpacked === null ? "" : bytesText(o.unpacked), "rv-num", RV.streamUnpacked(own)),
       ratioCell,
     );
     tr.addEventListener("click", (e) => {
@@ -263,7 +289,7 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
     box.dataset.rvPartEnd = String(o.node.offset_bits + o.node.size_bits);
   }
   const packed = o.node.size_bits / 8;
-  const unpacked = o.space?.lengthBytes ?? null;
+  const unpacked = o.unpacked;
   const h = document.createElement("h3");
   const name = document.createElement("code");
   name.textContent = o.label;
@@ -275,7 +301,7 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   if (o.space === null) {
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.append(`${RV.streamNotDrawnNote(o.notDrawn ?? "failed", { size: formatBytes(OPEN_BYTES), count: OPEN_MAX, total: formatBytes(OPEN_TOTAL) })} `);
+    p.append(`${RV.streamNotDrawnNote(o.notDrawn ?? "failed", { size: formatBytes(OPEN_BYTES), count: OPEN_MAX, total: formatBytes(OPEN_TOTAL) }, words)} `);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rv-button";
@@ -285,9 +311,9 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
     box.append(p);
     return box;
   }
-  // Stored bytes that come out the same size get no bars: two bars of one
-  // length would only repeat the size in the heading.
-  if (words.verb !== null || packed !== o.space.lengthBytes) box.append(stages(packed, o.space.lengthBytes, words));
+  // Bytes that come out the same size get no bars: two bars of one length
+  // would only repeat the size in the heading.
+  if (packed !== o.space.lengthBytes) box.append(stages(packed, o.space.lengthBytes, words));
   const r = traceRibbon(ctx, o);
   if (r !== null) box.append(r);
   return box;
@@ -420,10 +446,11 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
   const lead = document.createElement("b");
   lead.textContent = RV.ribbonCaptionLead(start, start + steps.length);
   // A sentence for each kind of code that is drawn, and none for the rest: a
-  // base64 stream has no copies to explain.
+  // base64 stream has no copies to explain. What quoted-printable writes
+  // nothing for is not whitespace alone, so it has a sentence of its own.
   const said = Object.entries(RV.ribbonKinds)
     .filter(([kind]) => steps.some((s) => s.kind === kind))
-    .map(([, text]) => text);
+    .map(([kind, text]) => (kind === "ignored" && o.node.type === "quoted-printable" ? RV.ribbonIgnoredQp : text));
   cap.append(lead, ` ${[...said, RV.ribbonHover].join(" ")}`);
   fig.append(svg, cap);
   return fig;

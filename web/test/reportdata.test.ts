@@ -267,27 +267,47 @@ test("the landmarks say the byte order and the widths the file uses", () => {
 test("the landmarks say what each kind of codec did, and leave out the ones that change nothing", () => {
   const codec = (kind: string, detail: string): Partial<ProfileRow> => ({ category: "codec", kind, detail, width: 0, order: "" });
   const said = landmarks(
-    profile([codec("tascam scramble", "scrambling"), codec("iar lz77", "compression"), codec("png scanlines", "filter"), codec("stored", "stored"), codec("base64", "encoding")]),
+    profile([
+      codec("tascam scramble", "scrambling"),
+      codec("iar lz77", "compression"),
+      codec("png scanlines", "filter"),
+      codec("stored", "stored"),
+      codec("base64", "encoding"),
+      codec("low bits argb", "steganography"),
+    ]),
   );
-  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam scramble."]);
+  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam scramble.", "Data hidden with low bits argb."]);
   // Rows from a core that sent no kind keep the old sentence.
   assert.deepEqual(landmarks(profile([codec("deflate", ""), codec("png scanlines", "")])), ["Compressed with deflate."]);
 });
 
 test("the streams section names its streams by what their codec does", () => {
   const scrambled = codecWords("scrambling");
-  assert.equal(RV.streamsHeading(2, 25_493_504, null, scrambled), "2 scrambled streams: 25,493,504 bytes");
-  assert.equal(RV.streamsHeading(1, 4, 4, scrambled), "1 scrambled stream: 4 bytes unscramble to 4 bytes");
-  assert.equal(RV.streamsHeading(1, 1, 4, codecWords("compression")), "1 compressed stream: 1 byte unpacks to 4 bytes");
+  const compressed = codecWords("compression");
+  assert.equal(RV.streamsHeading(1, 1, 4, compressed), "1 compressed stream: 1 byte unpacks to 4 bytes");
+  assert.equal(RV.streamHeading("data", 100, "deflate", 380, compressed), "data: 100 bytes of deflate unpack to 380 bytes");
   // Streams of more than one kind.
   assert.equal(RV.streamsHeading(3, 10, 40, null), "3 streams: 10 bytes unpack to 40 bytes");
   assert.equal(RV.streamUnpacked(null), "Unpacked");
   assert.equal(RV.streamUnpacked(scrambled), "Unscrambled");
-  assert.equal(RV.stagesCaption(4, 4, scrambled), "Each bar is drawn to scale. The unscrambled bytes are the same size as the scrambled ones.");
-  assert.equal(RV.stagesCaption(100, 380, codecWords("compression")), "Each bar is drawn to scale. The unpacked bytes are 3.8 times the size of the compressed ones.");
+  assert.equal(RV.stagesCaption(100, 380, compressed), "Each bar is drawn to scale. The unpacked data is 3.8 times the size of the compressed data.");
+  assert.equal(RV.stagesCaption(61, 47, codecWords("encoding")), "Each bar is drawn to scale. The decoded data is 77% of the size of the encoded data.");
   assert.equal(RV.unpacksTo("tascam scramble", "4 bytes", scrambled), "tascam scramble, unscrambles to 4 bytes");
-  assert.equal(RV.unpackedTo(1, "4 bytes", "scrambling"), "1 stream opened, unscrambled to 4 bytes");
-  assert.equal(RV.unpackedTo(2, "9 bytes", null), "2 streams opened, unpacked to 9 bytes");
+});
+
+test("a stream that comes out the same size has its size said once", () => {
+  const scrambled = codecWords("scrambling");
+  assert.equal(RV.streamsHeading(2, 25_493_504, 25_493_504, scrambled), "2 scrambled streams: 25,493,504 bytes");
+  assert.equal(RV.streamsHeading(2, 25_493_504, null, scrambled), "2 scrambled streams: 25,493,504 bytes");
+  assert.equal(RV.streamHeading("checksum_copy", 4, "tascam scramble", 4, scrambled), "checksum_copy: 4 bytes, scrambled");
+  // A stream of another kind that happens to come out the same size.
+  assert.equal(RV.streamHeading("body", 12, "deflate", 12, codecWords("compression")), "body: 12 bytes, compressed");
+});
+
+test("the format profile says how many of a codec's streams it measured", () => {
+  assert.equal(RV.unpackedTo(2, 2, "25,493,504 bytes", "scrambling"), "2 streams, unscrambled to 25,493,504 bytes");
+  assert.equal(RV.unpackedTo(1, 1, "9 bytes", null), "1 stream, unpacked to 9 bytes");
+  assert.equal(RV.unpackedTo(2, 3, "1,024 bytes", "compression"), "2 of 3 streams unpacked to 1,024 bytes");
 });
 
 test("a stored stream is not said to unpack", () => {
@@ -295,15 +315,40 @@ test("a stored stream is not said to unpack", () => {
   assert.equal(RV.streamsHeading(1, 29, 29, stored), "1 stored stream: 29 bytes");
   assert.equal(RV.streamHeading("data", 29, "stored", 29, stored), "data: 29 bytes, stored");
   assert.equal(RV.unpacksTo("stored", "29 bytes", stored), "stored");
-  assert.equal(RV.unpackedTo(1, "29 bytes", "stored"), "1 stream opened");
-  assert.equal(RV.streamUnpacked(stored), "Opened");
+  assert.equal(RV.unpackedTo(1, 1, "29 bytes", "stored"), "1 stream");
+  assert.equal(RV.streamUnpacked(stored), "Contents");
+  assert.equal(RV.stageUnpacked(stored), "Contents");
+  // An OLE workbook stream is stored and smaller than the run it is read from.
+  assert.equal(RV.stagesCaption(4096, 1024, stored), "Each bar is drawn to scale. The contents are 25% of the size of the stored data.");
 });
 
-test("a stream the report did not draw says which limit it passed", () => {
+test("a stream the report did not draw says which limit it passed, on which size", () => {
   const limits = { size: "4.00 MiB", count: 32, total: "16.0 MiB" };
-  assert.equal(RV.streamNotDrawnNote("size", limits), "This stream is larger than 4.00 MiB, so the report does not draw it. Open it as a tab to read it.");
-  assert.equal(RV.streamNotDrawnNote("count", limits), "The report draws at most 32 streams, so it does not draw this one. Open it as a tab to read it.");
-  assert.equal(RV.streamNotDrawnNote("total", limits), "The report draws at most 16.0 MiB of streams in all, so it does not draw this one. Open it as a tab to read it.");
+  const scrambled = codecWords("scrambling");
+  assert.equal(
+    RV.streamNotDrawnNote("size", limits, scrambled),
+    "This stream takes up more than 4.00 MiB of the file, so the report does not draw it. Open this stream in a tab to read it.",
+  );
+  assert.equal(RV.streamNotDrawnNote("count", limits, scrambled), "The report draws at most 32 streams, so this stream is not drawn. Open this stream in a tab to read it.");
+  assert.equal(
+    RV.streamNotDrawnNote("total", limits, scrambled),
+    "The report draws streams that take up at most 16.0 MiB of the file in all, so this stream is not drawn. Open this stream in a tab to read it.",
+  );
+});
+
+test("a stream that would not decode is said with its codec's verb, not open", () => {
+  const limits = { size: "4.00 MiB", count: 32, total: "16.0 MiB" };
+  assert.equal(RV.streamNotDrawnNote("failed", limits, codecWords("scrambling")), "The report could not unscramble this stream.");
+  assert.equal(RV.streamNotDrawnNote("failed", limits, codecWords("compression")), "The report could not unpack this stream.");
+  assert.equal(RV.streamNotDrawnNote("failed", limits, codecWords("stored")), "The report could not read this stream.");
+  assert.equal(RV.streamNotMeasured, "not measured");
+});
+
+test("the ribbon's sentences name the side a band widens toward, and what writes no bytes", () => {
+  assert.match(RV.ribbonKinds.match ?? "", /widens toward the output bytes\.$/);
+  assert.equal(RV.ribbonKinds.stored, "A stored run is one code for bytes kept as they are.");
+  assert.equal(RV.ribbonKinds.ignored, "Whitespace produces no bytes, so its band narrows to a point.");
+  assert.match(RV.ribbonIgnoredQp, /^A soft line break \(= at the end of a line\)/);
 });
 
 test("both byte orders are said with their counts", () => {

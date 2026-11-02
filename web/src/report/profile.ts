@@ -147,9 +147,11 @@ function profileTable(joined: readonly Joined[], withTemplate: boolean): HTMLEle
         }
       }
       let label = rowLabel(j.row);
-      // What a codec's streams came to, where the file opened any.
+      // What a codec's streams came to, where any of them was decoded, and
+      // how many of the row's streams that was.
       if (j.file !== null && j.file.category === "codec" && j.file.unpacked_fields > 0) {
-        label += `: ${RV.unpackedTo(j.file.unpacked_fields, bitsText(j.file.unpacked_bits), isCodecKind(j.file.detail) ? j.file.detail : null)}`;
+        const kind = isCodecKind(j.file.detail) ? j.file.detail : null;
+        label += `: ${RV.unpackedTo(j.file.unpacked_fields, Math.max(inFile, j.file.unpacked_fields), bitsText(j.file.unpacked_bits), kind)}`;
       }
       tr.append(
         cell(label, "rv-cell-name", ""),
