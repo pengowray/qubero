@@ -46,7 +46,7 @@ export type CodecWords = {
    *  the run is the pixels the data is hidden in, not the hidden data. */
   readonly bytes: string;
   /** How the report's landmark sentence about this kind of codec starts:
-   *  `Scrambled with tascam scramble.`, `Data hidden with low bits argb.`
+   *  `Scrambled with tascam byte table.`, `Data hidden with low bits argb.`
    *  Null for the kinds that sentence
    *  leaves out: stored bytes are not changed, and PNG's row filters are a
    *  step before deflate rather than a way the file is packed. */
@@ -61,7 +61,7 @@ export type CodecWords = {
    *  `open the unpacked data in a tab`. */
   readonly outData: string;
   /** The verb, for a plural subject and for a singular one: `24 bytes
-   *  unscramble to`, `tascam scramble, unscrambles to`. */
+   *  unscramble to`, `tascam byte table, unscrambles to`. */
   readonly verb: string;
   readonly verbs: string;
   /** What running the codec over the run is, as an infinitive: `could not
@@ -69,7 +69,7 @@ export type CodecWords = {
   readonly read: string;
   /** Whether a stream of this kind that comes out the same size as it is in
    *  the file has its size said once: `checksum_copy: 4 bytes, scrambled
-   *  with tascam scramble`. True for scrambling, which never changes the
+   *  with tascam byte table`. True for scrambling, which never changes the
    *  length, and for stored bytes, which come out as they are unless they
    *  are gathered from sectors. A stream of another kind that happens to
    *  come out the same size says both sizes, or `1 compressed stream: 4,096

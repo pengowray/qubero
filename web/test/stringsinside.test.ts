@@ -22,8 +22,8 @@ test("strings left in the list say which kind they are inside", () => {
 test("packed data is named by what its codec does", () => {
   assert.equal(SV.statusHidden(812, { numbers: 0, code: 0, packed: { scrambling: 812 } }), "812 hidden (scrambled data)");
   assert.equal(SV.statusInside({ numbers: 0, code: 0, packed: { scrambling: 9, compression: 3 } }), "(3 in compressed data, 9 in scrambled data)");
-  const title = SV.insideTitle("packed", "image", "tascam scramble", 0x20, 1024, "scrambling");
-  assert.match(title, /reads as scrambled data \(tascam scramble, /);
+  const title = SV.insideTitle("packed", "image", "tascam byte table", 0x20, 1024, "scrambling");
+  assert.match(title, /reads as scrambled data \(tascam byte table, /);
   assert.match(title, /Scrambled data often contains printable bytes by chance\. Click to open the unscrambled data in a tab, which has its own Strings view\.$/);
   // A string from a core that sent no kind keeps the words for compression.
   assert.match(SV.insideTitle("packed", "data", "deflate", 0, 10), /reads as compressed data .* Compressed data often .* open the unpacked data/);

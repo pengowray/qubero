@@ -268,7 +268,7 @@ test("the landmarks say what each kind of codec did, and leave out the ones that
   const codec = (kind: string, detail: string): Partial<ProfileRow> => ({ category: "codec", kind, detail, width: 0, order: "" });
   const said = landmarks(
     profile([
-      codec("tascam scramble", "scrambling"),
+      codec("tascam byte table", "scrambling"),
       codec("iar lz77", "compression"),
       codec("png scanlines", "filter"),
       codec("stored", "stored"),
@@ -276,7 +276,7 @@ test("the landmarks say what each kind of codec did, and leave out the ones that
       codec("low bits argb", "steganography"),
     ]),
   );
-  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam scramble.", "Data hidden with low bits argb."]);
+  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam byte table.", "Data hidden with low bits argb."]);
   // Rows from a core that sent no kind keep the old sentence.
   assert.deepEqual(landmarks(profile([codec("deflate", ""), codec("png scanlines", "")])), ["Compressed with deflate."]);
 });
@@ -292,7 +292,7 @@ test("the streams section names its streams by what their codec does", () => {
   assert.equal(RV.streamUnpacked(scrambled), "Unscrambled");
   assert.equal(RV.stagesCaption(100, 380, compressed), "Each bar is drawn to scale. The unpacked data is 3.8 times the size of the compressed data.");
   assert.equal(RV.stagesCaption(61, 47, codecWords("encoding")), "Each bar is drawn to scale. The decoded data is 77% of the size of the encoded data.");
-  assert.equal(RV.unpacksTo("tascam scramble", "4 bytes", scrambled), "tascam scramble, unscrambles to 4 bytes");
+  assert.equal(RV.unpacksTo("tascam byte table", "4 bytes", scrambled), "tascam byte table, unscrambles to 4 bytes");
 });
 
 test("a scrambled stream that comes out the same size has its size said once, with its codec", () => {
@@ -302,8 +302,8 @@ test("a scrambled stream that comes out the same size has its size said once, wi
   assert.equal(RV.streamsHeading(2, 25_493_504, null, scrambled), "2 scrambled streams: 25,493,504 bytes in all");
   assert.equal(RV.streamsHeading(1, 4, 4, scrambled), "1 scrambled stream: 4 bytes");
   assert.equal(RV.streamsHeading(2, 9_000, null, codecWords("compression")), "2 compressed streams: 9,000 bytes in all");
-  assert.equal(RV.streamHeading("checksum_copy", 4, "tascam scramble", 4, scrambled), "checksum_copy: 4 bytes, scrambled with tascam scramble");
-  assert.equal(RV.streamHeading("image", 4, "tascam scramble", null, scrambled), "image: 4 bytes, scrambled with tascam scramble");
+  assert.equal(RV.streamHeading("checksum_copy", 4, "tascam byte table", 4, scrambled), "checksum_copy: 4 bytes, scrambled with tascam byte table");
+  assert.equal(RV.streamHeading("image", 4, "tascam byte table", null, scrambled), "image: 4 bytes, scrambled with tascam byte table");
 });
 
 test("a stream of another kind that happens to come out the same size says both sizes", () => {
@@ -351,8 +351,8 @@ test("a stream the report did not draw says which limit it passed, on which size
 
 test("a stream that would not decode says why, with its codec's verb", () => {
   assert.equal(
-    RV.streamFailedNote(codecWords("scrambling"), "tascam scramble", "failed"),
-    "The report could not unscramble this stream: the tascam scramble decoder returned an error.",
+    RV.streamFailedNote(codecWords("scrambling"), "tascam byte table", "failed"),
+    "The report could not unscramble this stream: the tascam byte table decoder returned an error.",
   );
   assert.equal(RV.streamFailedNote(codecWords("compression"), "zstd", "too-large"), "The report could not unpack this stream: too large to unpack (over 64 MiB).");
   assert.equal(RV.streamFailedNote(codecWords("stored"), "cfb-workbook", "failed"), "The report could not extract this stream: the cfb-workbook decoder returned an error.");

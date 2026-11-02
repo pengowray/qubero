@@ -433,5 +433,5 @@ fn the_scrambled_runs_are_parts_of_their_own_and_say_they_are_scrambled() {
     assert!(l.rows.iter().filter(|r| r.part == [0]).all(|r| !r.stream), "the header is not a stream");
     let codecs: Vec<_> = w.profile().rows.into_iter().filter(|r| r.category == "codec").collect();
     assert!(!codecs.is_empty());
-    assert!(codecs.iter().filter(|r| r.kind == "tascam scramble").all(|r| r.detail == "scrambling"), "{codecs:?}");
+    assert!(codecs.iter().filter(|r| r.kind == "tascam byte table").all(|r| r.detail == "scrambling"), "{codecs:?}");
 }

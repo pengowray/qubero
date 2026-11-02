@@ -153,7 +153,7 @@ fixed section names.
    are of more than one kind, the heading says N streams and uses the verb
    unpack. A scrambled stream, or a stored one that comes out the same size,
    has its size said once, with its codec ("checksum_copy: 4 bytes,
-   scrambled with tascam scramble"), and gets no bars. A stream of any other
+   scrambled with tascam byte table"), and gets no bars. A stream of any other
    kind says both sizes even when they match, so the heading still says what
    it came to. One size over several streams is their total and says "in
    all". The ribbon is drawn only when it has two codes or more, and its

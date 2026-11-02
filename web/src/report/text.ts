@@ -298,7 +298,7 @@ export const RV = {
   colField: "Field",
   colValue: "Value",
   /** A compressed stream in the value column, beside its size in the file:
-   *  `jpeg scan, unpacks to 115,200 bytes`, `tascam scramble, unscrambles to
+   *  `jpeg scan, unpacks to 115,200 bytes`, `tascam byte table, unscrambles to
    *  4 bytes`, `cfb-workbook, extracts to 12,288 bytes`. */
   unpacksTo: (codec: string, size: string, w: CodecWords): string => `${codec}, ${w.verbs} to ${size}`,
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
@@ -327,7 +327,7 @@ export const RV = {
   // total, and says so: `2 scrambled streams: 25,493,504 bytes in all`. A
   // stream's own heading names its codec either way, so two scramblers in
   // one file can be told apart: `checksum_copy: 4 bytes, scrambled with
-  // tascam scramble`, `data: 29 bytes, stored`.
+  // tascam byte table`, `data: 29 bytes, stored`.
   streamsHeading: (n: number, packed: number, unpacked: number | null, w: CodecWords | null): string => {
     const streams = sentenceCase(counted(n, w === null ? "stream" : `${w.stream} stream`));
     if (unpacked === null || (unpacked === packed && w?.sizeOnce === true)) return `${streams}: ${bytesText(packed)}${n > 1 ? " in all" : ""}`;

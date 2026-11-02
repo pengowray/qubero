@@ -21,7 +21,7 @@ export const CATEGORY: Readonly<Record<string, string>> = {
   padding: "Padding",
   checksum: "Checksums",
   /** Its rows are codec names of every kind: deflate, base64, tascam
-   *  scramble. `Compressed streams` said that of all of them. */
+   *  byte table. `Compressed streams` said that of all of them. */
   codec: "Codecs",
   placement: "How each field is found",
   sizing: "How each field's length is set",
@@ -245,7 +245,7 @@ export function landmarks(p: Profile): string[] {
   const sums = kindsOf(p.rows, "checksum", CHECKSUM);
   if (sums.length > 0) out.push(`Checked with ${listText(sums)}.`);
   // A sentence for each kind of codec the file uses, saying what was done:
-  // "Compressed with deflate.", "Scrambled with tascam scramble." Stored
+  // "Compressed with deflate.", "Scrambled with tascam byte table." Stored
   // bytes and PNG's row filters get no sentence (see `CodecWords.with`).
   for (const kind of CODEC_KIND_ORDER) {
     const lead = codecWords(kind).with;

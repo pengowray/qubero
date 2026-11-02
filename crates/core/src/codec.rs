@@ -315,7 +315,7 @@ impl Codec {
             Codec::Base64 => "base64",
             Codec::QuotedPrintable => "quoted-printable",
             Codec::QEncoding => "q encoding",
-            Codec::TascamScramble => "tascam scramble",
+            Codec::TascamScramble => "tascam byte table",
             Codec::IarLz77 => "iar lz77",
             Codec::IarPackbits => "iar packbits",
             Codec::PngScanlines { .. } => "png scanlines",
