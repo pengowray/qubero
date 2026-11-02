@@ -6,15 +6,15 @@
 //! place. Before it can read that chip at full speed it has to know how to talk
 //! to it, so the first 512 bytes of the flash are a FlexSPI configuration
 //! block: the clock, how many data lines, and a lookup table of the command
-//! sequences the chip answers to. The block opens with `FCFB`, and that and the
-//! image vector table at 0x1000 are what identify the file.
+//! sequences the chip answers to. The block opens with `FCFB`. That tag and
+//! the image vector table at 0x1000 identify the file.
 //!
 //! The image vector table (IVT) is the boot ROM's index to the rest. Every
 //! pointer in it is an address in the processor's memory map, and the IVT
-//! gives its own address as well, so a pointer is a place in the flash once
-//! that address is taken off it and 0x1000 is added back. It points at the
-//! boot data, which says where the image starts and how big it is, at the
-//! device configuration data (DCD), and at the first thing to run.
+//! gives its own address as well, so a pointer's offset in the flash is the
+//! pointer less the IVT's own address, plus 0x1000. It points at the boot
+//! data, which says where the image starts and how big it is, at the device
+//! configuration data (DCD), and at the program's entry point.
 //!
 //! The DCD is a short list of register writes and polls that the boot ROM runs
 //! before the program: NXP's own boards use it to bring up the SDRAM
@@ -27,16 +27,26 @@
 //!
 //! The boot data and the DCD are read straight after the IVT, one after the
 //! other, which is where NXP's SDK puts them, and each is checked against the
-//! IVT's pointer to it. A file that keeps them somewhere else reads them in
-//! the wrong place and says so on both fields.
+//! IVT's pointer to it. If a file keeps them somewhere else, they are read
+//! from the wrong place and the check on each of them fails.
 //!
-//! What the IVT's entry points at is the program, and NXP's startup code puts
-//! the Cortex-M7's vector table there: the stack pointer, the fifteen
-//! exceptions every Cortex-M has, then the RT1060's interrupts as NXP's
-//! `MIMXRT1062.h` names them, filled out to 256 words with interrupt numbers
-//! the part does not use. Everything after the table is read as Thumb code,
-//! the way `hackrffw` reads a HackRF image: nothing in the flash says where the
-//! code stops and the data starts.
+//! The IVT's entry points at the program, and NXP's startup code puts the
+//! Cortex-M7's vector table there: the stack pointer, the fifteen exceptions
+//! every Cortex-M has, then the RT1060's interrupts as NXP's `MIMXRT1062.h`
+//! names them, filled out to 256 words with interrupt numbers the part does
+//! not use. What follows the table is read as Thumb code, the way `hackrffw`
+//! reads a HackRF image: nothing in the flash says where the code stops and
+//! the data starts.
+//!
+//! The code stops at the first 4 KiB of erased flash (0xff bytes), which is
+//! the smallest piece a NOR chip erases, and everything from there on is
+//! bytes: the erased run, and whatever is programmed after it. A file written
+//! by NXP's tools holds only the program, so this changes nothing for one of
+//! those. It is for a dump of the whole chip, which is mostly erased bytes
+//! after the program and may hold a second program further on, as the Tascam
+//! X8's flash does. Read as instructions to the end, the X8's 25 MB took
+//! nearly three minutes to count in a debug build, and a listing counts the
+//! instructions in a run before it shows the run's row.
 //!
 //! Field names are NXP's own, put into snake case: the configuration block's
 //! from the SDK's `fsl_flexspi_nor_config.h`, the IVT's and the boot data's
@@ -78,9 +88,29 @@ pub fn imxrt() -> Template {
             vec![
                 ("boot_header", boot_header()),
                 ("padding", padding_to_entry()),
-                ("image", T::structure("Image", vec![("vectors", vectors()), ("code", thumb(E::Remaining))])),
+                ("image", image()),
             ],
         ),
+    )
+}
+
+/// The smallest stretch a NOR flash erases, and so the shortest run of 0xff
+/// that says the program has ended rather than paused for padding.
+const ERASED_SECTOR: usize = 0x1000;
+
+/// The program at the IVT's entry: the vector table, the code up to the
+/// first erased sector, and what comes after that as bytes.
+fn image() -> T {
+    let more = || E::Remaining.greater_than(E::lit(0));
+    T::structure(
+        "Image",
+        vec![
+            ("vectors", vectors()),
+            ("code", thumb(E::to_bytes(&[0xff; ERASED_SECTOR]))),
+            ("erased", T::when(more(), T::bytes(E::run(&[0xff])))),
+            // A second program, a file system, settings: nothing here says.
+            ("rest", T::when(more(), T::bytes(E::Remaining))),
+        ],
     )
 }
 
@@ -238,7 +268,7 @@ fn mem_config() -> T {
             ("command_interval", T::u32(Little)),
             ("data_valid_time", T::array(T::u16(Little), E::lit(2))),
             ("busy_offset", T::u16(Little)),
-            ("busy_bit_polarity", T::enumeration("BusyBitPolarity", T::u16(Little), &[(0, "busy when 1"), (1, "busy when 0")])),
+            ("busy_bit_polarity", T::enumeration("BusyBitPolarity", T::u16(Little), &[(0, "1 means busy"), (1, "0 means busy")])),
             ("lookup_table", lookup_table()),
             ("lut_custom_seq", T::array(lut_seq(), E::lit(12))),
             ("reserved4", T::bytes(E::lit(16))),
@@ -271,10 +301,10 @@ const SERIAL_CLOCK: &[(i128, &str)] = &[
 /// Where FlexSPI takes the clock it samples read data with,
 /// `kFlexSPIReadSampleClk_*`.
 const READ_SAMPLE_CLOCK: &[(i128, &str)] = &[
-    (0, "loopback internally"),
+    (0, "internal loopback"),
     (1, "loopback from DQS pad"),
     (2, "loopback from SCK pad"),
-    (3, "external input from DQS pad"),
+    (3, "flash-provided DQS"),
 ];
 
 /// What a configuration command does, `kDeviceConfigCmdType_*`.
@@ -307,7 +337,7 @@ const DEVICE_TYPE: &[(i128, &str)] = &[
 ];
 
 /// `kSerialNorType_*`.
-const SERIAL_NOR_TYPE: &[(i128, &str)] = &[(0, "standard SPI"), (1, "HyperBus"), (2, "XPI"), (3, "no command")];
+const SERIAL_NOR_TYPE: &[(i128, &str)] = &[(0, "standard SPI"), (1, "HyperBus"), (2, "XPI"), (3, "no-command mode")];
 
 /// `flexspi_lut_seq_t`: how many lookup table sequences a command takes, and
 /// the first of them.
@@ -710,5 +740,26 @@ pub(crate) mod tests {
         assert_eq!(first.offset_bits / 8, 0x2400);
         let Value::Str(text) = first.value else { panic!("not an instruction: {:?}", first.value) };
         assert!(text.starts_with("push"), "{text}");
+        // Nothing after the code, so neither of the two runs after it is there.
+        assert!(ev.node(&d, &[2, 2]).unwrap().absent);
+        assert!(ev.node(&d, &[2, 3]).unwrap().absent);
+    }
+
+    #[test]
+    fn the_code_stops_at_the_first_erased_sector() {
+        let mut v = image(&[]);
+        // Two bytes of padding that are not the end, a sector and a half of
+        // erased flash, and then something programmed after it.
+        v.extend_from_slice(&[0xff, 0xff, 0xf8, 0xb5]);
+        let erased_at = v.len();
+        v.resize(erased_at + ERASED_SECTOR * 3 / 2, 0xff);
+        v.extend_from_slice(b"settings");
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(imxrt());
+        let code = ev.node(&d, &[2, 1]).unwrap();
+        assert_eq!((code.offset_bits / 8 + code.size_bits / 8) as usize, erased_at);
+        let erased = ev.node(&d, &[2, 2]).unwrap();
+        assert_eq!((erased.offset_bits / 8, erased.size_bits / 8), (erased_at as u64, (ERASED_SECTOR * 3 / 2) as u64));
+        assert_eq!(ev.node(&d, &[2, 3]).unwrap().size_bits, 8 * 8);
     }
 }
