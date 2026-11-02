@@ -526,8 +526,10 @@ impl Evaluator {
 
     /// The same, stopping at a run of numbers or instructions, or a packed
     /// stream, rather than going on to the one element or block holding the
-    /// bit. Which instruction covers a byte takes decoding every one before
-    /// it, and which run it is in takes nothing. See [`Evaluator::read_as_under`].
+    /// bit. Finding the run that holds the bit needs no walk. Finding the
+    /// instruction that covers it means stepping over every instruction before
+    /// it in the run, and in x86 code that means decoding each one. See
+    /// [`Evaluator::read_as_under`].
     pub(super) fn locate_run_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
         self.locate_down(doc, root, bit, true)
     }
@@ -622,11 +624,14 @@ impl Evaluator {
                 }
                 return Ok((path, true));
             }
-            // How many elements a code section holds is a question only the
-            // decoding of every one of them answers, and which one covers a
-            // byte is not that question: the walk stops at the byte. So the
-            // count is asked only where it is cheap, and where it is not the
-            // element is found by walking to it from the nearest kept offset.
+            // Counting a run that fills its room with elements of different
+            // sizes means walking the whole run, and in an x86 code section
+            // that means decoding every instruction. Finding the element that
+            // covers a byte means walking only as far as that byte. So the
+            // count is asked only where it is cheap, and otherwise the element
+            // is found by walking to it from the nearest kept offset. In a run
+            // of Thumb, RISC-V or ARM instructions, both walks step along the
+            // bytes without decoding: see `insnrun.rs`.
             let Some(n) = self.count_unless_walk(doc, &path)? else {
                 match self.child_covering(doc, &path, u64::MAX, bit) {
                     Ok(Some(i)) => {

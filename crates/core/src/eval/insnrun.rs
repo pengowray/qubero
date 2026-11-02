@@ -85,10 +85,10 @@ enum Step {
 
 impl Evaluator {
     /// The machine whose instructions the run `r` holds, when the run is one
-    /// this module can measure from its bytes: a run to the end of its room of
-    /// instructions with nothing around them but names and origins, starting
-    /// and ending on a byte, on a machine that says how long an instruction
-    /// is in its first bytes.
+    /// this module can measure from its bytes: a Repeat that runs to the end
+    /// of its room, whose element is an instruction with only names and
+    /// origins around it, starting and ending on a byte, on a machine whose
+    /// instruction length can be read from its first bytes.
     ///
     /// A size or a condition around the element changes how much room each
     /// instruction has, so neither is looked through here, unlike
@@ -116,9 +116,9 @@ impl Evaluator {
     /// fails part way: the ordinary walk then counts on from where this count
     /// stopped.
     ///
-    /// Each of the three questions here is one call out of the ordinary walk,
-    /// which is on the path the nesting limit was measured against, so what
-    /// they need goes in their own frames rather than in the walk's.
+    /// The ordinary walk calls each of these three functions. They are
+    /// `#[inline(never)]` so their locals stay out of the walk's stack frame,
+    /// which the depth tests measure.
     #[inline(never)]
     pub(super) fn count_insn_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<Option<u64>> {
         let Some(isa) = self.insn_run(r) else { return Ok(None) };

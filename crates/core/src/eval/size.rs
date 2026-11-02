@@ -425,12 +425,16 @@ impl Evaluator {
     /// walking the whole of it.
     ///
     /// A run that fills its container with elements whose length their own
-    /// bytes give is the one case where it does: a code section is a repeat of
-    /// instructions until the end, and counting them means decoding every one,
-    /// which for a 66 MiB section is a minute of work for a number nothing on
-    /// screen shows. None says so, and the caller finds what it wanted another
-    /// way. Every other list either divides, or ends on something it reads and
-    /// so stops of its own accord.
+    /// bytes give is the one case where answering means walking the whole run.
+    /// A code section is a repeat of instructions until the end. Counting an
+    /// x86 section means decoding every instruction, which for a 66 MiB
+    /// section is a minute of work for a number nothing on screen shows. A run
+    /// of Thumb, RISC-V or ARM instructions is counted by stepping along its
+    /// bytes (see `insnrun.rs`). That is much cheaper, but it still reads the
+    /// whole run, so those runs get None here too. None means the count was
+    /// not asked, and the caller finds what it wanted another way. Every other
+    /// list either divides, or ends on something it reads and so stops of its
+    /// own accord.
     pub(super) fn count_unless_walk<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<u64>> {
         self.resolve(doc, path)?;
         let ty = self.memo[path].ty.clone();

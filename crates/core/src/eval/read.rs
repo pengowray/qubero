@@ -379,9 +379,8 @@ impl Evaluator {
     }
 
     /// How many bytes the instruction at `r` takes: the length `read_insn`
-    /// gives, without the text. Measuring an instruction is what placing the
-    /// next one asks, and writing out the text was nearly all of what that
-    /// cost.
+    /// gives, without the text. Placing the next instruction needs only this
+    /// length, and `code::length` finds it without writing out the text.
     #[inline(never)]
     pub(super) fn read_insn_len<S: Source>(&self, doc: &Document<S>, r: &Resolved, isa: crate::code::Isa) -> R<u64> {
         let room = insn_room(r, isa);
