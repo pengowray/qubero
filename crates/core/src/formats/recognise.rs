@@ -350,7 +350,9 @@ const PROBES: &[Probe] = &[
     // A Tascam firmware update. The first eight bytes of its header are the
     // product code, which is different for each recorder, so the header is
     // recognised by its other fields: the file's length at byte 20, eight
-    // zero bytes after it, and a build date that can be a real date.
+    // zero bytes after it, and a build date that can be a real date. An update
+    // that has been cut short is deliberately not recognised, since its length
+    // is not the one at byte 20.
     Probe::Is("tascamfw", tascamfw::is_update),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the

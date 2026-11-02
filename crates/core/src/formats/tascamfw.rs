@@ -13,24 +13,33 @@
 //! are read as two separate runs, so that the header's checksum covers the
 //! image alone.
 //!
-//! The product code is Tascam's code for the product. The X8's code is
-//! `DR-TURBO`, Tascam's internal project name for the X8. The same name is in
-//! the source file paths in the X8's firmware
-//! (`C:\Perforce\projects\SSR\DR-TURBO\...`). The DR-05X's code is `DR-05X`. [`is_update`] recognises a file by the other fields of its
-//! header and accepts any product code.
+//! The product code is different for each recorder. The X8's is `DR-TURBO`,
+//! Tascam's internal project name for the X8. `DR-TURBO` is also in the
+//! source file paths in the X8's firmware
+//! (`C:\Perforce\projects\SSR\DR-TURBO\...`). The DR-05X's is `DR-05X`.
+//! [`is_update`] recognises a file by the other fields of its header and
+//! accepts any product code.
 //!
-//! How the image is read depends on its first unscrambled bytes, and not on
-//! the product code, so an update for a product with no sample here still
-//! reads if its image is one of these two kinds:
+//! How the image is read depends on its unscrambled bytes, and not on the
+//! product code, so an update for a product with no sample here still reads
+//! if its image is one of these kinds. Offsets here are counted from the
+//! start of the image, which is at 0x20 in the file.
 //!
 //! - An NXP i.MX RT flash image, which has `FCFB` at offset 0 and an image
-//!   vector table at 0x1000, which is what `imxrt::is_imxrt_flash` tests. The
-//!   X8's image is one, and it is read with the X8's layout, described below.
-//!   An i.MX RT image from another product is read with the X8's layout as
-//!   well, and that layout is unlikely to match the other product's image.
+//!   vector table at 0x1000, which is what `imxrt::is_imxrt_flash` tests. If
+//!   it also has `FTMP` at 0x20410, where the X8's font map starts, it is read
+//!   with the X8's layout, described below. The X8's image is one. Any other
+//!   i.MX RT image is read with the `imxrt` template's fields: the boot
+//!   header, padding, and the program at the IVT's entry address. An image
+//!   that has `FTMP` at 0x20410 but is laid out differently from the X8's is
+//!   still read with the X8's layout. If that layout does not fit, the image
+//!   can fail to read as a whole, boot header included.
 //! - An Analog Devices Blackfin boot stream, the format the `bfldr` template
-//!   reads, which starts with a 16-byte block header that has the first flag
-//!   set. Boot streams with these block headers are for the ADSP-BF50x,
+//!   reads, which starts with the 16-byte header of a program's first block,
+//!   the header `bfldr::is_bfldr` tests for: the signature 0xAD at offset 3,
+//!   the first and ignore flags set, the fill and final flags clear, a byte
+//!   count of 0, and 16 bytes that XOR to zero. Boot streams with these block
+//!   headers are for the ADSP-BF50x,
 //!   BF51x, BF52x, BF54x and BF59x. The DR-05X's image is one, and it is read
 //!   with `bfldr`'s pieces. It holds an initcode program at offset 0 and the
 //!   application at 0x748, which ends with a final block at 0x1F2AA0, and
@@ -102,9 +111,19 @@ const HEADER_BYTES: i128 = 0x20;
 /// Bytes in the product code that opens the header.
 const PRODUCT_CODE_BYTES: usize = 8;
 
-/// The two kinds of image there is a reading for, as [`image`] numbers them.
-const IMXRT_FLASH: i128 = 1;
-const BOOT_STREAM: i128 = 2;
+/// The three kinds of image there is a reading for, as [`image`] numbers
+/// them: the X8's flash, any other i.MX RT flash, and a Blackfin boot stream.
+const X8_FLASH: i128 = 1;
+const IMXRT_FLASH: i128 = 2;
+const BOOT_STREAM: i128 = 3;
+
+/// The tag that opens the X8's font map.
+const FTMP: &[u8; 4] = b"FTMP";
+
+/// Where the X8's font map starts in the unscrambled image: at the start of
+/// the application, after its 1 KiB vector table and 16-byte version stamp.
+/// `FTMP` here is what marks an i.MX RT image as laid out like the X8's.
+const FONT_MAP_AT: i128 = APP_AT + 0x400 + 0x10;
 
 /// The copy of the checksum that ends the image.
 const CHECKSUM_BYTES: i128 = 4;
@@ -132,6 +151,11 @@ const RIFF: i128 = 0x5249_4646;
 /// The product code is not compared with a list, so an update for a product
 /// with no sample here is recognised too. The length and the zero bytes are
 /// most of the evidence.
+///
+/// So a file that has been cut short, or has bytes added at the end, is not
+/// recognised: its length is not the one at byte 20. This is deliberate. Such
+/// a file can still be read by choosing the template, and the header's
+/// `file_size` check then fails.
 pub fn is_update(head: &[u8], len: u64) -> bool {
     let Some(h) = head.get(..HEADER_BYTES as usize) else { return false };
     let code = &h[..PRODUCT_CODE_BYTES];
@@ -161,16 +185,31 @@ pub fn tascamfw() -> Template {
         )
         .field_doc(
             "image",
-            "The firmware image, unscrambled. It is read as an i.MX RT flash image if it starts with the FlexSPI configuration block tag FCFB and has an image vector table (IVT) at offset 0x1000. It is read as a Blackfin boot stream if it starts with a block header that has the first flag (BFLAG_FIRST) set. Any other image is read as bytes.",
+            "The firmware image, unscrambled. Offsets in this note are counted from the start of the image, which is at 0x20 in the file. An image that starts with FCFB, the tag of an i.MX RT FlexSPI configuration block, and has an image vector table (IVT) header at 0x1000 is an i.MX RT flash image. If it also has FTMP at 0x20410, where the Portacapture X8's font map starts, it is read with the X8's flash layout. Otherwise it is read with the same fields as the i.MX RT flash image template: the boot header, padding, and the program at the IVT's entry address. An image that starts with the 16-byte header of a program's first block is read as a Blackfin boot stream. That header has the signature 0xAD at offset 3, the flags \"first\" (BFLAG_FIRST) and \"ignore\" (BFLAG_IGNORE) set, the flags \"fill\" (BFLAG_FILL) and \"final\" (BFLAG_FINAL) clear, and a byte count of 0. Its 16 bytes XOR to zero. Any other image is read as bytes.",
         ),
     )
 }
 
-/// The unscrambled image, read as what its first bytes say it is. See the
-/// module's notes.
+/// The unscrambled image, read as what its bytes say it is. See the module's
+/// notes.
 fn image() -> T {
-    let kind = E::cond(imxrt_flash_ahead(), E::lit(IMXRT_FLASH), E::cond(bfldr::stream_ahead(), E::lit(BOOT_STREAM), E::lit(0)));
-    T::switch(kind, vec![(IMXRT_FLASH, flash()), (BOOT_STREAM, bfldr::stream())], T::bytes(E::Remaining))
+    let flash_kind = E::cond(x8_ahead(), E::lit(X8_FLASH), E::lit(IMXRT_FLASH));
+    let kind = E::cond(imxrt_flash_ahead(), flash_kind, E::cond(bfldr::stream_ahead(), E::lit(BOOT_STREAM), E::lit(0)));
+    T::switch(
+        kind,
+        // An i.MX RT image that is not laid out like the X8's is read with
+        // the imxrt template's own fields.
+        vec![(X8_FLASH, flash()), (IMXRT_FLASH, imxrt::imxrt().root), (BOOT_STREAM, bfldr::stream())],
+        T::bytes(E::Remaining),
+    )
+}
+
+/// Whether an i.MX RT image has `FTMP` where the X8's font map starts, which
+/// says it is laid out like the X8's flash.
+fn x8_ahead() -> E {
+    E::Remaining
+        .greater_than(E::lit(FONT_MAP_AT + 3))
+        .both(E::peek_at(E::lit(FONT_MAP_AT * 8), 32, Big).equal_to(E::lit(i128::from(u32::from_be_bytes(*FTMP)))))
 }
 
 /// The test `imxrt::is_imxrt_flash` makes, as an expression asked of the bytes
@@ -214,7 +253,7 @@ fn header() -> T {
     .field_valid("file_size", Valid::Eq(E::SpaceSize))
     .field_doc(
         "product_code",
-        "Tascam's code for the product this update is for, in ASCII, padded with NULs to 8 bytes. The Portacapture X8's code is DR-TURBO, Tascam's internal project name for the X8. The same name appears in the source file paths in the X8's firmware (C:\\Perforce\\projects\\SSR\\DR-TURBO\\...). The DR-05X's code is DR-05X.",
+        "Tascam's product code for the recorder this update installs on, in ASCII, padded with NULs to 8 bytes. The Portacapture X8's product code is DR-TURBO, Tascam's internal project name for the X8. DR-TURBO also appears in source file paths in the X8's firmware (C:\\Perforce\\projects\\SSR\\DR-TURBO\\...). The DR-05X's product code is DR-05X.",
     )
 }
 
@@ -418,7 +457,7 @@ fn font_map() -> T {
         T::structure(
             "FontMap",
             vec![
-                ("magic", T::magic(b"FTMP")),
+                ("magic", T::magic(FTMP)),
                 ("version", T::u32(Big)),
                 ("size", T::u32(Big)),
                 ("font_count", T::u16(Big)),
@@ -766,6 +805,42 @@ mod tests {
     }
 
     #[test]
+    fn only_an_image_with_the_x8s_font_map_tag_is_taken_for_the_x8s() {
+        let flash = flash();
+        assert_eq!(&flash[FONT_MAP_AT as usize..][..4], FTMP);
+        assert!(ahead(x8_ahead(), &flash));
+        assert!(!ahead(x8_ahead(), &flash[..FONT_MAP_AT as usize + 3]), "cut short before the tag ends");
+        assert!(!ahead(x8_ahead(), &crate::formats::imxrt::tests::image(&dcd_with_a_stray())));
+        let mut moved = flash.clone();
+        moved[FONT_MAP_AT as usize] = b'X';
+        assert!(!ahead(x8_ahead(), &moved));
+    }
+
+    #[test]
+    fn an_imxrt_image_not_laid_out_like_the_x8s_is_read_with_imxrts_fields() {
+        let flash = flash();
+        // The X8's boot header and bootloader, and then erased flash.
+        let mut erased = flash[..APP_AT as usize].to_vec();
+        erased.resize(APP_AT as usize + 0x2000, 0xff);
+        // The whole X8 flash, with its font map's tag changed.
+        let mut moved = flash.clone();
+        moved[FONT_MAP_AT as usize] = b'X';
+        let images = [crate::formats::imxrt::tests::image(&dcd_with_a_stray()), erased, moved];
+        for (i, image) in images.iter().enumerate() {
+            let d = Document::new(MemSource(update_for(b"DR-99\0\0\0", image)));
+            let mut ev = Evaluator::new(tascamfw());
+            let node = ev.node(&d, &FLASH).unwrap();
+            assert_eq!((node.type_name.as_str(), node.size_bits / 8), ("ImxrtFlash", image.len() as u64), "image {i}");
+            assert_eq!(node.problem, None, "image {i}");
+            assert_eq!(int(&mut ev, &d, &FLASH, &["boot_header", "ivt", "entry"]), (XIP + 0x2000) as i128, "image {i}");
+            assert!(holds(&mut ev, &d, &FLASH, &["boot_header", "dcd"]), "image {i}");
+            assert_eq!(int(&mut ev, &d, &FLASH, &["program", "vectors", "stack_top"]), 0x2008_0000, "image {i}");
+            let sum = named(&mut ev, &d, &[0], &["checksum"]);
+            assert!(ev.run_check(&d, &sum).unwrap().expect("a check").ok, "image {i}");
+        }
+    }
+
+    #[test]
     fn an_image_that_is_a_boot_stream_is_read_with_bfldr() {
         let stream = crate::formats::bfldr::tests::two_programs();
         let d = Document::new(MemSource(update_for(b"DR-05X\0\0", &stream)));
@@ -780,6 +855,14 @@ mod tests {
         let programs = named(&mut ev, &d, &FLASH, &["programs"]);
         assert_eq!(ev.node(&d, &programs).unwrap().child_count, 2);
         assert_eq!(extent(&mut ev, &d, &FLASH, &["erased"]), (stream.len() as u64 - 12, 12));
+    }
+
+    #[test]
+    fn an_image_laid_out_like_the_x8s_is_read_with_the_x8s_layout_whatever_its_product_code() {
+        let d = Document::new(MemSource(update_for(b"DR-99\0\0\0", &flash())));
+        let mut ev = Evaluator::new(tascamfw());
+        let node = ev.node(&d, &FLASH).unwrap();
+        assert_eq!((node.type_name.as_str(), node.problem), ("X8Flash", None));
     }
 
     #[test]
