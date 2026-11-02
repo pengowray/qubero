@@ -118,8 +118,13 @@ struct Reader<'a, S: Source> {
 impl<S: Source> Reader<'_, S> {
     /// Note that the node at `path` has been read, so the build reaches at
     /// least to its end.
+    ///
+    /// `path` may not be placed yet: `count` and `text` note before they
+    /// read, and `find` ends on what a pointer points at without placing it.
+    /// So the space comes from [`space_at`](Evaluator::space_at), and a node
+    /// inside a stream is never measured as if its offset were in the file.
     fn note(&mut self, path: &[usize]) -> R<()> {
-        let space = self.ev.memo.get(path).map_or(0, |r| r.space);
+        let space = self.ev.space_at(path);
         if space != 0 {
             self.reach = u64::MAX;
             return Ok(());
@@ -730,5 +735,50 @@ mod tests {
         // A description in a stream is a claim about bytes the stream cannot
         // place in the file, so any edit rebuilds.
         assert!(ev.schemas.reaches_past(0));
+    }
+
+    /// Names its type after the text of `run.name`, found from the top of the
+    /// file without walking any records.
+    #[derive(Debug)]
+    struct NamedAfter;
+
+    impl crate::template::SchemaBuilder for NamedAfter {
+        fn build(&self, _key: &[KeyValue], table: &mut dyn Descriptions) -> R<Built> {
+            let name = table.find(&[], &["run", "name"])?.expect("a name");
+            let name = table.text(&name)?;
+            Ok(Built::by_heart(T::structure(&format!("Named_{name}"), vec![])))
+        }
+
+        fn key_text(&self, _key: &[KeyValue]) -> String {
+            "named".into()
+        }
+    }
+
+    #[test]
+    fn a_description_read_through_a_pointer_in_a_stream_rebuilds_on_any_edit() {
+        // `name` points two bytes into the run's own space. The path `find`
+        // hands back is what the pointer points at, which nothing has placed
+        // yet when `text` notes it as read.
+        let inner = T::structure("Inner", vec![("name", T::at_space(E::lit(1), T::utf8(E::lit(2))))]);
+        let root = T::structure(
+            "Root",
+            vec![
+                ("pad", T::bytes(E::lit(4))),
+                ("run", T::decoded(E::lit(3), crate::codec::Codec::Stored, inner)),
+                ("body", T::schema("named", vec![], vec![KeyPart::Int(E::lit(1))])),
+            ],
+        );
+        let t = Template::new("t", root).with_schema("named", Arc::new(NamedAfter));
+        let mut d = doc(vec![0, 0, 0, 0, b'?', b'a', b'b']);
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.node(&d, &[2]).unwrap().type_name, "Named_ab");
+        // The name is in the run, so where it is in the file is not something
+        // the build can say.
+        assert!(ev.schemas.built.values().all(|k| k.reach == u64::MAX));
+        // Byte 1 of the run is byte 5 of the file. In the run's space the name
+        // ends at bit 24, which is before the edit.
+        d.overwrite_bits(5 * 8, &[b'x'], 8);
+        ev.invalidate_from(5 * 8);
+        assert_eq!(ev.node(&d, &[2]).unwrap().type_name, "Named_xb");
     }
 }
