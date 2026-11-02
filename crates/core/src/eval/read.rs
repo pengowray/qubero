@@ -365,7 +365,7 @@ impl Evaluator {
     /// still an instruction, and reading past the section would be reading
     /// somebody else's bytes.
     pub(super) fn read_insn<S: Source>(&self, doc: &Document<S>, r: &Resolved, isa: crate::code::Isa) -> R<crate::code::Insn> {
-        let room = (r.limit.saturating_sub(r.offset)).min(isa.longest() as u64 * 8) / 8 * 8;
+        let room = insn_room(r, isa);
         if room == 0 {
             return fail("no room for an instruction");
         }
@@ -376,6 +376,20 @@ impl Evaluator {
         // left of it.
         insn.len = insn.len.clamp(1, (room / 8) as usize);
         Ok(insn)
+    }
+
+    /// How many bytes the instruction at `r` takes: the length `read_insn`
+    /// gives, without the text. Measuring an instruction is what placing the
+    /// next one asks, and writing out the text was nearly all of what that
+    /// cost.
+    #[inline(never)]
+    pub(super) fn read_insn_len<S: Source>(&self, doc: &Document<S>, r: &Resolved, isa: crate::code::Isa) -> R<u64> {
+        let room = insn_room(r, isa);
+        if room == 0 {
+            return fail("no room for an instruction");
+        }
+        let bytes = self.read(doc, r, r.offset, room)?;
+        Ok(crate::code::length(isa, &bytes).clamp(1, (room / 8) as usize) as u64)
     }
 
     /// A variable-length quantity: the high bit says another byte follows, and
@@ -690,6 +704,13 @@ impl Evaluator {
             _ => unreachable!("composite handled by caller"),
         })
     }
+}
+
+/// How many bits of an instruction's bytes are read to decode it: as many as
+/// the longest instruction the machine has, or what is left of the field, in
+/// whole bytes.
+fn insn_room(r: &Resolved, isa: crate::code::Isa) -> u64 {
+    (r.limit.saturating_sub(r.offset)).min(isa.longest() as u64 * 8) / 8 * 8
 }
 
 /// The number in a whole EBML VINT, big-endian, with or without its marker

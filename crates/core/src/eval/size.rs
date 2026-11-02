@@ -318,7 +318,7 @@ impl Evaluator {
                     n * 8
                 }
                 // As long as the decoder says the instruction is.
-                Ty::Insn { isa } => self.read_insn(doc, &r, *isa)?.len as u64 * 8,
+                Ty::Insn { isa } => self.read_insn_len(doc, &r, *isa)? * 8,
                 Ty::EbmlVint { strip_marker } => {
                     let (_, n) = self.read_ebml_vint(doc, &r, *strip_marker)?;
                     n * 8

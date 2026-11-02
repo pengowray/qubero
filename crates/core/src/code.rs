@@ -117,6 +117,13 @@ impl Isa {
         len.min(bytes.len())
     }
 
+    /// Whether an instruction's length can be read from its first bytes
+    /// without decoding it, which is true of every machine here except x86.
+    /// See [`length`].
+    pub fn says_its_length(self) -> bool {
+        !matches!(self, Isa::X86_64 | Isa::X86_32 | Isa::X86_16)
+    }
+
     /// The most it can be, which is how many bytes are worth reading to decode
     /// one.
     pub fn longest(self) -> usize {
@@ -147,9 +154,9 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
         return Insn { len: 0, text: String::new(), target: None };
     }
     let decoded = match isa {
-        Isa::X86_64 => x86_64(bytes),
-        Isa::X86_32 => x86_32(bytes),
-        Isa::X86_16 => x86_16(bytes),
+        Isa::X86_64 => x86_64(bytes).map(|i| Insn { len: i.len().to_const() as usize, text: i.to_string(), target: None }),
+        Isa::X86_32 => x86_32(bytes).map(|i| Insn { len: i.len().to_const() as usize, text: i.to_string(), target: None }),
+        Isa::X86_16 => x86_16(bytes).map(|i| Insn { len: i.len().to_const() as usize, text: i.to_string(), target: None }),
         Isa::Aarch64 => aarch64(bytes),
         Isa::Arm => arm(bytes),
         // The overlay goes first and answers only for what it knows; the
@@ -207,22 +214,39 @@ pub fn relative_target(isa: Isa, text: &str, len: usize) -> Option<i64> {
     Some(from_start + sign * value)
 }
 
-fn x86_64(bytes: &[u8]) -> Option<Insn> {
-    let mut reader = U8Reader::new(bytes);
-    let insn = yaxpeax_x86::long_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
+/// How many bytes the instruction at the front of `bytes` takes: the `len`
+/// that [`decode`] would give it, without writing out its text.
+///
+/// Writing the text is most of what decoding costs, and a walk along a run of
+/// code only needs the lengths. Every machine here except x86 says how long an
+/// instruction is in its first byte or halfword, or always uses four bytes, so
+/// for those the length is read from the bytes with no decoder at all. It is
+/// the same rule `decode` uses to step over bytes that do not decode, and
+/// `the_length_is_the_one_decoding_gives` checks that the decoders agree with
+/// it. x86 has to be decoded to be measured, so it is, without the text.
+pub fn length(isa: Isa, bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let decoded = match isa {
+        Isa::X86_64 => x86_64(bytes).map(|i| i.len().to_const() as usize),
+        Isa::X86_32 => x86_32(bytes).map(|i| i.len().to_const() as usize),
+        Isa::X86_16 => x86_16(bytes).map(|i| i.len().to_const() as usize),
+        _ => None,
+    };
+    decoded.unwrap_or_else(|| isa.unreadable(bytes))
 }
 
-fn x86_32(bytes: &[u8]) -> Option<Insn> {
-    let mut reader = U8Reader::new(bytes);
-    let insn = yaxpeax_x86::protected_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
+fn x86_64(bytes: &[u8]) -> Option<yaxpeax_x86::long_mode::Instruction> {
+    yaxpeax_x86::long_mode::InstDecoder::default().decode(&mut U8Reader::new(bytes)).ok()
 }
 
-fn x86_16(bytes: &[u8]) -> Option<Insn> {
-    let mut reader = U8Reader::new(bytes);
-    let insn = yaxpeax_x86::real_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
+fn x86_32(bytes: &[u8]) -> Option<yaxpeax_x86::protected_mode::Instruction> {
+    yaxpeax_x86::protected_mode::InstDecoder::default().decode(&mut U8Reader::new(bytes)).ok()
+}
+
+fn x86_16(bytes: &[u8]) -> Option<yaxpeax_x86::real_mode::Instruction> {
+    yaxpeax_x86::real_mode::InstDecoder::default().decode(&mut U8Reader::new(bytes)).ok()
 }
 
 fn aarch64(bytes: &[u8]) -> Option<Insn> {
@@ -368,6 +392,59 @@ mod tests {
         assert_eq!(text(&[0x5d]), "pop rbp"); // 0x40024e
         // The 32-bit decoder was right all along.
         assert_eq!(decode(Isa::X86_32, &[0x0f, 0xc8]).text, "bswap eax");
+    }
+
+    /// `length` reads Thumb's and RISC-V's lengths from their first bytes
+    /// rather than decoding, so it has to agree with what decoding says for
+    /// every first halfword there is, with the second halfword there or not,
+    /// and with the bytes cut short. The other machines are checked on bytes
+    /// made up by a fixed generator.
+    #[test]
+    fn the_length_is_the_one_decoding_gives() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for isa in [Isa::Thumb, Isa::Rp2350Arm, Isa::Riscv32, Isa::Hazard3, Isa::Riscv64] {
+            assert!(isa.says_its_length());
+            for first in 0..=u16::MAX {
+                let mut bytes = first.to_le_bytes().to_vec();
+                bytes.extend_from_slice(&(next() as u16).to_le_bytes());
+                for cut in [2, 4] {
+                    let b = &bytes[..cut];
+                    assert_eq!(length(isa, b), decoded_len(isa, b), "{} {b:02x?}", isa.name());
+                }
+            }
+        }
+        for isa in [Isa::X86_64, Isa::X86_32, Isa::X86_16, Isa::Aarch64, Isa::Arm, Isa::Thumb, Isa::Rp2350Arm, Isa::Riscv32, Isa::Hazard3, Isa::Riscv64] {
+            for _ in 0..2000 {
+                let bytes: Vec<u8> = (0..16).map(|_| next() as u8).collect();
+                for cut in 1..=isa.longest() {
+                    let b = &bytes[..cut];
+                    assert_eq!(length(isa, b), decoded_len(isa, b), "{} {b:02x?}", isa.name());
+                }
+            }
+        }
+        assert_eq!(length(Isa::Thumb, &[]), 0);
+    }
+
+    /// What `decode` says the length is. `raki` 1.3.2 decodes some 64-bit
+    /// RISC-V instructions and then panics writing them out as text, `f3 04
+    /// 2c 13` among them. The panic comes after the decode, which only
+    /// succeeds on two bytes with the compressed bits or four without them,
+    /// so the length `decode` was about to give is the one those bits say.
+    fn decoded_len(isa: Isa, bytes: &[u8]) -> usize {
+        match std::panic::catch_unwind(|| decode(isa, bytes).len) {
+            Ok(len) => len,
+            Err(_) if isa == Isa::Riscv64 => {
+                eprintln!("raki panics on {bytes:02x?}");
+                if bytes[0] & 3 == 3 { 4 } else { 2 }
+            }
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     #[test]
