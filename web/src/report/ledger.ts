@@ -58,7 +58,8 @@ const samePath = (a: readonly number[], b: readonly number[]): boolean => a.leng
  *   local files, the central directory and its end.
  * - A part that is one plain field is taken together with the other plain
  *   fields of the same structure: the thirty fields of an ELF header are one
- *   line, not thirty. One such field on its own keeps its own name.
+ *   line, not thirty. One such field on its own keeps its own name. A stream
+ *   is not a plain field, and keeps its own name.
  * - Bytes no field describes are one line, and padding another.
  */
 export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
@@ -81,7 +82,10 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
   };
   const lines = new Map<string, Acc>();
   for (const r of rows) {
-    const plain = r.group === "" && r.role !== "gap" && r.role !== "padding" && samePath(r.first_path, r.part);
+    // A stream is one leaf of the file too, but it is a part with contents of
+    // its own: a firmware update's scrambled image is `image`, not one of the
+    // fields of a trailer.
+    const plain = r.group === "" && r.role !== "gap" && r.role !== "padding" && r.stream !== true && samePath(r.first_path, r.part);
     const key =
       r.role === "gap"
         ? "gap"

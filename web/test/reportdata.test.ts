@@ -144,6 +144,18 @@ test("the plain fields of one structure are one line, and one field alone keeps 
   assert.equal(magic?.part, "magic");
 });
 
+test("a stream at the root is a part of its own, not one of the root's plain fields", () => {
+  // A Tascam firmware update: a header, then the scrambled image and the
+  // scrambled checksum copy, each one leaf of the file.
+  const lines = ledgerLines([
+    row([1], "image", "", "content", 203_948_000, [1], 256, { stream: true }),
+    row([0], "header", "", "content", 256, [0, 0], 0),
+    row([2], "checksum_copy", "", "content", 32, [2], 203_948_256, { stream: true }),
+  ]);
+  assert.deepEqual(lines.map((l) => l.part).sort(), ["checksum_copy", "header", "image"]);
+  assert.ok(lines.every((l) => l.parentPath === null));
+});
+
 test("bytes no field describes are one line, with their zero bytes kept", () => {
   const lines = ledgerLines([
     row([7], "header", "", "gap", 800, [7], 400, { zero_bits: 800 }),

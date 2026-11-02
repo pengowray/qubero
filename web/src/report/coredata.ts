@@ -55,6 +55,11 @@ export type LedgerRole = "content" | "machinery" | "padding" | "framing" | "gap"
 export type LedgerRow = {
   readonly part: readonly number[];
   readonly part_name: string;
+  /** True when the part is a stream: a field whose contents are read from the
+   *  bytes it unpacks to. The walk counts it as one leaf of the file, so its
+   *  `first_path` is the part itself, as for a part that is one plain value.
+   *  Optional so older test rows need no value. */
+  readonly stream?: boolean;
   /** Empty where no list element is above these bits. */
   readonly group: string;
   /** `key` | `case` | `name` | `type` | `none` | `other` */
