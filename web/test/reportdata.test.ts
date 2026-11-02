@@ -10,9 +10,10 @@ import type { LedgerRow, Profile, ProfileRow } from "../src/report/coredata.ts";
 import { sameOrder } from "../src/report/directories.ts";
 import { extentWindow } from "../src/report/extentfigure.ts";
 import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
+import { runPosition } from "../src/report/partrules.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { RV } from "../src/report/text.ts";
-import { codecWords } from "../src/strings.ts";
+import { codecWords, REPORT } from "../src/strings.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
 test("text inside a list of numbers is counted with its nouns, one and many", () => {
@@ -155,6 +156,79 @@ test("a stream at the root is a part of its own, not one of the root's plain fie
   ]);
   assert.deepEqual(lines.map((l) => l.part).sort(), ["checksum_copy", "header", "image"]);
   assert.ok(lines.every((l) => l.parentPath === null));
+});
+
+/** What the report calls each line, the way `lineLabel` in bytes.ts does for
+ *  a line of plain fields at the top of the file. */
+function lineNames(rows: LedgerRow[], fileBits: number): string[] {
+  return ledgerLines(rows).map((l) => l.part ?? REPORT.unnamedPart(runPosition({ offsetBits: l.firstOffsetBits, sizeBits: l.bits }, fileBits)));
+}
+
+test("plain fields on either side of a stream are separate lines, each named by where it is", () => {
+  // compressed/hello.zz: the zlib header's bit fields, the deflate stream,
+  // then the Adler-32 at the end of the file.
+  const names = lineNames(
+    [
+      row([6], "compressed", "", "content", 544, [6], 16, { stream: true }),
+      row([7], "adler32", "", "content", 32, [7], 560),
+      row([4], "fcheck", "", "content", 5, [4], 11),
+      row([0], "cinfo", "", "content", 4, [0], 0),
+      row([1], "cm", "", "content", 4, [1], 4),
+      row([2], "flevel", "", "content", 2, [2], 8),
+      row([3], "fdict", "", "machinery", 1, [3], 10),
+    ],
+    592,
+  );
+  assert.deepEqual(names, ["Header", "compressed", "adler32"]);
+});
+
+test("plain fields after the lists of a file are a trailer, not part of the header", () => {
+  // git/pack-v2-thirteen-objects.idx: magic and version, four lists, then
+  // two SHA-1 checksums at the end of the file.
+  const names = lineNames(
+    [
+      row([2], "fanout", "", "machinery", 8192, [2, 0], 64),
+      row([3], "names", "", "content", 2080, [3, 0], 0x408 * 8),
+      row([4], "crcs", "", "content", 416, [4, 0], 0x50c * 8),
+      row([5], "offsets", "", "content", 416, [5, 0], 0x540 * 8),
+      row([7], "pack_checksum", "", "content", 160, [7], 0x574 * 8),
+      row([8], "checksum", "", "content", 160, [8], 0x588 * 8),
+      row([0], "magic", "", "content", 32, [0], 0),
+      row([1], "version", "", "content", 32, [1], 32),
+    ],
+    0x59c * 8,
+  );
+  assert.deepEqual(names, ["Header", "fanout", "names", "crcs", "offsets", "Trailer"]);
+});
+
+test("plain fields with a gap between them are separate lines", () => {
+  const lines = ledgerLines([
+    row([0], "magic", "", "content", 32, [0], 0),
+    row([1], "version", "", "content", 32, [1], 32),
+    row([], "file", "", "gap", 64, [], 64),
+    row([2], "count", "", "content", 32, [2], 128),
+    row([3], "flags", "", "content", 32, [3], 160),
+  ]);
+  assert.deepEqual(
+    lines.filter((l) => !isGapLine(l)).map((l) => l.fields),
+    [
+      ["magic", "version"],
+      ["count", "flags"],
+    ],
+  );
+});
+
+test("a JSON object's braces are on the object's own line", () => {
+  // json/jsontestsuite-unicode-escapes.json, whose root is the one part.
+  const lines = ledgerLines([
+    row([], "file", "", "content", 856, [0], 8),
+    row([], "file", "", "framing", 16, [], 0x6c * 8),
+    row([], "file", "", "gap", 8, [], 0),
+  ]);
+  const file = lines.filter((l) => !isGapLine(l));
+  assert.equal(file.length, 1);
+  assert.equal(file[0]?.part, "file");
+  assert.deepEqual(file[0]?.roles.map((r) => r.role), ["content", "framing"]);
 });
 
 test("bytes no field describes are one line, with their zero bytes kept", () => {
