@@ -33,9 +33,9 @@
 //! first block checks that those blocks fill exactly that length. The blocks
 //! stop at a final block, or before a block that would run past the next
 //! program, and any bytes left before the next program are read as one bytes
-//! field. An
-//! initcode's program ends with an init block rather than a final block, and
-//! the boot ROM carries on into the next program after it runs the initcode.
+//! field. An initcode's program ends with an init block rather than a final
+//! block, and the boot ROM carries on into the next program after it runs the
+//! initcode.
 //! In every stream these sources describe, a first block is an ignore block
 //! with a byte count of zero. ldrshrink writes the program's entry point as a
 //! first block's target address. A first block with a payload would be read
@@ -149,7 +149,8 @@ pub(crate) fn stream() -> T {
         "BootStream",
         vec![
             ("programs", T::repeat(program(), Until::While(first_block_ahead()))),
-            // Blocks no first block starts: a stream written without one.
+            // Blocks outside any program: a stream that does not open with a
+            // first block.
             ("blocks", T::when(block_ahead(), T::repeat(block(), Until::Cond(flag(FINAL))))),
             ("erased", T::when(E::Remaining.greater_than(E::lit(0)).both(E::peek(8, Big).equal_to(E::lit(0xff))), T::bytes(E::run(&[0xff])))),
             // Whatever is after the erased run. The stream does not say what
@@ -173,9 +174,11 @@ pub(crate) fn program() -> T {
             "Program",
             vec![
                 ("first_block", block()),
-                // Up to a final block, or to the last block that fits before
-                // the next program, so that an argument that is too short
-                // cuts no block after the first in two.
+                // Up to a final block, or up to the last block that fits
+                // before the next program. Whether the next block fits is
+                // asked after each block, so the first block of this list is
+                // read even when the argument is too short for it, and then
+                // it runs past the program and reads as an error.
                 ("blocks", T::repeat(block(), Until::Cond(flag(FINAL).either(block_fits().negate())))),
                 // What is left before the next program: bytes after a final
                 // block, which the boot ROM never reads, or the start of a
@@ -223,12 +226,12 @@ pub(crate) fn block_header() -> T {
         ],
     )
     .field_valid("header_check", Valid::Expr { expr: header_xor().equal_to(E::lit(0)), msg: Some("The 16 header bytes do not XOR to zero".into()) })
-    .field_doc("dma_code", "DMACODE: which DMA width the boot ROM uses for this block, as a code. ADI's loader sets it from its -dmawidth option.")
+    .field_doc("dma_code", "DMACODE: a code for the DMA width the boot ROM uses to read this block. ADI's loader sets it from its -dmawidth option.")
     .field_doc("flags", "ADI's BFLAG_ flags, named without the BFLAG_ prefix.")
     .field_doc("header_check", "HDRCHK: set so that the 16 bytes of this header XOR to zero.")
     .field_doc("signature", "HDRSIGN: 0xAD in every block header.")
     .field_doc("target_address", "TARGET ADDRESS: where the boot ROM writes this block's payload or fill value.")
-    .field_doc("byte_count", "BYTE COUNT: the length of the payload. For a fill block, the number of bytes to fill, and the block has no payload.")
+    .field_doc("byte_count", "BYTE COUNT: the length of the payload in bytes. For a fill block, the number of bytes to fill; a fill block has no payload.")
     .field_doc(
         "argument",
         "ARGUMENT: for a first block, the number of bytes from the end of this header to the next program. For a fill block, the 32-bit fill value. For other blocks, a value for the boot ROM, such as a callback's argument or a CRC-32.",
