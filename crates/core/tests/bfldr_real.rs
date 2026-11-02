@@ -177,10 +177,12 @@ fn nothing_in_the_dr05x_stream_is_flagged_as_a_wrong_value() {
     assert_eq!(ev.node(&d, &[]).unwrap().problems_within, (0, 0));
 }
 
-/// How long a listing of the stream takes: every row down to the lists of
-/// blocks, which have to be counted, and then every block's row.
+/// Every row of the stream down to the lists of blocks, which have to be
+/// counted, and then every block's row. Prints how long each part took, but
+/// asserts only the count of block rows, since the time depends on the
+/// machine.
 #[test]
-fn the_dr05x_stream_lists_quickly() {
+fn the_dr05x_stream_lists_every_block_row() {
     let Some(bytes) = stream() else { return };
     let d = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::template("bfldr").expect("the bfldr template"));
