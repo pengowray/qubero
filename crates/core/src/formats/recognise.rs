@@ -280,6 +280,13 @@ const PROBES: &[Probe] = &[
     // interrupts, but any i.MX RT part with this layout matches. Four letters
     // on their own would be weak; the two together are not.
     Probe::Is("imxrt", |h, _| imxrt::is_imxrt_flash(h)),
+    // A Blackfin boot stream, which opens with the header of a program's
+    // first block: signed with 0xAD in byte 3, the 16 bytes XORing to zero,
+    // the first and ignore flags set, the fill and final flags clear, and a
+    // byte count of zero. U-Boot tests the signature and the byte count. A
+    // random 16-byte head passes about once in 2^52, and a BMP or UTF-8 text
+    // that passes the signature and the XOR fails on the byte count.
+    Probe::Is("bfldr", |h, _| bfldr::is_bfldr(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),
     // A miniSEED record, which has no signature but does have a front: six
