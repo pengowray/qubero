@@ -99,9 +99,6 @@ const MAGIC: &[(&[u8], &str)] = &[
     (rar4::MAGIC, "rar4"),
     (rar5::MAGIC, "rar5"),
     (uf2::MAGIC, "uf2"),
-    // A Tascam Portacapture X8 firmware update, which names the recorder by
-    // its project code in the first eight bytes.
-    (tascamfw::MAGIC, "tascamfw"),
     // A Godot resource with its body compressed. The plain one shares its
     // four letters with LabVIEW and is a probe instead; this one does not.
     (godot::MAGIC_COMPRESSED, "godot"),
@@ -350,6 +347,11 @@ const PROBES: &[Probe] = &[
     // The skippable magic is LZ4's too, so what settles it is the zstd magic
     // where the skippable frame's length says the next frame starts.
     Probe::Is("zstd", |h, _| is_zstd_after_skippable(h)),
+    // A Tascam firmware update. The first eight bytes of its header are the
+    // product code, which is different for each recorder, so the header is
+    // recognised by its other fields: the file's length at byte 20, eight
+    // zero bytes after it, and a build date that can be a real date.
+    Probe::Is("tascamfw", tascamfw::is_update),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the
     // table above knows `{"` and nothing else, and a brace, a newline and two

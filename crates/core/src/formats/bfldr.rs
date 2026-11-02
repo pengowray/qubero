@@ -14,9 +14,8 @@
 //! 16 bytes of the header XOR to zero, which is the test U-Boot's `ldrinfo`
 //! and ldrshrink both make. Here it is a constraint on the header check field,
 //! worked out from the header's fields, rather than a checksum: a checksum is
-//! only taken over bytes of the file, and this template is meant to be reused
-//! by `tascamfw` to read the stream in Tascam's DR-05X update, which is inside
-//! a scrambled run.
+//! only taken over bytes of the file, and `tascamfw` reuses this template to
+//! read the stream in Tascam's DR-05X update, which is inside a scrambled run.
 //!
 //! The boot ROM copies each payload to the block's target address. A fill
 //! block has no payload: the boot ROM writes the argument, a 32-bit value,
@@ -164,13 +163,36 @@ pub fn is_bfldr(head: &[u8]) -> bool {
         && word(8) == 0
 }
 
+/// The test [`is_bfldr`] makes, as an expression asked of the bytes ahead:
+/// one when they open a boot stream, zero when they do not. `tascamfw`
+/// switches on it inside the unscrambled image of an update, where the Rust
+/// test cannot be asked. A unit test below checks that the two agree.
+///
+/// The XOR is taken over the four header words and then over the four bytes
+/// of the result, which comes to the same as XORing the 16 bytes.
+pub(crate) fn stream_ahead() -> E {
+    let word = |at: i128| E::peek_at(E::lit(at * 8), 32, Little);
+    let flag = |bit: u32| E::peek(32, Little).bit(bit + 4);
+    let words = E::peek(32, Little).bit_xor(word(4)).bit_xor(word(8)).bit_xor(word(12));
+    let byte = |n: i128| words.clone().shr(E::lit(n));
+    let xor = byte(0).bit_xor(byte(8)).bit_xor(byte(16)).bit_xor(byte(24)).and(E::lit(0xff));
+    E::Remaining
+        .greater_than(E::lit(HEADER_BYTES as i128 - 1))
+        .both(E::peek_at(E::lit(24), 8, Big).equal_to(E::lit(i128::from(SIGNATURE))))
+        .both(xor.equal_to(E::lit(0)))
+        .both(flag(FIRST))
+        .both(flag(IGNORE))
+        .both(flag(FILL).negate())
+        .both(flag(FINAL).negate())
+        .both(word(8).equal_to(E::lit(0)))
+}
+
 pub fn bfldr() -> Template {
     Template::new("bfldr", stream())
 }
 
 /// A whole boot stream, and whatever follows it. `pub(crate)` so that
-/// `tascamfw` can read the stream in Tascam's DR-05X update with it, which it
-/// does not do yet.
+/// `tascamfw` can read the stream in Tascam's DR-05X update with it.
 pub(crate) fn stream() -> T {
     T::structure(
         "BootStream",
@@ -375,7 +397,7 @@ pub(crate) mod tests {
 
     /// An initcode program and an application, the way the DR-05X stream is
     /// laid out, and then erased flash.
-    fn two_programs() -> Vec<u8> {
+    pub(crate) fn two_programs() -> Vec<u8> {
         let init = program(
             0xffa0_0000,
             &[block(DMA_1, 0xff80_4000, 4, 0, b"data"), block(DMA_1, 0xffa0_0000, 8, 0, b"initcode"), block(DMA_1 | INIT_BLOCK, 0xffa0_0000, 0, 0, &[])],
@@ -454,6 +476,44 @@ pub(crate) mod tests {
         assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK, 0xffa0_0000, 0, 0, &[])), "a first block without the ignore flag");
         assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FILL_BLOCK, 0xffa0_0000, 0, 0, &[])));
         assert!(!is_bfldr(&block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[])));
+    }
+
+    /// What [`stream_ahead`] answers at the start of `bytes`, asked the way a
+    /// template asks it: whether a field that is there only when it is
+    /// nonzero is there.
+    fn ahead(bytes: &[u8]) -> bool {
+        let probe = Template::new("probe", T::structure("Probe", vec![("stream", T::when(stream_ahead(), T::bytes(E::Remaining)))]));
+        let d = Document::new(MemSource(bytes.to_vec()));
+        let mut ev = Evaluator::new(probe);
+        !ev.node(&d, &[0]).unwrap().absent
+    }
+
+    #[test]
+    fn the_expression_agrees_with_the_probe() {
+        let v = two_programs();
+        let mut unsigned = v.clone();
+        unsigned[3] = 0xac;
+        unsigned[2] ^= 0xad ^ 0xac;
+        let mut unchecked = v.clone();
+        unchecked[4] ^= 1;
+        let heads = [
+            v.clone(),
+            v[..15].to_vec(),
+            v[..16].to_vec(),
+            block(DMA_1 | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[]),
+            unsigned,
+            unchecked,
+            block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK, 0xffa0_0000, 4, 4, b"skip"),
+            block(DMA_1 | FIRST_BLOCK, 0xffa0_0000, 0, 0, &[]),
+            block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FILL_BLOCK, 0xffa0_0000, 0, 0, &[]),
+            block(DMA_1 | FIRST_BLOCK | IGNORE_BLOCK | FINAL_BLOCK, 0xffa0_0000, 0, 0, &[]),
+            crate::formats::imxrt::tests::image(&[]),
+            Vec::new(),
+        ];
+        for (i, head) in heads.iter().enumerate() {
+            assert_eq!(ahead(head), is_bfldr(head), "head {i}: {:02x?}", &head[..head.len().min(16)]);
+        }
+        assert!(ahead(&v), "the stream itself");
     }
 
     #[test]

@@ -1,16 +1,19 @@
-//! The two Tascam Portacapture X8 firmware updates in the sample collection,
-//! V2.01 and V2.03, read against what is known to be in them.
+//! The Tascam firmware updates in the sample collection, read against what is
+//! known to be in them: the Portacapture X8's V2.01 and V2.03, whose images
+//! are i.MX RT flash, and the DR-05X's V1.16, whose image is a Blackfin boot
+//! stream.
 //!
 //! The values asserted here were worked out by hand from the unscrambled
-//! images. Apart from the boot header at 0 and the application at 0x20000,
-//! which are fixed, the template finds every position itself: the init tables
-//! by searching for IAR's FPU routine, the fonts by the offsets in the font
-//! map, and the packed runs by the pointers in the init tables. The numbers
-//! below differ between the two releases wherever the application's code
-//! grew. The instruction counts were not worked out by hand. They are the
-//! counts the template gives, and each was checked against counting the same
-//! run one placed element at a time, the way runs of instructions were
-//! counted before `insnrun.rs`.
+//! images. In the X8's images, apart from the boot header at 0 and the
+//! application at 0x20000, which are fixed, the template finds every position
+//! itself: the init tables by searching for IAR's FPU routine, the fonts by
+//! the offsets in the font map, and the packed runs by the pointers in the
+//! init tables. The numbers below differ between the two X8 releases wherever
+//! the application's code grew. The instruction counts were not worked out by
+//! hand. They are the counts the template gives, and each was checked against
+//! counting the same run one placed element at a time, the way runs of
+//! instructions were counted before `insnrun.rs`. The DR-05X's boot stream is
+//! checked against the same walk by hand as `bfldr_real.rs`.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -19,7 +22,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, NodeInfo, Value};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
@@ -390,6 +393,102 @@ fn application(ev: &mut Evaluator, d: &Document<MemSource>, r: &Release) {
     let fourth = [&code[..], &[3]].concat();
     assert_eq!(ev.node(d, &fourth).unwrap().offset_bits / 8, 8);
     assert_eq!(text(ev, d, &fourth), "push {r4, r5, r6, r7, r8, lr}", "{f}");
+}
+
+/// The DR-05X V1.16 update, build 71.
+const DR05X: &str = "DR05X_071.116";
+const DR05X_FILE_SIZE: u64 = 2_043_936;
+
+/// The DR-05X's image: the file less the 32-byte header and the 4-byte
+/// checksum copy. It is the boot stream and then erased flash.
+const DR05X_IMAGE_SIZE: u64 = 0x1f_2ffc;
+
+/// Where the DR-05X's final block ends, and the erased flash starts.
+const DR05X_STREAM_END: u64 = 0x1f_2ab0;
+
+/// The names of the flags set in a Blackfin block's header.
+fn flags(ev: &mut Evaluator, d: &Document<MemSource>, block: &[usize]) -> Vec<String> {
+    let p = named(ev, d, block, &["header", "flags"]);
+    match ev.node(d, &p).unwrap().value {
+        Value::Flags { set, .. } => set,
+        other => panic!("not flags: {other:?}"),
+    }
+}
+
+/// Every node under `info`, depth first, with what is wrong with any of them.
+fn problems(ev: &mut Evaluator, d: &Document<MemSource>, info: &NodeInfo, found: &mut Vec<String>) {
+    if let Some(p) = &info.problem {
+        found.push(format!("{:?} {} at 0x{:x}: {}", info.path, info.name, info.offset_bits / 8, p.text));
+    }
+    if info.child_count > 0 {
+        for child in ev.children(d, &info.path, 0, info.child_count).unwrap() {
+            problems(ev, d, &child, found);
+        }
+    }
+}
+
+#[test]
+fn the_dr05x_update_reads_as_a_blackfin_boot_stream() {
+    let Some(path) = sample(DR05X) else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes.len() as u64, DR05X_FILE_SIZE);
+    let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
+    assert_eq!(formats::sniff(head, DR05X_FILE_SIZE), Some("tascamfw"));
+    let d = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::template("tascamfw").expect("the tascamfw template"));
+    let ev = &mut ev;
+    let d = &d;
+
+    // The header, and the whole file read with nothing left over.
+    assert_eq!(ev.node(d, &[]).unwrap().size_bits, DR05X_FILE_SIZE * 8);
+    let code = named(ev, d, &[0], &["product_code"]);
+    assert_eq!(text(ev, d, &code), "DR-05X");
+    assert_eq!(int(ev, d, &[0], &["version"]), 116);
+    assert_eq!(int(ev, d, &[0], &["build"]), 71);
+    assert_eq!((int(ev, d, &[0], &["year"]), int(ev, d, &[0], &["month"]), int(ev, d, &[0], &["day"])), (2023, 12, 15));
+    assert_eq!(int(ev, d, &[0], &["file_size"]), DR05X_FILE_SIZE as i128);
+    assert!(holds(ev, d, &[0], &["file_size"]));
+    let sum = named(ev, d, &[0], &["checksum"]);
+    let verdict = ev.run_check(d, &sum).unwrap().expect("the header's checksum is a check");
+    assert!(verdict.ok, "computed {}, stored {}", verdict.computed, verdict.stored);
+    assert!(holds(ev, d, &[2, 0], &["checksum"]), "the image's last word is the header's checksum");
+
+    // The image is a boot stream: an initcode program and the application,
+    // the final block, and erased flash.
+    let image = ev.node(d, &FLASH).unwrap();
+    assert_eq!((image.type_name.as_str(), image.size_bits / 8), ("BootStream", DR05X_IMAGE_SIZE));
+    let programs = named(ev, d, &FLASH, &["programs"]);
+    assert_eq!(ev.node(d, &programs).unwrap().child_count, 2);
+    let init = [&programs[..], &[0]].concat();
+    assert_eq!(extent(ev, d, &init, &[]), (0, 0x748));
+    assert!(holds(ev, d, &init, &["first_block"]), "the initcode's first block's argument is the length of the blocks after it");
+    assert_eq!(count(ev, d, &init, &["blocks"]), 3);
+    let run = [&named(ev, d, &init, &["blocks"])[..], &[2]].concat();
+    assert_eq!(flags(ev, d, &run), ["init"]);
+    let app = [&programs[..], &[1]].concat();
+    assert_eq!(extent(ev, d, &app, &[]), (0x748, DR05X_STREAM_END - 0x748));
+    assert!(holds(ev, d, &app, &["first_block"]), "the application's first block's argument is the length of the blocks after it");
+    let blocks = named(ev, d, &app, &["blocks"]);
+    let n = ev.node(d, &blocks).unwrap().child_count;
+    assert_eq!(n, 7826 - 2 - 3);
+    let last = [&blocks[..], &[n as usize - 1]].concat();
+    assert_eq!(extent(ev, d, &last, &[]), (0x1f_2aa0, 16));
+    assert_eq!(flags(ev, d, &last), ["final"]);
+    for name in ["blocks", "rest"] {
+        let p = named(ev, d, &FLASH, &[name]);
+        assert!(ev.node(d, &p).unwrap().absent, "{name}");
+    }
+    assert_eq!(extent(ev, d, &FLASH, &["erased"]), (DR05X_STREAM_END, 1356));
+
+    // Nothing anywhere in the file is flagged.
+    let root = ev.node(d, &[]).unwrap();
+    let mut found = Vec::new();
+    problems(ev, d, &root, &mut found);
+    assert!(found.is_empty(), "{} flagged, first: {:?}", found.len(), &found[..found.len().min(5)]);
+    assert_eq!(ev.node(d, &[]).unwrap().problems_within, (0, 0));
 }
 
 /// What the core tells a view about the two scrambled runs: that their codec

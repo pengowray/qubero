@@ -1,23 +1,55 @@
-//! Tascam Portacapture X8 firmware updates: files such as
-//! `#PortaX8_0217.203`, which a user copies to the recorder's memory card to
-//! update it.
+//! Tascam firmware updates: the files a user copies to a Tascam recorder's
+//! memory card to update it, such as `#PortaX8_0217.203` for the Portacapture
+//! X8 and `DR05X_071.116` for the DR-05X.
 //!
-//! The file is a 32-byte header, the flash image, and a 4-byte copy of the
+//! The file is a 32-byte header, the firmware image, and a 4-byte copy of the
 //! header's checksum. The image and the copy are scrambled: every byte is
-//! passed through a fixed substitution table (see [`crate::codec::tascam`]).
-//! The header names the recorder by its project code, `DR-TURBO`, and then
-//! gives the version, the build, the build date, a checksum, the length of
-//! the file and 8 reserved bytes. The checksum is the byte sum, kept to 32
-//! bits, of the unscrambled image. The image and the checksum copy are read as
-//! two separate runs, so that the header's checksum covers the image alone.
+//! passed through a fixed substitution table (see [`crate::codec::tascam`]),
+//! and both products with samples here use the same table. The header's
+//! fields are big-endian: an 8-byte product code in ASCII, padded with NULs,
+//! then the version, the build, the build date, a checksum, the length of the
+//! file and 8 reserved bytes, which are zero. The checksum is the byte sum,
+//! kept to 32 bits, of the unscrambled image. The image and the checksum copy
+//! are read as two separate runs, so that the header's checksum covers the
+//! image alone.
 //!
-//! The image is the flash an NXP i.MX RT1060 boots from, and its first 8 KiB
-//! are read with the same pieces as `imxrt`: the FlexSPI configuration block,
-//! the IVT, the boot data and the DCD. The IVT's `entry` field holds the
-//! address of Tascam's bootloader, and the application is at 0x20000. The
-//! bootloader copies everything from 0x20000 on into SDRAM at 0x80000000 and
-//! jumps to it without checking anything, so an application address is its
-//! flash offset plus 0x7ffe0000.
+//! The product code is Tascam's code for the product. The X8's code is
+//! `DR-TURBO`, its internal project name, which is also in the source paths in
+//! its firmware (`C:\Perforce\projects\SSR\DR-TURBO\...`). The DR-05X's code
+//! is `DR-05X`. [`is_update`] recognises a file by the other fields of its
+//! header and accepts any product code.
+//!
+//! How the image is read depends on its first unscrambled bytes, and not on
+//! the product code, so an update for a product with no sample here still
+//! reads if its image is one of these two kinds:
+//!
+//! - An NXP i.MX RT flash image, which has `FCFB` at offset 0 and an image
+//!   vector table at 0x1000, which is what `imxrt::is_imxrt_flash` tests. The
+//!   X8's image is one, and it is read with the X8's layout, described below.
+//!   An i.MX RT image from another product is read with the X8's layout as
+//!   well, and that layout is unlikely to match the other product's image.
+//! - An Analog Devices Blackfin boot stream, the format the `bfldr` template
+//!   reads, which starts with a 16-byte block header that has the first flag
+//!   set. Boot streams with these block headers are for the ADSP-BF50x,
+//!   BF51x, BF52x, BF54x and BF59x. The DR-05X's image is one, and it is read
+//!   with `bfldr`'s pieces. It holds an initcode program at offset 0 and the
+//!   application at 0x748, which ends with a final block at 0x1F2AA0, and
+//!   then 1,356 bytes of erased flash (0xFF). The DR-05 homebrew project found
+//!   an ADSP-BF514 in the older DR-05. That has not been checked against the
+//!   DR-05X.
+//!
+//! An image of any other kind is read as bytes.
+//!
+//! # The Portacapture X8's image
+//!
+//! Teardown photos of the X8 show an NXP MIMXRT1062DVL6B processor, a part
+//! of the i.MX RT1060 family. The image is the flash it boots from, and its
+//! first 8 KiB are read with the same pieces as `imxrt`: the FlexSPI
+//! configuration block, the IVT, the boot data and the DCD. The IVT's `entry`
+//! field holds the address of Tascam's bootloader, and the application is at
+//! 0x20000. The bootloader copies everything from 0x20000 on into SDRAM at
+//! 0x80000000 and jumps to it without checking anything, so an application
+//! address is its flash offset plus 0x7ffe0000.
 //!
 //! Both programs were built with IAR Embedded Workbench and keep their startup
 //! data the way IAR's linker does: an init table of routines and the ranges
@@ -58,22 +90,21 @@
 //! The ITCM code is linked to run at 0x400, and the template IR has no way to
 //! give a run a load address, so its branch targets read as distances from
 //! the instruction rather than as addresses.
-//!
-//! The layout of the image is the X8's. An update for another Tascam product
-//! with this header layout would need a different template for its image, so
-//! the product code `DR-TURBO` is checked as a magic number.
 
 use crate::codec::Codec;
 use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Named, StrLen, Template, Ty as T, Until, Valid};
 
-use super::imxrt;
-
-/// The X8's project code at TEAC, which opens every update file for it and is
-/// what identifies one.
-pub const MAGIC: &[u8] = b"DR-TURBO";
+use super::{bfldr, imxrt};
 
 /// Bytes of header before the scrambled image.
 const HEADER_BYTES: i128 = 0x20;
+
+/// Bytes in the product code that opens the header.
+const PRODUCT_CODE_BYTES: usize = 8;
+
+/// The two kinds of image there is a reading for, as [`image`] numbers them.
+const IMXRT_FLASH: i128 = 1;
+const BOOT_STREAM: i128 = 2;
 
 /// The copy of the checksum that ends the image.
 const CHECKSUM_BYTES: i128 = 4;
@@ -93,6 +124,30 @@ const APP_AT: i128 = 0x20000;
 /// `RIFF`, read as a big-endian number, which opens each WAV file.
 const RIFF: i128 = 0x5249_4646;
 
+/// Whether the head of a file is the header of a Tascam update: a product code
+/// of printable ASCII padded with NULs, a build date with a year from 1990 to
+/// 2100, a month from 1 to 12 and a day from 1 to 31, the length of the whole
+/// file (`len`) at byte 20, and 8 reserved bytes of zero.
+///
+/// The product code is not compared with a list, so an update for a product
+/// with no sample here is recognised too. The length and the zero bytes are
+/// most of the evidence.
+pub fn is_update(head: &[u8], len: u64) -> bool {
+    let Some(h) = head.get(..HEADER_BYTES as usize) else { return false };
+    let code = &h[..PRODUCT_CODE_BYTES];
+    let text = code.iter().position(|&b| b == 0).unwrap_or(PRODUCT_CODE_BYTES);
+    let be16 = |at: usize| u16::from_be_bytes([h[at], h[at + 1]]);
+    let be32 = |at: usize| u32::from_be_bytes([h[at], h[at + 1], h[at + 2], h[at + 3]]);
+    text > 0
+        && code[..text].iter().all(|b| (0x20..=0x7e).contains(b))
+        && code[text..].iter().all(|&b| b == 0)
+        && (1990..=2100).contains(&be16(12))
+        && (1..=12).contains(&h[14])
+        && (1..=31).contains(&h[15])
+        && u64::from(be32(20)) == len
+        && h[24..].iter().all(|&b| b == 0)
+}
+
 pub fn tascamfw() -> Template {
     Template::new(
         "tascamfw",
@@ -100,11 +155,35 @@ pub fn tascamfw() -> Template {
             "TascamUpdate",
             vec![
                 ("header", header()),
-                ("image", T::decoded(E::Remaining.sub(E::lit(CHECKSUM_BYTES)), Codec::TascamScramble, flash())),
+                ("image", T::decoded(E::Remaining.sub(E::lit(CHECKSUM_BYTES)), Codec::TascamScramble, image())),
                 ("checksum_copy", T::decoded(E::lit(CHECKSUM_BYTES), Codec::TascamScramble, checksum_copy())),
             ],
+        )
+        .field_doc(
+            "image",
+            "The firmware image, unscrambled. It is read as an i.MX RT flash image if it starts with the FlexSPI configuration block tag FCFB and has an image vector table (IVT) at offset 0x1000. It is read as a Blackfin boot stream if it starts with a block header that has the first flag (BFLAG_FIRST) set. Any other image is read as bytes.",
         ),
     )
+}
+
+/// The unscrambled image, read as what its first bytes say it is. See the
+/// module's notes.
+fn image() -> T {
+    let kind = E::cond(imxrt_flash_ahead(), E::lit(IMXRT_FLASH), E::cond(bfldr::stream_ahead(), E::lit(BOOT_STREAM), E::lit(0)));
+    T::switch(kind, vec![(IMXRT_FLASH, flash()), (BOOT_STREAM, bfldr::stream())], T::bytes(E::Remaining))
+}
+
+/// The test `imxrt::is_imxrt_flash` makes, as an expression asked of the bytes
+/// ahead: `FCFB` at 0, and at 0x1000 an IVT header whose version is 0x40 or
+/// 0x41. Clearing the low bit of the IVT header's last byte leaves 0x40 for
+/// both versions.
+fn imxrt_flash_ahead() -> E {
+    let tag: [u8; 4] = imxrt::TAG.try_into().expect("a four-letter tag");
+    let ivt = imxrt::IVT_AT as i128;
+    E::Remaining
+        .greater_than(E::lit(ivt + 3))
+        .both(E::peek(32, Big).equal_to(E::lit(i128::from(u32::from_be_bytes(tag)))))
+        .both(E::peek_at(E::lit(ivt * 8), 32, Big).and(E::lit(0xffff_fffe_i128)).equal_to(E::lit(0xd100_2040_i128)))
 }
 
 /// The 32 bytes in front of the image, all big-endian.
@@ -112,7 +191,7 @@ fn header() -> T {
     T::structure(
         "UpdateHeader",
         vec![
-            ("product_code", T::magic(MAGIC)),
+            ("product_code", T::text(StrLen::Padded { size: E::lit(PRODUCT_CODE_BYTES as i128), pad: 0 }, Encoding::Ascii)),
             // 203 is V2.03.
             ("version", T::u16(Big)),
             // The number in the file name: `#PortaX8_0217.203` is build 217.
@@ -133,6 +212,10 @@ fn header() -> T {
         ),
     )
     .field_valid("file_size", Valid::Eq(E::SpaceSize))
+    .field_doc(
+        "product_code",
+        "Tascam's code for the product this update is for, in ASCII, padded with NULs to 8 bytes. The Portacapture X8's code is DR-TURBO, its internal project name, which also appears in the source file paths in the X8's firmware (C:\\Perforce\\projects\\SSR\\DR-TURBO\\...). The DR-05X's code is DR-05X.",
+    )
 }
 
 /// The last four bytes of the image, which hold the header's checksum again.
@@ -140,7 +223,8 @@ fn checksum_copy() -> T {
     T::structure("ChecksumCopy", vec![("checksum", T::u32(Big))]).field_valid("checksum", Valid::Eq(E::within(&["header", "checksum"])))
 }
 
-/// The unscrambled flash, with offsets counted from the start of the chip.
+/// The unscrambled flash of a Portacapture X8, with offsets counted from the
+/// start of the chip.
 fn flash() -> T {
     T::structure(
         "X8Flash",
@@ -535,15 +619,24 @@ mod tests {
         v
     }
 
+    /// The X8's product code.
+    const DR_TURBO: &[u8; 8] = b"DR-TURBO";
+
     /// The update file for that flash: the header, then the flash and its sum
-    /// scrambled.
+    /// scrambled. The header gives the X8's version, build and date, which
+    /// the X8's version stamp is checked against.
     fn update(flash: &[u8]) -> Vec<u8> {
+        update_for(DR_TURBO, flash)
+    }
+
+    /// The same, for any product code and image.
+    fn update_for(code: &[u8; 8], flash: &[u8]) -> Vec<u8> {
         let sum = flash.iter().fold(0u32, |a, &b| a.wrapping_add(u32::from(b)));
         let mut scramble = [0u8; 256];
         for (b, &plain) in UNSCRAMBLE.iter().enumerate() {
             scramble[plain as usize] = b as u8;
         }
-        let mut v = MAGIC.to_vec();
+        let mut v = code.to_vec();
         v.extend_from_slice(&[0x00, 0xcb, 0x00, 0xd9, 0x07, 0xe9, 8, 19]);
         be(&mut v, &[sum, (HEADER_BYTES as usize + flash.len() + 4) as u32, 0, 0]);
         v.extend(flash.iter().chain(&sum.to_be_bytes()).map(|&b| scramble[b as usize]));
@@ -601,6 +694,109 @@ mod tests {
         // from inside it.
         assert!(holds(&mut ev, &d, &[2, 0], &["checksum"]));
         assert_eq!(ev.node(&d, &FLASH).unwrap().type_name, "X8Flash");
+        let code = named(&mut ev, &d, &[0], &["product_code"]);
+        assert!(matches!(&ev.node(&d, &code).unwrap().value, Value::Str(s) if s == "DR-TURBO"), "{:?}", ev.node(&d, &code).unwrap().value);
+    }
+
+    /// The first 32 bytes of the two products' updates in the sample
+    /// collection, `#PortaX8_0217.203` and `DR05X_071.116`, and the lengths of
+    /// those files.
+    const X8_HEAD: [u8; 32] = *b"DR-TURBO\x00\xcb\x00\xd9\x07\xe9\x08\x13\x7b\x86\x74\x1b\x01\x85\x00\x20\0\0\0\0\0\0\0\0";
+    const X8_LEN: u64 = 25_493_536;
+    const DR05X_HEAD: [u8; 32] = *b"DR-05X\0\0\x00\x74\x00\x47\x07\xe7\x0c\x0f\x0a\xdd\x23\x53\x00\x1f\x30\x20\0\0\0\0\0\0\0\0";
+    const DR05X_LEN: u64 = 2_043_936;
+
+    #[test]
+    fn the_probe_takes_both_products_headers_and_refuses_near_misses() {
+        assert!(is_update(&X8_HEAD, X8_LEN));
+        assert!(is_update(&DR05X_HEAD, DR05X_LEN));
+        assert_eq!(crate::formats::sniff(&X8_HEAD, X8_LEN), Some("tascamfw"));
+        assert_eq!(crate::formats::sniff(&DR05X_HEAD, DR05X_LEN), Some("tascamfw"));
+        assert!(!is_update(&DR05X_HEAD[..31], DR05X_LEN), "too short for a header");
+        assert!(!is_update(&DR05X_HEAD, DR05X_LEN + 1), "the length at byte 20 is not the file's");
+        assert!(!is_update(&X8_HEAD, DR05X_LEN));
+        let changed = |at: usize, b: u8| {
+            let mut h = DR05X_HEAD;
+            h[at] = b;
+            h
+        };
+        for (at, b, why) in [
+            (31, 1, "a reserved byte is not zero"),
+            (24, 0x80, "a reserved byte is not zero"),
+            (2, 0xb0, "a product code byte is not ASCII"),
+            (0, 0x1b, "a product code byte is a control character"),
+            (0, 0, "the product code is empty"),
+            (7, b'A', "a letter after the NUL padding"),
+            (14, 13, "month 13"),
+            (14, 0, "month 0"),
+            (15, 32, "day 32"),
+            (12, 0x05, "the year 1511"),
+        ] {
+            assert!(!is_update(&changed(at, b), DR05X_LEN), "{why}");
+        }
+    }
+
+    /// What `test` answers at the start of `bytes`, asked the way a template
+    /// asks it: whether a field that is there only when it is nonzero is
+    /// there.
+    fn ahead(test: E, bytes: &[u8]) -> bool {
+        let probe = Template::new("probe", T::structure("Probe", vec![("image", T::when(test, T::bytes(E::Remaining)))]));
+        let d = Document::new(MemSource(bytes.to_vec()));
+        let mut ev = Evaluator::new(probe);
+        !ev.node(&d, &[0]).unwrap().absent
+    }
+
+    #[test]
+    fn the_image_tests_agree_with_the_probes_they_copy() {
+        let stream = crate::formats::bfldr::tests::two_programs();
+        let flash = flash();
+        let mut old_ivt = flash.clone();
+        old_ivt[imxrt::IVT_AT + 3] = 0x40;
+        let mut no_ivt = flash.clone();
+        no_ivt[imxrt::IVT_AT] = 0xd2;
+        let mut no_tag = flash.clone();
+        no_tag[0] = b'X';
+        let images = [flash.clone(), old_ivt, no_ivt, no_tag, flash[..imxrt::IVT_AT + 3].to_vec(), stream.clone(), vec![0xff; 64], Vec::new()];
+        for (i, image) in images.iter().enumerate() {
+            assert_eq!(ahead(imxrt_flash_ahead(), image), imxrt::is_imxrt_flash(image), "image {i}");
+            assert_eq!(ahead(bfldr::stream_ahead(), image), bfldr::is_bfldr(image), "image {i}");
+        }
+        assert!(ahead(imxrt_flash_ahead(), &flash));
+        assert!(ahead(bfldr::stream_ahead(), &stream));
+    }
+
+    #[test]
+    fn an_image_that_is_a_boot_stream_is_read_with_bfldr() {
+        let stream = crate::formats::bfldr::tests::two_programs();
+        let d = Document::new(MemSource(update_for(b"DR-05X\0\0", &stream)));
+        let mut ev = Evaluator::new(tascamfw());
+        let code = named(&mut ev, &d, &[0], &["product_code"]);
+        assert!(matches!(&ev.node(&d, &code).unwrap().value, Value::Str(s) if s == "DR-05X"), "{:?}", ev.node(&d, &code).unwrap().value);
+        let sum = named(&mut ev, &d, &[0], &["checksum"]);
+        assert!(ev.run_check(&d, &sum).unwrap().expect("a check").ok);
+        assert!(holds(&mut ev, &d, &[2, 0], &["checksum"]));
+        let image = ev.node(&d, &FLASH).unwrap();
+        assert_eq!((image.type_name.as_str(), image.size_bits / 8), ("BootStream", stream.len() as u64));
+        let programs = named(&mut ev, &d, &FLASH, &["programs"]);
+        assert_eq!(ev.node(&d, &programs).unwrap().child_count, 2);
+        assert_eq!(extent(&mut ev, &d, &FLASH, &["erased"]), (stream.len() as u64 - 12, 12));
+    }
+
+    #[test]
+    fn an_image_of_another_kind_is_read_as_bytes() {
+        // FCFB with no IVT after it, and the header of a block that is not a
+        // first block.
+        let images: [&[u8]; 3] = [&[0x55; 64], b"FCFB and nothing else", &crate::formats::bfldr::tests::block(0x8001, 0xffa0_0000, 0, 0, &[])];
+        for image in images {
+            let d = Document::new(MemSource(update_for(b"DR-99\0\0\0", image)));
+            let mut ev = Evaluator::new(tascamfw());
+            let node = ev.node(&d, &FLASH).unwrap();
+            assert!(matches!(node.value, Value::Bytes { .. }), "{:?}", node.value);
+            assert_eq!(node.size_bits / 8, image.len() as u64);
+            assert_eq!(node.problem, None);
+            let sum = named(&mut ev, &d, &[0], &["checksum"]);
+            assert!(ev.run_check(&d, &sum).unwrap().expect("a check").ok);
+        }
     }
 
     #[test]
