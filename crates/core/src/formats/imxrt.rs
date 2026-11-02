@@ -203,9 +203,7 @@ fn mem_config() -> T {
         "FlexspiMemConfig",
         vec![
             ("tag", T::magic(TAG)),
-            // `V`, then the major, minor and bugfix numbers, from the top
-            // byte down: 0x56010400 is V1.4.0.
-            ("version", T::u32(Little)),
+            ("version", version()),
             ("reserved0", T::u32(Little)),
             ("read_sample_clk_src", T::enumeration("ReadSampleClkSrc", T::u8(), READ_SAMPLE_CLOCK)),
             ("cs_hold_time", T::u8()),
@@ -246,6 +244,14 @@ fn mem_config() -> T {
             ("reserved4", T::bytes(E::lit(16))),
         ],
     )
+}
+
+/// The block's version, one little-endian word whose bytes are, from the top,
+/// the letter `V` and the major, minor and bugfix numbers: 0x56010400 is
+/// V1.4.0. Read a byte at a time from the bottom, which is the order the file
+/// holds them in.
+fn version() -> T {
+    T::inline_structure("ConfigVersion", vec![("bugfix", T::u8()), ("minor", T::u8()), ("major", T::u8()), ("v", T::magic(b"V"))])
 }
 
 /// The clock the boot ROM drives the flash at, as the RT1060's
@@ -613,6 +619,8 @@ pub(crate) mod tests {
         let config = [0, 0, 0];
         assert_eq!(ev.node(&d, &config).unwrap().name, "mem_config");
         assert_eq!(value(&mut ev, &d, &config, &["serial_clk_freq"]).as_int(), Some(5));
+        assert_eq!(value(&mut ev, &d, &config, &["version", "major"]).as_int(), Some(1));
+        assert_eq!(value(&mut ev, &d, &config, &["version", "minor"]).as_int(), Some(4));
         let table = named(&mut ev, &d, &config, "lookup_table");
         let read = named(&mut ev, &d, &table, "read");
         let first = [&read[..], &[0]].concat();

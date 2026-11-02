@@ -41,9 +41,18 @@
 //! are inside the code, where only the code says where they are, and are left
 //! as part of it.
 //!
-//! The code that runs from the ITCM is read as Thumb code. It is linked to run
-//! at 0x400 and the IR has no way to say so, so its branch targets read as
-//! distances from the instruction rather than as addresses.
+//! The bootloader's code and the code that runs from the ITCM are read as
+//! Thumb instructions. The application's own code is not: its two runs, 11 MB
+//! before the init table and half a megabyte after it, are read as bytes.
+//! They are code mixed with string pools, vtables and images, so much of what
+//! a decoder made of them would be instructions nobody wrote, and a run of
+//! instructions is only counted by decoding every one of them: the 11 MB run
+//! took over a minute to count in a debug build, and a listing counts a run
+//! before it can draw the row that holds it.
+//!
+//! The ITCM code is linked to run at 0x400 and the IR has no way to say so, so
+//! its branch targets read as distances from the instruction rather than as
+//! addresses.
 //!
 //! The image's layout is this recorder's. Another product's update with the
 //! same header would need its own reading of the image, which is why the
@@ -170,9 +179,11 @@ fn application() -> T {
             ("version_stamp", version_stamp()),
             ("font_map", font_map()),
             ("sounds", T::repeat(sound(), Until::While(riff_ahead()))),
-            ("code", imxrt::thumb(through_init_core())),
+            // Code and data mixed, as bytes: see the module's notes for why
+            // these two are not read as instructions.
+            ("code", T::bytes(through_init_core())),
             ("init_table", app_init_table()),
-            ("code_after_init_table", imxrt::thumb(source(&entry("lz77_init_sdram")).sub(E::SpacePos))),
+            ("code_after_init_table", T::bytes(source(&entry("lz77_init_sdram")).sub(E::SpacePos))),
             // The three runs are written one after another, in the order the
             // table lists them.
             ("sdram_data", packed_run(&entry("lz77_init_sdram"), Codec::IarLz77, ("data", T::bytes(E::Remaining)))),
