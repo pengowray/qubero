@@ -11,7 +11,7 @@ import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
-import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
+import type { CodecKind, DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
 import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
@@ -94,8 +94,9 @@ type Covered = {
    *  not a run of the file. */
   readonly at: { readonly at: number; readonly bytes: number } | null;
   /** The run of the file those bytes were produced from, for a sum over
-   *  something unpacked. Null when the sum is over the file itself. */
-  readonly from: { readonly at: number; readonly bytes: number } | null;
+   *  something unpacked, and what its codec does. Null when the sum is over
+   *  the file itself. */
+  readonly from: { readonly at: number; readonly bytes: number; readonly kind: CodecKind | null } | null;
   /** The check field's own bytes inside the covered run, and the byte they
    *  were summed as, for a format that seals a record the checksum is part
    *  of. Null for every check that sums the bytes as they are, which is all
@@ -112,8 +113,8 @@ function overFile(what: string, at: number, bytes: number, own: Covered["own"] =
 /** A checksum over what a run of the file unpacks to. `size` is null unless
  *  `exact` says the core knows the true count without having had to decode
  *  anything to answer. */
-function overUnpacked(what: string, at: number, bytes: number, exact: boolean): Covered {
-  return { what, size: exact ? formatBytes(bytes) : null, at: null, from: { at, bytes }, own: null };
+function overUnpacked(what: string, at: number, bytes: number, exact: boolean, kind: CodecKind | null): Covered {
+  return { what, size: exact ? formatBytes(bytes) : null, at: null, from: { at, bytes, kind }, own: null };
 }
 
 /** What each algorithm is called on screen. The core answers in the short form
@@ -1629,10 +1630,11 @@ export class Inspector {
       covers:
         check.over === null
           ? overUnpacked(
-              check.unpacked_member ? CHECKED.unpackedMember : CHECKED.unpacked,
+              check.unpacked_member ? CHECKED.unpackedMember : CHECKED.unpacked(check.unpacked_kind),
               over[0],
               over[1],
               check.covered_exact,
+              check.unpacked_kind ?? null,
             )
           : overFile(
               coveredWhat(path, n, check.blanked !== null),
@@ -1760,7 +1762,7 @@ export class Inspector {
       // The bytes summed, or the bytes those were made from: two different
       // claims, so two different words rather than one row that is sometimes
       // one and sometimes the other.
-      add(plan.covers.at === null ? CHECKED.fromLabel : CHECKED.overLabel, b);
+      add(plan.covers.at === null ? CHECKED.fromLabel(plan.covers.from?.kind) : CHECKED.overLabel, b);
     }
     // Plain text, not a button like the row above. The bytes it names are the
     // field the cursor is already on, so there is nowhere to go; worse, going

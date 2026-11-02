@@ -283,6 +283,9 @@ export type TemplateNode = {
   /** True for a compressed run. One that opened can be opened as a document of
    *  its own; one that did not says why in `refused` instead. */
   readonly decoded: boolean;
+  /** For a decoded run, what its codec does to the bytes. Null for every other
+   *  field. Optional so that a node made by hand in a test needs no value. */
+  readonly codec_kind?: CodecKind | null;
   /** True for the one node a stream holds, whose parent is the stream. There is
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
@@ -678,6 +681,14 @@ export type StringHit = {
  *  printable bytes turn up in by chance. */
 export type StringInsideKind = "numbers" | "code" | "packed";
 
+/** What a codec does to the bytes it is given, as the core names it (see
+ *  `qubero_core::codec::CodecKind`). Compression makes them smaller; an
+ *  encoding writes them in another form, usually text; scrambling replaces
+ *  each byte with another and keeps the length; stored bytes are the bytes as
+ *  they are; a filter is PNG's row filtering; steganography keeps bytes in the
+ *  low bits of pixels. */
+export type CodecKind = "compression" | "encoding" | "scrambling" | "stored" | "filter" | "steganography";
+
 export type StringInside = {
   readonly kind: StringInsideKind;
   /** The run, or the stream: what opens a packed one in a tab of its own. */
@@ -686,6 +697,8 @@ export type StringInside = {
   readonly name: string;
   /** One element's type, such as `i16 le` or `x86-64`, or the codec's name. */
   readonly what: string;
+  /** For a packed stream, what its codec does. Null for numbers and code. */
+  readonly codec_kind?: CodecKind | null;
   /** The run's first byte and length in bytes. */
   readonly at: number;
   readonly len: number;
@@ -814,6 +827,9 @@ export type FieldCheck = {
   readonly over: readonly [number, number] | null;
   /** `[offset, length]` in bytes of the compressed run, when they are not. */
   readonly unpacked_from: readonly [number, number] | null;
+  /** What the codec of that run does, so the run can be called compressed,
+   *  scrambled or encoded. Null when the sum is over the file. */
+  readonly unpacked_kind?: CodecKind | null;
   /** How many bytes the sum is over, so a view can decide whether to run the
    *  check unasked. Real when `covered_exact` is true; otherwise a stand-in,
    *  which a view must not print as the covered count. See `covered_exact`. */

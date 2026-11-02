@@ -3,6 +3,7 @@
 // (`number`, `length-field`, `at-end`) and this file is the only place they
 // become English. See `eval/profile.rs` for every key.
 
+import { CODEC_KIND_ORDER, codecWords, isCodecKind } from "../strings.ts";
 import type { Profile, ProfileRow } from "./coredata.ts";
 import { counted, listText } from "./text.ts";
 
@@ -19,7 +20,9 @@ export const CATEGORY: Readonly<Record<string, string>> = {
   opaque: "Data the template does not divide further",
   padding: "Padding",
   checksum: "Checksums",
-  codec: "Compressed streams",
+  /** Its rows are codec names of every kind: deflate, base64, tascam
+   *  scramble. `Compressed streams` said that of all of them. */
+  codec: "Codecs",
   placement: "How each field is found",
   sizing: "How each field's length is set",
 };
@@ -177,6 +180,15 @@ export function rowLabel(r: ProfileRow): string {
   }
 }
 
+/** What a codec row's codec does, which the core sends as the row's detail.
+ *  A row with no kind is read as compression, which is what every codec row
+ *  was called before codecs had kinds, except PNG's scanlines, which that
+ *  sentence always left out. */
+function codecKindOf(r: ProfileRow): string {
+  if (isCodecKind(r.detail)) return r.detail;
+  return r.kind === "png scanlines" ? "filter" : "compression";
+}
+
 /** The key a row is matched on between the template's profile and the
  *  file's. */
 export function rowKey(r: ProfileRow): string {
@@ -213,7 +225,7 @@ function kindsOf(rows: readonly ProfileRow[], category: string, names: Readonly<
 /**
  * The line of landmarks under the facts table: only what helps a reader find
  * their way around the bytes. Byte order, the widths of the numbers, the
- * variable-length numbers, how parts are found, checksums and compression,
+ * variable-length numbers, how parts are found, checksums and codecs,
  * each a short sentence, each only when the file has any.
  */
 export function landmarks(p: Profile): string[] {
@@ -232,10 +244,15 @@ export function landmarks(p: Profile): string[] {
   if (f.from_end > 0) out.push(`${sentence(counted(f.from_end, "field"))} ${f.from_end === 1 ? "is" : "are"} found from the end of the file.`);
   const sums = kindsOf(p.rows, "checksum", CHECKSUM);
   if (sums.length > 0) out.push(`Checked with ${listText(sums)}.`);
-  // PNG's row filters prepare the pixels for deflate; they compress nothing, so
-  // they are not named in the sentence about compression.
-  const codecs = kindsOf(p.rows.filter((r) => r.kind !== "png scanlines"), "codec", CODEC);
-  if (codecs.length > 0) out.push(`Compressed with ${listText(codecs)}.`);
+  // A sentence for each kind of codec the file uses, saying what was done:
+  // "Compressed with deflate.", "Scrambled with tascam scramble." Stored
+  // bytes and PNG's row filters get no sentence (see `CodecWords.with`).
+  for (const kind of CODEC_KIND_ORDER) {
+    const lead = codecWords(kind).with;
+    if (lead === null) continue;
+    const codecs = kindsOf(p.rows.filter((r) => codecKindOf(r) === kind), "codec", CODEC);
+    if (codecs.length > 0) out.push(`${lead} ${listText(codecs)}.`);
+  }
   return out;
 }
 

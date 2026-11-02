@@ -5,7 +5,9 @@
 // hands over facts and this file writes the words, as `time.rs` and
 // `problem.rs` have it for the rest of the app.
 
+import type { CodecKind } from "../doc.ts";
 import { formatBytes, percentText } from "../format.ts";
+import { codecWords, type CodecWords } from "../strings.ts";
 import type { ExtentCheck } from "./coredata.ts";
 
 /** `1 byte`, `5,770 bytes`. */
@@ -296,8 +298,9 @@ export const RV = {
   colField: "Field",
   colValue: "Value",
   /** A compressed stream in the value column, beside its size in the file:
-   *  `jpeg scan, unpacks to 115,200 bytes`. */
-  unpacksTo: (codec: string, size: string): string => `${codec}, unpacks to ${size}`,
+   *  `jpeg scan, unpacks to 115,200 bytes`, `tascam scramble, unscrambles to
+   *  4 bytes`. */
+  unpacksTo: (codec: string, size: string, w: CodecWords): string => `${codec}, ${w.verbs} to ${size}`,
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   /** Neighbouring fields of one name, as one row. */
   runOf: (name: string, n: number): string => `${name} × ${n.toLocaleString()}`,
@@ -311,25 +314,41 @@ export const RV = {
   gapBody: "No field of the template describes these bytes.",
 
   // ----- 9. decoded streams -----
-  streamsHeading: (n: number, packed: number, unpacked: number | null): string =>
-    unpacked === null
-      ? `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)}`
-      : `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)} ${agree(packed, "unpacks", "unpack")} to ${bytesText(unpacked)}`,
-  streamHeading: (name: string, packed: number, codec: string, unpacked: number | null): string =>
+  // The words follow what the codec does: `2 compressed streams` that unpack,
+  // `2 scrambled streams` that unscramble. `w` is null where the streams are
+  // of more than one kind, and then they are `streams` that unpack, the
+  // app's word for what any codec gives back.
+  streamsHeading: (n: number, packed: number, unpacked: number | null, w: CodecWords | null): string => {
+    const streams = sentenceCase(counted(n, w === null ? "stream" : `${w.stream} stream`));
+    if (unpacked === null) return `${streams}: ${bytesText(packed)}`;
+    return `${streams}: ${bytesText(packed)} ${agree(packed, w?.verbs ?? "unpacks", w?.verb ?? "unpack")} to ${bytesText(unpacked)}`;
+  },
+  streamHeading: (name: string, packed: number, codec: string, unpacked: number | null, w: CodecWords): string =>
     unpacked === null
       ? `${name}: ${bytesText(packed)} of ${codec}`
-      : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, "unpacks", "unpack")} to ${bytesText(unpacked)}`,
+      : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, w.verbs, w.verb)} to ${bytesText(unpacked)}`,
   streamName: "Stream",
   streamPacked: "In the file",
-  streamUnpacked: "Unpacked",
+  /** Over the column of what each stream came to: `Unpacked`, or
+   *  `Unscrambled` where every stream is scrambled. */
+  streamUnpacked: (w: CodecWords | null): string => sentenceCase(w?.out ?? "unpacked"),
   /** Over the ratio column, whose cells say `3.8×`: unpacked over packed. */
   streamRatio: "Ratio",
   streamRowTitle: "Click to draw this stream below",
-  streamNotUnpacked: "not unpacked here",
+  streamNotUnpacked: (w: CodecWords): string => `not ${w.out} here`,
   ratio: (r: number): string => `${r.toFixed(r < 10 ? 1 : 0)}×`,
   stageCompressed: "In the file",
-  stageUnpacked: "Unpacked",
-  stagesCaption: (ratio: string): string => `Each bar is drawn to scale. The unpacked bytes are ${ratio} the size of the compressed ones.`,
+  stageUnpacked: (w: CodecWords): string => sentenceCase(w.out),
+  /** Under the two bars. Bytes that come out the same size as they went in,
+   *  as scrambled and stored ones do, are said to be the same size rather
+   *  than `1.0 times` it. */
+  stagesCaption: (packed: number, unpacked: number, w: CodecWords): string => {
+    const lead = "Each bar is drawn to scale.";
+    if (packed === 0) return lead;
+    if (packed === unpacked) return `${lead} The ${w.out} bytes are the same size as the ${w.stream} ones.`;
+    const ratio = unpacked / packed;
+    return `${lead} The ${w.out} bytes are ${ratio.toFixed(ratio < 10 ? 1 : 0)} times the size of the ${w.stream} ones.`;
+  },
   ribbonTop: (bits: number): string => `Codes in the stream, ${counted(bits, "bit")}`,
   ribbonBottom: (bytes: number): string => `Bytes they produce, ${bytesText(bytes)}`,
   /** Codes `from` (counted from 0) up to `to` of a stream. */
@@ -339,7 +358,8 @@ export const RV = {
       : `Codes ${(from + 1).toLocaleString()} to ${to.toLocaleString()} of the stream, joined to the bytes each one writes.`,
   ribbonCaption:
     "A literal is one code for one byte. A copy is one code that repeats earlier bytes, so its band widens toward the bytes. Hover a band for its bits and bytes.",
-  streamNotOpened: (limit: string): string => `Not unpacked here: the report unpacks streams up to ${limit} on its own. Open it as a tab to read it.`,
+  streamNotOpened: (limit: string, w: CodecWords): string =>
+    `Not ${w.out} here: the report ${w.verbs} streams up to ${limit} on its own. Open it as a tab to read it.`,
   openUnpacked: "Open unpacked",
   moreStreams: (n: number): string => `${counted(n, "more stream")} not shown.`,
   /** For a file whose only streams are joined ones. */
@@ -394,7 +414,9 @@ export const RV = {
   profileBytes: "Bytes",
   profileDeclared: "Declared in the template",
   notInFile: "none",
-  unpackedTo: (streams: number, size: string): string => `${counted(streams, "stream")} opened, unpacked to ${size}`,
+  /** After a codec's row in the format profile: `1 stream opened, unpacked
+   *  to 4 bytes`, or `unscrambled to` for a scrambling codec. */
+  unpackedTo: (streams: number, size: string, kind: CodecKind | null): string => `${counted(streams, "stream")} opened, ${codecWords(kind).out} to ${size}`,
   profileCaption:
     "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows.",
   /** Under the table, for the rows folded away: what the template declares

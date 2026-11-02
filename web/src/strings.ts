@@ -4,7 +4,7 @@
 import { ADDRESS_MARK, formatBytes, formatOffset } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
-import type { FieldTime, Shape, StringInsideKind } from "./doc.ts";
+import type { CodecKind, FieldTime, Shape, StringInsideKind } from "./doc.ts";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -20,6 +20,119 @@ export function bitSizeText(bits: number): string {
     return bytes === 1 ? "1 byte" : `${bytes.toLocaleString()} bytes`;
   }
   return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
+}
+
+/**
+ * The words for what a codec did to a run of the file, by what the codec does
+ * (`CodecKind`). Real compression keeps the words the app has always used for
+ * it: compressed bytes, which unpack. The other kinds say what was done
+ * instead: Tascam's firmware image is scrambled and unscrambles, a base64
+ * part is encoded and decodes, a PNG's rows are filtered and unfilter.
+ *
+ * Where no one codec is at hand, "unpacked" stays the app's word for what any
+ * codec gives back: the Open unpacked button, an offset within the unpacked
+ * stream, a tab's title, and a report heading over streams of several kinds.
+ */
+export type CodecWords = {
+  /** In front of "stream": `2 scrambled streams`. */
+  readonly stream: string;
+  /** The run in the file, as data: `reads as scrambled data`. */
+  readonly data: string;
+  /** The inspector's label on the address of the run a checksum's bytes
+   *  came out of: `Scrambled bytes`. */
+  readonly bytes: string;
+  /** How the report's landmark sentence about this kind of codec starts:
+   *  `Scrambled with tascam scramble.` Null for the kinds that sentence
+   *  leaves out: stored bytes are not changed, and PNG's row filters are a
+   *  step before deflate rather than a way the file is packed. */
+  readonly with: string | null;
+  /** What came out, as an adjective: `the unscrambled bytes`. */
+  readonly out: string;
+  /** The verb, for a plural subject and for a singular one: `24 bytes
+   *  unscramble to`, `tascam scramble, unscrambles to`. */
+  readonly verb: string;
+  readonly verbs: string;
+  /** What a checksum over everything the run gives back is a checksum of:
+   *  `CRC-32 of the unpacked file`. */
+  readonly summed: string;
+};
+
+const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
+  compression: {
+    stream: "compressed",
+    data: "compressed data",
+    bytes: "Compressed bytes",
+    with: "Compressed with",
+    out: "unpacked",
+    verb: "unpack",
+    verbs: "unpacks",
+    summed: "the unpacked file",
+  },
+  encoding: {
+    stream: "encoded",
+    data: "encoded data",
+    bytes: "Encoded bytes",
+    with: "Encoded with",
+    out: "decoded",
+    verb: "decode",
+    verbs: "decodes",
+    summed: "the decoded data",
+  },
+  scrambling: {
+    stream: "scrambled",
+    data: "scrambled data",
+    bytes: "Scrambled bytes",
+    with: "Scrambled with",
+    out: "unscrambled",
+    verb: "unscramble",
+    verbs: "unscrambles",
+    summed: "the unscrambled data",
+  },
+  stored: {
+    stream: "stored",
+    data: "stored data",
+    bytes: "Stored bytes",
+    with: null,
+    out: "unpacked",
+    verb: "unpack",
+    verbs: "unpacks",
+    summed: "the stored data",
+  },
+  filter: {
+    stream: "filtered",
+    data: "filtered data",
+    bytes: "Filtered bytes",
+    with: null,
+    out: "unfiltered",
+    verb: "unfilter",
+    verbs: "unfilters",
+    summed: "the unfiltered data",
+  },
+  steganography: {
+    stream: "steganographic",
+    data: "steganographic data",
+    bytes: "Steganographic bytes",
+    with: "Hidden with",
+    out: "decoded",
+    verb: "decode",
+    verbs: "decodes",
+    summed: "the decoded data",
+  },
+};
+
+/** The words for one kind of codec. A kind this build has not heard of, or a
+ *  run the core sent no kind for, gets the words for compression, which is
+ *  what every run was called before codecs had kinds. */
+export function codecWords(kind: CodecKind | null | undefined): CodecWords {
+  return (kind === null || kind === undefined ? undefined : CODEC_WORDS[kind]) ?? CODEC_WORDS.compression;
+}
+
+/** The kinds the landmark sentences name, in the order they are said. */
+export const CODEC_KIND_ORDER: readonly CodecKind[] = ["compression", "encoding", "scrambling", "steganography", "stored", "filter"];
+
+/** Whether a string the core sent is a codec kind this build knows. */
+export function isCodecKind(s: string): s is CodecKind {
+  return Object.hasOwn(CODEC_WORDS, s);
 }
 
 /** A compressed run that was opened, and the fields read inside it.
@@ -143,8 +256,10 @@ export const CHECKED = {
    * over them; the row above says what it is over. `Unpacked from` lost: the
    * Properties list uses those words over a row about the field at the
    * cursor, and here they would have been about the file the field checks.
+   * Named by what the codec did to them: `Compressed bytes` for a deflated
+   * ZIP entry, `Scrambled bytes` for a Tascam firmware image.
    */
-  fromLabel: "Compressed bytes",
+  fromLabel: (kind: CodecKind | null | undefined): string => codecWords(kind).bytes,
   range: (from: string, to: string, size: string): string => `${from} to ${to} · ${size}`,
   /**
    * Label on the row for the check field's own bytes, for a sum that runs over
@@ -202,8 +317,10 @@ export const CHECKED = {
   file: "this entry's stored data",
   /** A deflated entry or a gzip stream: the sum is over what unpacks, and
    *  those bytes are nowhere in the file. `the file these bytes unpack to`
-   *  lost: `these bytes` pointed at a row the reader had not reached. */
-  unpacked: "the unpacked file",
+   *  lost: `these bytes` pointed at a row the reader had not reached. Named
+   *  by what the codec did: a Tascam update's checksum is of `the
+   *  unscrambled data`. */
+  unpacked: (kind: CodecKind | null | undefined): string => codecWords(kind).summed,
   /** An xz block's own check, over what that one block unpacks to rather
    *  than the whole stream around it. `unpacked` above would say the wrong
    *  thing here: a stream holding several blocks unpacks to all of them
@@ -3524,10 +3641,12 @@ export const STRINGSVIEW = {
       "UTF-16, big-endian, searched for at every byte offset. A match is found only when the bytes around it mark it as a string: a null terminator after it, or a length prefix of more than 2 bytes in front. Not found: unterminated text with no length prefix, and text that is only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
   } as Readonly<Record<string, string>>,
   /** Only offered when a template is reading the file, since it is the
-   *  template that says which bytes are numbers or code. */
-  hideInsideToggle: "Hide strings inside numeric data, machine code or compressed data",
+   *  template that says which bytes are numbers or code. `packed data`
+   *  covers every codec whose input text turns up in by chance: compressed,
+   *  scrambled, base64. The status line names which kind a file has. */
+  hideInsideToggle: "Hide strings inside numeric data, machine code or packed data",
   hideInsideTitle:
-    "Hide strings that lie inside fields the template reads as numeric data, machine code or compressed data. Printable bytes appear in such fields by chance. The status line still counts them.",
+    "Hide strings that lie inside fields the template reads as numeric data, machine code, or data that a codec decodes, such as compressed or scrambled data. Printable bytes appear in such fields by chance. The status line still counts them.",
   /** "Filter" alone, beside the app's Find, would be taken for it. */
   filterPlaceholder: "Filter strings",
   filterLabel: "Filter strings by text",
@@ -3622,16 +3741,20 @@ export const STRINGSVIEW = {
     after: ` (${what})`,
   }),
   /** Field names are quoted here, since a tooltip has no code type: `Inside
-   *  data, which the template reads as compressed data` says data twice. */
-  insideTitle: (kind: StringInsideKind, name: string, what: string, at: number, len: number): string => {
+   *  data, which the template reads as compressed data` says data twice.
+   *  Packed data is named by what its codec does: compressed, scrambled,
+   *  encoded. */
+  insideTitle: (kind: StringInsideKind, name: string, what: string, at: number, len: number, codec: CodecKind | null = null): string => {
     const where = `${what}, ${formatBytes(len)} at ${formatOffset(at * 8)}`;
     switch (kind) {
       case "numbers":
         return `Inside "${name}", which the template reads as numeric data (${where}). Numeric data often contains printable bytes by chance. If this is real text, the template may be reading the wrong bytes.`;
       case "code":
         return `Inside "${name}", which the template reads as machine code (${where}). Machine code often contains printable bytes by chance.`;
-      case "packed":
-        return `Inside "${name}", which the template reads as compressed data (${where}). Compressed data often contains printable bytes by chance. Click to open the unpacked data in a tab of its own, which has its own Strings view.`;
+      case "packed": {
+        const w = codecWords(codec);
+        return `Inside "${name}", which the template reads as ${w.data} (${where}). ${sentenceStart(w.data)} often contains printable bytes by chance. Click to open the ${w.out} data in a tab of its own, which has its own Strings view.`;
+      }
     }
   },
 
@@ -3673,10 +3796,10 @@ export const STRINGSVIEW = {
   /** The strings inside numbers, code and packed data, after the count of all
    *  of them. Said by kind, because "in code" and "in numbers" send a reader
    *  to different conclusions. */
-  statusInside: (counts: Readonly<Record<StringInsideKind, number>>): string => `(${insideKinds(counts, true)})`,
+  statusInside: (counts: InsideCounts): string => `(${insideKinds(counts, true)})`,
   /** The count when some are hidden, so it does not read as every string. */
   statusShown: (n: number): string => (n === 0 ? "No strings shown" : `${countText(n, "string")} shown`),
-  statusHidden: (hidden: number, counts: Readonly<Record<StringInsideKind, number>>): string =>
+  statusHidden: (hidden: number, counts: InsideCounts): string =>
     `${hidden.toLocaleString()} hidden (${insideKinds(counts, false)})`,
   statusScanning: (scanned: number, total: number): string =>
     `first ${formatBytes(scanned)} of ${formatBytes(total)} scanned…`,
@@ -3693,20 +3816,34 @@ export const STRINGSVIEW = {
     `Scanned ${formatBytes(scanned)} of ${formatBytes(total)}`,
 };
 
-/** "27 in numeric data, 4 in machine code", leaving out the kinds with none.
- *  Without the "in" after "hidden", which would read as hidden in the code,
- *  and without the count there when there is one kind, since it is the count
- *  already in front. */
-function insideKinds(counts: Readonly<Record<StringInsideKind, number>>, inside: boolean): string {
-  const words: Record<StringInsideKind, string> = {
-    numbers: "numeric data",
-    code: "machine code",
-    packed: "compressed data",
-  };
-  const kinds = (["numbers", "code", "packed"] as const).filter((k) => counts[k] > 0);
+/** How many strings lie inside each reading the template gives: numbers,
+ *  code, and packed data, the last by what its codec does. A string inside a
+ *  packed stream the core sent no kind for counts as compression. */
+export type InsideCounts = {
+  readonly numbers: number;
+  readonly code: number;
+  readonly packed: Readonly<Partial<Record<CodecKind, number>>>;
+};
+
+/** "Compressed data" at the start of a sentence. */
+function sentenceStart(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** "27 in numeric data, 4 in machine code, 9 in scrambled data", leaving out
+ *  the kinds with none. Without the "in" after "hidden", which would read as
+ *  hidden in the code, and without the count there when there is one kind,
+ *  since it is the count already in front. */
+function insideKinds(counts: InsideCounts, inside: boolean): string {
+  const kinds: { readonly n: number; readonly words: string }[] = [
+    { n: counts.numbers, words: "numeric data" },
+    { n: counts.code, words: "machine code" },
+    ...CODEC_KIND_ORDER.map((k) => ({ n: counts.packed[k] ?? 0, words: codecWords(k).data })),
+  ].filter((k) => k.n > 0);
   // "8,727 hidden (machine code)": one kind needs no second count.
-  if (!inside && kinds.length === 1 && kinds[0] !== undefined) return words[kinds[0]];
-  return kinds.map((k) => `${counts[k].toLocaleString()} ${inside ? "in " : ""}${words[k]}`).join(", ");
+  const [only] = kinds;
+  if (!inside && kinds.length === 1 && only !== undefined) return only.words;
+  return kinds.map((k) => `${k.n.toLocaleString()} ${inside ? "in " : ""}${k.words}`).join(", ");
 }
 
 /** One reading of the bytes in front of a string, as the view hands it over. */

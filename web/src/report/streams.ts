@@ -1,4 +1,6 @@
-// Section 9: the compressed streams, and what they unpack to.
+// Section 9: the streams a codec reads, compressed, scrambled or encoded, and
+// what they unpack to. The words follow what each codec does; see
+// `CodecWords` in strings.ts.
 //
 // Each stream gets its stages drawn to scale: the run in the file and the
 // bytes it unpacks to. A stream whose codec keeps a trace (deflate) also gets
@@ -13,6 +15,7 @@
 
 import type { Doc, MapStep, TemplateNode } from "../doc.ts";
 import { byteText, formatAddress, formatBytes, formatOffset } from "../format.ts";
+import { codecWords, type CodecWords } from "../strings.ts";
 import { ok } from "./model.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { ribbon, type RibbonData } from "./ribbon.ts";
@@ -68,10 +71,11 @@ export const streamsSection: Section = {
     }
     if (streams.length > ROWS_MAX) allOpened = false;
     const packed = streams.reduce((n, s) => n + s.size_bits / 8, 0);
+    const words = sharedWords(streams);
     const sec = document.createElement("section");
     sec.className = "rv-section rv-streams";
     const h = document.createElement("h2");
-    h.textContent = streams.length === 0 ? RV.joinsHeading(walk.joins.length) : RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null);
+    h.textContent = streams.length === 0 ? RV.joinsHeading(walk.joins.length) : RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null, words);
     sec.append(h);
     if (streams.length === 0) {
       sec.append(joinList(ctx, walk.joins));
@@ -85,7 +89,7 @@ export const streamsSection: Section = {
       row?.classList.add("is-on");
       figure.replaceChildren(streamBlock(ctx, o));
     };
-    const table = streamTable(opened, pick);
+    const table = streamTable(opened, words, pick);
     sec.append(table.el);
     if (streams.length > ROWS_MAX) {
       const p = document.createElement("p");
@@ -101,10 +105,23 @@ export const streamsSection: Section = {
   },
 };
 
+/** The words for what every one of these streams' codecs does, or null where
+ *  the streams are of more than one kind. */
+function sharedWords(streams: readonly TemplateNode[]): CodecWords | null {
+  const kinds = new Set(streams.map((s) => s.codec_kind ?? null));
+  const [only] = kinds;
+  return kinds.size === 1 && only !== undefined ? codecWords(only) : null;
+}
+
 /** Every stream in one table: its name, how many bytes it takes in the file
  *  and unpacks to, and the ratio as a bar. A click on a row draws that
- *  stream's figures under the table. */
-function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTableRowElement) => void): { el: HTMLElement; rows: Map<Opened, HTMLTableRowElement> } {
+ *  stream's figures under the table. `words` heads the column of what each
+ *  stream came to, when every stream's codec does the same kind of thing. */
+function streamTable(
+  opened: readonly Opened[],
+  words: CodecWords | null,
+  pick: (o: Opened, row: HTMLTableRowElement) => void,
+): { el: HTMLElement; rows: Map<Opened, HTMLTableRowElement> } {
   const wrap = document.createElement("div");
   wrap.className = "rv-tablewrap";
   const t = document.createElement("table");
@@ -114,7 +131,7 @@ function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTable
   for (const [text, cls] of [
     [RV.streamName, ""],
     [RV.streamPacked, "rv-num"],
-    [RV.streamUnpacked, "rv-num"],
+    [RV.streamUnpacked(words), "rv-num"],
     [RV.streamRatio, ""],
   ] as const) {
     const th = document.createElement("th");
@@ -148,12 +165,15 @@ function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTable
     const bar = document.createElement("span");
     bar.className = "rv-ratiobar";
     bar.style.width = `${Math.max(1, (ratio / most) * 60)}px`;
-    const ratioCell = cell(o.space === null ? RV.streamNotUnpacked : "", "rv-ratio", RV.streamRatio);
+    const own = codecWords(o.node.codec_kind);
+    const ratioCell = cell(o.space === null ? RV.streamNotUnpacked(own) : "", "rv-ratio", RV.streamRatio);
     if (o.space !== null) ratioCell.append(bar, ` ${RV.ratio(ratio)}`);
     tr.append(
       name,
       cell(bytesText(o.node.size_bits / 8), "rv-num", RV.streamPacked),
-      cell(o.space === null ? "" : bytesText(o.space.lengthBytes), "rv-num", RV.streamUnpacked),
+      // The label a narrow screen shows beside the number is this stream's
+      // own word, since there the column's heading is not above it.
+      cell(o.space === null ? "" : bytesText(o.space.lengthBytes), "rv-num", RV.streamUnpacked(own)),
       ratioCell,
     );
     tr.addEventListener("click", (e) => {
@@ -237,14 +257,15 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   const h = document.createElement("h3");
   const name = document.createElement("code");
   name.textContent = o.label;
-  const [before, after] = RV.streamHeading("\u0000", packed, o.node.type, unpacked).split("\u0000");
+  const words = codecWords(o.node.codec_kind);
+  const [before, after] = RV.streamHeading("\u0000", packed, o.node.type, unpacked, words).split("\u0000");
   h.append(before ?? "", name, after ?? "");
   if (o.node.space === 0) pointAt(h, { path: o.node.path, startBit: o.node.offset_bits, endBit: o.node.offset_bits + o.node.size_bits }, o.label);
   box.append(h);
   if (o.space === null) {
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.append(`${RV.streamNotOpened(formatBytes(OPEN_BYTES))} `);
+    p.append(`${RV.streamNotOpened(formatBytes(OPEN_BYTES), words)} `);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rv-button";
@@ -254,20 +275,20 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
     box.append(p);
     return box;
   }
-  box.append(stages(packed, o.space.lengthBytes));
+  box.append(stages(packed, o.space.lengthBytes, words));
   const r = traceRibbon(ctx, o);
   if (r !== null) box.append(r);
   return box;
 }
 
 /** One bar per stage, each as wide as its size. */
-function stages(packed: number, unpacked: number): HTMLElement {
+function stages(packed: number, unpacked: number, words: CodecWords): HTMLElement {
   const fig = document.createElement("figure");
   fig.className = "rv-figure rv-stages";
   const most = Math.max(1, packed, unpacked);
   for (const [label, n, cls] of [
     [RV.stageCompressed, packed, "is-packed"],
-    [RV.stageUnpacked, unpacked, "is-unpacked"],
+    [RV.stageUnpacked(words), unpacked, "is-unpacked"],
   ] as const) {
     const row = document.createElement("div");
     row.className = "rv-stage";
@@ -287,7 +308,7 @@ function stages(packed: number, unpacked: number): HTMLElement {
     fig.append(row);
   }
   const cap = document.createElement("figcaption");
-  cap.textContent = RV.stagesCaption(packed > 0 ? `${(unpacked / packed).toFixed(unpacked / packed < 10 ? 1 : 0)} times` : "");
+  cap.textContent = RV.stagesCaption(packed, unpacked, words);
   fig.append(cap);
   return fig;
 }

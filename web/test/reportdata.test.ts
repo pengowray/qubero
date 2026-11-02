@@ -12,6 +12,7 @@ import { extentWindow } from "../src/report/extentfigure.ts";
 import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { RV } from "../src/report/text.ts";
+import { codecWords } from "../src/strings.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
 test("text inside a list of numbers is counted with its nouns, one and many", () => {
@@ -187,6 +188,35 @@ test("the landmarks say the byte order and the widths the file uses", () => {
   const said = landmarks(p);
   assert.equal(said[0], "Big-endian.");
   assert.equal(said[1], "Integers are 8, 16, and 32 bits.");
+});
+
+test("the landmarks say what each kind of codec did, and leave out the ones that change nothing", () => {
+  const codec = (kind: string, detail: string): Partial<ProfileRow> => ({ category: "codec", kind, detail, width: 0, order: "" });
+  const said = landmarks(
+    profile([codec("tascam scramble", "scrambling"), codec("iar lz77", "compression"), codec("png scanlines", "filter"), codec("stored", "stored"), codec("base64", "encoding")]),
+  );
+  assert.deepEqual(said, ["Compressed with iar lz77.", "Encoded with base64.", "Scrambled with tascam scramble."]);
+  // Rows from a core that sent no kind keep the old sentence.
+  assert.deepEqual(landmarks(profile([codec("deflate", ""), codec("png scanlines", "")])), ["Compressed with deflate."]);
+});
+
+test("the streams section names its streams by what their codec does", () => {
+  const scrambled = codecWords("scrambling");
+  assert.equal(RV.streamsHeading(2, 25_493_504, null, scrambled), "2 scrambled streams: 25,493,504 bytes");
+  assert.equal(RV.streamsHeading(1, 4, 4, scrambled), "1 scrambled stream: 4 bytes unscramble to 4 bytes");
+  assert.equal(RV.streamsHeading(1, 1, 4, codecWords("compression")), "1 compressed stream: 1 byte unpacks to 4 bytes");
+  // Streams of more than one kind.
+  assert.equal(RV.streamsHeading(3, 10, 40, null), "3 streams: 10 bytes unpack to 40 bytes");
+  assert.equal(RV.streamUnpacked(null), "Unpacked");
+  assert.equal(RV.streamUnpacked(scrambled), "Unscrambled");
+  assert.equal(RV.streamNotUnpacked(scrambled), "not unscrambled here");
+  assert.equal(RV.streamNotOpened("4 MiB", scrambled), "Not unscrambled here: the report unscrambles streams up to 4 MiB on its own. Open it as a tab to read it.");
+  assert.equal(RV.streamNotOpened("4 MiB", codecWords("compression")), "Not unpacked here: the report unpacks streams up to 4 MiB on its own. Open it as a tab to read it.");
+  assert.equal(RV.stagesCaption(4, 4, scrambled), "Each bar is drawn to scale. The unscrambled bytes are the same size as the scrambled ones.");
+  assert.equal(RV.stagesCaption(100, 380, codecWords("compression")), "Each bar is drawn to scale. The unpacked bytes are 3.8 times the size of the compressed ones.");
+  assert.equal(RV.unpacksTo("tascam scramble", "4 bytes", scrambled), "tascam scramble, unscrambles to 4 bytes");
+  assert.equal(RV.unpackedTo(1, "4 bytes", "scrambling"), "1 stream opened, unscrambled to 4 bytes");
+  assert.equal(RV.unpackedTo(2, "9 bytes", null), "2 streams opened, unpacked to 9 bytes");
 });
 
 test("both byte orders are said with their counts", () => {

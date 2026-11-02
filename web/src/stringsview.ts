@@ -18,9 +18,14 @@
 // scroll like a list of twenty.
 
 import { tagged as el } from "./dom.ts";
-import type { Doc, StringEncoding, StringHit, StringInsideKind, StringScanOpts } from "./doc.ts";
+import type { CodecKind, Doc, StringEncoding, StringHit, StringScanOpts } from "./doc.ts";
 import { formatOffset } from "./format.ts";
 import { STRINGSVIEW as SV } from "./strings.ts";
+
+/** No strings inside anything yet. */
+function noneInside(): { numbers: number; code: number; packed: Partial<Record<CodecKind, number>> } {
+  return { numbers: 0, code: 0, packed: {} };
+}
 
 /** Height of one row, which must match `--sv-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
@@ -78,8 +83,9 @@ export class StringsView {
   private shown: number[] | null = null;
   private filterText = "";
   /** How many of the strings found lie inside a run the template reads as
-   *  numbers, code or packed data, by which. */
-  private inside: Record<StringInsideKind, number> = { numbers: 0, code: 0, packed: 0 };
+   *  numbers, code or packed data, by which, and the packed ones by what their
+   *  codec does. */
+  private inside = noneInside();
   /** True when those strings are left out of the list. They are still
    *  counted, and the status line says how many. */
   private hideInside = false;
@@ -214,7 +220,7 @@ export class StringsView {
     this.busy = false;
     this.hits = [];
     this.shown = null;
-    this.inside = { numbers: 0, code: 0, packed: 0 };
+    this.inside = noneInside();
     this.next = 0;
     this.done = false;
     this.at = -1;
@@ -299,7 +305,13 @@ export class StringsView {
     const first = this.hits.length;
     for (const h of take) {
       this.hits.push(h);
-      if (h.inside !== null) this.inside[h.inside.kind] += 1;
+      if (h.inside === null) continue;
+      if (h.inside.kind === "packed") {
+        const codec = h.inside.codec_kind ?? "compression";
+        this.inside.packed[codec] = (this.inside.packed[codec] ?? 0) + 1;
+      } else {
+        this.inside[h.inside.kind] += 1;
+      }
     }
     if (this.shown !== null) {
       const keep = this.keeps();
@@ -331,7 +343,7 @@ export class StringsView {
 
   /** Strings inside runs the template reads as numbers, code or packed data. */
   private get insideCount(): number {
-    return this.inside.numbers + this.inside.code + this.inside.packed;
+    return this.inside.numbers + this.inside.code + Object.values(this.inside.packed).reduce((a, b) => a + b, 0);
   }
 
   // ---- drawing ----------------------------------------------------------
@@ -420,7 +432,7 @@ export class StringsView {
       if (n instanceof HTMLButtonElement) n.type = "button";
       if (packed) n.dataset["unpacked"] = hit.inside.path.join(".");
       n.append(said.before, el("span", "sv-field", hit.inside.name), said.after);
-      n.title = SV.insideTitle(hit.inside.kind, hit.inside.name, hit.inside.what, hit.inside.at, hit.inside.len);
+      n.title = SV.insideTitle(hit.inside.kind, hit.inside.name, hit.inside.what, hit.inside.at, hit.inside.len, hit.inside.codec_kind ?? null);
       notes.append(n);
     }
     const first = hit.prefix[0];

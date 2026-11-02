@@ -6,7 +6,7 @@ import type { Doc, TableFact, TemplateNode } from "../doc.ts";
 import { swatch } from "../colour.ts";
 import { problemGlyph } from "../dom.ts";
 import { fieldClass } from "../fieldstyle.ts";
-import { childWord, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
+import { childWord, codecWords, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
 import { formatOffset } from "../format.ts";
 import { factValue } from "../tablebar.ts";
 import type { TablePlan } from "../tableplan.ts";
@@ -62,7 +62,7 @@ export function valueText(doc: Doc, n: TemplateNode): string {
   if (n.decoded) {
     const kids = doc.templateChildren(n.path, 0, Math.min(n.child_count, 8));
     const root = kids.status === "ok" ? kids.node.find((k) => k.space_root) : undefined;
-    return root === undefined ? n.type : RV.unpacksTo(n.type, bitsText(root.size_bits));
+    return root === undefined ? n.type : RV.unpacksTo(n.type, bitsText(root.size_bits), codecWords(n.codec_kind));
   }
   return counted(n.child_count, childWord(n));
 }
