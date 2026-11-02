@@ -113,7 +113,7 @@ test("the button that opens a stream says what its codec does", () => {
   assert.equal(UNPACKED.open("compression"), "Open unpacked");
   assert.equal(UNPACKED.open("scrambling"), "Open unscrambled");
   assert.equal(UNPACKED.open("encoding"), "Open decoded");
-  assert.equal(UNPACKED.open("stored"), "Open contents");
+  assert.equal(UNPACKED.open("stored"), "Open extracted");
   assert.equal(UNPACKED.open("steganography"), "Open decoded");
   assert.equal(UNPACKED.open(undefined), "Open unpacked");
 });

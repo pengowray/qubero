@@ -7,7 +7,7 @@
 
 import type { CodecKind } from "../doc.ts";
 import { formatBytes, percentText } from "../format.ts";
-import { codecWords, type CodecWords } from "../strings.ts";
+import { codecWords, DECODED_REFUSED, type CodecWords } from "../strings.ts";
 import type { ExtentCheck } from "./coredata.ts";
 
 /** `1 byte`, `5,770 bytes`. */
@@ -299,8 +299,8 @@ export const RV = {
   colValue: "Value",
   /** A compressed stream in the value column, beside its size in the file:
    *  `jpeg scan, unpacks to 115,200 bytes`, `tascam scramble, unscrambles to
-   *  4 bytes`. A stored stream is its codec's name alone, `stored`. */
-  unpacksTo: (codec: string, size: string, w: CodecWords): string => (w.verbs === null ? codec : `${codec}, ${w.verbs} to ${size}`),
+   *  4 bytes`, `cfb-workbook, extracts to 12,288 bytes`. */
+  unpacksTo: (codec: string, size: string, w: CodecWords): string => `${codec}, ${w.verbs} to ${size}`,
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   /** Neighbouring fields of one name, as one row. */
   runOf: (name: string, n: number): string => `${name} × ${n.toLocaleString()}`,
@@ -317,29 +317,33 @@ export const RV = {
   // The words follow what the codec does: `2 compressed streams` that unpack,
   // `2 scrambled streams` that unscramble. `w` is null where the streams are
   // of more than one kind, and then they are `streams` that unpack, the
-  // app's word for what any codec gives back. A stream that comes out the
-  // same size as it is in the file, as every scrambled or stored one does,
-  // has its size said once: `2 scrambled streams: 25,493,504 bytes`,
-  // `checksum_copy: 4 bytes, scrambled`. So does a stored stream, which has
-  // no verb.
+  // app's word for what any codec gives back.
+  //
+  // A heading gives one size where the size after decoding is not known, and
+  // where it is the same as the size in the file for a kind whose streams
+  // keep their size (`CodecWords.sizeOnce`): a scrambled stream always does,
+  // and a stored one does unless it is gathered from sectors, as an OLE
+  // file's Workbook stream is. One size over more than one stream is their
+  // total, and says so: `2 scrambled streams: 25,493,504 bytes in all`. A
+  // stream's own heading names its codec either way, so two scramblers in
+  // one file can be told apart: `checksum_copy: 4 bytes, scrambled with
+  // tascam scramble`, `data: 29 bytes, stored`.
   streamsHeading: (n: number, packed: number, unpacked: number | null, w: CodecWords | null): string => {
     const streams = sentenceCase(counted(n, w === null ? "stream" : `${w.stream} stream`));
-    if (unpacked === null || unpacked === packed || w?.verb === null) return `${streams}: ${bytesText(packed)}`;
+    if (unpacked === null || (unpacked === packed && w?.sizeOnce === true)) return `${streams}: ${bytesText(packed)}${n > 1 ? " in all" : ""}`;
     return `${streams}: ${bytesText(packed)} ${agree(packed, w?.verbs ?? "unpacks", w?.verb ?? "unpack")} to ${bytesText(unpacked)}`;
   },
   streamHeading: (name: string, packed: number, codec: string, unpacked: number | null, w: CodecWords): string =>
-    unpacked === packed
-      ? `${name}: ${bytesText(packed)}, ${w.stream}`
-      : w.verb === null || w.verbs === null
-        ? `${name}: ${bytesText(packed)}, ${codec}`
-        : unpacked === null
-          ? `${name}: ${bytesText(packed)} of ${codec}`
-          : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, w.verbs, w.verb)} to ${bytesText(unpacked)}`,
+    w.sizeOnce && (unpacked === null || unpacked === packed)
+      ? `${name}: ${bytesText(packed)}, ${w.with === null ? codec : `${w.with.toLowerCase()} ${codec}`}`
+      : unpacked === null
+        ? `${name}: ${bytesText(packed)} of ${codec}`
+        : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, w.verbs, w.verb)} to ${bytesText(unpacked)}`,
   streamName: "Stream",
   streamPacked: "In the file",
   /** Over the column of what each stream came to: `Unpacked`, or
-   *  `Unscrambled` where every stream is scrambled, or `Contents` where every
-   *  stream is stored. */
+   *  `Unscrambled` where every stream is scrambled, or `Extracted` where
+   *  every stream is stored. */
   streamUnpacked: (w: CodecWords | null): string => sentenceCase(w?.out ?? "unpacked"),
   /** Over the ratio column, whose cells say `3.8×`: unpacked over packed. */
   streamRatio: "Ratio",
@@ -356,14 +360,14 @@ export const RV = {
   /** Under the two bars, which are drawn only when the two sizes differ:
    *  `The unpacked data is 3.8 times the size of the compressed data.`, and a
    *  percentage for data that came out smaller, where `0.3 times` would be
-   *  read twice. */
+   *  read twice: `The extracted data is 27% of the size of the stored data.`
+   *  for an OLE file's Workbook stream. */
   stagesCaption: (packed: number, unpacked: number, w: CodecWords): string => {
     const lead = "Each bar is drawn to scale.";
     if (packed === 0) return lead;
-    const is = w.outPlural ? "are" : "is";
     const ratio = unpacked / packed;
-    if (ratio < 1) return `${lead} The ${w.outData} ${is} ${percentText(unpacked, packed)} of the size of the ${w.data}.`;
-    return `${lead} The ${w.outData} ${is} ${ratio.toFixed(ratio < 10 ? 1 : 0)} times the size of the ${w.data}.`;
+    if (ratio < 1) return `${lead} The ${w.outData} is ${percentText(unpacked, packed)} of the size of the ${w.data}.`;
+    return `${lead} The ${w.outData} is ${ratio.toFixed(ratio < 10 ? 1 : 0)} times the size of the ${w.data}.`;
   },
   ribbonTop: (bits: number): string => `Codes in the stream, ${counted(bits, "bit")}`,
   ribbonBottom: (bytes: number): string => `Bytes they produce, ${bytesText(bytes)}`,
@@ -375,11 +379,19 @@ export const RV = {
   /** After the lead, one sentence for each kind of code the figure draws,
    *  in this order, then `ribbonHover`. A kind of code with no sentence here
    *  (a deflate block header, a zstd frame) is grey in the figure and named
-   *  when its band is hovered. */
+   *  when its band is hovered. A copy is a length and a distance, two codes
+   *  in deflate, and a stored run (a deflate stored block's bytes, an LZ4
+   *  literal run) is no code at all, so neither sentence counts codes. Each
+   *  side of the figure is drawn across the whole width in its own units,
+   *  bits on top and bytes below, so a literal's or a stored run's band
+   *  changes width with the two scales and its sentence says nothing about
+   *  the band. A copy's band widens far more than that, and the band of
+   *  input that writes nothing narrows to a point, so those two sentences
+   *  say what the band does. */
   ribbonKinds: {
     literal: "A literal is one code for one byte.",
-    match: "A copy is one code that repeats earlier bytes, so its band widens toward the output bytes.",
-    stored: "A stored run is one code for bytes kept as they are.",
+    match: "A copy repeats earlier bytes, so its band widens toward the output bytes.",
+    stored: "A stored run is copied to the output as it is.",
     base64: "A base64 group is 4 characters that stand for 3 bytes. The last group of a stream can stand for 1 or 2 bytes.",
     // Base64 reads past spaces, tabs and line breaks, and writes nothing for
     // them.
@@ -388,30 +400,33 @@ export const RV = {
   /** In place of `ribbonKinds.ignored` for a quoted-printable stream, whose
    *  line breaks are kept: what it writes nothing for is a soft line break
    *  and the spaces and tabs before the end of a line. */
-  ribbonIgnoredQp: "A soft line break (= at the end of a line) and spaces or tabs at the end of a line produce no bytes, so their bands narrow to a point.",
+  ribbonIgnoredQp: "A soft line break (an = sign at the end of a line) and spaces or tabs at the end of a line produce no bytes, so their bands narrow to a point.",
   ribbonHover: "Hover a band for its bits and bytes.",
   /** The note in place of a stream's figures, for a stream the report did
    *  not draw, before the button that opens it in a tab. The report decodes
    *  streams on its own up to three limits, all of them on the streams'
-   *  sizes in the file, and says which one this stream passed. "Open" is
-   *  kept for opening a tab, so a stream that would not decode is said with
-   *  the verb for its codec: `could not unscramble this stream`. */
-  streamNotDrawnNote: (
-    why: "size" | "count" | "total" | "failed",
-    limits: { readonly size: string; readonly count: number; readonly total: string },
-    w: CodecWords,
-  ): string => {
+   *  sizes in the file, and says which one this stream passed. */
+  streamNotDrawnNote: (why: "size" | "count" | "total", limits: { readonly size: string; readonly count: number; readonly total: string }): string => {
     const open = "Open this stream in a tab to read it.";
     switch (why) {
       case "size":
-        return `This stream takes up more than ${limits.size} of the file, so the report does not draw it. ${open}`;
+        return `This stream takes up more than ${limits.size} of the file, so this stream is not drawn. ${open}`;
       case "count":
         return `The report draws at most ${limits.count.toLocaleString()} streams, so this stream is not drawn. ${open}`;
       case "total":
-        return `The report draws streams that take up at most ${limits.total} of the file in all, so this stream is not drawn. ${open}`;
-      case "failed":
-        return `The report could not ${w.read} this stream.`;
+        return `The report draws at most ${limits.total} of streams in all, counting the space each stream takes up in the file, so this stream is not drawn. ${open}`;
     }
+  },
+  /** The note in place of a stream's figures, for a stream that would not
+   *  decode, with the reason the core gave (`refused`, keyed as
+   *  `DECODED_REFUSED` is). A refusal of `failed` carries no message from
+   *  the decoder, so the note says only that the decoder returned an error.
+   *  "Open" is kept for opening a tab, so the stream is said with the verb
+   *  for its codec: `could not unscramble this stream`. No button follows:
+   *  opening the stream in a tab would fail the same way. */
+  streamFailedNote: (w: CodecWords, codec: string, refused: string | null): string => {
+    const why = refused === "failed" ? `the ${codec} decoder returned an error` : refused === null ? undefined : DECODED_REFUSED[refused];
+    return why === undefined ? `The report could not ${w.read} this stream.` : `The report could not ${w.read} this stream: ${why}.`;
   },
   moreStreams: (n: number): string => `${counted(n, "more stream")} not shown.`,
   /** For a file whose only streams are joined ones. */
@@ -467,17 +482,18 @@ export const RV = {
   profileDeclared: "Declared in the template",
   notInFile: "none",
   /** After a codec's row in the format profile: `2 streams, unscrambled to
-   *  25,493,504 bytes`. `decoded` of the codec's `all` streams were decoded
-   *  when the profile was taken: those the template had decoded, and those
-   *  small enough for the profile to decode on its own (`survey.rs`). Where
-   *  that is not all of them, the row says how many it measured: `2 of 3
-   *  streams unpacked to 1,024 bytes`. A stored stream comes out as it is,
-   *  so its row gives the count alone: `1 stream`. */
+   *  25,493,504 bytes in all`. `decoded` of the codec's `all` streams were
+   *  decoded when the profile was taken: those the template had decoded, and
+   *  those small enough for the profile to decode on its own (`survey.rs`).
+   *  Where that is not all of them, the row says how many it measured: `3
+   *  streams, 2 of them unpacked to 1,024 bytes in all`. The size is said
+   *  even where it matches the Bytes column, since it is what says the
+   *  streams were decoded. */
   unpackedTo: (decoded: number, all: number, size: string, kind: CodecKind | null): string => {
     const w = codecWords(kind);
-    if (w.verb === null) return counted(all, "stream");
-    if (decoded < all) return `${decoded.toLocaleString()} of ${counted(all, "stream")} ${w.out} to ${size}`;
-    return `${counted(decoded, "stream")}, ${w.out} to ${size}`;
+    const inAll = decoded > 1 ? " in all" : "";
+    if (decoded < all) return `${counted(all, "stream")}, ${decoded.toLocaleString()} of them ${w.out} to ${size}${inAll}`;
+    return `${counted(all, "stream")}, ${w.out} to ${size}${inAll}`;
   },
   profileCaption:
     "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows.",

@@ -4,8 +4,8 @@
 //
 // Each stream gets its stages drawn to scale: the run in the file and the
 // bytes it unpacks to. A stream that comes out the same size as it is in the
-// file, as a scrambled or stored one does, gets none: two bars of one length
-// would only repeat the size in the heading. A stream whose codec keeps a
+// file, as a scrambled one always does and a stored one mostly does, gets
+// none: two bars of one length would only repeat the sizes in the heading. A stream whose codec keeps a
 // trace of two codes or more (deflate, base64) also gets the ribbon from its
 // first codes to the bytes they write, from `Space::map_out`: a literal is
 // one code for one byte, a copy one code for a run of earlier bytes, so its
@@ -51,13 +51,16 @@ type NotDrawn = "size" | "count" | "total" | "failed";
 
 /** One stream, and what it came to. `space` is what the report decoded to
  *  draw it, or null. `unpacked` is its size after decoding, in bytes, or null
- *  when neither the report nor the template decoded it. */
+ *  when neither the report nor the template decoded it. `refused` is the
+ *  core's reason a stream would not decode (`DECODED_REFUSED`'s keys), where
+ *  it gave one. */
 type Opened = {
   readonly node: TemplateNode;
   readonly label: string;
   readonly space: Doc | null;
   readonly unpacked: number | null;
   readonly notDrawn: NotDrawn | null;
+  readonly refused: string | null;
 };
 
 export const streamsSection: Section = {
@@ -76,6 +79,7 @@ export const streamsSection: Section = {
       const label = streamLabel(ctx.doc, node);
       if (label === WAIT) return WAIT;
       let space: Doc | null = null;
+      let refused: string | null = null;
       const bytes = node.size_bits / 8;
       let notDrawn: NotDrawn | null =
         bytes > OPEN_BYTES ? "size" : opened.filter((o) => o.space !== null).length >= OPEN_MAX ? "count" : openedBytes + bytes > OPEN_TOTAL ? "total" : null;
@@ -86,13 +90,16 @@ export const streamsSection: Section = {
         if (r !== null && "working" in r) return WAIT;
         space = r !== null && !("refused" in r) ? r : null;
         if (space !== null) openedBytes += bytes;
-        else notDrawn = "failed";
+        else {
+          notDrawn = "failed";
+          if (r !== null && "refused" in r) refused = r.refused;
+        }
       }
       const unpacked = space !== null ? space.lengthBytes : decodedSize(ctx.doc, node);
       if (unpacked === WAIT) return WAIT;
       if (unpacked === null) allKnown = false;
       else unpackedTotal += unpacked;
-      opened.push({ node, label, space, unpacked, notDrawn });
+      opened.push({ node, label, space, unpacked, notDrawn, refused });
     }
     if (streams.length > ROWS_MAX) allKnown = false;
     const packed = streams.reduce((n, s) => n + s.size_bits / 8, 0);
@@ -301,7 +308,14 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   if (o.space === null) {
     const p = document.createElement("p");
     p.className = "rv-note";
-    p.append(`${RV.streamNotDrawnNote(o.notDrawn ?? "failed", { size: formatBytes(OPEN_BYTES), count: OPEN_MAX, total: formatBytes(OPEN_TOTAL) }, words)} `);
+    // A stream that would not decode gets no button: the tab would not open
+    // either, and `openUnpacked` in main.ts says nothing when it does not.
+    if (o.notDrawn === null || o.notDrawn === "failed") {
+      p.textContent = RV.streamFailedNote(words, o.node.type, o.refused);
+      box.append(p);
+      return box;
+    }
+    p.append(`${RV.streamNotDrawnNote(o.notDrawn, { size: formatBytes(OPEN_BYTES), count: OPEN_MAX, total: formatBytes(OPEN_TOTAL) })} `);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rv-button";

@@ -144,19 +144,26 @@ fixed section names.
    for a traced codec, the ribbon from codes in the compressed stream to the
    bytes they produce. The words follow what the codec does (the core's
    `CodecKind`): compressed streams unpack, scrambled ones unscramble, encoded
-   ones decode, and stored ones have no verb, since their bytes come out as
-   they are. Their output is called the contents, and the button is Open
-   contents. "Open" is kept for opening a tab, and never means running a
-   codec. When the streams' codecs are of more than one kind, the heading
-   says N streams and uses the verb unpack. A stream that comes out the same
-   size as it is in the file, as every scrambled or stored one does, has its
-   size said once ("checksum_copy: 4 bytes, scrambled") and gets no bars. The
-   ribbon is drawn only when it has two codes or more, and its caption has a
-   sentence for each kind of code it draws. A stream the report does not
-   decode to draw (over 4 MiB in the file, past 32 streams or past 16 MiB of
-   the file in all) says which limit it passed. Where the template has
-   decoded it anyway, its size after decoding and its ratio are still in the
-   table, and only a size nobody has measured reads "not measured".
+   ones decode, and stored ones extract. A stored stream's bytes are not
+   changed, but they are not always the size they take up in the file: an
+   OLE file's Workbook stream is gathered from its sectors. The output is
+   always named by a participle (Unpacked, Unscrambled, Extracted), and the
+   button is Open unpacked, Open extracted and so on. "Open" is kept for
+   opening a tab, and never means running a codec. When the streams' codecs
+   are of more than one kind, the heading says N streams and uses the verb
+   unpack. A scrambled stream, or a stored one that comes out the same size,
+   has its size said once, with its codec ("checksum_copy: 4 bytes,
+   scrambled with tascam scramble"), and gets no bars. A stream of any other
+   kind says both sizes even when they match, so the heading still says what
+   it came to. One size over several streams is their total and says "in
+   all". The ribbon is drawn only when it has two codes or more, and its
+   caption has a sentence for each kind of code it draws. A stream the report
+   does not decode to draw (over 4 MiB in the file, past 32 streams or past
+   16 MiB of the file in all) says which limit it passed. Where the template
+   has decoded it anyway, its size after decoding and its ratio are still in
+   the table, and only a size nobody has measured reads "not measured". A
+   stream that would not decode says the reason the core gave, and gets no
+   button, since the tab would not open either.
 10. **How the format is built.** The format profile in full. It says how the
     format writes its values and finds its parts, counted over the template and
     over this file, so it can say "the template allows 12 kinds of chunk and

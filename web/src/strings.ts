@@ -28,7 +28,8 @@ export function bitSizeText(bits: number): string {
  * it: compressed bytes, which unpack. The other kinds say what was done
  * instead: Tascam's firmware image is scrambled and unscrambles, a base64
  * part is encoded and decodes, a PNG's rows are filtered and unfilter. Stored
- * bytes are not changed, so they have no verb.
+ * bytes are not changed, and are extracted: a ZIP entry stored as it is, or
+ * the Workbook stream of an OLE file gathered from its sectors.
  *
  * Where no one codec is at hand, "unpacked" stays the app's word for what any
  * codec gives back: an offset within the unpacked stream, the inspector's
@@ -51,29 +52,35 @@ export type CodecWords = {
    *  step before deflate rather than a way the file is packed. */
   readonly with: string | null;
   /** What came out, as the label over it: the report's column and bar
-   *  `Unscrambled`, and the format profile's `unscrambled to`. For stored
-   *  bytes, `contents`: they come out as they are, and "open" is kept for
-   *  opening a tab. */
+   *  `Unscrambled`, and the format profile's `unscrambled to`. A participle
+   *  for every kind, `extracted` for stored bytes, so the column reads the
+   *  same whatever the kind. `contents` lost: in a report it also means the
+   *  list of sections, and `Open contents` read as a link to that list. */
   readonly out: string;
   /** What came out, as data, for a sentence: `The unscrambled data is`,
-   *  `open the unpacked data in a tab`. For stored bytes, `contents`, which
-   *  takes a plural verb (`outPlural`). */
+   *  `open the unpacked data in a tab`. */
   readonly outData: string;
-  readonly outPlural: boolean;
   /** The verb, for a plural subject and for a singular one: `24 bytes
-   *  unscramble to`, `tascam scramble, unscrambles to`. Null for stored
-   *  bytes, which come out as they are: the clause is left out. */
-  readonly verb: string | null;
-  readonly verbs: string | null;
+   *  unscramble to`, `tascam scramble, unscrambles to`. */
+  readonly verb: string;
+  readonly verbs: string;
   /** What running the codec over the run is, as an infinitive: `could not
-   *  unscramble this stream`. `read` for stored bytes, which have no verb
-   *  of their own. */
+   *  unscramble this stream`. */
   readonly read: string;
+  /** Whether a stream of this kind that comes out the same size as it is in
+   *  the file has its size said once: `checksum_copy: 4 bytes, scrambled
+   *  with tascam scramble`. True for scrambling, which never changes the
+   *  length, and for stored bytes, which come out as they are unless they
+   *  are gathered from sectors. A stream of another kind that happens to
+   *  come out the same size says both sizes, or `1 compressed stream: 4,096
+   *  bytes` would read as the compressed size with the unpacked one left
+   *  out. */
+  readonly sizeOnce: boolean;
   /** What a checksum over everything the run gives back is a checksum of:
    *  `CRC-32 of the unpacked file`. */
   readonly summed: string;
   /** The button that opens what the run gives back as a tab: `Open
-   *  unpacked`, `Open unscrambled`, and `Open contents` for stored bytes. */
+   *  unpacked`, `Open unscrambled`, and `Open extracted` for stored bytes. */
   readonly open: string;
   /** Between the field and the file in a tab's title: `image unscrambled
    *  from update.203`. A stored stream's tab is `data from archive.rar`. */
@@ -88,10 +95,10 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     with: "Compressed with",
     out: "unpacked",
     outData: "unpacked data",
-    outPlural: false,
     verb: "unpack",
     verbs: "unpacks",
     read: "unpack",
+    sizeOnce: false,
     summed: "the unpacked file",
     open: "Open unpacked",
     from: "unpacked from",
@@ -103,10 +110,10 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     with: "Encoded with",
     out: "decoded",
     outData: "decoded data",
-    outPlural: false,
     verb: "decode",
     verbs: "decodes",
     read: "decode",
+    sizeOnce: false,
     summed: "the decoded data",
     open: "Open decoded",
     from: "decoded from",
@@ -118,10 +125,10 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     with: "Scrambled with",
     out: "unscrambled",
     outData: "unscrambled data",
-    outPlural: false,
     verb: "unscramble",
     verbs: "unscrambles",
     read: "unscramble",
+    sizeOnce: true,
     summed: "the unscrambled data",
     open: "Open unscrambled",
     from: "unscrambled from",
@@ -131,14 +138,14 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     data: "stored data",
     bytes: "Stored bytes",
     with: null,
-    out: "contents",
-    outData: "contents",
-    outPlural: true,
-    verb: null,
-    verbs: null,
-    read: "read",
+    out: "extracted",
+    outData: "extracted data",
+    verb: "extract",
+    verbs: "extracts",
+    read: "extract",
+    sizeOnce: true,
     summed: "the stored data",
-    open: "Open contents",
+    open: "Open extracted",
     from: "from",
   },
   filter: {
@@ -148,10 +155,10 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     with: null,
     out: "unfiltered",
     outData: "unfiltered data",
-    outPlural: false,
     verb: "unfilter",
     verbs: "unfilters",
     read: "unfilter",
+    sizeOnce: false,
     summed: "the unfiltered data",
     open: "Open unfiltered",
     from: "unfiltered from",
@@ -163,10 +170,10 @@ const CODEC_WORDS: Readonly<Record<CodecKind, CodecWords>> = {
     with: "Data hidden with",
     out: "decoded",
     outData: "decoded data",
-    outPlural: false,
     verb: "decode",
     verbs: "decodes",
     read: "decode",
+    sizeOnce: false,
     summed: "the decoded data",
     open: "Open decoded",
     from: "decoded from",
@@ -3818,12 +3825,14 @@ export const STRINGSVIEW = {
         return `Inside "${name}", which the template reads as machine code (${where}). Machine code often contains printable bytes by chance.`;
       case "packed": {
         // Base64, the one encoding marked here, is printable throughout: the
-        // string is the base64 text itself. Stored bytes are not changed, so
+        // string is the base64 text itself, so the sentence names base64 and
+        // not encoded data in general, most of which (quoted-printable) is
+        // readable text. Stored bytes are not changed, so
         // a string in them would be real text, and they get no such sentence.
         const w = codecWords(codec);
         const chance =
           codec === "encoding"
-            ? `${sentenceStart(w.data)} is printable throughout, so this string is most likely part of the base64 text, not readable text. `
+            ? "Base64 text is printable throughout, so this string is most likely just base64 characters, not readable text. "
             : codec === "stored"
               ? ""
               : `${sentenceStart(w.data)} often contains printable bytes by chance. `;

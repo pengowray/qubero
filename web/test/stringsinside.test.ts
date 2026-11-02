@@ -32,7 +32,7 @@ test("packed data is named by what its codec does", () => {
 test("a string inside base64 is most likely the base64 text itself, not printable bytes by chance", () => {
   const title = SV.insideTitle("packed", "body", "base64", 0x340, 30, "encoding");
   assert.match(title, /reads as encoded data \(base64, /);
-  assert.match(title, /Encoded data is printable throughout, so this string is most likely part of the base64 text, not readable text\. Click to open the decoded data in a tab/);
+  assert.match(title, /Base64 text is printable throughout, so this string is most likely just base64 characters, not readable text\. Click to open the decoded data in a tab/);
   assert.doesNotMatch(title, /printable bytes by chance/);
 });
 
@@ -46,7 +46,7 @@ test("a stored stream's string is not said to be chance", () => {
   // wrong if it did: stored bytes are the text as it is.
   const title = SV.insideTitle("packed", "data", "stored", 0, 29, "stored");
   assert.doesNotMatch(title, /by chance/);
-  assert.match(title, /Click to open the contents in a tab/);
+  assert.match(title, /Click to open the extracted data in a tab/);
 });
 
 test("a list with every string hidden says none are shown", () => {
