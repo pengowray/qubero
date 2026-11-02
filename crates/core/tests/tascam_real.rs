@@ -7,9 +7,11 @@
 //! by searching for IAR's FPU routine, the fonts by the offsets in the font
 //! map, and the packed runs by the pointers in the init tables. The numbers
 //! below differ between the two releases wherever the application's code
-//! grew. The instruction counts are the template's own. They were checked
-//! once against counting the same runs one placed element at a time, which
-//! is how a run of instructions was counted before `insnrun.rs`.
+//! grew. The instruction counts are the template's own. The one for the
+//! code before 0217.203's init table was checked against counting the same
+//! run one placed element at a time, which is how runs of instructions were
+//! counted before `insnrun.rs`. The other three were not, but the test also
+//! checks the last instructions of each run, which a wrong count would move.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
