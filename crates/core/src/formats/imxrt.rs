@@ -200,7 +200,8 @@ const IRQS: &[&str] = &[
 
 /// Everything the boot ROM reads before the program: the configuration block,
 /// the IVT, the boot data and the DCD, in the order NXP's SDK lays them out.
-/// Shared with `tascamfw`, whose update files are an image of this flash.
+/// Shared with `tascamfw`, whose Portacapture X8 updates hold an image of
+/// this flash.
 pub(crate) fn boot_header() -> T {
     T::structure(
         "BootHeader",
@@ -257,8 +258,8 @@ pub(crate) fn thumb(len: E) -> T {
     T::sized(len, T::repeat(T::insn(Isa::Thumb), Until::End))
 }
 
-/// The vector table, one named word at a time. Shared with `tascamfw`, whose
-/// bootloader and application each start with one.
+/// The vector table, one named word at a time. Shared with `tascamfw`: the
+/// X8's bootloader and application each start with one.
 pub(crate) fn vectors() -> T {
     // The slots past the last interrupt NXP names. In the X8's two programs
     // they mostly hold the default handler, and the last word is 0xffffffff.

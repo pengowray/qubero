@@ -11,11 +11,12 @@
 //! The table was worked out by the DR-05 homebrew project in 2016 by lining
 //! up an update file against a flash dump of the same version
 //! (<https://github.com/dr05-homebrew/dr05-homebrew>, `fwupdate/lut_decode.bin`),
-//! for a recorder built on a Blackfin. The Portacapture X8, built nine years
-//! later on an i.MX RT1060, uses the same one. That it is right for every byte
-//! the X8's images use is checked by the header, not assumed: the header's
-//! checksum is the sum of the bytes this table gives back, and it comes out
-//! exactly for both releases.
+//! for a recorder built on a Blackfin. The DR-05X, also a Blackfin, and the
+//! Portacapture X8, built nine years later on an i.MX RT1060, use the same
+//! one. That it is right for every byte their images use is checked by the
+//! header, not assumed: the header's checksum is the sum of the bytes this
+//! table gives back, and it comes out exactly for both X8 releases and for the
+//! DR-05X's V1.16.
 //!
 //! Mostly the table swaps the high half of a byte for another and shuffles
 //! the low half within each row. The exceptions keep 0x00 and 0xff as
