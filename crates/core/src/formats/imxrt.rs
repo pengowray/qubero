@@ -704,6 +704,8 @@ pub(crate) mod tests {
         let mut ev = Evaluator::new(imxrt());
         let dcd = named(&mut ev, &d, &[0], "dcd");
         assert!(ev.node(&d, &dcd).unwrap().absent);
+        // A pointer of zero is no DCD, which is no fault to report.
+        assert!(ev.valid_of(&d, &dcd).unwrap().is_none_or(|v| v.ok));
         // So the padding runs from the end of the boot data to the entry.
         let padding = ev.node(&d, &[1]).unwrap();
         assert_eq!((padding.offset_bits / 8, padding.size_bits / 8), (0x1030, 0x2000 - 0x1030));
