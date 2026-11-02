@@ -71,8 +71,8 @@
 //! DCD write to (IOMUXC_SNVS_GPR, IOMUXC_SNVS, IOMUXC_GPR, IOMUXC, the CCM
 //! analog block, CCM and SEMC). Every register that NXP's device header places
 //! in those ranges is named in `registers::REGISTERS`. Every other address
-//! gets one of two names, worked out from the registers of all the peripherals
-//! the header defines:
+//! gets one of two kinds of name, worked out from the registers of all the
+//! peripherals the header defines:
 //!
 //! - `in` and a peripheral's name, such as `in LPUART1`, for a register of that
 //!   peripheral outside the seven ranges, for an address partway into one of
