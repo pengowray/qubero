@@ -1,4 +1,7 @@
 target/
+# Private cargo target directories, such as target-priv/ in a worktree
+# that runs its own test gate.
+target-*/
 node_modules
 web/dist/
 web/src/pkg/
