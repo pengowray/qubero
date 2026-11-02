@@ -59,7 +59,8 @@
 //!
 //! The address in each DCD write and check is shown as the name of the RT1060
 //! register at that address, in the form the reference manual writes it:
-//! `CCM_CCGR0`, `IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00`, `SEMC_MCR`. That form is
+//! `CCM_CCGR0`, `IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00`, `SEMC_MCR`. The `dcd.c`
+//! files in NXP's SDK name the addresses they write the same way. That form is
 //! one word, so a search of the manual or the SDK finds it. Table 9-42 of the
 //! manual lists the seven address ranges the boot ROM lets a DCD write to
 //! (IOMUXC_SNVS_GPR, IOMUXC_SNVS, IOMUXC_GPR, IOMUXC, the CCM analog block,
