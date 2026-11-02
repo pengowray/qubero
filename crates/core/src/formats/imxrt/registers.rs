@@ -3,8 +3,11 @@
 //! Do not edit. They come from NXP's MCUXpresso SDK at commit
 //! `8a289764d763ad06e0c3a05c885644ed98b970af`, from `devices/MIMXRT1062/MIMXRT1062.h` and
 //! `devices/MIMXRT1062/drivers/fsl_iomuxc.h`, and are used under its BSD-3-Clause licence.
-//! Each name is written the way the reference manual writes it: the
-//! peripheral, an underscore, and the register.
+//! Each name is the peripheral's name, an underscore and the register's name,
+//! the form the `dcd.c` files in NXP's SDK use. Most chapters of the
+//! reference manual use it too. Its SEMC chapter writes the SEMC registers
+//! without `SEMC_`, and rev. 3 of the manual does not list the registers of
+//! the GPIO_SPI pads.
 
 /// The 802 registers in the address ranges the boot ROM lets a DCD
 /// write, by address.
@@ -814,9 +817,10 @@ pub const REGISTERS: &[(u32, &str)] = &[
 ];
 
 /// The address space in 232 pieces, in address order. Each piece starts at
-/// its address and runs to the start of the next, and names the peripheral
-/// whose registers, or reserved space between them, it holds. None for the
-/// space outside every peripheral's registers.
+/// its address and runs to the start of the next. It names the peripheral
+/// whose registers, or reserved space between two of them, it holds. None for
+/// the space before a peripheral's first register and after its last, and
+/// for a gap between registers of two different peripherals.
 pub const AREAS: &[(u32, Option<&str>)] = &[
     (0x00000000, None),
     (0x4007c000, Some("AIPSTZ1")),

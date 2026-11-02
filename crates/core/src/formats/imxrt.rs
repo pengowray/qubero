@@ -58,21 +58,41 @@
 //! reference manual. The other names are this template's.
 //!
 //! The address in each DCD write and check is shown as the name of the RT1060
-//! register at that address, in the form the reference manual writes it:
-//! `CCM_CCGR0`, `IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00`, `SEMC_MCR`. The `dcd.c`
-//! files in NXP's SDK name the addresses they write the same way. That form is
-//! one word, so a search of the manual or the SDK finds it. Table 9-42 of the
-//! manual lists the seven address ranges the boot ROM lets a DCD write to
-//! (IOMUXC_SNVS_GPR, IOMUXC_SNVS, IOMUXC_GPR, IOMUXC, the CCM analog block,
-//! CCM and SEMC), and every register NXP's device header places in those
-//! ranges has its name here, 802 of them. An address in any other
-//! peripheral's registers reads as that peripheral, `in LPUART1`; an address
-//! between two registers of one peripheral, or partway into one, reads the
-//! same way. Any other address reads as `not a peripheral register`. Every
-//! address gets a name, so no address in a DCD is marked as a value the
-//! format does not define. An address outside the seven ranges is not an
-//! error in the image: the boot ROM skips a write command that has one, and a
-//! check command may poll any address.
+//! register at that address: `CCM_CCGR0`, `IOMUXC_SW_MUX_CTL_PAD_GPIO_EMC_00`,
+//! `SEMC_MCR`. Each name is the peripheral's name, an underscore and the
+//! register's name. The `dcd.c` files in NXP's SDK name the addresses they
+//! write this way, and so do most chapters of the reference manual. Rev. 3 of
+//! the manual differs in two places. Its SEMC chapter writes the SEMC
+//! registers without `SEMC_` (`MCR`), and the manual does not list the
+//! registers of the GPIO_SPI pads at all. A name in this form is one word, so
+//! it can be searched for as one.
+//!
+//! Table 9-42 of the manual lists the seven address ranges the boot ROM lets a
+//! DCD write to (IOMUXC_SNVS_GPR, IOMUXC_SNVS, IOMUXC_GPR, IOMUXC, the CCM
+//! analog block, CCM and SEMC). Every register that NXP's device header places
+//! in those ranges is named in `registers::REGISTERS`. Every other address
+//! gets one of two names, worked out from the registers of all the peripherals
+//! the header defines:
+//!
+//! - `in` and a peripheral's name, such as `in LPUART1`, for a register of that
+//!   peripheral outside the seven ranges, for an address partway into one of
+//!   its registers, and for a reserved address whose nearest register below and
+//!   nearest register above both belong to that peripheral. 0x402F0088 reads as
+//!   `in SEMC` because it is between SEMC_DBICR1 and SEMC_IPCR0.
+//! - `not a peripheral register` for every other address. That includes the
+//!   reserved addresses before a peripheral's first register and after its
+//!   last, even inside the seven ranges: 0x402F0100 is past SEMC's last
+//!   register. It also includes a reserved address between registers of two
+//!   different peripherals, as at 0x402E0808, where the registers of USBNC1 and
+//!   USBNC2 alternate.
+//!
+//! Every address gets a name, so no address in a DCD is marked as a value the
+//! format does not define. The boot ROM does not write to an address outside
+//! the seven ranges: if any address in a write data command is outside them,
+//! the boot ROM writes none of that command's values (the note above table
+//! 9-42). This template does not check for that, so such a command is read and
+//! shown like any other. The manual sets no range for the address a check data
+//! command reads.
 //!
 //! The names come from `registers`, which `node tools/imxrtregisters.mjs`
 //! writes from two files of NXP's MCUXpresso SDK at a fixed commit:
