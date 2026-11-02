@@ -193,3 +193,132 @@ fn what_the_listing_asks_of_a_long_run_of_instructions_costs_less_than_counting_
     ev.begin_slice();
     assert_eq!(ev.locate(&d, end - 40).unwrap()[0], 1);
 }
+
+/// Three blocks of raw deflate, each behind its packed and unpacked lengths,
+/// joined into one stream of Thumb. `spoil` is applied to the third block's
+/// packed bytes after they are written.
+fn thumb_in_blocks(code: &[u8], spoil: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+    let third = code.len().div_ceil(3);
+    let mut file = Vec::new();
+    for (i, part) in code.chunks(third).enumerate() {
+        let mut packed = miniz_oxide::deflate::compress_to_vec(part, 6);
+        if i == 2 {
+            spoil(&mut packed);
+        }
+        file.extend((packed.len() as u16).to_le_bytes());
+        file.extend((part.len() as u16).to_le_bytes());
+        file.extend(packed);
+    }
+    file
+}
+
+/// The blocks of [`thumb_in_blocks`] and the stream joined from them, read as
+/// a run of Thumb: plain, or with `slow` each instruction wrapped in a
+/// condition.
+fn blocks_template(slow: bool) -> Template {
+    let insn = if slow { T::when(E::lit(1), T::insn(Isa::Thumb)) } else { T::insn(Isa::Thumb) };
+    let block = T::structure(
+        "Block",
+        vec![
+            ("packed_len", T::u16(Little)),
+            ("original_size", T::u16(Little)),
+            ("compressed", T::decoded(E::field("packed_len"), crate::codec::Codec::Deflate, T::bytes(E::Remaining))),
+        ],
+    );
+    Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("blocks", T::repeat(block, Until::End)),
+                (
+                    "code",
+                    T::stitched(
+                        vec![Step::field("blocks"), Step::each(), Step::field("compressed")],
+                        Some(E::field("original_size")),
+                        None,
+                        T::repeat(insn, Until::End),
+                    ),
+                ),
+            ],
+        ),
+    )
+}
+
+/// The run inside the stream joined from [`blocks_template`]'s blocks.
+const JOINED_RUN: [usize; 2] = [1, 0];
+
+/// What one walk says of the joined run: its count, or the error asking for
+/// it gives, and why the run stopped where it did.
+fn run_said(ev: &mut Evaluator, d: &Document<MemSource>) -> (String, Option<String>) {
+    let count = format!("{:?}", ev.node(d, &JOINED_RUN).map(|info| (info.child_count, info.size_bits)));
+    (count, ev.list(&JOINED_RUN).repeat_trouble.clone())
+}
+
+#[test]
+fn a_run_of_instructions_in_a_stream_with_a_part_that_will_not_unpack_stops_where_the_walk_stops() {
+    // About 120 KB of Thumb, so the count's first chunk is read whole from the
+    // first two blocks and the second reaches into the third.
+    let code = Bytes(0x5eed_0f7b_1701).thumb(45_000);
+    // A block type that does not exist, where the third block's deflate starts.
+    for spoil in [None, Some(0xff)] {
+        let d = doc(&thumb_in_blocks(&code, |b| {
+            if let Some(byte) = spoil {
+                b[0] = byte;
+            }
+        }));
+        let what = if spoil.is_some() { "with the third block spoiled" } else { "with every block whole" };
+        let mut slow = Evaluator::new(blocks_template(true));
+        let said = run_said(&mut slow, &d);
+        let mut fast = Evaluator::new(blocks_template(false));
+        assert_eq!(run_said(&mut fast, &d), said, "{what}");
+        if spoil.is_some() {
+            assert!(said.1.as_deref().is_some_and(|why| why.contains("blocks[2].compressed could not be unpacked")), "{what}: {said:?}");
+        }
+        let n = slow.node(&d, &JOINED_RUN).unwrap().child_count as usize;
+        assert!(n > 2 * super::super::walk::GUARD_ABOVE, "{what}: long enough to be guarded");
+        let place = |ev: &mut Evaluator, k: usize| format!("{:?}", ev.node(&d, &[1, 0, k]).map(|i| (i.offset_bits, i.size_bits)));
+        let want: Vec<String> = (0..=n).map(|k| place(&mut slow, k)).collect();
+        for (k, w) in want.iter().enumerate() {
+            assert_eq!(place(&mut fast, k), *w, "{what}: instruction {k}");
+        }
+        // Asked out of order, before anything has counted the run, including
+        // instructions in the blocks before the spoiled one.
+        let mut cold = Evaluator::new(blocks_template(false));
+        let mut pick = Bytes(n as u64 * 31);
+        for _ in 0..200 {
+            let k = (pick.next() as usize * 7) % (n + 1);
+            assert_eq!(place(&mut cold, k), want[k], "{what}: instruction {k} asked cold");
+        }
+        assert_eq!(run_said(&mut cold, &d), said, "{what}: asked cold");
+
+        // Which instruction a bit of the stream is in, asked cold on both.
+        let mut slow = Evaluator::new(blocks_template(true));
+        let mut cold = Evaluator::new(blocks_template(false));
+        let last = slow.node(&d, &[1, 0, n - 1]).unwrap();
+        let end = last.offset_bits + last.size_bits;
+        let mut bits: Vec<u64> = (0..100).map(|_| (pick.next() as u64 * 977) % (end + 64)).collect();
+        bits.extend([0, 7, 8, end - 9, end - 1, end, end + 8, end + 23]);
+        for bit in bits {
+            let found = |ev: &mut Evaluator| format!("{:?}", ev.locate_under(&d, &JOINED_RUN, bit));
+            assert_eq!(found(&mut cold), found(&mut slow), "{what}: bit {bit}");
+        }
+
+        // Counted in goes of four elements, the count still gets there.
+        let mut goes = Evaluator::new(blocks_template(false));
+        goes.set_slice(Some(4));
+        let mut tries = 0;
+        let counted = loop {
+            tries += 1;
+            assert!(tries < 100_000, "{what}: the count in goes is not getting anywhere");
+            goes.begin_slice();
+            match goes.node(&d, &JOINED_RUN) {
+                Ok(info) => break info.child_count as usize,
+                Err(e) if e.interrupted() => continue,
+                Err(e) => panic!("{what}: {e:?}"),
+            }
+        };
+        assert_eq!(counted, n, "{what}: counted in goes");
+        assert_eq!(goes.list(&JOINED_RUN).repeat_trouble, said.1, "{what}: counted in goes");
+    }
+}

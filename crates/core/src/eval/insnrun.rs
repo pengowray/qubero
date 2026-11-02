@@ -23,13 +23,23 @@
 //! The answers are the ones the ordinary walk gives. An instruction is as long
 //! as its machine says, cut short to what is left of the run, which is what
 //! `read_insn` does: the last instruction of a run that ends part way through
-//! one is the bytes that are left. A plain instruction fails to read only
-//! where the run has no bytes left, and this walk ends at the end of the run
-//! without reading there, so a run read here never has its room stretched and
-//! never stops early with a reason. Anything this does not cover is left to
-//! the ordinary walk: x86, whose length only a decoder can find; an element
-//! wrapped in a size or a condition; a run that ends on what it reads; and a
-//! run that does not start and end on a byte.
+//! one is the bytes that are left. In the file and in a stream unpacked whole,
+//! a plain instruction fails to read only where the run has no bytes left.
+//! This walk ends at the end of the run without reading there, so there the
+//! run never has its room stretched and never stops early with a reason.
+//!
+//! A stream joined from packed parts, or unpacked a piece at a time, can fail
+//! to read part way through: a part that will not unpack fails every read
+//! that reaches into it. When one of this walk's reads fails, it stops at the
+//! start of the chunk it was reading and hands the run to the ordinary walk,
+//! which carries on from there one instruction at a time. That walk reaches
+//! the same instruction that will not read, and ends the run there with the
+//! reason, as it would have without this module.
+//!
+//! Anything this does not cover is left to the ordinary walk: x86, whose
+//! length only a decoder can find; an element wrapped in a size or a
+//! condition; a run that ends on what it reads; and a run that does not start
+//! and end on a byte.
 
 use super::walk::CHECKPOINT;
 use super::*;
@@ -68,6 +78,9 @@ enum Step {
     Covers,
     /// At the end of the run, before the goal.
     End,
+    /// The chunk's bytes could not be read, so nothing in it was stepped
+    /// over. The ordinary walk takes the run from here.
+    Unreadable,
 }
 
 impl Evaluator {
@@ -99,7 +112,9 @@ impl Evaluator {
 
     /// How many instructions the run at `path` holds, counted by stepping
     /// along its bytes and carrying on from where an earlier count stopped.
-    /// None when the run is not one this module measures.
+    /// None when the run is not one this module measures, and when a read
+    /// fails part way: the ordinary walk then counts on from where this count
+    /// stopped.
     ///
     /// Each of the three questions here is one call out of the ordinary walk,
     /// which is on the path the nesting limit was measured against, so what
@@ -119,7 +134,9 @@ impl Evaluator {
                 self.list_mut(path).repeat_done = true;
                 continue;
             }
-            self.insn_chunk(doc, path, r, isa, &mut j, &mut at, Goal::End)?;
+            if self.insn_chunk(doc, path, r, isa, &mut j, &mut at, Goal::End)? == Step::Unreadable {
+                return Ok(None);
+            }
             let m = self.list_mut(path);
             m.repeat_len = j;
             m.repeat_end = Some(at);
@@ -128,8 +145,9 @@ impl Evaluator {
 
     /// Where instruction `idx` of the run at `path` starts, found by stepping
     /// along the bytes from the nearest known start before it. None when the
-    /// run is not one this module measures, or when it ends before `idx`,
-    /// which the ordinary walk then reports.
+    /// run is not one this module measures, when it ends before `idx`, which
+    /// the ordinary walk then reports, and when a read fails on the way, which
+    /// the ordinary walk then steps past or stops at.
     #[inline(never)]
     pub(super) fn insn_run_start<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved, idx: usize) -> R<Option<u64>> {
         let Some(isa) = self.insn_run(r) else { return Ok(None) };
@@ -137,7 +155,7 @@ impl Evaluator {
         loop {
             match self.insn_chunk(doc, path, r, isa, &mut j, &mut at, Goal::Start(idx))? {
                 Step::More => {}
-                Step::End => return Ok(None),
+                Step::End | Step::Unreadable => return Ok(None),
                 _ => return Ok(Some(at)),
             }
         }
@@ -146,8 +164,9 @@ impl Evaluator {
     /// Which of the first `n` instructions of the run at `path` covers `bit`,
     /// found by stepping along the bytes from the nearest known start at or
     /// before it. The outer None is for a run this module does not measure,
-    /// and for a bit past the end of the run, which the ordinary walk then
-    /// reports.
+    /// for a bit past the end of the run, which the ordinary walk then
+    /// reports, and for a read that fails on the way, which the ordinary walk
+    /// then steps past or stops at.
     #[inline(never)]
     pub(super) fn insn_run_covering<S: Source>(
         &mut self,
@@ -162,7 +181,7 @@ impl Evaluator {
         loop {
             match self.insn_chunk(doc, path, r, isa, &mut j, &mut at, Goal::Covering { bit, n })? {
                 Step::More => {}
-                Step::End => return Ok(None),
+                Step::End | Step::Unreadable => return Ok(None),
                 Step::There => return Ok(Some(None)),
                 Step::Covers => return Ok(Some(Some(j))),
             }
@@ -172,7 +191,8 @@ impl Evaluator {
     /// Step along one chunk of the run, from instruction `j` starting at `at`,
     /// towards `goal`. Leaves `j` and `at` at the instruction it stopped at,
     /// and notes that in the run's walk state and checkpoints the way the
-    /// ordinary walk does.
+    /// ordinary walk does. When the chunk's bytes cannot be read, nothing is
+    /// changed or charged, and the answer is `Step::Unreadable`.
     #[allow(clippy::too_many_arguments)]
     fn insn_chunk<S: Source>(
         &mut self,
@@ -210,8 +230,15 @@ impl Evaluator {
         .min(CHUNK);
         let left = (r.limit - *at) / 8;
         let take = left.min(span + longest as u64);
+        // Charged once the bytes are read. A read that fails hands the run to
+        // the ordinary walk, and that walk needs what is left of the go's
+        // allowance to step past even one instruction.
+        let bytes = match self.read(doc, r, *at, take * 8) {
+            Ok(bytes) => bytes,
+            Err(EvalError::Failed(_)) => return Ok(Step::Unreadable),
+            Err(e) => return Err(e),
+        };
         self.spend_n(*at, take.min(span).div_ceil(BYTES_PER_ELEMENT))?;
-        let bytes = self.read(doc, r, *at, take * 8)?;
         let upto = if take == left { bytes.len() } else { span as usize };
         let mut i = 0usize;
         let mut step = Step::More;
