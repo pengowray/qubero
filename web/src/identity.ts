@@ -228,6 +228,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   hackrffw: ["bin"],
   imxrt: ["bin"],
   bfldr: ["ldr"],
+  x8project: ["bin"],
   gdbm: ["gdbm", "db"],
   bdb: ["db"],
   grubenv: ["env"],

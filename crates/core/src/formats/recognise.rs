@@ -383,6 +383,11 @@ const PROBES: &[Probe] = &[
     // The header NIfTI-1 grew from, which has its size and no magic at all:
     // recognised by that size and by the dimensions and voxel type agreeing.
     Probe::Is("analyze", nifti::is_analyze),
+    // A Tascam Portacapture X8's project file, the `.bin` beside a take's
+    // WAV files. It has no signature. It is recognised by its length of
+    // exactly 268 bytes and by every field with a known range being inside
+    // that range: see `x8project::is_project`.
+    Probe::Is("x8project", x8project::is_project),
     // A record of who logged in, which has no header at all: it is recognised
     // by every record in it being the right size and shape.
     Probe::Is("utmp", utmp::is_utmp),

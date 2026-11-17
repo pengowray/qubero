@@ -111,6 +111,7 @@ mod uf2;
 mod hackrffw;
 mod imxrt;
 mod tascamfw;
+mod x8project;
 mod bfldr;
 pub mod hardening;
 mod hdf4;
@@ -273,6 +274,7 @@ pub use uf2::{image as uf2_image, uf2, Image as Uf2Image};
 pub use hackrffw::hackrffw;
 pub use imxrt::imxrt;
 pub use tascamfw::tascamfw;
+pub use x8project::x8project;
 pub use bfldr::bfldr;
 pub use hdf4::hdf4;
 pub use hdf5::hdf5;
@@ -497,6 +499,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("hackrffw", |_| hackrffw()),
     ("imxrt", |_| imxrt()),
     ("tascamfw", |_| tascamfw()),
+    ("x8project", |_| x8project()),
     ("bfldr", |_| bfldr()),
     ("gif", |_| gif()),
     ("aiff", |_| aiff()),
