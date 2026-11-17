@@ -109,19 +109,19 @@ fn every_project_file_is_recognised_and_read_whole() {
             }
         }
 
-        // The firmware's default values in the track blocks and at 0x100.
-        let blocks = named(ev, d, &[], &["track_blocks"]);
+        // The firmware's default values in each track's EQ and in the metronome's settings.
+        let blocks = named(ev, d, &[], &["eq"]);
         assert_eq!(ev.node(d, &blocks).unwrap().offset_bits, 0x40 * 8, "{f}");
         for track in 0..6 {
             for (index, first) in [16, 32, 32, 16].into_iter().enumerate() {
                 let entry = [blocks.clone(), vec![track, 0, index]].concat();
-                let bytes = [int(ev, d, &entry, &["unknown_0"]), int(ev, d, &entry, &["unknown_1"]), int(ev, d, &entry, &["unknown_2"])];
+                let bytes = [int(ev, d, &entry, &["frequency"]), int(ev, d, &entry, &["gain"]), int(ev, d, &entry, &["q"])];
                 assert_eq!(bytes, [first, 12, 3], "{f}: track {} entry {index}", track + 1);
             }
         }
-        let tail = named(ev, d, &[], &["unknown_100"]);
+        let tail = named(ev, d, &[], &["metronome"]);
         assert_eq!(ev.node(d, &tail).unwrap().offset_bits, 0x100 * 8, "{f}");
-        let values = ["unknown_0", "unknown_4", "unknown_6", "unknown_8", "unknown_flags", "unknown_a", "unknown_b"]
+        let values = ["tempo", "beat", "level", "unknown_8", "unknown_flags", "unknown_a", "unknown_b"]
             .map(|field| int(ev, d, &tail, &[field]));
         assert_eq!(values, [120, 4, 50, 0, 2, 27, 0], "{f}");
 

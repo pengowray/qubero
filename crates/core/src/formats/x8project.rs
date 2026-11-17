@@ -12,10 +12,11 @@
 //! compared with 127 files an X8 recorded. Tascam does not document the
 //! file. Where the firmware's use of a field was not traced, the field is
 //! named `unknown` with its offset, and its note gives the range the
-//! firmware's mixer range table allows and the values in the 127 files. Two
-//! parts are named by inference only, and their notes say so: the six
-//! 32-byte blocks at 0x40 have the shape of a 4-band EQ, and the 12 bytes at
-//! 0x100 may be reverb settings.
+//! firmware's mixer range table allows and the values in the 127 files.
+//! The six 32-byte blocks at 0x40 are each track's 4-band EQ, and the 12
+//! bytes at 0x100 are the metronome's settings. Both were read from the
+//! firmware's code and tables. Every one of the 127 files has the default
+//! values there, so no file has confirmed a value other than a default.
 //!
 //! Nothing in the file is a signature. [`is_project`] recognises a file by
 //! its length of exactly 268 bytes and by every field with a known range
@@ -108,8 +109,8 @@ pub fn x8project() -> Template {
                 ("unknown_37", T::u8()),
                 ("unknown_38", T::u32(Little)),
                 ("unknown_3c", T::u32(Little)),
-                ("track_blocks", T::array(track_block(), E::lit(TRACKS as i128))),
-                ("unknown_100", block_at_100()),
+                ("eq", T::array(track_eq(), E::lit(TRACKS as i128))),
+                ("metronome", metronome()),
             ],
         )
         .field_valid("version", Valid::AnyOf(vec![E::lit(0), E::lit(1)]))
@@ -163,12 +164,12 @@ pub fn x8project() -> Template {
             "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
         )
         .field_doc(
-            "track_blocks",
-            "One 32-byte block for each of tracks 1 to 6, in track order. A block's layout, four 4-byte entries and then 16 zero bytes, suggests the settings of a 4-band EQ, but the meaning of its bytes was not traced. The firmware saves these blocks from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
+            "eq",
+            "The 4-band EQ of each of tracks 1 to 6, in track order, 32 bytes each. The firmware saves these from the recorder's settings only in apps 9, 10 and 11; a take from another app has the default values, or the values of the project that was open. All 127 files compared have the default values.",
         )
         .field_doc(
-            "unknown_100",
-            "Twelve bytes whose use was not traced. They may be reverb settings. The firmware saves them from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
+            "metronome",
+            "The metronome's settings, 12 bytes. The firmware saves them from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
         ),
     )
 }
@@ -195,45 +196,63 @@ fn unknown_entry() -> T {
     T::structure("X8UnknownEntry", vec![("unknown_0", T::u8()), ("unknown_1", T::u8()), ("unknown_2", T::u8()), ("unknown_3", T::u8())])
 }
 
-/// One track's 32-byte block at 0x40 and after.
-fn track_block() -> T {
-    T::structure("X8TrackBlock", vec![("entries", T::array(entry(), E::lit(4))), ("unused", T::bytes(E::lit(16)))])
+/// The EQ's gain steps: 0 is -12 dB, 12 is 0 dB and 24 is 12 dB.
+const MAX_EQ_GAIN: u8 = 24;
+/// The EQ's Q steps.
+const EQ_Q: &[(i128, &str)] = &[(0, "0.25"), (1, "0.5"), (2, "1"), (3, "2"), (4, "4"), (5, "8"), (6, "16")];
+
+/// One track's EQ: four bands, then 16 bytes the firmware leaves at 0.
+fn track_eq() -> T {
+    T::structure("X8TrackEq", vec![("bands", T::array(eq_band(), E::lit(4))), ("unused", T::bytes(E::lit(16)))])
         .field_doc(
-            "entries",
-            "Four 4-byte entries. The default values of their first three bytes are 16, 12, 3 in the first entry, 32, 12, 3 in the second and third entries, and 16, 12, 3 in the fourth entry.",
+            "bands",
+            "Bands 1 to 4, 4 bytes each. The defaults are 400 Hz, 1,700 Hz, 1,700 Hz and 5,500 Hz, each with 0 dB of gain and a Q of 2.",
         )
         .field_doc("unused", "Sixteen bytes that are zero in the default values and in all 127 files compared.")
 }
 
-/// One of a track block's four entries.
-fn entry() -> T {
-    T::structure("X8TrackBlockEntry", vec![("unknown_0", T::u8()), ("unknown_1", T::u8()), ("unknown_2", T::u8()), ("padding", T::u8())])
-        .field_doc("unknown_0", "Not traced. The default is 16 in a block's first and fourth entries and 32 in its second and third entries.")
-        .field_doc("unknown_1", "Not traced. The default is 12.")
-        .field_doc("unknown_2", "Not traced. The default is 3.")
-        .field_doc("padding", "A byte that is 0 in the default values and in all 127 files compared.")
+/// One EQ band.
+fn eq_band() -> T {
+    T::structure(
+        "X8EqBand",
+        vec![("frequency", T::u8()), ("gain", T::u8()), ("q", T::enumeration("X8EqQ", T::u8(), EQ_Q)), ("padding", T::u8())],
+    )
+    .field_valid("gain", Valid::Max(E::lit(MAX_EQ_GAIN)))
+    .field_doc(
+        "frequency",
+        "The band's frequency, as an index into the firmware's table of 64 frequencies from 32 Hz to 18,000 Hz. Bands 1 to 3 count from the table's start, so 16 is 400 Hz and 32 is 1,700 Hz. Band 4 counts from the table's 33rd entry, so 16 is 5,500 Hz. The default is 16 in bands 1 and 4, and 32 in bands 2 and 3.",
+    )
+    .field_doc("gain", "The band's gain in steps of 1 dB: 0 is -12 dB, 12 is 0 dB and 24 is 12 dB. The default is 12.")
+    .field_doc("q", "The band's Q: 0.25, 0.5, 1, 2, 4, 8 or 16. The default is 2.")
+    .field_doc("padding", "A byte that is 0 in the default values and in all 127 files compared.")
 }
 
-/// The 12 bytes at 0x100.
-fn block_at_100() -> T {
+/// The metronome's settings, at 0x100.
+fn metronome() -> T {
     T::structure(
-        "X8UnknownBlock",
+        "X8Metronome",
         vec![
-            ("unknown_0", T::u32(Little)),
-            ("unknown_4", T::u16(Little)),
-            ("unknown_6", T::u16(Little)),
+            ("tempo", T::u32(Little)),
+            ("beat", T::u16(Little)),
+            ("level", T::u16(Little)),
             ("unknown_8", T::u8()),
             ("unknown_flags", T::u8()),
             ("unknown_a", T::u8()),
             ("unknown_b", T::u8()),
         ],
     )
-    .field_doc("unknown_0", "Not traced. The default is 120.")
-    .field_doc("unknown_4", "Not traced. The default is 4.")
-    .field_doc("unknown_6", "Not traced. The default is 50.")
-    .field_doc("unknown_8", "Not traced. The default is 0.")
-    .field_doc("unknown_flags", "A flag byte. The meaning of its bits was not traced. The default is 2.")
-    .field_doc("unknown_a", "Not traced. The default is 27.")
+    .field_doc("tempo", "The tempo in beats per minute, from 20 to 250. The default is 120. The firmware uses the low 16 bits.")
+    .field_doc("beat", "The number of beats in a bar, from 1 to 9. The default is 4.")
+    .field_doc("level", "The metronome's level, from 0 to 100. The default is 50.")
+    .field_doc("unknown_8", "A metronome setting from 0 to 2. Its meaning was not traced. The default is 0.")
+    .field_doc(
+        "unknown_flags",
+        "Three metronome settings in one byte: bit 0 is a setting of 0 or 1, bit 1 is another, and bits 2 and 3 hold a setting from 0 to 2. Their meanings were not traced. The default is 2, which is bit 1 alone.",
+    )
+    .field_doc(
+        "unknown_a",
+        "A metronome setting from 0 to 47. Its meaning was not traced. When the number of beats is set, the firmware sets this byte to the number of beats plus 23, so the default is 27.",
+    )
     .field_doc("unknown_b", "Not traced. The default is 0.")
 }
 
@@ -299,15 +318,15 @@ pub(crate) mod tests {
         let third = [channels.clone(), vec![2]].concat();
         assert_eq!(ev.node(d, &third).unwrap().offset_bits, 0x18 * 8);
         assert_eq!((int(ev, d, &third, &["level"]), int(ev, d, &third, &["pan"])), (64, 40));
-        let blocks = ev.child_named(d, &[], "track_blocks").unwrap().unwrap();
+        let blocks = ev.child_named(d, &[], "eq").unwrap().unwrap();
         let last = [blocks.clone(), vec![5]].concat();
         assert_eq!(ev.node(d, &last).unwrap().offset_bits, 0xe0 * 8);
         assert_eq!(ev.node(d, &last).unwrap().size_bits, 0x20 * 8);
         let second_entry = [last.clone(), vec![0, 1]].concat();
-        assert_eq!(int(ev, d, &second_entry, &["unknown_0"]), 32);
-        let tail = ev.child_named(d, &[], "unknown_100").unwrap().unwrap();
+        assert_eq!(int(ev, d, &second_entry, &["frequency"]), 32);
+        let tail = ev.child_named(d, &[], "metronome").unwrap().unwrap();
         assert_eq!(ev.node(d, &tail).unwrap().offset_bits, 0x100 * 8);
-        assert_eq!(int(ev, d, &tail, &["unknown_0"]), 120);
+        assert_eq!(int(ev, d, &tail, &["tempo"]), 120);
         assert_eq!(int(ev, d, &tail, &["unknown_a"]), 27);
     }
 
