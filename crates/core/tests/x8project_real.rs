@@ -2,9 +2,11 @@
 //! beside each take's WAV files, read with the `x8project` template.
 //!
 //! Every file has to be recognised from its bytes alone, read to its last
-//! byte, and pass every range check the template declares. The fields the
-//! firmware always writes the same way are compared with the firmware's
-//! defaults. One take, `260430_0070`, is compared with what is known of it:
+//! byte, and pass every range check the template declares. The six track
+//! blocks and the 12 bytes at 0x100 are compared with the firmware's default
+//! values, which all 127 files the test was written against have there. A
+//! take recorded in app 9, 10 or 11 can have other values there, and this
+//! test would fail on it. One take, `260430_0070`, is compared with what is known of it:
 //! its WAV files hold 157.7 seconds of audio.
 //!
 //! The files are not in the sample collection that is kept beside the
@@ -107,14 +109,14 @@ fn every_project_file_is_recognised_and_read_whole() {
             }
         }
 
-        // The parts every file has the firmware's default values in.
+        // The firmware's default values in the track blocks and at 0x100.
         let blocks = named(ev, d, &[], &["track_blocks"]);
         assert_eq!(ev.node(d, &blocks).unwrap().offset_bits, 0x40 * 8, "{f}");
         for track in 0..6 {
-            for (band, first) in [16, 32, 32, 16].into_iter().enumerate() {
-                let entry = [blocks.clone(), vec![track, 0, band]].concat();
+            for (index, first) in [16, 32, 32, 16].into_iter().enumerate() {
+                let entry = [blocks.clone(), vec![track, 0, index]].concat();
                 let bytes = [int(ev, d, &entry, &["unknown_0"]), int(ev, d, &entry, &["unknown_1"]), int(ev, d, &entry, &["unknown_2"])];
-                assert_eq!(bytes, [first, 12, 3], "{f}: track {} entry {band}", track + 1);
+                assert_eq!(bytes, [first, 12, 3], "{f}: track {} entry {index}", track + 1);
             }
         }
         let tail = named(ev, d, &[], &["unknown_100"]);

@@ -9,10 +9,10 @@
 //!
 //! The layout was read from the recorder's V2.03 firmware, which writes the
 //! file at the end of a take and reads it when the take is opened, and it was
-//! compared with 117 files an X8 recorded. Tascam does not document the
+//! compared with 127 files an X8 recorded. Tascam does not document the
 //! file. Where the firmware's use of a field was not traced, the field is
 //! named `unknown` with its offset, and its note gives the range the
-//! firmware's mixer range table allows and the values in the 117 files. Two
+//! firmware's mixer range table allows and the values in the 127 files. Two
 //! parts are named by inference only, and their notes say so: the six
 //! 32-byte blocks at 0x40 have the shape of a 4-band EQ, and the 12 bytes at
 //! 0x100 may be reverb settings.
@@ -41,11 +41,11 @@ const MAX_PERCENT: u8 = 100;
 const MAX_MS_DECODE: u8 = 3;
 
 /// The recording apps whose number is confirmed. The X8 has other apps, and
-/// one of the 117 files has 5 here, but only MANUAL's number was matched to
+/// one of the 127 files has 5 here, but only MANUAL's number was matched to
 /// its name.
 const APPS: &[(i128, &str)] = &[(2, "MANUAL")];
 
-/// The MS DECODE setting, by the names the recorder's screen uses.
+/// The MS DECODE setting's values.
 const MS_DECODE: &[(i128, &str)] = &[(0, "OFF"), (1, "INPUT 1-2"), (2, "INPUT 3-4"), (3, "INPUT 5-6")];
 
 /// Whether a file is an X8 project file. The file has no signature, so every
@@ -125,50 +125,50 @@ pub fn x8project() -> Template {
         .field_doc("length_seconds", "The length of the take in whole seconds: the number of audio frames divided by the sample rate, with the fraction dropped.")
         .field_doc(
             "recording_app",
-            "The number of the recording app the take was made with. 2 is MANUAL. The firmware writes 9 for apps 9, 10 and 11. The names of the apps numbered 1, 3, 4, 5 and 6 are not confirmed. Of the 117 files compared, 116 have 2 and 1 has 5.",
+            "The number of the recording app the take was made with. 2 is MANUAL. The firmware writes 9 for apps 9, 10 and 11. The names of the apps numbered 1, 3, 4, 5 and 6 are not confirmed. Of the 127 files compared, 126 have 2 and 1 has 5.",
         )
-        .field_doc("file_mode", "A file mode setting. Its values were not traced. All 117 files compared have 3.")
-        .field_doc("unknown_0a", "Not traced. All 117 files compared have 0.")
-        .field_doc("unknown_0b", "Not traced. All 117 files compared have 0.")
+        .field_doc("file_mode", "A file mode setting. Its values were not traced. All 127 files compared have 3.")
+        .field_doc("unknown_0a", "Not traced. All 127 files compared have 0.")
+        .field_doc("unknown_0b", "Not traced. All 127 files compared have 0.")
         .field_doc("ms_decode", "The MS DECODE setting: OFF, or the pair of inputs whose mid-side signal the mixer decodes to left and right.")
         .field_doc(
             "ms_decode_width",
             "The MS decode width, from 0 to 100. The default is 50. The firmware uses this value as an index into its table of mid gains, and 100 minus this value as an index into its table of side gains.",
         )
-        .field_doc("unknown_0e", "Not traced. The firmware allows 0 to 100, and the default is 100. All 117 files compared have 100.")
-        .field_doc("unknown_0f", "Not traced. All 117 files compared have 0.")
+        .field_doc("unknown_0e", "Not traced. The firmware allows 0 to 100, and the default is 100. All 127 files compared have 100.")
+        .field_doc("unknown_0f", "Not traced. All 127 files compared have 0.")
         .field_doc("channels", "The mixer channels of tracks 1 to 6, in track order, 4 bytes each.")
         .field_doc(
             "unknown_entries",
-            "Two 4-byte entries after the six mixer channels. Their use was not traced. In all 117 files compared, the first entry is 97, 0, 0, 0 and the second is 97, 40, 0, 0. If the first two bytes are a level and a pan, as they are in a mixer channel, those values are the default level with pan fully left, and the default level with pan fully right.",
+            "Two 4-byte entries after the six mixer channels. Their use was not traced. In all 127 files compared, the first entry is 97, 0, 0, 0 and the second is 97, 40, 0, 0. If the first two bytes are a level and a pan, as they are in a mixer channel, those values are the default level with pan fully left, and the default level with pan fully right.",
         )
         .field_doc(
             "master_level",
-            "The mixer's master level, from 0 to 127. The 117 files compared have 97, 100 or 113. The value's unit was not traced; a channel's level, which has the same range, is an index into a gain table.",
+            "The mixer's master level, from 0 to 127. The 127 files compared have 97, 100 or 113. The value's unit was not traced; a channel's level, which has the same range, is an index into a gain table.",
         )
-        .field_doc("unknown_31", "Not traced. All 117 files compared have 70.")
-        .field_doc("unknown_32", "A setting that is 0 or 1. Its meaning was not traced. Of the 117 files compared, 78 have 0 and 39 have 1.")
-        .field_doc("unknown_33", "Not traced. All 117 files compared have 0.")
-        .field_doc("unused", "Three bytes the firmware does not write. All 117 files compared have zeros.")
+        .field_doc("unknown_31", "Not traced. All 127 files compared have 70.")
+        .field_doc("unknown_32", "A setting that is 0 or 1. Its meaning was not traced. Of the 127 files compared, 86 have 0 and 41 have 1.")
+        .field_doc("unknown_33", "Not traced. All 127 files compared have 0.")
+        .field_doc("unused", "Three bytes the firmware does not write. All 127 files compared have zeros.")
         .field_doc(
             "unknown_37",
-            "Not traced. The firmware copies this byte from the recorder's state, or keeps the value from the project that was open. All 117 files compared have 0.",
+            "Not traced. The firmware copies this byte from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
         )
         .field_doc(
             "unknown_38",
-            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 117 files compared have 0.",
+            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
         )
         .field_doc(
             "unknown_3c",
-            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 117 files compared have 0.",
+            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
         )
         .field_doc(
             "track_blocks",
-            "One 32-byte block for each of tracks 1 to 6, in track order. A block's layout, four 4-byte entries and then 16 zero bytes, suggests the settings of a 4-band EQ, but the meaning of its bytes was not traced. The firmware saves these blocks from the recorder's settings only in apps 9, 10 and 11. All 117 files compared have the default values.",
+            "One 32-byte block for each of tracks 1 to 6, in track order. A block's layout, four 4-byte entries and then 16 zero bytes, suggests the settings of a 4-band EQ, but the meaning of its bytes was not traced. The firmware saves these blocks from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
         )
         .field_doc(
             "unknown_100",
-            "Twelve bytes whose use was not traced. They may be reverb settings. The firmware saves them from the recorder's settings only in apps 9, 10 and 11. All 117 files compared have the default values.",
+            "Twelve bytes whose use was not traced. They may be reverb settings. The firmware saves them from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
         ),
     )
 }
@@ -184,7 +184,7 @@ fn channel() -> T {
         .field_doc("pan", "The track's pan in the mix, from 0 to 40: 0 is fully left, 20 is centre and 40 is fully right.")
         .field_doc(
             "unknown_2",
-            "Not traced. The firmware allows 0 to 100. The byte's position in the mixer channel suggests a send level. All 117 files compared have 0.",
+            "Not traced. The firmware allows 0 to 100. The byte's position in the mixer channel suggests a send level. All 127 files compared have 0.",
         )
         .field_doc("out_of_mix", "1 if the track is left out of the mix, and 0 if the track is in the mix. The firmware uses this flag only in app 6.")
 }
@@ -197,21 +197,21 @@ fn unknown_entry() -> T {
 
 /// One track's 32-byte block at 0x40 and after.
 fn track_block() -> T {
-    T::structure("X8TrackBlock", vec![("bands", T::array(band(), E::lit(4))), ("unused", T::bytes(E::lit(16)))])
+    T::structure("X8TrackBlock", vec![("entries", T::array(entry(), E::lit(4))), ("unused", T::bytes(E::lit(16)))])
         .field_doc(
-            "bands",
-            "Four 4-byte entries. The default values of their first three bytes are 16, 12, 3 in the first entry, 32, 12, 3 in the second and third entries, and 16, 12, 3 in the fourth entry. The name bands is an inference from the block's layout, which suggests a 4-band EQ.",
+            "entries",
+            "Four 4-byte entries. The default values of their first three bytes are 16, 12, 3 in the first entry, 32, 12, 3 in the second and third entries, and 16, 12, 3 in the fourth entry.",
         )
-        .field_doc("unused", "Sixteen bytes that are zero in the default values and in all 117 files compared.")
+        .field_doc("unused", "Sixteen bytes that are zero in the default values and in all 127 files compared.")
 }
 
 /// One of a track block's four entries.
-fn band() -> T {
-    T::structure("X8TrackBand", vec![("unknown_0", T::u8()), ("unknown_1", T::u8()), ("unknown_2", T::u8()), ("padding", T::u8())])
+fn entry() -> T {
+    T::structure("X8TrackBlockEntry", vec![("unknown_0", T::u8()), ("unknown_1", T::u8()), ("unknown_2", T::u8()), ("padding", T::u8())])
         .field_doc("unknown_0", "Not traced. The default is 16 in a block's first and fourth entries and 32 in its second and third entries.")
         .field_doc("unknown_1", "Not traced. The default is 12.")
         .field_doc("unknown_2", "Not traced. The default is 3.")
-        .field_doc("padding", "A byte that is 0 in the default values and in all 117 files compared.")
+        .field_doc("padding", "A byte that is 0 in the default values and in all 127 files compared.")
 }
 
 /// The 12 bytes at 0x100.
@@ -303,8 +303,8 @@ pub(crate) mod tests {
         let last = [blocks.clone(), vec![5]].concat();
         assert_eq!(ev.node(d, &last).unwrap().offset_bits, 0xe0 * 8);
         assert_eq!(ev.node(d, &last).unwrap().size_bits, 0x20 * 8);
-        let second_band = [last.clone(), vec![0, 1]].concat();
-        assert_eq!(int(ev, d, &second_band, &["unknown_0"]), 32);
+        let second_entry = [last.clone(), vec![0, 1]].concat();
+        assert_eq!(int(ev, d, &second_entry, &["unknown_0"]), 32);
         let tail = ev.child_named(d, &[], "unknown_100").unwrap().unwrap();
         assert_eq!(ev.node(d, &tail).unwrap().offset_bits, 0x100 * 8);
         assert_eq!(int(ev, d, &tail, &["unknown_0"]), 120);
