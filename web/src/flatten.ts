@@ -48,6 +48,16 @@ export const LIST_OPEN_MAX = 64;
  *  that lands evicts one it needs. Past this many items, a structure arrives
  *  closed. One the reader opens still opens. */
 export const OPEN_BUDGET = 50_000;
+/** Chunks of the file the walk can read nodes from before a structure stops
+ *  arriving open. The item count alone misses a walk that cannot finish: a
+ *  Breakthrough Listen HDF5 file's chunk index is 3,500 entries, fewer items
+ *  than `OPEN_BUDGET`, but each entry points into a different 64 KiB chunk of
+ *  the file, and `Doc` keeps 512 chunks. Every chunk that landed started a
+ *  walk that dropped another chunk it needed, so the walk never finished and
+ *  the page was busy for minutes. A quarter of the cache leaves room for what
+ *  the last structure opened inside the budget reads, which is at most a page
+ *  of rows, and for the hex view. */
+export const CHUNK_BUDGET = 128;
 /** Bytes a gap or an opaque field can hold before its value column cannot
  *  show them, which is when the bytes arrive as a scrolling dump under the
  *  row instead of behind a control. Sixteen is a line of the dump and the
@@ -279,6 +289,12 @@ export type FlatOptions = {
   readonly fileBits?: number;
   /** `OPEN_BUDGET`, for a test that wants a small one. */
   readonly openBudget?: number;
+  /** How big a chunk of the file is, when the file is fetched in chunks and
+   *  only some of them are held. Absent for bytes that are all in memory,
+   *  such as an unpacked stream. */
+  readonly chunkBytes?: number | undefined;
+  /** `CHUNK_BUDGET`, for a test that wants a small one. */
+  readonly chunkBudget?: number;
 };
 
 export type Flattened = {
@@ -287,6 +303,9 @@ export type Flattened = {
    *  chunks the source wanted have arrived. */
   readonly pending: boolean;
   readonly reachedBytes: number;
+  /** How many chunks of the file the walk read nodes from. Zero without
+   *  `chunkBytes`. */
+  readonly chunks: number;
 };
 
 export function pathKey(path: readonly number[]): string {
@@ -401,6 +420,10 @@ class Walk {
   readonly page: number;
   readonly sectionListMax: number;
   readonly openBudget: number;
+  readonly chunkBudget: number;
+  /** The chunks of the file that the nodes read so far are in, when the file
+   *  is fetched in chunks. */
+  readonly chunks = new Set<number>();
   /** Items ahead of this walk in the list, when it walks one fold of a list
    *  already made. The budget counts from the top of the list, so a fold
    *  walked again opens what the whole walk would have. */
@@ -420,6 +443,7 @@ class Walk {
     this.page = opts.page ?? PAGE;
     this.sectionListMax = opts.sectionListMax ?? SECTION_LIST_MAX;
     this.openBudget = opts.openBudget ?? OPEN_BUDGET;
+    this.chunkBudget = opts.chunkBudget ?? CHUNK_BUDGET;
   }
 
   /** Whether a fold is open: what the reader did, or failing that what the
@@ -427,7 +451,15 @@ class Walk {
   isOpen(key: string, arrivesOpen: boolean): boolean {
     if (this.state.closed.has(key)) return false;
     if (this.state.open.has(key)) return true;
-    return arrivesOpen && this.before + this.items.length < this.openBudget;
+    return arrivesOpen && this.before + this.items.length < this.openBudget && this.chunks.size < this.chunkBudget;
+  }
+
+  /** Note which chunks of the file `nodes` are in. Only the file's own nodes
+   *  count: an unpacked stream is all in memory. */
+  private count(nodes: readonly TemplateNode[]): void {
+    const size = this.opts.chunkBytes;
+    if (size === undefined) return;
+    for (const n of nodes) if (n.space === 0) this.chunks.add(Math.floor(n.offset_bits / 8 / size));
   }
 
   /** The strip under an item, when its bytes are showing: because the reader
@@ -472,12 +504,22 @@ class Walk {
   kids(path: readonly number[], count: number): Slice | null {
     const { from, to } = this.window(path, count);
     const reply = this.src.children(path, from, to);
-    if (reply.status === "ok") return { from, nodes: reply.node };
+    if (reply.status === "ok") {
+      this.count(reply.node);
+      return { from, nodes: reply.node };
+    }
     if (reply.status === "error") return { from, nodes: [] };
     this.pending = true;
     this.reachedBytes = Math.max(this.reachedBytes, reply.reachedBytes);
+    // Waiting on bytes is waiting on at least one chunk the walk has not
+    // counted yet, since the nodes it is in have not come back. Counted as
+    // one, under a number no real chunk has.
+    if (this.opts.chunkBytes !== undefined) this.chunks.add(-1 - this.waits++);
     return null;
   }
+
+  /** Replies that were pending, for `kids` to number them. */
+  private waits = 0;
 
   push(item: Item): void {
     this.items.push(item);
@@ -507,8 +549,8 @@ class Walk {
 export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions = {}): Flattened {
   const w = new Walk(src, state, opts);
   const root = src.node([]);
-  if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
-  if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
+  if (root.status === "error") return { items: [], pending: false, reachedBytes: 0, chunks: 0 };
+  if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes, chunks: 0 };
   w.fileBits = Math.max(root.node.size_bits, opts.fileBits ?? 0);
   // Above the content card rather than below it: a card is four hundred pixels
   // of picture, and a control under one is a control off the first screenful.
@@ -522,10 +564,10 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   const kids = w.kids([], root.node.child_count);
   if (kids === null) {
     w.waiting([], 0, root.node);
-    return { items: w.items, pending: true, reachedBytes: w.reachedBytes };
+    return { items: w.items, pending: true, reachedBytes: w.reachedBytes, chunks: w.chunks.size };
   }
   sections(w, [], root.node, kids.nodes, kids.from);
-  return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes };
+  return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes, chunks: w.chunks.size };
 }
 
 /** A stretch of the list to replace, and what to put there. `from` to `to` is

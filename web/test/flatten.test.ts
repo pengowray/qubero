@@ -1265,3 +1265,98 @@ test("a row that says all that is in it arrives shut, and opens when asked", () 
   // The dict is a structure whose row says nothing, and the caller said so.
   assert.ok(shutItems.some((i) => i.kind === "row" && i.node.name === "entry"));
 });
+
+/**
+ * A source that holds the file the way `Doc` does: in 64 KiB chunks, at most
+ * `capacity` of them, the one read longest ago dropped first. As in the core,
+ * a reply needs the chunks its plain values are in and answers pending until
+ * they are held; the chunk a structure or a run of bytes starts in is only
+ * wanted for its preview, and is fetched without holding the reply up.
+ */
+function cachedSource(root: Fixture, capacity: number) {
+  const CHUNK = 64 * 1024;
+  const held = new Map<number, number>();
+  let clock = 0;
+  const asked = new Set<number>();
+  const fetched = new Map<number, number>();
+  const inner = source(root);
+  const src: TreeSource = {
+    node: (path) => inner.node(path),
+    children(path, from, to) {
+      const reply = inner.children(path, from, to);
+      if (reply.status !== "ok") return reply;
+      let ready = true;
+      for (const n of reply.node) {
+        const c = Math.floor(n.offset_bits / 8 / CHUNK);
+        if (held.has(c)) held.set(c, ++clock);
+        else {
+          asked.add(c);
+          if (!n.composite && n.kind !== "bytes") ready = false;
+        }
+      }
+      return ready ? reply : { status: "pending", reachedBytes: 0 };
+    },
+  };
+  const land = (): void => {
+    for (const c of asked) {
+      fetched.set(c, (fetched.get(c) ?? 0) + 1);
+      held.set(c, ++clock);
+      while (held.size > capacity) {
+        const oldest = [...held].reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+        held.delete(oldest);
+      }
+    }
+    asked.clear();
+  };
+  // The root's own chunk is read before anything else.
+  held.set(0, 0);
+  return { src, land, fetched, asked };
+}
+
+test("a walk over a tree spread across the file settles inside the chunk cache", () => {
+  // The chunk index of a Breakthrough Listen HDF5 file: 64 b-tree nodes, one
+  // every 3 MB, each with 55 entries, and each entry pointing at a chunk of
+  // data 56 KB long somewhere else in the file. No list is long enough to
+  // arrive closed, and the items come to fewer than OPEN_BUDGET, so opened
+  // whole the walk reads a node in 3,584 different chunks of the file. The
+  // page holds 512, so each round of the walk dropped chunks it needed again,
+  // and the hex view stayed busy for minutes.
+  const NODE = 3_200_000;
+  const DATA = 57_344;
+  const entry = (n: number, e: number): Spec => ({
+    name: `[${e}]`,
+    bytes: 40,
+    at: n * NODE + 64 + e * 40,
+    kids: [
+      { name: "size", bytes: 4 },
+      { name: "filter_mask", bytes: 4 },
+      { name: "chunk", bytes: DATA, at: n * NODE + 4096 + e * DATA, kids: [{ name: "bytes", bytes: DATA, kind: "bytes" }] },
+    ],
+  });
+  const node = (n: number): Spec => ({
+    name: `[${n}]`,
+    bytes: 64 + 55 * 40,
+    at: n * NODE,
+    kids: [
+      { name: "signature", bytes: 4 },
+      { name: "entries", bytes: 55 * 40, at: n * NODE + 64, kids: Array.from({ length: 55 }, (_, e) => entry(n, e)) },
+    ],
+  });
+  const tree: Spec = { name: "file", bytes: 64 * NODE, kids: [{ name: "index", bytes: 64 * NODE, kids: Array.from({ length: 64 }, (_, n) => node(n)) }] };
+  const root = build(tree, [], 0);
+  const { src, land, fetched, asked } = cachedSource(root, 512);
+  let rounds = 0;
+  let done = flatten(src, emptyState, { fileBits: 64 * NODE * 8, chunkBytes: 64 * 1024 });
+  while ((done.pending || asked.size > 0) && rounds < 100) {
+    land();
+    rounds += 1;
+    done = flatten(src, emptyState, { fileBits: 64 * NODE * 8, chunkBytes: 64 * 1024 });
+  }
+  assert.equal(done.pending, false, `still waiting on chunks after ${rounds} rounds`);
+  const twice = [...fetched].filter(([, n]) => n > 1).length;
+  assert.equal(twice, 0, `${twice} chunks fetched more than once`);
+  // What arrived closed is still there to open: every node of the index has
+  // its row, and one the reader opens shows its entries.
+  const nodes = done.items.filter((i) => (i.kind === "row" || i.kind === "heading") && i.node !== null && /^\[\d+\]$/.test(i.node.name) && i.path.length === 2);
+  assert.equal(nodes.length, 64);
+});

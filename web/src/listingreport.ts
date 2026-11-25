@@ -14,7 +14,8 @@
 import { tagged as el } from "./dom.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
-import { emptyState, flatten, hopPath, OPEN_BUDGET, PAGE, pathKey, refold } from "./flatten.ts";
+import { CHUNK_SIZE } from "./doc.ts";
+import { CHUNK_BUDGET, emptyState, flatten, hopPath, OPEN_BUDGET, PAGE, pathKey, refold } from "./flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.ts";
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { markStrip } from "./bytestrip.ts";
@@ -135,6 +136,8 @@ export class ListingReport {
   private readonly src: TreeSource;
   private state: ListingState = emptyState;
   private items: readonly Item[] = [];
+  /** How many chunks of the file the last whole walk read nodes from. */
+  private chunks = 0;
   /** The rows standing in the document right now, by key. Scrolling a listing
    *  moves the window by an item or two, and drawing all thirty again costs
    *  the browser a fresh layout of every one of them. A row whose key is still
@@ -378,7 +381,9 @@ export class ListingReport {
    *  above it would otherwise push the whole file down under the cursor. */
   private rebuild(): void {
     const anchor = this.anchor();
-    this.items = flatten(this.src, this.state, this.flatOpts()).items;
+    const walked = flatten(this.src, this.state, this.flatOpts());
+    this.items = walked.items;
+    this.chunks = walked.chunks;
     this.segments = this.items
       .filter((i) => i.kind === "heading" && i.level === 0)
       .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
@@ -411,6 +416,7 @@ export class ListingReport {
       formatCard: (node) => formatCardKind(this.doc, node, this.cards),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,
+      chunkBytes: this.doc.isFile ? CHUNK_SIZE : undefined,
       hideMachinery: offersSwitch && !this.showMachinery,
       listingSwitch: offersSwitch ? { key: template, on: this.showMachinery } : null,
     };
@@ -1026,6 +1032,9 @@ export class ListingReport {
     // below it too. Only a whole walk knows what that is.
     const length = this.items.length - (cut.to - cut.from) + cut.items.length;
     if (Math.max(this.items.length, length) >= OPEN_BUDGET) return false;
+    // The same for the chunks of the file the whole walk read: a fold walked
+    // alone does not know how many the folds above it read.
+    if (this.chunks >= CHUNK_BUDGET) return false;
     const top = this.tops[cut.from] ?? 0;
     const was = (this.tops[cut.to] ?? top) - top;
     this.items = [...this.items.slice(0, cut.from), ...cut.items, ...this.items.slice(cut.to)];

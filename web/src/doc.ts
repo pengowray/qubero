@@ -18,7 +18,7 @@ export type SigVerdict = {
   readonly extension: string;
 };
 
-const CHUNK_SIZE = 64 * 1024;
+export const CHUNK_SIZE = 64 * 1024;
 /** How many rounds of fetch-and-ask-again a read of text is given. Each round
  *  is one window of file, so this is a batch of lines spanning a few tens of
  *  megabytes: further than any screenful reaches, and short of forever. */

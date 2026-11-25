@@ -21,6 +21,7 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | A table's rate is a real. `1/TBIN` for GBT's 40.96 us is 24,414.0625 rows a second, and a filterbank sampled every 15 s has a rate below one. | 6ff6e25a |
 | SIGPROC filterbank (`sigproc.rs`) and GUPPI raw voltages (`guppi.rs`), each sniffed, each a table with facts, and both checked against numpy readers (see below). Toolbar: "SIGPROC filterbank file", "GUPPI raw voltages". | 99b18b1a, e42f4dd6 |
 | A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096 channels."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
+| The 200 MB GJ699 `.gpuspec.0002.h5` kept the page busy for minutes after it opened, and going to `2504` took a minute before the offset could even be typed. The listing opened the whole chunk index: 3,500 entries, under the 50,000-item limit, but each in a different 64 KiB chunk of the file, against a cache of 512. Every chunk that landed set off a walk of the listing that dropped another chunk it needed. A structure now arrives closed once the walk has read nodes from 128 chunks (`CHUNK_BUDGET` in `flatten.ts`). In headless Chromium: before, the page did not settle in 300 s; after, the row at `0x2500` is drawn 155 ms after Enter and the page answers again within 1 s, for `0xb001f87` (chunk 3,277) too, and for the 1.17 GB GJ388 file. | see git log |
 
 ### Bit order inside a byte
 
@@ -117,12 +118,6 @@ factor of 2.
 
 ### Things to fix in what was done
 
-- In the web app, the 200 MB GJ699 `.gpuspec.0002.h5` opens, and then
-  going to an offset inside a chunk (`2504`) keeps the page busy for minutes:
-  scripts answer only now and then and nothing is drawn. A build of
-  8b816386, before this work's changes, does the same, so the cause is older.
-  The small `hdf5/filterbank-bitshuffle.h5` shows its chunk panel at once.
-  Not investigated further.
 - The toolbar label is cut with an ellipsis: "PSRFITS searc..." at 800 px,
   and "Hierarchical Dat..." for HDF5 even at 1440 px. The full text is in
   the page.
