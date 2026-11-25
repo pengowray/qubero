@@ -92,6 +92,10 @@
   --panel: #f5f6f8;
   --accent: #2457c5;
   --accent-soft: #dbe5fb;
+  /* Text on an --accent fill: the selected view tab, the selected button of
+     a group, the primary button. White on the light accent (6.5:1); on the
+     dark one, which is light, white measured 2.5:1, so dark text there. */
+  --on-accent: #ffffff;
   --warn: #b4361f;
   /* The other end of --warn: a check that passed, a value that is what the
      format asked for. `.insp-check-result.ok` has wanted this since it was
@@ -99,7 +103,9 @@
      green. Dark enough on this ground to read at 4.5:1, like every other
      colour a word is written in here. */
   --good: #1a7f37;
-  --addr: #737982;
+  /* 4.6:1 on --panel, where the table bar's facts and the inspector's
+     addresses sit, and 5.0:1 on --bg. #737982 was 4.06:1 on --panel. */
+  --addr: #6b7079;
   /* The two tints a code's bits are banded with, one per stored byte, chosen
      on the byte's own address so a byte keeps its tint across every code that
      touches it. Two fills and not one fill against the panel, because a byte
@@ -112,8 +118,10 @@
   /* How much of a field's own colour a zero byte keeps. See `.hv-zero`: the
      number is whatever takes the faintest of the five field colours down to
      the address column's contrast and no further, and that is a different
-     number under a dark ground. */
-  --zero-weight: 85%;
+     number under a dark ground. 89% since --addr went to #6b7079: the
+     faintest, --field-text's, is 5.07:1 on --bg against the address
+     column's 4.98:1. */
+  --zero-weight: 89%;
   --mono: "Roboto Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -127,6 +135,8 @@
     --panel: #1f2126;
     --accent: #7ea2ff;
     --accent-soft: #2a3a63;
+    /* 7.2:1 on the dark --accent. */
+    --on-accent: #17181c;
     --warn: #ff8a6a;
     --good: #3fb950;
     --addr: #858c95;
@@ -184,7 +194,7 @@ button:disabled {
 }
 button.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent);
   padding: 10px 18px;
 }
@@ -1682,7 +1692,7 @@ button.insp-prop-head:hover {
 }
 .seg button[aria-checked="true"] {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent);
 }
 .insp-crumbs {
@@ -2824,7 +2834,7 @@ qubero-spinner svg {
 }
 .tb-view.is-on {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* `display: flex` on a view beats the browser's own rule for `hidden`, so the
@@ -6982,7 +6992,7 @@ summary.kp-group-heading:hover {
 }
 .set-seg button[aria-pressed="true"] {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .set-seg button[aria-disabled="true"] {
   cursor: default;
