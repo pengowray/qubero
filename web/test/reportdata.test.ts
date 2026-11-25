@@ -130,7 +130,7 @@ test("a table's facts go by their own field's name, and numbers get separators a
 
 test("a table's heading in the report says how long its rows last", () => {
   assert.equal(RV.tableHeading(12_000, "sample", 8000), "12,000 samples at 8,000 a second, 1.5 s");
-  assert.equal(RV.tableHeading(26_460_000, "sample", 44_100), "26,460,000 samples at 44,100 a second, 10 min 0 s");
+  assert.equal(RV.tableHeading(26_460_000, "sample", 44_100), "26,460,000 samples at 44,100 a second, 10 min");
 });
 
 test("the kinds a file does not use are counted by the table's two halves", () => {

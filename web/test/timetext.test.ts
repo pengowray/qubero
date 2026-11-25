@@ -19,7 +19,11 @@ test("a length of time is in the unit its size calls for", () => {
 
 test("from a minute up a duration is minutes and seconds, then hours", () => {
   assert.equal(durationText(59.99), "59.99 s");
-  assert.equal(durationText(59.9996), "1 min 0 s");
+  assert.equal(durationText(59.9996), "1 min");
+  assert.equal(durationText(600), "10 min");
+  assert.equal(durationText(3600), "1 h");
+  assert.equal(durationText(3603), "1 h 0 min 3 s");
+  assert.equal(durationText(3660), "1 h 1 min");
   assert.equal(durationText(252), "4 min 12 s");
   assert.equal(durationText(3723), "1 h 2 min 3 s");
   assert.equal(durationText(90_061), "25 h 1 min 1 s");

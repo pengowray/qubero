@@ -62,8 +62,8 @@ function fixed(n: number, decimals: number): string {
 
 /**
  * A length of time on its own: `341.3 ns`, `64 µs`, `12.35 s`, `4 min 12 s`,
- * `1 h 2 min 3 s`. Four significant digits below a minute, whole seconds from
- * a minute up. Empty for something that is not a number.
+ * `10 min`, `1 h 2 min 3 s`. Four significant digits below a minute, whole
+ * seconds from a minute up. Empty for something that is not a number.
  */
 export function durationText(seconds: number): string {
   if (!Number.isFinite(seconds)) return "";
@@ -78,7 +78,10 @@ export function durationText(seconds: number): string {
   const h = Math.floor(whole / 3600);
   const m = Math.floor((whole % 3600) / 60);
   const s = whole % 60;
-  return h > 0 ? `${sign}${h.toLocaleString()} h ${m} min ${s} s` : `${sign}${m} min ${s} s`;
+  // Parts that are zero at the end are left off: `10 min`, not `10 min 0 s`.
+  const hours = `${h.toLocaleString()} h`;
+  if (h > 0) return sign + (s > 0 ? `${hours} ${m} min ${s} s` : m > 0 ? `${hours} ${m} min` : hours);
+  return sign + (s > 0 ? `${m} min ${s} s` : `${m} min`);
 }
 
 /**

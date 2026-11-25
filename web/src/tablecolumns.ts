@@ -99,11 +99,12 @@ export class TableColumns {
   }
 
   /** A heading's hover: what its name stands for, where the name is
-   *  shorthand, then the heading as drawn. */
+   *  shorthand, and then the count of wrong values when the heading has one. */
   hoverOf(c: number): string {
     const text = this.headTextOf(c);
     const title = this.of.plan.columns[c]?.title ?? "";
-    return title === "" ? text : `${title}\n${text}`;
+    if (title === "") return text;
+    return text === this.headingOf(c) ? title : `${title}\n${text}`;
   }
 
   /** Every heading, as an export and a copy want them. */
