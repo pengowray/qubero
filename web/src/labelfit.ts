@@ -31,12 +31,23 @@ export function shorterForms(full: string, short: string | null = null): string[
 }
 
 /**
- * Write the longest of `forms` that fits `el` without being cut, or the
- * shortest when none does. `el` has to take its width from the space around
- * it rather than from its text, as a flex item with a basis of 0 does, or
- * every form fits.
+ * Write the longest of `forms` that fits `el` without being cut. `el` has to
+ * take its width from the space around it rather than from its text, as a
+ * flex item with a basis of 0 does, or every form fits.
+ *
+ * The shortest form sets `el`'s minimum width, so it is never cut either: a
+ * toolbar with a long file name in it gave the file type 14 px, which cut even
+ * `HDF5`. The file name, or the next control along, gives way instead.
  */
 export function fitText(el: HTMLElement, forms: readonly string[]): void {
+  const shortest = forms[forms.length - 1] ?? "";
+  el.textContent = shortest;
+  // The text's own width, whatever the box's: a range measures the run of
+  // text, not the element it is in.
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const min = shortest === "" ? "" : `${Math.ceil(range.getBoundingClientRect().width) + 1}px`;
+  if (el.style.minWidth !== min) el.style.minWidth = min;
   for (const form of forms) {
     el.textContent = form;
     if (el.scrollWidth <= el.clientWidth) return;

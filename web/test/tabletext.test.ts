@@ -22,12 +22,12 @@ test("a line is the row's number and then its values", () => {
 });
 
 test("name, time and addresses go around the values in a fixed order", () => {
-  // Ten rows a second for a minute: the column is in seconds, to two places.
+  // Ten rows a second for a minute: the column is in seconds, to one place.
   const lead: Lead = { named: true, time: timeColumn(600, 10), addresses: true };
   assert.deepEqual(headerCells(["v"], lead), ["#", "name", "time (s)", "v", "Stored at", "Size"]);
   const cells = recordCells(5, row(["9"], { name: "Phase", offsetBits: 0x80, sizeBits: 64 }), 1, lead);
   assert.equal(cells.length, 6);
-  assert.deepEqual(cells.slice(0, 4), ["5", "Phase", (0.5).toLocaleString(undefined, { minimumFractionDigits: 2 }), "9"]);
+  assert.deepEqual(cells.slice(0, 4), ["5", "Phase", (0.5).toLocaleString(), "9"]);
   assert.equal(leadBefore(lead), 3);
   assert.deepEqual(leadKinds(lead), ["index", "name", "time", "at", "size"]);
 });

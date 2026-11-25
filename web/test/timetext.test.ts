@@ -57,6 +57,9 @@ test("a time column has one unit and places enough for each row to differ", () =
   assert.equal(psrfits.unit.symbol, "ms");
   assert.equal(columnTimeText(1, psrfits), "0.064");
   assert.equal(columnTimeText(4095, psrfits), "262.080");
+  // A step that ends is shown to its end: 125 µs is 0.125 ms, not 0.13.
+  const parkes = timeColumn(4096, 8000);
+  assert.equal(columnTimeText(1, parkes), "0.125");
   const guppi = timeColumn(2, 1 / 3.41333333333e-7);
   assert.equal(guppi.unit.symbol, "ns");
   assert.equal(columnTimeText(1, guppi), "341");

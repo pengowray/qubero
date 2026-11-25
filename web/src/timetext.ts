@@ -34,14 +34,22 @@ export function timeUnit(seconds: number): TimeUnit {
 
 /** Fewest places after the point that still tell apart two times `step`
  *  seconds apart, in `unit`: enough for a round step such as an axis tick's.
- *  `exact` adds one more where the step is under one of the unit, so a step
- *  that is not round is shown to two digits: 64 µs in ms is `0.064`, not
- *  `0.06`. */
+ *  `exact` adds places where the step is under one of the unit, so a step
+ *  that is not round still shows: 64 µs in ms is `0.064`, not `0.06`. */
 export function decimalsFor(step: number, unit: TimeUnit, exact = false): number {
   if (!(step > 0) || !Number.isFinite(step)) return 0;
   const inUnit = step / unit.seconds;
   if (inUnit >= 1) return 0;
-  return Math.min(MAX_DECIMALS, Math.ceil(-Math.log10(inUnit) - 1e-9) + (exact ? 1 : 0));
+  const least = Math.ceil(-Math.log10(inUnit) - 1e-9);
+  if (!exact) return Math.min(MAX_DECIMALS, least);
+  // A step that ends within three more places is shown to its end, so 125 µs
+  // in ms is `0.125` and not `0.13`. One that never ends, as 1/44,100 s does,
+  // gets one place more than the least.
+  for (let d = least; d <= least + 3 && d <= MAX_DECIMALS; d++) {
+    const scaled = inUnit * 10 ** d;
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-6) return d;
+  }
+  return Math.min(MAX_DECIMALS, least + 1);
 }
 
 function significant(n: number): string {

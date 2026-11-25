@@ -22,6 +22,9 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | SIGPROC filterbank (`sigproc.rs`) and GUPPI raw voltages (`guppi.rs`), each sniffed, each a table with facts, and both checked against numpy readers (see below). Toolbar: "SIGPROC filterbank file", "GUPPI raw voltages". | 99b18b1a, e42f4dd6 |
 | A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096 channels."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
 | The 200 MB GJ699 `.gpuspec.0002.h5` kept the page busy for minutes after it opened, and going to `2504` took a minute before the offset could even be typed. The listing opened the whole chunk index: 3,500 entries, under the 50,000-item limit, but each in a different 64 KiB chunk of the file, against a cache of 512. Every chunk that landed set off a walk of the listing that dropped another chunk it needed. A structure now arrives closed once the walk has read nodes from 128 chunks (`CHUNK_BUDGET` in `flatten.ts`). In headless Chromium: before, the page did not settle in 300 s; after, the row at `0x2500` is drawn 155 ms after Enter and the page answers again within 1 s, for `0xb001f87` (chunk 3,277) too, and for the 1.17 GB GJ388 file. | see git log |
+| Every length of time goes through `web/src/timetext.ts`, which picks ns, µs, ms or s from the value: `TBIN 341.3 ns`, `341.3 ns apart`, `TBIN 64 µs` (the card's `6.4E-05 s` on hover). A whole rate keeps `1/8,000 s`. From a minute up, `4 min 12 s`. It replaced the table bar's spacing, the report's `secondsText`, the value plot's axis and hover, the WAV outline's `4:12` and the APNG frame delay. A table's time column takes the unit its last row calls for: `time (ms)` for a PSRFITS row of 64 µs samples. | see git log |
+| Columns come in groups: SIGPROC `nifs` and PSRFITS `NPOL` (`ColumnGroups` in `template.rs`). With more than one, a column is `IF 2 channel 5` or `pol 2 channel 5`, and its hover is `Intermediate frequency (IF) 2 of 2, channel 5 of 64`. GUPPI raw headers stay `pol 1 real`, with `Polarisation 1, real part` on hover (`TableShape::titles`). | see git log |
+| The toolbar's file type is written shorter rather than cut (`web/src/labelfit.ts`): up to its middle dot, then without a bracketed remark at its end, then up to its first comma, then the template's own name. `PSRFITS search mode`, `HDF5`. The shortest form sets the label's minimum width. | see git log |
 
 ### Bit order inside a byte
 
@@ -118,9 +121,6 @@ factor of 2.
 
 ### Things to fix in what was done
 
-- The toolbar label is cut with an ellipsis: "PSRFITS searc..." at 800 px,
-  and "Hierarchical Dat..." for HDF5 even at 1440 px. The full text is in
-  the page.
 
 - The `DATA` column's `TUNITn` (`Jy` in both Parkes files) is not shown on
   the sample table, on purpose: the samples are the digitiser's levels until
@@ -153,8 +153,9 @@ Read; see Done. Left:
 - `FREQUENCY_START` ... `fchannel` ... `FREQUENCY_END` is read as records,
   and the channel frequencies it lists are not used for column names.
 - A file of 45,056 channels and 4 IFs is a table of 180,224 columns, named
-  `channel 1` to `channel 180,224`: the IF a column belongs to is not in its
-  name. The same is true of PSRFITS `NPOL`.
+  `IF 1 channel 1` to `IF 4 channel 45,056`. PSRFITS `NPOL` names them the
+  same way, `pol 2 channel 5`. The PSRFITS `POL_TYPE` card (`AABBCRCI`) is
+  not read, so a column says `pol 2` and not `BB`.
 - A table both too wide to draw across (over 4,096 columns) and too long to
   turn (over 1,000 rows) is drawn across, and will be slow or fail.
 - `telescope_id` and `machine_id` are numbers, not names.
