@@ -180,6 +180,8 @@ mod rpm;
 mod rtf;
 mod sac;
 mod segy;
+mod sigproc;
+mod guppi;
 mod png;
 mod root;
 pub mod root_streamer;
@@ -328,6 +330,8 @@ pub use rpm::rpm;
 pub use rtf::rtf;
 pub use sac::sac;
 pub use segy::segy;
+pub use sigproc::sigproc;
+pub use guppi::guppi;
 pub use pico8::p8png;
 pub use png::png;
 pub use root::root;
@@ -467,6 +471,10 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("avro", |_| avro()),
     ("ogg", |_| ogg()),
     ("fits", |_| fits()),
+    // Radio telescope files with no FITS or HDF5 around them: a SIGPROC
+    // filterbank, and GUPPI raw voltages.
+    ("sigproc", |_| sigproc()),
+    ("guppi", |_| guppi()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
     ("bgzf", |_| bgzf()),

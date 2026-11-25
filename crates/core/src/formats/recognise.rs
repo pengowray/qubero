@@ -81,6 +81,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // The first card of a FITS header, keyword and all: eight bytes of
     // keyword and the `=` that says it has a value.
     (b"SIMPLE  =", "fits"),
+    // A SIGPROC filterbank: the length of the string `HEADER_START`, and
+    // the string.
+    (sigproc::MAGIC, "sigproc"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
@@ -234,6 +237,9 @@ enum Probe {
 ///    only after everything that does have one has spoken.
 const PROBES: &[Probe] = &[
     Probe::Is("braw", |h, _| is_braw(h)),
+    // GUPPI raw voltages: FITS-style cards with no `SIMPLE` card in front,
+    // and the three that size a block among them before `END`.
+    Probe::Is("guppi", |h, _| guppi::is_guppi(h)),
     Probe::Is("aseprite", |h, _| h.get(4..6) == Some(&[0xe0, 0xa5])),
     Probe::Is("xm", |h, _| h.starts_with(b"Extended Module: ")),
     Probe::Is("it", |h, _| h.starts_with(b"IMPM")),

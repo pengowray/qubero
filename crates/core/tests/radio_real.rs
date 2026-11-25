@@ -6,16 +6,18 @@
 //!
 //! Two sets of files are checked, each against a reference of its own:
 //!
-//! - The small ones in the sample collection (`psrfits/` and
-//!   `hdf5/filterbank-bitshuffle.h5`), against
+//! - The small ones in the sample collection (`psrfits/`, `sigproc/`,
+//!   `guppi/` and `hdf5/filterbank-bitshuffle.h5`), against
 //!   `tests/fixtures/radio/reference.tsv`. `tools/make_radio_samples.py` in
 //!   the collection writes them; the PSRFITS ones are cut from the two
-//!   observations below.
+//!   observations below, and the rest are made from seeded random numbers.
 //! - Whole observations, in `qubero2-extras/radio` beside the checkout or an
 //!   ancestor of it, or wherever `QUBERO_RADIO` points, against the
-//!   `radio_reference.tsv` in that folder: two PSRFITS files and two
-//!   Breakthrough Listen filterbank files in HDF5, 26 MB to 1.2 GB each, too
-//!   large for the collection.
+//!   `radio_reference.tsv` in that folder: two PSRFITS files, two
+//!   Breakthrough Listen filterbank files in HDF5, three Breakthrough Listen
+//!   SIGPROC filterbank files and one GUPPI raw file, 395 bytes to 1.2 GB
+//!   each. The Breakthrough Listen files state no licence, so none of them is
+//!   cut into the collection.
 //!
 //! Without a folder the test that reads it says so and passes.
 
@@ -287,6 +289,178 @@ fn check_h5(doc: &Doc, facts: &[Fact], file: &str, wrong: &mut Vec<String>) -> u
     facts.len()
 }
 
+// --------------------------------------------------------------- SIGPROC
+
+/// A value as the reference writes it: a whole number, a float in the fewest
+/// digits that read back as it, or text.
+fn value_text(ev: &mut Evaluator, doc: &Doc, at: &[usize]) -> String {
+    match ev.node(doc, at).unwrap().value {
+        Value::Float(f) => f.to_string(),
+        Value::Str(s) => s,
+        Value::Composite { .. } => match child(ev, doc, at, "text") {
+            Some(text) => value_text(ev, doc, &text),
+            None => String::new(),
+        },
+        Value::Bytes { .. } => String::new(),
+        other => other.as_int().map(|n| n.to_string()).unwrap_or_else(|| format!("{other:?}")),
+    }
+}
+
+/// `hhmmss.s` as hours, or `ddmmss.s` as degrees.
+fn sexagesimal(v: f64) -> f64 {
+    let a = v.abs();
+    let (whole, minutes, seconds) = ((a / 10_000.0).trunc(), ((a % 10_000.0) / 100.0).trunc(), a % 100.0);
+    (whole + minutes / 60.0 + seconds / 3600.0).copysign(v)
+}
+
+/// What a run's elements are, in the words `same_element` takes: `f32` for
+/// a run of floats, and anything else for the rest.
+fn element_type(ev: &mut Evaluator, doc: &Doc, run: &[usize]) -> &'static str {
+    if ev.node(doc, run).unwrap().type_name.starts_with("f32") { "f32" } else { "" }
+}
+
+/// The header record of a filterbank file whose keyword is `key`.
+fn fil_record(ev: &mut Evaluator, doc: &Doc, key: &str) -> Option<Vec<usize>> {
+    let n = ev.node(doc, &[0]).unwrap().child_count as usize;
+    (0..n).map(|i| vec![0, i]).find(|at| {
+        let k = child(ev, doc, at, "keyword").unwrap();
+        ev.node(doc, &k).unwrap().value == Value::Str(key.into())
+    })
+}
+
+/// Every fact about one SIGPROC filterbank file. Returns how many were
+/// checked.
+fn check_fil(doc: &Doc, facts: &[Fact], file: &str, wrong: &mut Vec<String>) -> usize {
+    let mut ev = Evaluator::new(formats::builtin("sigproc").unwrap());
+    let mut differ = |fact: &Fact, got: String| wrong.push(format!("{file} {} {}: {got}, reference {}", fact.kind, fact.at, fact.value));
+    let samples = vec![1, 0];
+    for fact in facts {
+        match fact.kind.as_str() {
+            "key" => {
+                let (i, key) = fact.at.split_once(',').unwrap();
+                let at = vec![0, i.parse().unwrap()];
+                let k = child(&mut ev, doc, &at, "keyword").unwrap();
+                let got_key = value_text(&mut ev, doc, &k);
+                let v = child(&mut ev, doc, &at, "value").unwrap();
+                let got = value_text(&mut ev, doc, &v);
+                if got_key != key || !same(&got, &fact.value) {
+                    differ(fact, format!("{got_key} {got}"));
+                }
+            }
+            "h5key" => {
+                let mut got = match fil_record(&mut ev, doc, &fact.at) {
+                    Some(at) => {
+                        let v = child(&mut ev, doc, &at, "value").unwrap();
+                        value_text(&mut ev, doc, &v)
+                    }
+                    None => "no such record".into(),
+                };
+                // The filterbank writes a position as `hhmmss.s` and
+                // `ddmmss.s`, and the HDF5 copy as hours and degrees.
+                if matches!(fact.at.as_str(), "src_raj" | "src_dej") {
+                    got = sexagesimal(got.parse().unwrap()).to_string();
+                }
+                if !same(&got, &fact.value) {
+                    differ(fact, got);
+                }
+            }
+            "data" => {
+                let want: Vec<u64> = fact.value.split(',').map(|v| v.parse().unwrap()).collect();
+                let run = ev.node(doc, &samples).unwrap();
+                let shape = ev.table_shape(doc, &samples).unwrap().expect("a table");
+                let got = [run.offset_bits / 8, shape.columns.unwrap_or(0), run.child_count / shape.columns.unwrap_or(1).max(1)];
+                if got[..] != want[..] {
+                    differ(fact, format!("{got:?}"));
+                }
+            }
+            "value" => {
+                let at = step(&samples, fact.at.parse().unwrap());
+                let got = value_text(&mut ev, doc, &at);
+                if !same_element(&got, &fact.value, element_type(&mut ev, doc, &samples)) {
+                    differ(fact, got);
+                }
+            }
+            "sum" => {
+                let [first, count] = numbers(&fact.at)[..] else { panic!("{}", fact.at) };
+                // Each value as the number it is on disk, an f32 widened,
+                // which is what the reference sums.
+                let f32s = element_type(&mut ev, doc, &samples) == "f32";
+                let got: f64 = (first..first + count)
+                    .map(|i| {
+                        let text = value_text(&mut ev, doc, &step(&samples, i));
+                        if f32s { f64::from(text.parse::<f32>().unwrap()) } else { text.parse::<f64>().unwrap() }
+                    })
+                    .sum();
+                if !same(&got.to_string(), &fact.value) {
+                    differ(fact, got.to_string());
+                }
+            }
+            other => panic!("{file}: a {other} fact is not one a filterbank file has"),
+        }
+    }
+    assert_eq!(formats::sniff(&doc_head(doc), doc.len_bits() / 8), Some("sigproc"), "{file}");
+    facts.len()
+}
+
+// ----------------------------------------------------------------- GUPPI
+
+/// The run of values in one channel of one block.
+fn guppi_channel(ev: &mut Evaluator, doc: &Doc, block: usize, channel: usize) -> Vec<usize> {
+    let channels = child(ev, doc, &[0, block, 2], "channels").expect("the channels");
+    let at = step(&step(&channels, channel), 0);
+    assert_eq!(ev.node(doc, &at).unwrap().name, "samples");
+    at
+}
+
+/// Every fact about one GUPPI raw file. Returns how many were checked.
+fn check_raw(doc: &Doc, facts: &[Fact], file: &str, wrong: &mut Vec<String>) -> usize {
+    let mut ev = Evaluator::new(formats::builtin("guppi").unwrap());
+    let mut differ = |fact: &Fact, got: String| wrong.push(format!("{file} {} {}: {got}, reference {}", fact.kind, fact.at, fact.value));
+    for fact in facts {
+        match fact.kind.as_str() {
+            "block" => {
+                let b: usize = fact.at.parse().unwrap();
+                let block = ev.node(doc, &[0, b]).unwrap();
+                let cards = ev.node(doc, &[0, b, 0]).unwrap();
+                let data = ev.node(doc, &[0, b, 2]).unwrap();
+                let got = format!("{},{},{},{}", block.offset_bits / 8, cards.child_count, data.offset_bits / 8, data.size_bits / 8);
+                if got != fact.value {
+                    differ(fact, got);
+                }
+            }
+            "card" => {
+                let (b, key) = fact.at.split_once(',').unwrap();
+                let got = card(&mut ev, doc, b.parse().unwrap(), key).unwrap_or_else(|| "no such card".into());
+                if !same(&got, &fact.value) {
+                    differ(fact, got);
+                }
+            }
+            "sample" => {
+                let [b, c, i] = numbers(&fact.at)[..] else { panic!("{}", fact.at) };
+                let run = guppi_channel(&mut ev, doc, b, c);
+                let got = sample(&mut ev, doc, &run, i);
+                if got.to_string() != fact.value {
+                    differ(fact, got.to_string());
+                }
+            }
+            "sum" => {
+                let [b, c, first, count] = numbers(&fact.at)[..] else { panic!("{}", fact.at) };
+                let run = guppi_channel(&mut ev, doc, b, c);
+                let got: i128 = (first..first + count).map(|i| sample(&mut ev, doc, &run, i)).sum();
+                if got.to_string() != fact.value {
+                    differ(fact, got.to_string());
+                }
+            }
+            other => panic!("{file}: a {other} fact is not one a GUPPI raw file has"),
+        }
+    }
+    // The blocks fill the file.
+    let blocks = ev.node(doc, &[0]).unwrap();
+    assert_eq!(blocks.size_bits, doc.len_bits(), "{file}: the blocks do not fill the file");
+    assert_eq!(formats::sniff(&doc_head(doc), doc.len_bits() / 8), Some("guppi"), "{file}");
+    facts.len()
+}
+
 // ------------------------------------------------------------------ both
 
 /// Read every file a reference names from `dir`, each with the reader its
@@ -303,6 +477,8 @@ fn check_all(dir: &Path, facts: &BTreeMap<String, Vec<Fact>>, wrong: &mut Vec<St
         let n = match path.extension().and_then(|e| e.to_str()) {
             Some("sf") => check_psrfits(&doc, facts, file, wrong),
             Some("h5") => check_h5(&doc, facts, file, wrong),
+            Some("fil") => check_fil(&doc, facts, file, wrong),
+            Some("raw") => check_raw(&doc, facts, file, wrong),
             other => panic!("{file}: no check for a {other:?} file"),
         };
         eprintln!("{file}: {n} facts");

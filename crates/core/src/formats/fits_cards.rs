@@ -76,12 +76,20 @@ const NUMBERED: &[(&str, fn() -> T)] = &[
 /// The card is a window of exactly eighty bytes, so the value's search for a
 /// `/` stops at the end of the line rather than running into the next card.
 pub(super) fn card() -> T {
+    card_reading(&[])
+}
+
+/// A card as [`card`] reads one, with these keywords read as whole numbers as
+/// well. GUPPI raw files write their block headers as FITS cards, with
+/// keywords of their own (`BLOCSIZE`, `OBSNCHAN`) that size the data, and a
+/// FITS file is not changed by a list it never uses.
+pub(super) fn card_reading(numeric: &[&str]) -> T {
     // A keyword that carries a number is told from the five letters it opens
     // with, before the digits. Writing `TFORM1` through `TFORM999` out as
     // cases is what fixed how many columns a table could have.
     let by_prefix: Vec<(i128, T)> =
         NUMBERED.iter().map(|(prefix, body)| (keynum(prefix) >> 24, card_of(body()))).collect();
-    T::sized(E::lit(CARD), T::switch(E::peek(64, Big).div(E::lit(1 << 24)), by_prefix, card_of(named_body())))
+    T::sized(E::lit(CARD), T::switch(E::peek(64, Big).div(E::lit(1 << 24)), by_prefix, card_of(named_body(numeric))))
 }
 
 /// A card with this body: the keyword, the keyword as a number, and the rest.
@@ -109,8 +117,8 @@ fn card_of(body: T) -> T {
 
 /// The body of a card whose whole keyword the standard fixed, picked by that
 /// keyword. Everything else in a header is text.
-fn named_body() -> T {
-    let mut cases: Vec<(String, T)> = NUMERIC.iter().map(|k| ((*k).to_string(), numeric_body())).collect();
+fn named_body(numeric: &[&str]) -> T {
+    let mut cases: Vec<(String, T)> = NUMERIC.iter().chain(numeric).map(|k| ((*k).to_string(), numeric_body())).collect();
     cases.extend(PSRFITS_NUMERIC.iter().map(|k| ((*k).to_string(), maybe_numeric_body())));
     cases.extend(REAL.iter().map(|k| ((*k).to_string(), real_body())));
     cases.extend(LOGICAL.iter().map(|k| ((*k).to_string(), logical_body())));

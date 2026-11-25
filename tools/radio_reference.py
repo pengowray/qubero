@@ -22,6 +22,32 @@ Which reader a file gets is told from its name:
     - `sample`, at `HDU,row,index`: one sample of the row's DATA cell, counted
       from the first sample of the row.
     - `sum`, at `HDU,row,first,count`: the sum of `count` samples from `first`.
+- `.fil`, a SIGPROC filterbank. Read with numpy and `struct`, from the
+  header layout sigproc documents (keyword strings, each a little-endian u32
+  length and its bytes, and a value whose type the keyword fixes). No third
+  party filterbank reader was at hand. Where an `.h5` of the same name is
+  beside it, the HDF5 copy Breakthrough Listen writes of the same header, its
+  attributes are read with h5py as a second reference.
+    - `key`, at `index,keyword`: the header record at that index, and its
+      value as text. A string's value is its text; a mark has none.
+    - `h5key`, at `keyword`: the value of that keyword as the HDF5 copy's
+      attribute says it.
+    - `data`, at `samples`: where the samples start, how many values a time
+      sample has, and how many whole time samples there are, separated by
+      commas.
+    - `value`, at `index`: one value of the samples, counted from the first.
+    - `sum`, at `first,count`: the sum of `count` values from `first`.
+- `.raw`, GUPPI raw voltages. Read with numpy, from the GUPPI block layout:
+  80-byte cards to an `END` card, the header padded to 512 bytes when
+  `DIRECTIO` is 1, then `BLOCSIZE` bytes, channel by channel, each time
+  sample `NPOL` values of `NBITS`, the first value in the top bits of a byte.
+    - `block`, at `block`: where the block starts, how many cards its header
+      has with `END`, where its data starts and how many bytes of data the
+      file has for it, separated by commas.
+    - `card`, at `block,KEYWORD`: a card's value as text, quotes taken off.
+    - `sample`, at `block,channel,index`: one value of a channel, counted
+      from the channel's first.
+    - `sum`, at `block,channel,first,count`: the sum of `count` values.
 - `.h5`, a filterbank in HDF5. Read with h5py and hdf5plugin.
     - `filter`, at the dataset: its filters as `id:client data`, one per
       filter, separated by `;`.
@@ -147,9 +173,132 @@ def h5(path, name, out):
             out("chunk", name, f"data,{i}", f"{info.byte_offset},{info.size},{len(unpacked)},{fnv1a(unpacked):016x},{first}")
 
 
+# ----------------------------------------------------------------- SIGPROC
+
+FIL_INTS = {"telescope_id", "machine_id", "data_type", "nchans", "nbits", "nifs", "nbeams", "ibeam", "nsamples",
+            "barycentric", "pulsarcentric", "nbins"}
+FIL_DOUBLES = {"tstart", "tsamp", "fch1", "foff", "src_raj", "src_dej", "az_start", "za_start", "refdm", "period",
+               "fchannel"}
+FIL_STRINGS = {"source_name", "rawdatafile"}
+FIL_MARKS = {"HEADER_START", "HEADER_END", "FREQUENCY_START", "FREQUENCY_END"}
+
+
+def fil_header(buf):
+    """The header's records as (keyword, value), and where the samples start."""
+    import struct
+
+    at, records = 0, []
+
+    def string():
+        nonlocal at
+        (n,) = struct.unpack_from("<I", buf, at)
+        text = bytes(buf[at + 4:at + 4 + n]).decode("ascii")
+        at += 4 + n
+        return text
+
+    while True:
+        key = string()
+        if key in FIL_MARKS:
+            value = None
+        elif key in FIL_INTS:
+            (value,) = struct.unpack_from("<i", buf, at)
+            at += 4
+        elif key in FIL_DOUBLES:
+            (value,) = struct.unpack_from("<d", buf, at)
+            at += 8
+        elif key in FIL_STRINGS:
+            value = string()
+        elif key == "signed":
+            value = buf[at]
+            at += 1
+        else:
+            sys.exit(f"unknown keyword {key!r}")
+        records.append((key, value))
+        if key == "HEADER_END":
+            return records, at
+
+
+def fil(path, name, out):
+    raw = np.fromfile(path, dtype=np.uint8)
+    records, start = fil_header(raw)
+    for i, (key, value) in enumerate(records):
+        out("key", name, f"{i},{key}", "" if value is None else repr(value) if isinstance(value, float) else value)
+    head = dict(records)
+    per_sample = head["nchans"] * head.get("nifs", 1)
+    nbits = head["nbits"]
+    kind = {32: "<f4", 16: "<u2", 8: "<i1" if head.get("signed") == 1 else "<u1"}[nbits]
+    row_bytes = per_sample * nbits // 8
+    rows = (len(raw) - start) // row_bytes
+    values = raw[start:start + rows * row_bytes].view(kind)
+    out("data", name, "samples", f"{start},{per_sample},{rows}")
+    for i in spread(len(values), 200):
+        v = values[i].item()
+        out("value", name, str(i), repr(v) if isinstance(v, float) else v)
+    for first, count in ((0, min(per_sample, 4096, len(values))), (max(0, len(values) - 4096), min(len(values), 4096))):
+        if count:
+            total = float(np.sum(values[first:first + count], dtype=np.float64)) if kind == "<f4" else int(values[first:first + count].sum(dtype=np.int64))
+            out("sum", name, f"{first},{count}", repr(total) if isinstance(total, float) else total)
+    twin = os.path.splitext(path)[0] + ".h5"
+    if os.path.exists(twin):
+        import h5py
+
+        with h5py.File(twin, "r") as f:
+            for key, value in sorted(f["data"].attrs.items()):
+                if key == "DIMENSION_LABELS":
+                    continue
+                value = value.item() if hasattr(value, "item") else value
+                out("h5key", name, key, repr(value) if isinstance(value, float) else value)
+
+
+# ------------------------------------------------------------------- GUPPI
+
+def guppi(path, name, out):
+    raw = np.memmap(path, dtype=np.uint8, mode="r")
+    at, index = 0, 0
+    while at < len(raw):
+        cards, n = {}, 0
+        while True:
+            card = bytes(raw[at + 80 * n:at + 80 * (n + 1)]).decode("ascii")
+            n += 1
+            if card[:8] == "END     ":
+                break
+            if card[8:10] == "= ":
+                cards[card[:8].strip()] = card[10:].split("/")[0].strip().strip("'").strip()
+        header = 80 * n
+        if int(cards.get("DIRECTIO", "0")) != 0:
+            header = -(-header // 512) * 512
+        blocsize = int(cards["BLOCSIZE"])
+        data = raw[at + header:at + header + blocsize]
+        out("block", name, str(index), f"{at},{n},{at + header},{len(data)}")
+        for key in ("BLOCSIZE", "OBSNCHAN", "NPOL", "NBITS", "TBIN", "CHAN_BW", "OBSFREQ", "DIRECTIO", "PKTIDX", "SRC_NAME"):
+            if key in cards:
+                out("card", name, f"{index},{key}", cards[key])
+        nchan, nbits = int(cards["OBSNCHAN"]), int(cards["NBITS"])
+        per_channel = blocsize // nchan
+        for c in sorted({0, 1, nchan // 2, nchan - 1}):
+            chunk = np.array(data[c * per_channel:(c + 1) * per_channel])
+            if nbits == 8:
+                values = chunk.view(np.int8).astype(np.int64)
+            else:
+                per_byte = 8 // nbits
+                shifts = np.array([8 - nbits * (i + 1) for i in range(per_byte)], dtype=np.uint8)
+                values = ((chunk[:, None] >> shifts) & ((1 << nbits) - 1)).reshape(-1).astype(np.int64)
+            if len(values) == 0:
+                continue
+            for i in spread(len(values), 40):
+                out("sample", name, f"{index},{c},{i}", int(values[i]))
+            for first, count in ((0, min(len(values), 4096)), (len(values) // 2, min(len(values) - len(values) // 2, 4096))):
+                out("sum", name, f"{index},{c},{first},{count}", int(values[first:first + count].sum()))
+        pad = 0
+        if int(cards.get("DIRECTIO", "0")) != 0:
+            pad = -blocsize % 512
+        at += header + blocsize + pad
+        index += 1
+
+
 # ------------------------------------------------------------------- main
 
-READERS = {".sf": psrfits, ".h5": h5}
+READERS = {".sf": psrfits, ".h5": h5, ".fil": fil, ".raw": guppi}
 
 
 def main():
