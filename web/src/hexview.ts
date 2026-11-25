@@ -421,8 +421,10 @@ export class HexView {
    *  and pushes the cursor off has grown rows above it: chips and values for
    *  bytes that arrived after the jump, which a large file sends in pieces.
    *  That frame brings the cursor back. One that starts from somewhere else
-   *  was scrolled, and is left where the scroll put it. */
-  private cursorShown: { readonly topRow: number; readonly topPx: number } | null = null;
+   *  was scrolled, and is left where the scroll put it; one whose cursor has
+   *  moved, or whose view has changed height, is a move or a resize, each of
+   *  which decides for itself what to show. */
+  private cursorShown: { readonly topRow: number; readonly topPx: number; readonly cursor: number; readonly viewH: number } | null = null;
   /** True while `revealCursor` is moving the view, so the frames it draws do
    *  not each start another reveal. */
   private revealing = false;
@@ -2099,7 +2101,7 @@ export class HexView {
     // will immediately be rebuilt when the view is shown through relayout().
     if (this.settling || this.el.hidden || !this.el.isConnected) return;
     const shown = this.cursorShown;
-    const steady = shown !== null && shown.topRow === this.topRow && shown.topPx === this.topPx;
+    const steady = shown !== null && shown.topRow === this.topRow && shown.topPx === this.topPx && shown.cursor === this.cursor;
     this.drawing++;
     try {
       this.draw();
@@ -2110,8 +2112,9 @@ export class HexView {
     // for by a listener while this one was still drawing, and a reveal's
     // own, are part of this one.
     if (this.revealing || this.drawing > 0) return;
-    if (steady && !this.cursorInView()) this.revealCursor();
-    this.cursorShown = this.cursorInView() ? { topRow: this.topRow, topPx: this.topPx } : null;
+    // The height is only known once `draw` has measured it.
+    if (steady && shown.viewH === this.viewH && !this.cursorInView()) this.revealCursor();
+    this.cursorShown = this.cursorInView() ? { topRow: this.topRow, topPx: this.topPx, cursor: this.cursor, viewH: this.viewH } : null;
   }
 
   private draw(): void {
