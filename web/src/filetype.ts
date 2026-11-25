@@ -13,6 +13,7 @@ import type { Doc, Identification, TemplateChoice, TemplateNode, ToolMatch, SigV
 import { OWN_SOURCE } from "./doc.ts";
 import { wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
 import { decide, nameAndVersion, type Answers, type Candidate, type TemplateAnswer } from "./identity.ts";
+import { fitText, shorterForms } from "./labelfit.ts";
 
 
 const IDENTIFYING_MSG = "Identifying file type...";
@@ -549,6 +550,10 @@ export function fileType(): FileType {
   let sigs: SigVerdict | null = null;
   let failed = false;
   let identifying = false;
+  // The ways to write the name, longest first. The toolbar shows the longest
+  // that fits, and picks again when its width changes.
+  let forms: readonly string[] = [];
+  new ResizeObserver(() => fitText(kindLabel, forms)).observe(kindLabel);
 
   const api: FileType = {
     label: kindLabel,
@@ -614,7 +619,14 @@ export function fileType(): FileType {
     // replaces it, and a blank line in the meantime would say nothing.
     else if (answers.file === null) line = UNKNOWN_TYPE_MSG;
     else line = "";
-    kindLabel.textContent = line;
+    // The template's own name for the format goes last, when the name shown
+    // is about the same format: `HDF5` for the rule's "Hierarchical Data
+    // Format (version 5) data".
+    const t = answers.template;
+    const own = id.candidates.find((c) => c.source === "template");
+    const sameFormat = t !== null && t.signatureMismatch !== true && (id.source === "template" || (id.source === "file" && own?.disagrees !== true));
+    forms = shorterForms(line, sameFormat ? templateLabel(t.name) : null);
+    fitText(kindLabel, forms);
     // A name that is only the template's, over a signature the file does not
     // have, is in the warning colour, with no words added: the toolbar has no
     // room for them, and the colour is enough to send a reader to the dialog,
