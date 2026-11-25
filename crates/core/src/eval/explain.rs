@@ -1432,6 +1432,53 @@ impl Evaluator {
                     return Ok(Some(p));
                 }
             }
+            // An object header too long for its first block goes on in a
+            // continuation block, which may go on in another, and the message
+            // may be in any of them, before or after the one that placed the
+            // chunk. The Breakthrough Listen filterbank files keep their
+            // datatype message two continuations down.
+            if self.node(doc, &cur)?.type_name == "Message[]" {
+                if let Some(p) = self.hdf5_continued_part(doc, &cur, Some(idx), &field, 16)? {
+                    return Ok(Some(p));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The path to `field` inside a message of a continuation block of the
+    /// message list `list`, following continuations `depth` deep. `skip` is
+    /// the message of `list` the search came from.
+    fn hdf5_continued_part<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        skip: Option<usize>,
+        field: &[String],
+        depth: usize,
+    ) -> R<Option<Vec<usize>>> {
+        if depth == 0 {
+            return Ok(None);
+        }
+        // `messages` points at the block, and entering it lands on the list
+        // of messages there.
+        let into = ["body", "messages"].map(String::from);
+        for k in 0..self.node(doc, list)?.child_count as usize {
+            let mut block = list.to_vec();
+            block.push(k);
+            if Some(k) == skip || !self.descend(doc, &mut block, &into)? {
+                continue;
+            }
+            for j in 0..self.node(doc, &block)?.child_count as usize {
+                let mut p = block.clone();
+                p.push(j);
+                if self.descend(doc, &mut p, field)? {
+                    return Ok(Some(p));
+                }
+            }
+            if let Some(p) = self.hdf5_continued_part(doc, &block, None, field, depth - 1)? {
+                return Ok(Some(p));
+            }
         }
         Ok(None)
     }
