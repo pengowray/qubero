@@ -899,6 +899,28 @@ button.welcome-crystal {
   background: var(--panel);
   align-content: start;
 }
+/* While the fields are shown the rows start one line of chips down, and the
+   strip stands in that band rather than over the first row: over it, the
+   strip hid the first bytes (fields below the bytes) or the first chips
+   (fields beside them). The band is kept when nothing is carried, so the
+   rows do not jump a line each time a field scrolls past the top edge. Its
+   cover hides the part of the top row scrolled up into it. The height is
+   the one `HexView.fitRows` reserves: a chip line and 2px. */
+.hv-rows.has-pin-band::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: calc(var(--hv-chip-line) + 2px);
+  background: var(--bg);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.hv-rows.has-pin-band .hv-note-pinned {
+  height: calc(var(--hv-chip-line) + 2px);
+  overflow: hidden;
+}
 .hexview.has-notes {
   line-height: 24px;
 }

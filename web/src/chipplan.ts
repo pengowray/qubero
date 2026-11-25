@@ -344,10 +344,11 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
     );
     const reaching = carried.filter((c) => spanEnd(c.span) > first);
     const texts = reaching.map((c) => pinnedText(chipText(c), c, o.reading ?? null));
+    // One line: the band the strip stands in is one line of chips tall.
     const { shown } = chipLayout(
       texts.map((t, i) => chipWidth(carriedName(t.name, reaching[i]), continuedDetail(t.detail), o.measure, reaching[i]?.span.colour !== undefined)),
       o.noteWidth,
-      o.maxLines,
+      1,
     );
     pinned = { entries: reaching, texts, shown };
     // More carried fields than a capped block can hold: the rest are

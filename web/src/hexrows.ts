@@ -215,8 +215,9 @@ export class HexRows {
 
   /** Put the rows at the scroll position: the top row starts above the edge
    *  by however much of it is hidden. */
-  setOffset(topPx: number): void {
-    this.inner.style.transform = topPx === 0 ? "" : `translateY(${-topPx}px)`;
+  setOffset(topPx: number, band = 0): void {
+    const y = band - topPx;
+    this.inner.style.transform = y === 0 ? "" : `translateY(${y}px)`;
   }
 
   /**

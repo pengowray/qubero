@@ -428,6 +428,14 @@ export class HexView {
   private revealing = false;
   /** How many draws are under way, so only the outermost one decides. */
   private drawing = 0;
+  /**
+   * How tall the band at the top of the rows is that the strip of fields
+   * carried down from above stands in: one line of chips, while the fields
+   * are shown, and nothing otherwise. The rows start under it, so the strip
+   * covers none of them. It is there whether or not anything is carried, so
+   * the rows do not move as a field scrolls past the top edge.
+   */
+  private band = 0;
 
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. `atBit`, when there is one, is
@@ -821,6 +829,12 @@ export class HexView {
    * after the rows are made.
    */
   private fitRows(): void {
+    const band = this.showsFields ? this.sizes.chipLine + 2 : 0;
+    if (band !== this.band) {
+      this.band = band;
+      this.fit = null;
+      this.rowsEl.classList.toggle("has-pin-band", band > 0);
+    }
     if (this.fit !== null) {
       this.grid.ensure(this.visibleRows, this.dragging === null);
       return;
@@ -839,7 +853,7 @@ export class HexView {
       chipLine: px("--hv-chip-line", 22),
       valLine: px("--hv-val-line", 18),
     };
-    this.viewH = this.rowsEl.clientHeight;
+    this.viewH = Math.max(0, this.rowsEl.clientHeight - this.band);
     // One more than fills the space: the top row is usually cut off by the
     // scroll position, and without the spare there would be a strip of nothing
     // at the bottom for however much of it is above the edge.
@@ -1028,7 +1042,7 @@ export class HexView {
     if (cell === undefined) return false;
     const c = cell.getBoundingClientRect();
     const box = this.rowsEl.getBoundingClientRect();
-    return c.height > 0 && c.top >= box.top - 0.5 && c.bottom <= box.bottom + 0.5;
+    return c.height > 0 && c.top >= box.top + this.band - 0.5 && c.bottom <= box.bottom + 0.5;
   }
 
   /** How far a page key moves, in pixels: everything on screen but nothing
@@ -1423,10 +1437,11 @@ export class HexView {
     if (d === null) return;
     const r = this.rowsEl.getBoundingClientRect();
     const before = this.scrollY;
-    const above = d.y < r.top;
+    const top = r.top + this.band;
+    const above = d.y < top;
     const below = d.y > r.bottom;
     if (above || below) {
-      const over = above ? r.top - d.y : d.y - r.bottom;
+      const over = above ? top - d.y : d.y - r.bottom;
       const step = Math.min(8, 1 + Math.floor(over / 24)) * this.rowHeight;
       const at = this.ledger.rowAtY(Math.max(0, Math.min(this.maxScrollY, before + (above ? -step : step))));
       this.topRow = at.row;
@@ -1444,7 +1459,7 @@ export class HexView {
     // Pinned to the last row rather than the bottom edge: the rows do not
     // always fill the space, and a point in the slack under them is nowhere.
     const last = this.grid.lastRow()?.getBoundingClientRect().bottom ?? r.bottom;
-    const y = Math.min(r.bottom - 1, last - 1, Math.max(r.top + 1, d.y));
+    const y = Math.min(r.bottom - 1, last - 1, Math.max(top + 1, d.y));
     const hit = this.hitAt(d.x, y, d.pane);
     const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;
     const focus = hit === null ? 0 : hit.bit >= d.anchor ? hit.bit + hit.unit : hit.bit;
@@ -2046,7 +2061,7 @@ export class HexView {
   }
 
   private finish(real: readonly number[], trackH: number, f: Frame): void {
-    this.grid.setOffset(this.topPx);
+    this.grid.setOffset(this.topPx, this.band);
 
     // Which rows are on screen, by the heights measured above: a row whose
     // top is inside the view is on screen, whatever of it is cut off below.
