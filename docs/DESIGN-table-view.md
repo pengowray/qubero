@@ -232,8 +232,8 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | Tab title | `{field} as table · {file}` |
 | Tab tooltip | `Table of {rows} from {field} of {file}` |
 | Count | `{n} {rows}` |
-| Row meaning, with rate and columns | `Each row is one {row} of each {column word}, 1/{rate} s apart.` |
-| Row meaning, with rate only | `Each row is one {row}, 1/{rate} s apart.` |
+| Row meaning, with rate and columns | `Each row is one {row} of each {column word}, {spacing} apart.` |
+| Row meaning, with rate only | `Each row is one {row}, {spacing} apart.` |
 | Index column | `#` |
 | Time column | `time (s)` |
 | Unnamed column | `{column word} {n}` |
@@ -245,7 +245,8 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | Row name column | `name` |
 | Rows-or-columns choice | `{Rows} in:` `rows` / `columns` (radio pair); hover `One {row} per row, or one {row} per column. (Display only)` |
 | `columns` greyed, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
-| Column meaning, turned | `Each column is one {row} of each {column word}, 1/{rate} s apart.` |
+| Column meaning, turned | `Each column is one {row} of each {column word}, {spacing} apart.` |
+| {spacing} | One over the rate, as a length of time: `125 µs`, `22.68 µs`, `341.3 ns` |
 | Copy button, nothing selected (disabled) | `Copy selected rows`; hover `Select rows to copy them as tab-separated text` |
 | Copy button, rows selected | `Copy selected row`, `Copy {n} selected rows`; hover `Copy the selected rows to the clipboard as tab-separated text, with their headings (Ctrl+C)` |
 | Copy notice | `Copied {n} rows as tab-separated text.` |

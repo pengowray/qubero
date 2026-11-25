@@ -87,13 +87,12 @@ export function durationText(seconds: number): string {
 }
 
 /**
- * How far apart two samples are, at `rate` a second. `1/8,000 s` for a whole
- * number of samples a second, which is how a rate is usually quoted, and the
- * interval itself otherwise: `292.6 µs`, not `1/3,417.969 s`.
+ * How far apart two samples are, at `rate` a second, as a length of time:
+ * `125 µs` at 8,000 a second, `292.6 µs` at 3,417.969. The same form as a
+ * fact such as `TBIN 125 µs`, so the two can be compared at a glance.
  */
 export function spacingText(rate: number): string {
   if (!(rate > 0) || !Number.isFinite(rate)) return "";
-  if (Number.isInteger(rate)) return `1/${rate.toLocaleString()} s`;
   return durationText(1 / rate);
 }
 

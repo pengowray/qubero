@@ -31,9 +31,10 @@ test("from a minute up a duration is minutes and seconds, then hours", () => {
   assert.equal(durationText(90_061), "25 h 1 min 1 s");
 });
 
-test("a whole rate keeps its 1/N form, any other rate is an interval", () => {
-  assert.equal(spacingText(8000), "1/8,000 s");
-  assert.equal(spacingText(44_100), "1/44,100 s");
+test("the spacing of samples is a length of time, whole rate or not", () => {
+  assert.equal(spacingText(8000), "125 µs");
+  assert.equal(spacingText(44_100), "22.68 µs");
+  assert.equal(spacingText(1), "1 s");
   assert.equal(spacingText(1 / 3.41333333333e-7), "341.3 ns");
   assert.equal(spacingText(24_414.0625), "40.96 µs");
   assert.equal(spacingText(1 / 0.899), "899 ms");
