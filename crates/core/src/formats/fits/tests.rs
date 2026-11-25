@@ -512,6 +512,36 @@ fn a_tbin_with_an_exponent_gives_the_rate() {
     assert_eq!(ev.table_shape(&d, &run).unwrap().unwrap().rate, Some(15625));
 }
 
+/// A fold-mode file, and some search-mode writers, quote the PSRFITS cards
+/// they leave unused, or write `*`. The header still reads, and `DATA` keeps
+/// the reading its `TFORMn` gives.
+#[test]
+fn quoted_psrfits_cards_read_as_text() {
+    let mut b = search_table("16X", 1, 8, 2, &[0; 2]);
+    for (key, was, quoted) in [("NBITS", 1, "'1       '"), ("NCHAN", 8, "'*       '"), ("NSBLK", 2, "'1       '")] {
+        let from = format!("{key:8}= {was:20}");
+        let to = format!("{key:8}= {quoted:20}");
+        let at = b.windows(from.len()).position(|w| w == from.as_bytes()).unwrap();
+        b[at..at + to.len()].copy_from_slice(to.as_bytes());
+    }
+    let (d, mut ev) = eval(b);
+    let cards = ev.node(&d, &[0, 1, 0]).unwrap();
+    for i in 0..cards.child_count as usize {
+        ev.node(&d, &[0, 1, 0, i]).unwrap_or_else(|e| panic!("card {i}: {e:?}"));
+        let body = ev.child_named(&d, &[0, 1, 0, i], "body").unwrap();
+        if let Some(body) = body {
+            for j in 0..ev.node(&d, &body).unwrap().child_count as usize {
+                let mut p = body.clone();
+                p.push(j);
+                ev.node(&d, &p).unwrap_or_else(|e| panic!("card {i} field {j}: {e:?}"));
+            }
+        }
+    }
+    // A bit column that is not samples is the bytes that hold its bits.
+    let cell = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
+    assert_eq!((cell.type_name.as_str(), cell.size_bits), ("bytes[]", 16));
+}
+
 /// The cards have to account for every bit of the cell. Where they do not,
 /// the column reads as the bytes its `TFORMn` says and nothing is guessed.
 #[test]

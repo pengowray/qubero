@@ -21,13 +21,17 @@ const CARD: i128 = 80;
 /// of their own, since a whole number written with a point after it is still a
 /// whole number. See [`REAL`] and [`real_value`].
 ///
-/// The last four are PSRFITS's, the pulsar community's convention: how wide a
-/// search-mode sample is, and how many channels, polarisations and time
-/// samples a row of the `SUBINT` table holds. They size the samples in that
-/// table's `DATA` column. See [`search_samples`](super::fits::search_samples).
-const NUMERIC: &[&str] = &[
-    "BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL", "ZBITPIX", "ZDITHER0", "NBITS", "NCHAN", "NPOL", "NSBLK",
-];
+const NUMERIC: &[&str] = &["BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL", "ZBITPIX", "ZDITHER0"];
+
+/// PSRFITS's cards for how wide a search-mode sample is, and how many
+/// channels, polarisations and time samples a row of the `SUBINT` table
+/// holds. They size the samples in that table's `DATA` column. See
+/// [`search_samples`](super::fits::search_samples).
+///
+/// They are whole numbers in a search-mode file, but a writer may quote one
+/// it leaves unused (`NBITS = '1 '`) or write `*`, so each reads as a number
+/// only when no quote or `*` comes before the comment. See [`maybe_numeric_body`].
+const PSRFITS_NUMERIC: &[&str] = &["NBITS", "NCHAN", "NPOL", "NSBLK"];
 
 /// The logicals that decide how the data is read, which are read as the one
 /// letter they hold rather than as the run of blanks and a letter a text
@@ -107,6 +111,7 @@ fn card_of(body: T) -> T {
 /// keyword. Everything else in a header is text.
 fn named_body() -> T {
     let mut cases: Vec<(String, T)> = NUMERIC.iter().map(|k| ((*k).to_string(), numeric_body())).collect();
+    cases.extend(PSRFITS_NUMERIC.iter().map(|k| ((*k).to_string(), maybe_numeric_body())));
     cases.extend(REAL.iter().map(|k| ((*k).to_string(), real_body())));
     cases.extend(LOGICAL.iter().map(|k| ((*k).to_string(), logical_body())));
     cases.push(("CONTINUE".to_string(), continue_body()));
@@ -127,6 +132,14 @@ fn real_body() -> T {
 /// and the rest of the line is the comment.
 fn numeric_body() -> T {
     valued(T::decimal(StrLen::token(&[b' '], &[b' ', b'/'])))
+}
+
+/// A card read as a number when its value is written as one, and as text when
+/// a quote or a `*` comes before the comment. The search stops at the end of
+/// the card, which is where both searches land when the card has neither.
+fn maybe_numeric_body() -> T {
+    let before_comment = |c: &[u8]| E::to_bytes(c).less_than(E::to_bytes(b"/"));
+    T::switch(before_comment(b"'").or(before_comment(b"*")), vec![(1, text_body())], numeric_body())
 }
 
 /// A card whose value is a logical: the `T` or `F` after any blanks, read as
