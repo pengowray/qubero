@@ -12,6 +12,7 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | A `TFORMn` repeat count of six or more digits (`393216X`, `458752B`) read as five digits and a type letter of `6`, so the `DATA` column of every PSRFITS search-mode file covered no bytes and 96% of the file was a gap in its rows. | dfa34552 |
 | The `DATA` cell of a PSRFITS `SUBINT` table reads as a run of `NBITS`-wide samples (1, 2, 4 or 8) when `NBITS * NCHAN * NPOL * NSBLK` is exactly the bits its `TFORMn` counts, first channel in the top bits of a byte. The run is a table, one row per time sample and one column per channel, at `1/TBIN` rows a second, with `NBITS`, `NCHAN`, `NPOL`, `NSBLK`, `TBIN` and `CHAN_BW` as its facts. Any other `DATA` column (fold mode, or cards that do not add up) keeps its `TFORMn` reading. | 70c46e1c |
 | `fits_contents` reads `FITSTYPE` and `OBS_MODE` from the primary header, and the toolbar names the file "PSRFITS search mode (filterbank samples) · FITS", or fold mode, or calibration. | 70c46e1c, 3ec159f3 |
+| `NBITS`, `NCHAN`, `NPOL` and `NSBLK` read as numbers unless a quote or `*` comes before the comment, so a header that quotes an unused one still reads. | c7c694d5 |
 | HDF5 filter 32008 (bitshuffle, with or without its LZ4 blocks) is undone in the chunk panel, as two steps: "bitshuffle LZ4" and "bitshuffle". | cb9beb61 |
 | The chunk panel found an HDF5 dataset's datatype only among the messages before the layout message. The Breakthrough Listen files keep it two continuation blocks down, so their chunks unpacked with no element type and no values shown. | 525c7692 |
 | `radio_real` checks all of this against astropy and h5py (see below). | c25d2a70 |
@@ -48,8 +49,10 @@ no errors, before and after.
 `spans_probe` over the whole 1-bit file after the change: 10,368 spans, no
 gaps, and the spans add up to the file's 26,530,560 bytes. The bytes after
 the last row (424 in the 1-bit file, 192 in the 2-bit file) are all zero and
-are the padding to a 2880-byte block that every FITS data unit has; neither
-file has a part row after `NAXIS2` rows.
+are the padding to a 2880-byte block that every FITS data unit has. None of
+the 13 Parkes files of that pointing, nor the HTRU file, has a part row
+after its `NAXIS2` rows: in each, the bytes after the rows are exactly that
+padding.
 
 ### How it was checked
 
@@ -78,6 +81,9 @@ is what tests the order.
 
 ### Things to fix in what was done
 
+- The toolbar label and the sample table have not been looked at in the
+  app. `tsc` passes; nothing was opened in a browser.
+
 - The table facts are labelled by path, `cards[12].body.value 6.4E-05`, and
   carry no unit. The unit is in the card's comment (`[s]`, `[MHz]`). WAV and
   AIFF facts have no units either, so this is a gap in the facts, not in the
@@ -103,7 +109,8 @@ is what tests the order.
 
 ### SIGPROC filterbank (`.fil`)
 
-No sample. Every `.fil` the Breakthrough Listen open data API lists
+Not started, not even from a synthetic file. No sample: every `.fil` the
+Breakthrough Listen open data API lists
 (`seti.berkeley.edu/opendata/api/query-files`, 10,000 rows) is served from
 `blpd0`, `blpd2`, `blpd5`, `blpd6` or `blpd1.ssl.berkeley.edu`, which were
 not among the hosts this work could download from. The smallest with data is
@@ -133,8 +140,9 @@ like `search_samples` in `fits.rs` (`columns = nchans * nifs`, rate
 
 ### GUPPI raw voltages (`.raw`)
 
-No sample under 150 MB that this work could fetch: the archive's "baseband
-data" files are on `blpd0.ssl.berkeley.edu` too, and the smallest listed for
+Not started; a synthetic fixture was not written either. No sample under
+150 MB that this work could fetch: the archive's "baseband data" files are on
+`blpd0.ssl.berkeley.edu` too, and the smallest listed for
 Voyager 1 is 66 MB (`blc2_2bit_guppi_57396_VOYAGER1_0002.0013.raw`), so a
 real one exists if that host is allowed.
 

@@ -385,8 +385,8 @@ Seven samples, cross-checked with pyhdf. Left:
 Reads further than any other scientific format. Left:
 
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
-  shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
-  32000+ stop the walk.
+  shuffle, fletcher32 and bitshuffle (32008) as a side reader. szip, nbit,
+  scaleoffset and the other filters from 32000 up stop the walk.
 - Virtual dataset mappings are bytes.
 - Huge and tiny fractal-heap objects, free-space managers.
 - 4-byte offsets are read wrong rather than refused.
