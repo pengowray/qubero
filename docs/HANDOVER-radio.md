@@ -1,6 +1,7 @@
 # Handover: radio telescope files
 
-Written 2026-11-25. Which radio telescope formats Qubero reads, how that was
+Written 2026-11-25, and brought up to date after the SIGPROC and GUPPI work
+the same day. Which radio telescope formats Qubero reads, how that was
 checked, and what is left, in the order it was asked for: PSRFITS search
 mode (1-bit and 2-bit), Breakthrough Listen filterbank files in HDF5, SIGPROC
 filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
@@ -13,9 +14,13 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | The `DATA` cell of a PSRFITS `SUBINT` table reads as a run of `NBITS`-wide samples (1, 2, 4 or 8) when `NBITS * NCHAN * NPOL * NSBLK` is exactly the bits its `TFORMn` counts, first channel in the top bits of a byte. The run is a table, one row per time sample and one column per channel, at `1/TBIN` rows a second, with `NBITS`, `NCHAN`, `NPOL`, `NSBLK`, `TBIN` and `CHAN_BW` as its facts. Any other `DATA` column (fold mode, or cards that do not add up) keeps its `TFORMn` reading. | 70c46e1c |
 | `fits_contents` reads `FITSTYPE` and `OBS_MODE` from the primary header, and the toolbar names the file "PSRFITS search mode (filterbank samples) · FITS", or fold mode, or calibration. | 70c46e1c, 3ec159f3 |
 | `NBITS`, `NCHAN`, `NPOL` and `NSBLK` read as numbers unless a quote or `*` comes before the comment, so a header that quotes an unused one still reads. | c7c694d5 |
-| HDF5 filter 32008 (bitshuffle, with or without its LZ4 blocks) is undone in the chunk panel, as two steps: "bitshuffle LZ4" and "bitshuffle". | cb9beb61 |
+| HDF5 filter 32008 (bitshuffle, with or without its LZ4 blocks) is undone in the chunk panel, as one step: "bitshuffle with lz4", or "bitshuffle" when the blocks are not compressed. It was two steps, the first called "bitshuffle LZ4", until 6ff6e25a. | cb9beb61, 6ff6e25a |
 | The chunk panel found an HDF5 dataset's datatype only among the messages before the layout message. The Breakthrough Listen files keep it two continuation blocks down, so their chunks unpacked with no element type and no values shown. | 525c7692 |
 | `radio_real` checks all of this against astropy and h5py (see below). | c25d2a70 |
+| A table fact carries a label and a unit (`TableFact`, `FactUnit` in `template.rs`). The PSRFITS sample table shows `TBIN 0.000125 s` and `CHAN_BW -3 MHz`, by keyword, with the unit read from the `[...]` at the front of the card's comment; WAV, AIFF and AU sample rates are in Hz. The report shows the same. | 6ff6e25a |
+| A table's rate is a real. `1/TBIN` for GBT's 40.96 us is 24,414.0625 rows a second, and a filterbank sampled every 15 s has a rate below one. | 6ff6e25a |
+| SIGPROC filterbank (`sigproc.rs`) and GUPPI raw voltages (`guppi.rs`), each sniffed, each a table with facts, and both checked against numpy readers (see below). Toolbar: "SIGPROC filterbank file", "GUPPI raw voltages". | 99b18b1a, e42f4dd6 |
+| A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
 
 ### Bit order inside a byte
 
@@ -32,7 +37,7 @@ standard's order for an `X` column.
 
 ### What Qubero did with each real file, before and after
 
-`cover_probe`, bytes of the file the annotation spans name:
+`cover_probe` and `spans_probe`, bytes of the file the annotation spans name:
 
 | File | Before | After |
 |---|---|---|
@@ -40,6 +45,10 @@ standard's order for an `X` column.
 | `bpsr111206_072835_beam10.sf`, HTRU 2-bit, 1.06 GB | 40,125,632 (3.8%) | 1,060,390,080 (100%) |
 | GJ699 `.gpuspec.0002.h5`, float32, 200 MB | 199,692,678 (99.99%) | the same; chunks now unpack, with values |
 | GJ388 `.gpuspec.8.0001.h5`, uint8, 1.17 GB | 1,169,093,978 (99.999%) | the same; chunks now unpack, with values |
+| `guppi_58326_..._0001.0002.fil`, BL Parkes, 32-bit, 2.2 MB | 0 (no template) | 2,163,083 (100%) |
+| `guppi_58275_..._0001.0001.stokesI.8b.fil`, BL Parkes, 8-bit, 7.2 MB | 0 (no template) | 7,209,305 (100%) |
+| `guppi_58275_..._0001.0000.fil`, BL Parkes, header only, 395 bytes | 0 (no template) | 395 (100%) |
+| `blc2_2bit_guppi_57396_VOYAGER1_0002.0013.raw`, BL GBT, 2-bit, 66 MB | 0 (no template) | 66,138,624 (100%) |
 
 `cover_probe`'s own tree walk stops after 3,000,000 nodes, and one row of
 1-bit samples is 393,216 of them, so its tree column (413,374 bytes after)
@@ -77,22 +86,41 @@ The 2-bit reference unpacks top bits first with numpy shifts, so it agrees
 with the template by construction on bit order; the correlation check above
 is what tests the order.
 
+SIGPROC and GUPPI, added later, are checked the same way. No third party
+reader was used: blimpy, your and sigpyproc are not installed, and PyPI was
+not among the hosts that work could download from. `radio_reference.py`
+reads both from the published layouts with numpy, written apart from the
+templates. For one filterbank there is also a second reference: the HDF5
+copy Breakthrough Listen published of the header-only `0000.fil`, whose
+attributes h5py reads. All of its 17 values agree, once `src_raj` and
+`src_dej` are converted: the `.fil` holds them as `hhmmss.s` and
+`ddmmss.s`, the HDF5 copy as hours and degrees.
+
+- Whole files: 843 new facts (header records, where the samples start,
+  values, sums, block placement, cards, 2-bit codes) in the four files
+  above. With the earlier 4,170, 5,013 facts; none differ.
+- Collection: `sigproc/synthetic-32bit-2if.fil` (a part time sample at the
+  end), `guppi/synthetic-8bit-directio.raw` (DIRECTIO = 1, the second block
+  cut 100 bytes short) and `guppi/synthetic-2bit.raw`, from seeded random
+  numbers. 505 new facts; with the earlier 552, 1,057; none differ.
+
+What was checked about the GUPPI layout against the Voyager 1 file, rather
+than taken from memory: the samples are channel by channel (the share of
+outer 2-bit levels changes smoothly within each 1/64 of a block and jumps
+between them), and the first two values of each byte behave as one pair and
+the last two as another. `NPKT * PKTSIZE = BLOCSIZE`, so a channel has
+`BLOCSIZE * 8 / (OBSNCHAN * NPOL * NBITS)` time samples: `NPOL = 4` already
+counts real and imaginary. The earlier version of this note had an extra
+factor of 2.
+
 ## Left
 
 ### Things to fix in what was done
 
-- The toolbar label and the sample table have not been looked at in the
-  app. `tsc` passes; nothing was opened in a browser.
-
-- The table facts are labelled by path, `cards[12].body.value 6.4E-05`, and
-  carry no unit. The unit is in the card's comment (`[s]`, `[MHz]`). WAV and
-  AIFF facts have no units either, so this is a gap in the facts, not in the
-  FITS template. A label read from the card's keyword and a unit read from a
-  `[...]` at the front of its comment would fix both.
-- The rate is `1/TBIN` truncated to a whole number of samples a second, the
-  way `real_count_at` treats every rate. Both Parkes files have whole rates
-  (8,000 and 15,625). A file with `TBIN = 4.096E-05` (GBT) would say 24,414
-  where the true rate is 24,414.0625.
+- The `DATA` column's `TUNITn` (`Jy` in both Parkes files) is not shown on
+  the sample table, on purpose: the samples are the digitiser's levels until
+  `DAT_SCL` and `DAT_OFFS` are applied. Once they are applied, the unit
+  belongs in `TableShape::units`.
 - The time column of the sample table counts from the start of the `DATA`
   cell, which is one row of `SUBINT`. The row's own start is `OFFS_SUB -
   TSUBINT/2`, in the row's cells.
@@ -109,57 +137,46 @@ is what tests the order.
 
 ### SIGPROC filterbank (`.fil`)
 
-Not started, not even from a synthetic file. No sample: every `.fil` the
-Breakthrough Listen open data API lists
-(`seti.berkeley.edu/opendata/api/query-files`, 10,000 rows) is served from
-`blpd0`, `blpd2`, `blpd5`, `blpd6` or `blpd1.ssl.berkeley.edu`, which were
-not among the hosts this work could download from. The smallest with data is
-5 MB (`guppi_58275_49663_030096_1934-638_B3_0001.0002.fil`). GJ699 has only
-HDF5 files there.
+Read; see Done. Left:
 
-The format: a run of keyword records between the strings `HEADER_START` and
-`HEADER_END`, each string written as a 4-byte little-endian length and its
-bytes. After a keyword comes its value, whose type is fixed by the keyword:
-`int32` for `telescope_id`, `machine_id`, `data_type`, `nchans`, `nbits`,
-`nifs`, `nbeams`, `ibeam`, `nsamples`, `barycentric`, `pulsarcentric`;
-`float64` for `tstart`, `tsamp`, `fch1`, `foff`, `src_raj`, `src_dej`,
-`az_start`, `za_start`, `refdm`, `period`; a length-prefixed string for
-`source_name` and `rawdatafile`; one byte for `signed`. A keyword the reader
-does not know has no length to skip by, so it has to stop there. The samples
-follow the header with nothing between: `nchans * nifs` values a time
-sample, `nbits` each, as many as the file holds. Below 8 bits the order
-inside a byte has to be checked against a real file the way
-`psrfits_bit_order.py` checks PSRFITS; sigproc's own `pack`/`unpack` are the
-reference to read first.
-
-A template would be a `T::Match` on the keyword text for the value, a list
-of records until `HEADER_END`, and the samples as a run with a `TableShape`
-like `search_samples` in `fits.rs` (`columns = nchans * nifs`, rate
-`1/tsamp`). The sniff is the first 16 bytes: `0c 00 00 00` and
-`HEADER_START`.
+- 1, 2 and 4-bit samples stay bytes. No file of those widths was at hand
+  (Breakthrough Listen writes 32 and 8), and the order inside a byte has
+  to be checked against one, the way `psrfits_bit_order.py` checks PSRFITS.
+  sigproc's own `pack`/`unpack` are the reference to read first.
+- `npuls` and any keyword not in the lists in `sigproc.rs` ends the header
+  there, and the rest of the file reads as `Unread`.
+- `FREQUENCY_START` ... `fchannel` ... `FREQUENCY_END` is read as records,
+  and the channel frequencies it lists are not used for column names.
+- A file of 45,056 channels and 4 IFs is a table of 180,224 columns, named
+  `channel 1` to `channel 180,224`: the IF a column belongs to is not in its
+  name. The same is true of PSRFITS `NPOL`.
+- A table both too wide to draw across (over 4,096 columns) and too long to
+  turn (over 1,000 rows) is drawn across, and will be slow or fail.
+- `telescope_id` and `machine_id` are numbers, not names.
 
 ### GUPPI raw voltages (`.raw`)
 
-Not started; a synthetic fixture was not written either. No sample under
-150 MB that this work could fetch: the archive's "baseband data" files are on
-`blpd0.ssl.berkeley.edu` too, and the smallest listed for
-Voyager 1 is 66 MB (`blc2_2bit_guppi_57396_VOYAGER1_0002.0013.raw`), so a
-real one exists if that host is allowed.
+Read; see Done. Left:
 
-The format: blocks, each an ASCII header of 80-byte cards in FITS style
-(`KEYWORD = value`) ending with an `END` card, then `BLOCSIZE` bytes of
-samples. With `DIRECTIO = 1` the header is padded to a multiple of 512 bytes.
-The samples are complex, `NBITS` each for the real and the imaginary part
-(8 is usual), ordered channel, then time, then polarisation (from the
-format's description, not checked against a file): `OBSNCHAN`
-channels of `BLOCSIZE / (OBSNCHAN * NPOL * 2 * NBITS / 8)` time samples. The
-cards can be read with `fits_cards::card`, which reads a card on its own;
-the block is a structure of `Repeat(card, until END)`, padding, and a run
-sized by `BLOCSIZE` found by keyword the way `fits.rs` finds `NAXIS2`.
+- The order of 2-bit values inside a byte (top bits first) is taken from
+  blimpy's `unpack_2to8`, from memory, and nothing in the data checked it:
+  reversing it only swaps which polarisation is which and real with
+  imaginary. A file with a known tone in one polarisation would settle it.
+- 4-bit samples stay bytes.
+- With `DIRECTIO = 1` the data is padded to a multiple of 512 bytes too,
+  from memory of rawspec. The synthetic file has a `BLOCSIZE` of 512, so the
+  question does not come up in it; no real direct-I/O file was at hand.
+- The table is one channel of one block. Nothing joins a channel across
+  blocks, and `OVERLAP` samples, repeated at the start of a block, are read
+  as samples like any other.
+- The codes are shown as codes, 0 to 3. blimpy maps them to +40, +12, -12
+  and -40.
 
 ### LOFAR beamformed HDF5
 
-No sample, so nothing was tried, and what follows is from memory of the
+No sample on the hosts this work could download from: the Breakthrough
+Listen API lists no LOFAR target, and a CSIRO data portal search for LOFAR
+returns only Parkes collections. So nothing was tried, and what follows is from memory of the
 LOFAR documentation, not checked here. A beamformed observation is
 an HDF5 file of metadata (groups `SUB_ARRAY_POINTING_nnn/BEAM_nnn/STOKES_n`
 with attributes) and, in the LOFAR long-term archive, the samples in a

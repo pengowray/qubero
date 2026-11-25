@@ -13,8 +13,8 @@
 //! two polarisations of complex samples, the real and the imaginary part of
 //! the first and then of the second, which is how blimpy's GUPPI reader
 //! splits them. So a channel holds `BLOCSIZE * 8 / (OBSNCHAN * NPOL * NBITS)`
-//! time samples, 516,608 in the Voyager 1 file in the sample collection, and
-//! `NPKT * PKTSIZE` there is `BLOCSIZE` too.
+//! time samples, 516,608 in the Breakthrough Listen Voyager 1 file the tests
+//! read from `qubero2-extras`, where `NPKT * PKTSIZE` is `BLOCSIZE` too.
 //!
 //! Checked against the Voyager 1 file: the statistics of the 2-bit levels
 //! change smoothly over each 1/64 of the block and jump between them, which
@@ -70,7 +70,9 @@ fn channel() -> T {
         columns: Some(card_value("NPOL")),
         names: vec!["pol 1 real".into(), "pol 1 imaginary".into(), "pol 2 real".into(), "pol 2 imaginary".into()],
         units: vec!["".into(), "".into(), "".into(), "".into()],
-        column_word: Some("value".into()),
+        // The four columns have names; a word for a column would only make
+        // the sentence under the table say "one sample of each value".
+        column_word: None,
         row_word: Some("sample".into()),
         rate: Some(E::real(1.0).div(E::real_text(card_at("TBIN", &["body", "value"])))),
         facts: vec![
