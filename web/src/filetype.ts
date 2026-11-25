@@ -267,6 +267,8 @@ export const templateSentence = (doc: Doc, name: string): string | null => {
       return themeSentence(doc);
     case "bgzf":
       return bgzfSentence(doc.bgzfContents());
+    case "fits":
+      return FITS_HOLDS[doc.fitsContents()] ?? null;
     case "pickle":
     case "picklefpf":
     case "joblib":
@@ -296,6 +298,17 @@ export const templateSignatureMismatch = (doc: Doc): boolean => {
 };
 
 const wrongSignature = (n: TemplateNode): boolean => n.kind === "magic" && n.problem?.tier === "invalid";
+
+/** What a FITS file is for, by `FITSTYPE` and `OBS_MODE` in its primary
+ *  header. PSRFITS is the pulsar community's FITS convention, and its three
+ *  modes hold different data: filterbank samples, folded pulse profiles, and
+ *  a calibration observation. */
+const FITS_HOLDS: Record<string, string> = {
+  "psrfits-search": "PSRFITS search mode (filterbank samples) \u00b7 FITS",
+  "psrfits-fold": "PSRFITS fold mode (pulse profiles) \u00b7 FITS",
+  "psrfits-cal": "PSRFITS calibration \u00b7 FITS",
+  psrfits: "PSRFITS \u00b7 FITS",
+};
 
 /** What a BGZF file holds, by what its first block unpacks to. */
 const BGZF_HOLDS: Record<string, string> = {

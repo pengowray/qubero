@@ -2792,6 +2792,19 @@ export class Doc {
   }
 
   /**
+   * What a FITS file is for, from its primary header: `psrfits-search`,
+   * `psrfits-fold`, `psrfits-cal` or `psrfits`, or "" for any other FITS
+   * file. Read from the same head `bgzfContents` reads.
+   */
+  fitsContents(): string {
+    if (this.space !== 0) return "";
+    const n = Math.min(this.editor.sniff_window(), this.lengthBytes);
+    if (n === 0) return "";
+    const { bytes, complete } = this.read(0, n);
+    return complete ? this.editor.fits_contents(bytes) : "";
+  }
+
+  /**
    * Ask the file(1) rule database what this file is, for the files no template
    * covers. The rules and the engine that runs them outweigh the rest of the
    * editor, so they live in their own wasm module that is fetched on the first
