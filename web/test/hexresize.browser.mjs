@@ -80,7 +80,8 @@ try {
       rowGrew: narrow !== wide,
       // The row is whole against the edge, which is where a reload puts it.
       atRowStart: view.topPx === 0 && view.topRow === 0,
-      drawnAtEdge: Math.abs(view.grid.rows[0].getBoundingClientRect().top - view.el.querySelector(".hv-rows").getBoundingClientRect().top) < 1,
+      // The edge is under the band the strip of carried fields stands in.
+      drawnAtEdge: Math.abs(view.grid.rows[0].getBoundingClientRect().top - view.el.querySelector(".hv-rows").getBoundingClientRect().top - view.band) < 1,
       // What the ledger holds for the row is what the browser gave it.
       ledgerAgrees: Math.abs(view.ledger.heightOf(0) - narrow) < 1.5,
     };

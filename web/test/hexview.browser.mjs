@@ -87,7 +87,8 @@ try {
     // pushing its head, the headings and the first bytes, off the top. Checked
     // as a precondition so a fixture whose first row lost its headings fails
     // here instead of passing the clamp check vacuously.
-    view.el.style.height = "60px";
+    // 60px of rows, under the band the strip of carried fields stands in.
+    view.el.style.height = `${60 + view.band}px`;
     view.relayout();
     view.scrollToY(0);
     await new Promise(resolve => requestAnimationFrame(resolve));
