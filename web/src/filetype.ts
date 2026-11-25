@@ -113,6 +113,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   root: "CERN ROOT",
   gwf: "LIGO/Virgo GWF frame",
   fits: "FITS",
+  sigproc: "SIGPROC filterbank",
+  guppi: "GUPPI raw voltages",
   asdf: "ASDF",
   avro: "Avro",
   npy: "NumPy array",

@@ -147,6 +147,8 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   netcdf: ["nc", "cdf"],
   cdf: ["cdf"],
   fits: ["fits", "fit", "fts"],
+  sigproc: ["fil"],
+  guppi: ["raw"],
   asdf: ["asdf"],
   avro: ["avro"],
   root: ["root"],
