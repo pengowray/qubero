@@ -853,10 +853,10 @@ export const TABLE = {
    * the fact that turns a quarter of a million rows into five seconds of
    * sound.
    */
-  rowMeaning: (rowWord: string, columnWord: string, rate: string): string =>
-    `Each row is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
+  rowMeaning: (rowWord: string, columnWord: string, spacing: string): string =>
+    `Each row is one ${rowWord} of each ${columnWord}, ${spacing} apart.`,
   /** The same where the shape has no word for a column. */
-  rowMeaningPlain: (rowWord: string, rate: string): string => `Each row is one ${rowWord}, 1/${rate} s apart.`,
+  rowMeaningPlain: (rowWord: string, spacing: string): string => `Each row is one ${rowWord}, ${spacing} apart.`,
   /** Following one of those facts to where it is stored. Not on the button
    *  itself, which is read as a fact rather than as a control: the label and
    *  the value are what the reader came for, and where it lives is the answer
@@ -937,11 +937,14 @@ export const TABLE = {
   /** Why `columns` cannot be chosen, on a table too long to turn. */
   turnTooMany: (rowWord: string, limit: number): string =>
     `Too many ${plural(rowWord)} to show as columns. The limit is ${limit.toLocaleString()}.`,
+  /** Why `rows` cannot be chosen, on a table too wide to draw across. */
+  acrossTooMany: (rowWord: string, columnWord: string | null, limit: number): string =>
+    `Too many ${plural(columnWord ?? "column")} to show ${plural(rowWord)} as rows. The limit is ${limit.toLocaleString()}.`,
   /** The sentence saying what a row is, for a table drawn turned, where it is
    *  a column that is one. */
-  columnMeaning: (rowWord: string, columnWord: string, rate: string): string =>
-    `Each column is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
-  columnMeaningPlain: (rowWord: string, rate: string): string => `Each column is one ${rowWord}, 1/${rate} s apart.`,
+  columnMeaning: (rowWord: string, columnWord: string, spacing: string): string =>
+    `Each column is one ${rowWord} of each ${columnWord}, ${spacing} apart.`,
+  columnMeaningPlain: (rowWord: string, spacing: string): string => `Each column is one ${rowWord}, ${spacing} apart.`,
   /** The checkbox that adds them. "byte" rather than "file": inside an
    *  unpacked stream the addresses are of the stream, and what is true of both
    *  is that they are addresses of bytes. */

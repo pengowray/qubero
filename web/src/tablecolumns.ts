@@ -151,12 +151,16 @@ export class TableColumns {
     const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
     if (plan.rowNames) cells.push(el("span", { className: "tbl-th", textContent: TABLE.rowName }));
     if (this.of.rate() !== null) cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
-    cells.push(...this.columns.map((column) => column.head));
+    // A loop rather than a spread: a spread of a very wide table's heads is
+    // more arguments than a call can take.
+    for (const column of this.columns) cells.push(column.head);
     if (this.of.addresses()) {
       cells.push(el("span", { className: "tbl-th", textContent: TABLE.storedAt }));
       cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.size }));
     }
-    this.of.head.replaceChildren(el("div", { className: "tbl-headline" }, ...cells));
+    const line = el("div", { className: "tbl-headline" });
+    for (const cell of cells) line.append(cell);
+    this.of.head.replaceChildren(line);
   }
 
   // ----- the widths -----

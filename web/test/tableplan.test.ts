@@ -27,6 +27,8 @@ import {
   shapeColumns,
   spanOf,
   startsTurned,
+  ACROSS_MAX,
+  canDrawAcross,
   timeDigits,
   timeText,
   timeWidth,
@@ -287,6 +289,17 @@ test("a table stays the way the file has it unless all three hold", () => {
   assert.equal(turnsByDefault({ count: 400, ...plainIndexes(places(500)) }), false);
   // Too many records to give a column each.
   assert.equal(turnsByDefault({ count: TURN_MAX + 1, ...plainIndexes(places(5000)) }), false);
+});
+
+test("a table too wide to draw across arrives turned whatever was chosen before", () => {
+  // A filterbank of 45,056 channels and 4 IFs, 3 time samples long.
+  const wide = { count: 3, indexColumns: false, columns: { length: 180_224 } };
+  assert.equal(canDrawAcross(wide.columns.length), false);
+  assert.equal(canDrawAcross(ACROSS_MAX), true);
+  assert.equal(turnsByDefault(wide), true);
+  assert.equal(startsTurned(wide, "0"), true);
+  // Too long to turn as well: drawn across, the way it always was.
+  assert.equal(startsTurned({ ...wide, count: TURN_MAX + 1 }, null), false);
 });
 
 test("only a table short enough can be turned", () => {

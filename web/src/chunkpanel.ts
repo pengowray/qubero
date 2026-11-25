@@ -34,7 +34,10 @@ export function chunkBody(info: ChunkInfo): DocumentFragment {
     label: s.filter,
     text: s.skipped ? "not applied to this chunk" : bytesChange(s.in_bytes, s.out_bytes),
   }));
-  frag.append(stepList("Filters, in the order they were undone", rows));
+  // Stacked, label above its sizes: filter names run to `bitshuffle with
+  // lz4` and `fletcher32`, wider than the narrow label column, which let the
+  // name run under the sizes beside it.
+  frag.append(stepList("Filters, in the order they were undone", rows, true));
 
   if (info.problem !== "") {
     frag.append(problemLine(info.problem));

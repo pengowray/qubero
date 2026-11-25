@@ -13,7 +13,7 @@
 import { el } from "./dom.ts";
 import { TABLE } from "./strings.ts";
 import type { TableFact } from "./doc.ts";
-import { canTurn, TURN_MAX, type TablePlan } from "./tableplan.ts";
+import { ACROSS_MAX, canDrawAcross, canTurn, TURN_MAX, type TablePlan } from "./tableplan.ts";
 
 /** How many views have made a rows-or-columns choice, for naming each one's
  *  radio buttons apart. */
@@ -49,7 +49,7 @@ export function tableBar(opts: BarOpts): Bar {
   const sayMeaning = (turned: boolean): void => {
     if (rate === null) return;
     const word = plan.columnWord;
-    const said = rate.toLocaleString();
+    const said = spacing(rate);
     const rows = plan.rowWord;
     if (turned) meaning.textContent = word === null ? TABLE.columnMeaningPlain(rows, said) : TABLE.columnMeaning(rows, word, said);
     else meaning.textContent = word === null ? TABLE.rowMeaningPlain(rows, said) : TABLE.rowMeaning(rows, word, said);
@@ -88,15 +88,16 @@ function arrangeChoice(opts: BarOpts): HTMLElement {
   // name are one group wherever they are, so each view's name is its own.
   const name = `tbl-arrange-${++arrangeGroups}`;
   const can = canTurn(opts.plan.count);
+  const across = canDrawAcross(opts.plan.columns.length);
   const choice = (turned: boolean, text: string): HTMLElement => {
-    const box = el("input", { type: "radio", name, checked: opts.turned === turned, disabled: turned && !can });
+    const box = el("input", { type: "radio", name, checked: opts.turned === turned, disabled: turned ? !can : !across });
     box.addEventListener("change", () => {
       if (box.checked) opts.onTurn(turned);
     });
     const label = el("label", { className: "tbl-check" }, box, text);
     if (box.disabled) {
       label.classList.add("is-off");
-      label.title = TABLE.turnTooMany(opts.plan.rowWord, TURN_MAX);
+      label.title = turned ? TABLE.turnTooMany(opts.plan.rowWord, TURN_MAX) : TABLE.acrossTooMany(opts.plan.rowWord, opts.plan.columnWord, ACROSS_MAX);
     }
     return label;
   };
@@ -105,6 +106,15 @@ function arrangeChoice(opts: BarOpts): HTMLElement {
   group.setAttribute("aria-label", TABLE.arrange(opts.plan.rowWord));
   group.title = TABLE.arrangeTitle(opts.plan.rowWord);
   return group;
+}
+
+/** How far apart two rows are, for the sentence under the bar: `1/8,000 s`
+ *  for a whole number of rows a second, which is how the rate is usually
+ *  quoted, and the interval itself otherwise, `0.0002926 s` rather than
+ *  `1/3,417.969 s`. */
+export function spacing(rate: number): string {
+  if (Number.isInteger(rate)) return `1/${rate.toLocaleString()} s`;
+  return `${(1 / rate).toLocaleString(undefined, { maximumSignificantDigits: 4 })} s`;
 }
 
 /** A fact's value and its unit, as the bar and the report show them:

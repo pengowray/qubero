@@ -335,6 +335,16 @@ export function canTurn(count: number): boolean {
   return count > 0 && count <= TURN_MAX;
 }
 
+/** The most columns a table is drawn with the right way up. Every drawn row
+ *  holds a cell for each, and a filterbank of 45,056 channels and 4 IFs has
+ *  180,224 of them, which no row can be built with. */
+export const ACROSS_MAX = 4096;
+
+/** Whether a table of this many columns can be drawn the right way up. */
+export function canDrawAcross(columns: number): boolean {
+  return columns <= ACROSS_MAX;
+}
+
 /** Whether every column is called by its place and nothing else: `[0]`,
  *  `[1]`, and so on. Those are the columns of a list of lists, where what runs
  *  across is more of the same thing rather than different facts about one
@@ -383,6 +393,7 @@ const WIDE = 20;
  */
 export function turnsByDefault(plan: TurnFacts): boolean {
   const columns = plan.columns.length;
+  if (!canDrawAcross(columns)) return canTurn(plan.count);
   return canTurn(plan.count) && plan.indexColumns && columns > WIDE && columns >= 4 * plan.count;
 }
 
@@ -396,6 +407,7 @@ export function turnsByDefault(plan: TurnFacts): boolean {
  * want strips of samples.
  */
 export function startsTurned(plan: TurnFacts, kept: string | null): boolean {
+  if (!canDrawAcross(plan.columns.length)) return canTurn(plan.count);
   return turnsByDefault(plan) && kept !== "0";
 }
 
