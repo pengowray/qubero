@@ -1725,13 +1725,16 @@ impl Evaluator {
             | Ty::Raster { pixel: elem, .. } => elem.base(),
             _ => return None,
         };
-        // Through a name, and through an origin: saying where the addresses
-        // inside a thing count from says nothing about what the thing is, so
-        // a list of them still counts them by whatever they are called.
+        // Through a name, through an origin and through a size: saying where
+        // the addresses inside a thing count from, or how many bytes it is
+        // given, says nothing about what the thing is, so a list of them
+        // still counts them by whatever they are called. A GUPPI block's
+        // channels are each a window of `BLOCSIZE / OBSNCHAN` bytes, and are
+        // channels.
         for _ in 0..8 {
             match elem {
                 Ty::Named(n) => elem = self.template.types.get(&**n)?.base(),
-                Ty::Origin { inner } | Ty::When { inner, .. } => elem = inner.base(),
+                Ty::Origin { inner } | Ty::When { inner, .. } | Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => elem = inner.base(),
                 // A run of optional fields is a run of whatever they are
                 // optional instances of, so the unit is that type's, not
                 // "items". The switch has to be seen through to reach it,

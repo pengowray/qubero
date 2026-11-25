@@ -4206,9 +4206,16 @@ impl Ty {
 
     /// What one of these is called when a list of them is counted, e.g.
     /// `block`, so the row reads `97,280 blocks`. See [`StructDef::unit`].
+    ///
+    /// Through a size: a FITS table's rows are each a window of `NAXIS1`
+    /// bytes, and calling the window a row is calling the structure in it
+    /// one. Before this the word was dropped there, and the rows counted as
+    /// items.
     pub fn counted_as(self, unit: &str) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { unit: Some(unit.into()), ..(*s).clone() })),
+            Ty::Sized { size, inner } => Ty::Sized { size, inner: Box::new(inner.counted_as(unit)) },
+            Ty::SizedBits { bits, inner } => Ty::SizedBits { bits, inner: Box::new(inner.counted_as(unit)) },
             other => other,
         }
     }

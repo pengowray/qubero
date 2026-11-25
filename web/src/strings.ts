@@ -5,6 +5,7 @@ import { ADDRESS_MARK, formatBytes, formatOffset } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
 import type { CodecKind, FieldTime, Shape, StringInsideKind } from "./doc.ts";
+import type { TablePlace } from "./tableplace.ts";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -831,6 +832,13 @@ export const UNPACKED = {
  * the strings take the singular and make the plural here, rather than each
  * caller working out whether it holds one word or two.
  */
+/** Which block, channel or row a table is, outermost first: `block 2 of 128,
+ *  channel 3 of 64`, or without the counts, `block 2, channel 3`, where room
+ *  is short. */
+function placesText(places: readonly TablePlace[], counts: boolean): string {
+  return places.map((p) => (counts ? `${p.word} ${p.n.toLocaleString()} of ${p.of.toLocaleString()}` : `${p.word} ${p.n.toLocaleString()}`)).join(", ");
+}
+
 export const TABLE = {
   /** The button that opens the table, wherever it is offered: the panel at the
    *  cursor, the listing heading, a run chip's tooltip. The row word carries
@@ -840,11 +848,21 @@ export const TABLE = {
   /** Names the tab. The file stays on it because several tables can be open at
    *  once, and `samples as table` alone names the wrong one as readily as the
    *  right one. */
-  tabTitle: (field: string, file: string): string => `${field} as table · ${file}`,
+  tabTitle: (field: string, file: string, places: readonly TablePlace[] = []): string =>
+    places.length === 0 ? `${field} as table · ${file}` : `${field} as table · ${placesText(places, false)} · ${file}`,
   /** The same on hover, spelled out: what the rows are, and where they came
-   *  from. */
-  tabTooltip: (rowWord: string, field: string, file: string): string =>
-    `Table of ${plural(rowWord)} from ${field} of ${file}`,
+   *  from, with the counts the tab leaves out. */
+  tabTooltip: (rowWord: string, field: string, file: string, places: readonly TablePlace[] = []): string =>
+    places.length === 0
+      ? `Table of ${plural(rowWord)} from ${field} of ${file}`
+      : `Table of ${plural(rowWord)} from ${field}, ${placesText(places, true)}, of ${file}`,
+  /** The table's name over it, with which one of several it is when it sits
+   *  in counted lists: `samples, block 2 of 128, channel 3 of 64`. */
+  title: (field: string, places: readonly TablePlace[]): string =>
+    places.length === 0 ? field : `${field}, ${placesText(places, true)}`,
+  /** What the export's file name says the table is: `samples.block2.channel3`. */
+  exportTable: (field: string, places: readonly TablePlace[]): string =>
+    [field, ...places.map((p) => `${p.word}${p.n}`)].join("."),
   /** How many rows there are, in the bar above them. */
   count: (n: number, rowWord: string): string => countText(n, rowWord),
   /**

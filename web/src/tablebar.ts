@@ -13,6 +13,7 @@
 import { el } from "./dom.ts";
 import { TABLE } from "./strings.ts";
 import type { TableFact } from "./doc.ts";
+import type { TablePlace } from "./tableplace.ts";
 import { secondsValueText, spacingText } from "./timetext.ts";
 import { ACROSS_MAX, canDrawAcross, canTurn, TURN_MAX, type TablePlan } from "./tableplan.ts";
 
@@ -22,6 +23,8 @@ let arrangeGroups = 0;
 
 export type BarOpts = {
   readonly title: string;
+  /** Which one of several this table is, nearest list first. */
+  readonly places: readonly TablePlace[];
   readonly plan: TablePlan;
   /** Which way round the table is drawn as the bar is built. */
   readonly turned: boolean;
@@ -57,7 +60,7 @@ export function tableBar(opts: BarOpts): Bar {
   };
 
   const bar = el("header", { className: "tbl-bar" });
-  bar.append(el("b", { className: "tbl-title", textContent: opts.title }));
+  bar.append(el("b", { className: "tbl-title", textContent: TABLE.title(opts.title, opts.places) }));
   bar.append(el("span", { className: "tbl-count", textContent: TABLE.count(plan.count, plan.rowWord) }));
   for (const fact of plan.facts) {
     const button = el("button", {

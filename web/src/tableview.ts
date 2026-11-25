@@ -44,6 +44,7 @@
 // straight down the page. A cell says where it is on its own hover either way
 // up, and a click goes to the bytes of the cell that was clicked.
 
+import type { TablePlace } from "./tableplace.ts";
 import type { Doc } from "./doc.ts";
 import { el, problemGlyph as glyph } from "./dom.ts";
 import { swatch } from "./colour.ts";
@@ -135,7 +136,7 @@ export class TableView {
    *  cell, to the field it names. */
   onFactPick: (path: readonly number[]) => void = () => {};
 
-  constructor(doc: Doc, plan: TablePlan, opts: { readonly title: string }) {
+  constructor(doc: Doc, plan: TablePlan, opts: { readonly title: string; readonly places?: readonly TablePlace[] }) {
     this.plan = plan;
     this.addresses = storedText(ADDRESSES_KEY) === "1";
     this.turned = startsTurned(plan, storedText(TURNED_KEY));
@@ -157,7 +158,7 @@ export class TableView {
     // them all here.
     this.exporter = new TableExportPanel({
       file: doc.name,
-      table: opts.title,
+      table: TABLE.exportTable(opts.title, opts.places ?? []),
       rowWord: plan.rowWord,
       count: plan.count,
       headings: () => this.columns.headings(),
@@ -170,6 +171,7 @@ export class TableView {
     });
     this.barLine = tableBar({
       title: opts.title,
+      places: opts.places ?? [],
       plan,
       turned: this.turned,
       addresses: this.addresses,
