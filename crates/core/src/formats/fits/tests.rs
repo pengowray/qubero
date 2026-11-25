@@ -423,6 +423,109 @@ fn a_repeat_count_of_six_digits_is_read_whole() {
     assert_eq!(column.value, Value::Int(1_234_567));
 }
 
+/// A `SUBINT` table the way a PSRFITS search-mode file writes one: a time
+/// column, and then `DATA`, whose samples the four cards size.
+fn search_table(form: &str, bits: u32, channels: u32, samples: u32, data: &[u8]) -> Vec<u8> {
+    let cards = [
+        "TFIELDS =                    2".to_string(),
+        format!("NBITS   = {bits:20} / Nr of bits/datum"),
+        format!("NCHAN   = {channels:20} / Number of channels/sub-bands in this HDU"),
+        "NPOL    =                    1 / Nr of polarisations".to_string(),
+        format!("NSBLK   = {samples:20} / Samples/row"),
+        "TBIN    =             0.000125 / [s] Time per bin or sample".to_string(),
+        "CHAN_BW =                  -3. / [MHz] Channel/sub-band width".to_string(),
+        "EXTNAME = 'SUBINT  '".to_string(),
+        "TTYPE1  = 'TSUBINT '".to_string(),
+        "TFORM1  = '1D      '".to_string(),
+        "TTYPE2  = 'DATA    '".to_string(),
+        format!("TFORM2  = '{form:8}'"),
+    ];
+    let refs: Vec<&str> = cards.iter().map(|c| c.as_str()).collect();
+    let mut b = primary();
+    b.extend_from_slice(&table_header(&refs, 1, 8 + data.len(), 0));
+    let mut row = 0.512f64.to_be_bytes().to_vec();
+    row.extend_from_slice(data);
+    b.extend_from_slice(&padded(row));
+    b
+}
+
+/// The samples of the first row's `DATA` cell, and the type the run has.
+fn search_values(d: &Document<MemSource>, ev: &mut Evaluator) -> (String, Vec<i128>) {
+    let cell = [0, 1, 3, 1, 0, 0, 1];
+    let run = ev.child_named(d, &cell, "samples").unwrap().expect("a run of samples");
+    let node = ev.node(d, &run).unwrap();
+    let values = (0..node.child_count as usize)
+        .map(|i| {
+            let mut p = run.clone();
+            p.push(i);
+            ev.node(d, &p).unwrap().value.as_int().unwrap()
+        })
+        .collect();
+    (node.type_name, values)
+}
+
+/// A PSRFITS search-mode `DATA` column written as bits reads as one-bit
+/// samples, the first channel of a byte in its top bit.
+#[test]
+fn a_search_mode_bit_column_reads_as_one_bit_samples() {
+    let (d, mut ev) = eval(search_table("16X", 1, 8, 2, &[0b1010_0000, 0b0000_0111]));
+    let (ty, values) = search_values(&d, &mut ev);
+    assert_eq!(ty, "u1[]");
+    assert_eq!(values, [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]);
+    // The run reads as a table: a row a time sample, a column a channel.
+    let run = ev.child_named(&d, &[0, 1, 3, 1, 0, 0, 1], "samples").unwrap().unwrap();
+    let shape = ev.table_shape(&d, &run).unwrap().expect("a shape");
+    // `TBIN` is 0.000125 s, so 8000 samples a second.
+    assert_eq!((shape.columns, shape.rate), (Some(8), Some(8000)));
+    assert_eq!((shape.column_word.as_deref(), shape.row_word.as_deref()), (Some("channel"), Some("sample")));
+    // The cards that size and time the samples are the table's facts, each
+    // with the card it was read from.
+    let said: Vec<&str> = shape.facts.iter().map(|f| f.value.trim()).collect();
+    assert_eq!(said, ["1", "8", "1", "2", "0.000125", "-3."], "{:?}", shape.facts);
+    assert!(shape.facts.iter().all(|f| !f.path.is_empty()));
+}
+
+/// The same column written as bytes, at two bits and at four bits a sample.
+#[test]
+fn a_search_mode_byte_column_reads_as_samples_as_wide_as_nbits() {
+    let (d, mut ev) = eval(search_table("3B", 2, 4, 3, &[0b00_01_10_11, 0b11_00_00_01, 0b10_10_10_10]));
+    let (ty, values) = search_values(&d, &mut ev);
+    assert_eq!(ty, "u2[]");
+    assert_eq!(values, [0, 1, 2, 3, 3, 0, 0, 1, 2, 2, 2, 2]);
+    let (d, mut ev) = eval(search_table("2B", 4, 2, 2, &[0x1f, 0xa0]));
+    assert_eq!(search_values(&d, &mut ev), ("u4[]".to_string(), vec![1, 15, 10, 0]));
+    let (d, mut ev) = eval(search_table("4B", 8, 2, 2, &[1, 2, 250, 4]));
+    assert_eq!(search_values(&d, &mut ev), ("u8[]".to_string(), vec![1, 2, 250, 4]));
+    // The cell is the whole column either way, so the row has no gap.
+    assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap().size_bits, 32);
+}
+
+/// `TBIN` written with an exponent, as the HTRU survey's files write it,
+/// still gives the samples a rate.
+#[test]
+fn a_tbin_with_an_exponent_gives_the_rate() {
+    let mut b = search_table("16X", 1, 8, 2, &[0; 2]);
+    let at = b.windows(8).position(|w| w == b"0.000125").unwrap();
+    b[at..at + 8].copy_from_slice(b" 6.4E-05");
+    let (d, mut ev) = eval(b);
+    let run = ev.child_named(&d, &[0, 1, 3, 1, 0, 0, 1], "samples").unwrap().unwrap();
+    assert_eq!(ev.table_shape(&d, &run).unwrap().unwrap().rate, Some(15625));
+}
+
+/// The cards have to account for every bit of the cell. Where they do not,
+/// the column reads as the bytes its `TFORMn` says and nothing is guessed.
+#[test]
+fn a_data_column_the_cards_do_not_account_for_keeps_its_bytes() {
+    // Four channels of two bits over three samples is 24 bits, not 32.
+    let (d, mut ev) = eval(search_table("4B", 2, 4, 3, &[1, 2, 3, 4]));
+    let cell = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
+    assert_eq!((cell.type_name.as_str(), cell.child_count), ("u8[]", 4));
+    // A fold-mode file has the same cards and a `DATA` column of integers.
+    let (d, mut ev) = eval(search_table("2I", 1, 2, 16, &[0, 7, 0, 9]));
+    let cell = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
+    assert_eq!((cell.type_name.as_str(), cell.child_count), ("i16 be[]", 2));
+}
+
 /// A string too long for one card ends in `&` and goes on in the cards
 /// after it, each of which reads as the piece it holds.
 #[test]
@@ -1250,4 +1353,29 @@ fn a_compressed_images_tiles_stay_bytes() {
     let (d, mut ev) = eval(b);
     let tile = ev.node(&d, &[0, 1, 3, 5, 0]).unwrap();
     assert_eq!((tile.type_name.as_str(), tile.child_count), ("u8[]", 4));
+}
+
+/// A PSRFITS file says what it is in its primary header, and which kind of
+/// observation it holds.
+#[test]
+fn a_psrfits_file_is_told_by_its_primary_header() {
+    let psrfits = |mode: &str| {
+        header(&[
+            "SIMPLE  =                    T",
+            "BITPIX  =                    8",
+            "NAXIS   =                    0",
+            "FITSTYPE= 'PSRFITS '           / FITS definition for pulsar data files",
+            &format!("OBS_MODE= '{mode:8}'           / (PSR, CAL, SEARCH)"),
+            "END",
+        ])
+    };
+    assert_eq!(fits_contents(&psrfits("SEARCH")), Some("psrfits-search"));
+    assert_eq!(fits_contents(&psrfits("PSR")), Some("psrfits-fold"));
+    assert_eq!(fits_contents(&psrfits("CAL")), Some("psrfits-cal"));
+    assert_eq!(fits_contents(&psrfits("LEVPSR")), Some("psrfits"));
+    // Any other FITS file is only FITS, and a card after END is not read.
+    assert_eq!(fits_contents(&image()), None);
+    let mut late = image();
+    late.extend_from_slice(&psrfits("SEARCH"));
+    assert_eq!(fits_contents(&late), None);
 }

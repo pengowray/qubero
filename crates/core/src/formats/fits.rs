@@ -163,7 +163,7 @@
 //!   size is a search by the text of another card.
 
 use super::fits_cards::card;
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, TableShape, Template, Ty as T, Until};
 
 /// The block every part of a FITS file is padded out to.
 const BLOCK: u32 = 2880;
@@ -830,8 +830,10 @@ fn binary_cell() -> T {
             // for a value nobody set.
             ("L", text.clone()),
             // A bit column is that many bits, rounded up to whole bytes.
-            ("X", T::bytes(r.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
-            ("B", scaled(T::UInt { bits: 8, endian: Big }, 1)),
+            // A PSRFITS search-mode file keeps its samples in a bit column or
+            // a byte column called `DATA`. See [`search_samples`].
+            ("X", search_samples(T::bytes(r.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining)), r.clone())),
+            ("B", search_samples(scaled(T::UInt { bits: 8, endian: Big }, 1), r.clone().mul(E::lit(8)))),
             ("I", scaled(T::Int { bits: 16, endian: Big }, 2)),
             ("J", scaled(T::Int { bits: 32, endian: Big }, 4)),
             ("K", scaled(T::Int { bits: 64, endian: Big }, 8)),
@@ -850,6 +852,73 @@ fn binary_cell() -> T {
         // none of it.
         T::bytes(E::lit(0)),
     )
+}
+
+/// The `DATA` cell of a PSRFITS search-mode `SUBINT` table: the samples one
+/// row holds, each `NBITS` bits wide. Any other cell reads as `plain`.
+///
+/// PSRFITS is the pulsar community's FITS convention. A search-mode file
+/// keeps the output of a filterbank: `NSBLK` time samples in each row of the
+/// `SUBINT` table, and in each time sample `NPOL` polarisations of `NCHAN`
+/// frequency channels, the first channel varying fastest. A sample is 1, 2,
+/// 4 or 8 bits, so the column is written as bits (`393216X`) or as bytes
+/// (`458752B`) and neither letter says how wide a sample is. `NBITS` does.
+/// The `TDIMn` card does not settle it either: the Parkes 1-bit file says
+/// `(96,1,4096)`, counting samples, and the HTRU 2-bit file `(224,1,2048)`,
+/// counting bytes.
+///
+/// The cell reads as samples only when the header's four cards account for
+/// every bit of it: `NBITS * NCHAN * NPOL * NSBLK` is exactly the bits the
+/// column's `TFORMn` counts. A fold-mode file also has an `NBITS` card and a
+/// `DATA` column, of 16-bit integers, and reads as the integers it holds.
+///
+/// The first channel of a byte is in its top bits. That is the order a FITS
+/// bit column has, and it is the order the Parkes 1-bit and HTRU 2-bit files
+/// this was checked against write (`tools/psrfits_bit_order.py`): channels
+/// next to each other in frequency are correlated, and the last channel of
+/// one byte is correlated with the first channel of the next byte only in
+/// that order.
+///
+/// The samples are one run rather than a list per time sample, so that the
+/// run reads as a table: a row a time sample, a column a channel. With more
+/// than one polarisation a row is every channel of the first polarisation
+/// and then every channel of the next.
+///
+/// `cell_bits` is how many bits the column's `TFORMn` counts.
+fn search_samples(plain: T, cell_bits: E) -> T {
+    let ttype = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
+    let per_sample = card_value("NCHAN").mul(card_value("NPOL"));
+    let said = card_value("NBITS").mul(per_sample.clone()).mul(card_value("NSBLK"));
+    // Asked only where the header has an `NSBLK` card, so a table that is not
+    // PSRFITS pays for one search of its header and no more.
+    let accounted = E::cond(card_at("NSBLK", &["keynum"]), said.equals(cell_bits.clone()), E::lit(0));
+    let run = |bits: u32| {
+        let count = cell_bits.clone().div(E::lit(i128::from(bits)));
+        let room = E::Remaining.mul(E::lit(8)).div(E::lit(i128::from(bits)));
+        let shape = TableShape {
+            columns: Some(per_sample.clone()),
+            column_word: Some("channel".into()),
+            row_word: Some("sample".into()),
+            // `TBIN` is the time between samples in seconds, so a second
+            // holds one over it. It is written as a real, `6.4E-05`.
+            rate: Some(E::real(1.0).div(E::real_text(card_value("TBIN")))),
+            facts: vec![
+                card_value("NBITS"),
+                card_value("NCHAN"),
+                card_value("NPOL"),
+                card_value("NSBLK"),
+                card_value("TBIN"),
+                card_value("CHAN_BW"),
+            ],
+            ..Default::default()
+        };
+        T::structure("Search samples", vec![("samples", T::array(T::UInt { bits, endian: Big }, count.at_most(room)))])
+            .payload(&["samples"])
+            .field_table("samples", shape)
+    };
+    let packed = T::switch(card_value("NBITS"), vec![(1, run(1)), (2, run(2)), (4, run(4)), (8, run(8))], plain.clone());
+    let checked = T::switch(accounted, vec![(0, plain.clone())], packed);
+    T::matches(ttype, vec![("DATA", checked.clone()), ("DATA    ", checked)], plain)
 }
 
 /// One number of a column the header says is worth something else: the integer
@@ -961,6 +1030,46 @@ pub fn fits() -> Template {
     Template::new("fits", T::structure("FITS", vec![("hdus", T::repeat(hdu(), Until::End))]))
         .with_schema(super::fits_afw::MASK, std::sync::Arc::new(super::fits_afw::Planes))
         .with_schema(super::fits_afw::ARCHIVE, std::sync::Arc::new(super::fits_afw::Components))
+}
+
+/// What a FITS file is for, where its primary header says: `psrfits-search`,
+/// `psrfits-fold` or `psrfits-cal` for a PSRFITS file by its `OBS_MODE`, and
+/// `psrfits` for one whose mode is none of those. None for any other FITS
+/// file.
+///
+/// PSRFITS files say what they are in the primary header: `FITSTYPE =
+/// 'PSRFITS'`, and `OBS_MODE` is `SEARCH` for filterbank samples, `PSR` for
+/// folded profiles and `CAL` for a calibrator observation. `head` is the
+/// front of the file, and only the primary header in it is read.
+pub fn fits_contents(head: &[u8]) -> Option<&'static str> {
+    let mut fitstype = None;
+    let mut mode = None;
+    for card in head.chunks_exact(80) {
+        let key = &card[..8];
+        if key == b"END     " {
+            break;
+        }
+        if &card[8..10] != b"= " {
+            continue;
+        }
+        // A string value: what is between the first two quotes, with the
+        // blanks it is padded with taken off.
+        let text = std::str::from_utf8(&card[10..]).ok().and_then(|v| v.split('\'').nth(1)).map(str::trim_end);
+        match key {
+            b"FITSTYPE" => fitstype = text,
+            b"OBS_MODE" => mode = text,
+            _ => {}
+        }
+    }
+    if fitstype != Some("PSRFITS") {
+        return None;
+    }
+    Some(match mode {
+        Some("SEARCH") => "psrfits-search",
+        Some("PSR") => "psrfits-fold",
+        Some("CAL") => "psrfits-cal",
+        _ => "psrfits",
+    })
 }
 
 #[cfg(test)]

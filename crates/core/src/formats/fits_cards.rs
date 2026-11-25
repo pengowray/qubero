@@ -20,7 +20,14 @@ const CARD: i128 = 80;
 /// logical, and `T` is not a number. The cards that hold a real have a shape
 /// of their own, since a whole number written with a point after it is still a
 /// whole number. See [`REAL`] and [`real_value`].
-const NUMERIC: &[&str] = &["BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL", "ZBITPIX", "ZDITHER0"];
+///
+/// The last four are PSRFITS's, the pulsar community's convention: how wide a
+/// search-mode sample is, and how many channels, polarisations and time
+/// samples a row of the `SUBINT` table holds. They size the samples in that
+/// table's `DATA` column. See [`search_samples`](super::fits::search_samples).
+const NUMERIC: &[&str] = &[
+    "BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL", "ZBITPIX", "ZDITHER0", "NBITS", "NCHAN", "NPOL", "NSBLK",
+];
 
 /// The logicals that decide how the data is read, which are read as the one
 /// letter they hold rather than as the run of blanks and a letter a text

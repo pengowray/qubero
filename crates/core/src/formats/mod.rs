@@ -252,7 +252,7 @@ pub use draco::draco;
 pub use dv::dv;
 pub use eml::eml;
 pub use eps::eps;
-pub use fits::fits;
+pub use fits::{fits, fits_contents};
 pub use elf::{bpf, elf};
 pub use ne::ne;
 pub use macho::macho;

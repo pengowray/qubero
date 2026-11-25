@@ -1254,6 +1254,13 @@ impl Editor {
         formats::bgzf_contents(head).unwrap_or("").to_string()
     }
 
+    /// What a FITS file is for, from the primary header in these leading
+    /// bytes: `psrfits-search`, `psrfits-fold`, `psrfits-cal` or `psrfits`,
+    /// or "" for any other FITS file. See `formats::fits_contents`.
+    pub fn fits_contents(&self, head: &[u8]) -> String {
+        formats::fits_contents(head).unwrap_or("").to_string()
+    }
+
     /// Select a template by name; "" clears it. Returns false if unknown.
     ///
     /// A name starting `ksy:` is one of the bundled Kaitai Struct formats and
