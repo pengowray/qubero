@@ -114,6 +114,9 @@ test("columns in groups are named by their group, with the group written out on 
   const columns = shapeColumns(s, 6);
   assert.deepEqual(columns.map((c) => c.name), ["IF 1 channel 1", "IF 1 channel 2", "IF 1 channel 3", "IF 2 channel 1", "IF 2 channel 2", "IF 2 channel 3"]);
   assert.equal(columns[4]?.title, "Intermediate frequency (IF) 2 of 2, channel 2 of 3");
+  // Counts in the hover get their separators: 45,056 channels to an IF.
+  const wide = shapeColumns(shape({ column_word: "channel", groups: { count: 4, word: "IF", spelled: "Intermediate frequency (IF)" } }), 180_224);
+  assert.equal(wide[1]?.title, `Intermediate frequency (IF) 1 of 4, channel 2 of ${(45_056).toLocaleString()}`);
   // One group, or groups that do not divide the row, and the columns are
   // channels alone.
   const one = shape({ column_word: "channel", groups: { count: 1, word: "pol", spelled: "Polarisation" } });
