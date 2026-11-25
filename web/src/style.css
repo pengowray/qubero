@@ -916,8 +916,9 @@ button.welcome-crystal {
    row would put it between the bytes it covers and the ones after them, and
    naming it inside the row would make that row taller than the same row is
    anywhere else, so every row below it moved as a long field scrolled past.
-   It covers the first bytes; the hairline goes underneath, since what it
-   divides the chips from is below them. */
+   It stands in the band above the first row (`.has-pin-band` below); the
+   hairline goes underneath, since what it divides the chips from is below
+   them. */
 .hv-note-pinned {
   position: absolute;
   top: 0;
@@ -937,7 +938,9 @@ button.welcome-crystal {
    (fields beside them). The band is kept when nothing is carried, so the
    rows do not jump a line each time a field scrolls past the top edge. Its
    cover hides the part of the top row scrolled up into it. The height is
-   the one `HexView.fitRows` reserves: a chip line and 2px. */
+   the one `HexView.fitRows` reserves: a chip line and 2px. A strip of more
+   carried fields than one line holds grows down over the first row rather
+   than making the top row taller, which would move every row below it. */
 .hv-rows.has-pin-band::before {
   content: "";
   position: absolute;
@@ -950,8 +953,7 @@ button.welcome-crystal {
   border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
 }
 .hv-rows.has-pin-band .hv-note-pinned {
-  height: calc(var(--hv-chip-line) + 2px);
-  overflow: hidden;
+  min-height: calc(var(--hv-chip-line) + 2px);
 }
 .hexview.has-notes {
   line-height: 24px;

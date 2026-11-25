@@ -2034,7 +2034,8 @@ export class HexView {
    *  again, and every draw was paying for that to size an overlay that is
    *  switched off unless the reader asked for it. */
   private overlayBox(): { width: number; height: number } {
-    return { width: this.rowsEl.clientWidth, height: this.viewH };
+    // The whole box, band and all: `viewH` is the rows' share of it.
+    return { width: this.rowsEl.clientWidth, height: this.viewH + this.band };
   }
 
   /**
