@@ -374,21 +374,27 @@ fn quoted_part() -> T {
 fn tform_value() -> T {
     // No leading digit: a width after the letter says ASCII, and nothing
     // after it says a binary column whose count was left out.
-    let by_letter = T::switch(digit_peek(1), vec![(1, ascii_form())], binary_form(None));
+    let by_letter = T::switch(digit_peek(1), vec![(1, ascii_form())], binary_form(false));
     T::structure(
         "TFORM",
         vec![
             ("open", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
-            ("form", T::switch(digit_peek(0), vec![(1, digits_then(1, 5))], by_letter)),
+            ("form", T::switch(digit_peek(0), vec![(1, binary_form(true))], by_letter)),
         ],
     )
     .machinery(&["open"])
 }
 
-/// The fields of a binary table's `TFORMn`. `digits` is how many digits the
-/// repeat count is written in, or nothing at all for a card that left the
-/// count out, where the count reads as the one the standard says it means.
-fn binary_form(digits: Option<i128>) -> T {
+/// The fields of a binary table's `TFORMn`. `counted` says the card writes a
+/// repeat count, which is then every digit up to the type letter. A card that
+/// left the count out reads as the count the standard says it means, which is
+/// one.
+///
+/// The count has no fixed number of digits. It used to be read as five at
+/// most, and a longer one lost its last digits to the type letter: a PSRFITS
+/// search-mode `DATA` column is `393216X` or `458752B`, which read as a count
+/// of 39321 and a type of `6`, so the column covered no bytes.
+fn binary_form(counted: bool) -> T {
     // A variable-length column writes the type of what its arrays hold as a
     // second letter, `1PB`: `P` says the cell is a descriptor and `B` says the
     // heap array it points at is bytes. Every other column has no second
@@ -399,9 +405,9 @@ fn binary_form(digits: Option<i128>) -> T {
         vec![(b'P' as i128, letter.clone()), (b'Q' as i128, letter)],
         T::bytes(E::lit(0)),
     );
-    let repeat = match digits {
-        Some(d) => T::decimal(StrLen::Fixed(E::lit(d))),
-        None => T::computed(E::lit(1)),
+    let repeat = match counted {
+        true => T::decimal(StrLen::Fixed(E::run(b"0123456789"))),
+        false => T::computed(E::lit(1)),
     };
     T::structure(
         "Binary column",
@@ -418,18 +424,6 @@ fn binary_form(digits: Option<i128>) -> T {
 fn digit_peek(n: i128) -> E {
     let byte = E::peek_at(E::lit(n * 8), 8, Big);
     E::lit(b'0' as i128 - 1).less_than(byte.clone()).mul(byte.less_than(E::lit(b'9' as i128 + 1)))
-}
-
-/// A binary table's `rTa`, where the count is `d` digits long if the byte
-/// after those digits is not another digit, and one digit longer if it is.
-/// `most` is where the walk stops: a repeat count longer than that reads as
-/// that many digits, and the letter after it is read as part of the number.
-fn digits_then(d: i128, most: i128) -> T {
-    let form = binary_form(Some(d));
-    if d == most {
-        return form;
-    }
-    T::switch(digit_peek(d), vec![(1, digits_then(d + 1, most))], form)
 }
 
 /// An ASCII table's `Tw.d`: the letter, the width in columns, and the digits

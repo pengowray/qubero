@@ -400,6 +400,29 @@ fn a_tform_with_no_repeat_count_is_one_value_of_that_type() {
     assert_eq!((two.type_name.as_str(), two.child_count, two.size_bits), ("i16 be[]", 2, 32));
 }
 
+/// A repeat count is as many digits as the card writes. Six of them read as
+/// five and a type of `6` before, which left the column with no bytes: the
+/// `DATA` column of a PSRFITS search-mode file is `393216X` or `458752B`.
+#[test]
+fn a_repeat_count_of_six_digits_is_read_whole() {
+    let cards = ["TFIELDS =                    2", "TFORM1  = '100000B '", "TFORM2  = '1234567X'"];
+    let bits = 1_234_567usize;
+    let width = 100_000 + bits.div_ceil(8);
+    let mut b = primary();
+    b.extend_from_slice(&table_header(&cards, 1, width, 0));
+    b.extend_from_slice(&padded(vec![7; width]));
+    let (d, mut ev) = eval(b);
+    let bytes = ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap();
+    assert_eq!((bytes.type_name.as_str(), bytes.child_count, bytes.size_bits), ("u8[]", 100_000, 800_000));
+    // An `X` column counts bits, and takes the whole bytes that hold them.
+    let flags = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
+    assert_eq!(flags.size_bits, bits.div_ceil(8) as u64 * 8);
+    // The two columns fill the row, so nothing of it is left unread.
+    assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0]).unwrap().size_bits, width as u64 * 8);
+    let column = ev.node(&d, &[0, 1, 3, 0, 1, 1]).unwrap();
+    assert_eq!(column.value, Value::Int(1_234_567));
+}
+
 /// A string too long for one card ends in `&` and goes on in the cards
 /// after it, each of which reads as the piece it holds.
 #[test]
