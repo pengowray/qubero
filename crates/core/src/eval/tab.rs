@@ -182,7 +182,7 @@ impl<'a, S: Source> Tab<'a, S> {
             facts: t
                 .facts
                 .into_iter()
-                .map(|o| Origin { path: self.path_out(&o.path).unwrap_or_default(), ..o })
+                .map(|f| TableFactInfo { path: self.path_out(&f.path).unwrap_or_default(), ..f })
                 .collect(),
             ..t
         }))

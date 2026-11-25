@@ -126,14 +126,11 @@ pub fn decode(data: &[u8], filters: &[Filter], mask: u32, element_size: usize) -
             2 => Some(unshuffle(&chunk.bytes, shuffle_width(filter, element_size))),
             32008 => match unbitshuffle(&chunk.bytes, filter, element_size) {
                 Ok((bytes, lz4)) => {
-                    // Two steps of one filter: the LZ4 blocks unpacked, then
-                    // the bits of each block put back into their elements.
-                    let mut in_bytes = in_bytes;
-                    if lz4 {
-                        chunk.steps.push(Step { filter: "bitshuffle LZ4".into(), in_bytes, out_bytes: bytes.len(), skipped: false });
-                        in_bytes = bytes.len();
-                    }
-                    chunk.steps.push(Step { filter: name, in_bytes, out_bytes: bytes.len(), skipped: false });
+                    // One filter, so one step, whether or not the library
+                    // packed its blocks with lz4 as well. The name says which,
+                    // in the case the other filter names are written in.
+                    let filter = if lz4 { format!("{name} with lz4") } else { name };
+                    chunk.steps.push(Step { filter, in_bytes, out_bytes: bytes.len(), skipped: false });
                     chunk.bytes = bytes;
                     continue;
                 }
@@ -253,7 +250,7 @@ pub fn unbitshuffle(data: &[u8], filter: &Filter, element_size: usize) -> Result
             let mut block = vec![0u8; bytes];
             match lz4_flex::block::decompress_into(packed, &mut block) {
                 Ok(got) if got == bytes => block,
-                _ => return Err("an LZ4 block would not unpack to the size it should.".into()),
+                _ => return Err("an lz4 block would not unpack to the size it should.".into()),
             }
         } else {
             let raw = data.get(at..at + bytes).ok_or("a block runs past the end of the chunk.")?;
@@ -434,7 +431,7 @@ mod tests {
         assert_eq!(chunk.problem, None);
         assert_eq!(chunk.bytes, twenty());
         let steps: Vec<(&str, usize, usize)> = chunk.steps.iter().map(|s| (s.filter.as_str(), s.in_bytes, s.out_bytes)).collect();
-        assert_eq!(steps, [("bitshuffle LZ4", 91, 80), ("bitshuffle", 80, 80)]);
+        assert_eq!(steps, [("bitshuffle with lz4", 91, 80)]);
         // Without LZ4 the chunk is the transposed blocks and nothing else.
         let plain = Filter { id: 32008, client_data: vec![0, 4, 4, 0, 0] };
         let chunk = decode(&hex(BITSHUFFLE_PLAIN), &[plain], 0, 4);

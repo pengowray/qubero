@@ -782,7 +782,7 @@ fn table_text(t: &TableShape) -> String {
         parts.push(format!("units [{}]", t.units.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(", ")));
     }
     if !t.facts.is_empty() {
-        parts.push(format!("describes [{}]", t.facts.iter().map(expr).collect::<Vec<_>>().join(", ")));
+        parts.push(format!("describes [{}]", t.facts.iter().map(|f| expr(&f.value)).collect::<Vec<_>>().join(", ")));
     }
     format!("table {}", parts.join(", "))
 }

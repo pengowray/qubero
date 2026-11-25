@@ -163,7 +163,7 @@
 //!   size is a search by the text of another card.
 
 use super::fits_cards::card;
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, TableShape, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, TableFact, TableShape, Template, Ty as T, Until};
 
 /// The block every part of a FITS file is padded out to.
 const BLOCK: u32 = 2880;
@@ -902,14 +902,16 @@ fn search_samples(plain: T, cell_bits: E) -> T {
             // `TBIN` is the time between samples in seconds, so a second
             // holds one over it. It is written as a real, `6.4E-05`.
             rate: Some(E::real(1.0).div(E::real_text(card_value("TBIN")))),
-            facts: vec![
-                card_value("NBITS"),
-                card_value("NCHAN"),
-                card_value("NPOL"),
-                card_value("NSBLK"),
-                card_value("TBIN"),
-                card_value("CHAN_BW"),
-            ],
+            // Each by its keyword, in the unit its comment opens with:
+            // `TBIN = 6.4E-05 / [s] Time per bin or sample`. The `DATA`
+            // column's own `TUNITn` (`Jy` in the Parkes files) is left off
+            // the samples, since they are the digitiser's levels until
+            // `DAT_SCL` and `DAT_OFFS` are applied, and nothing here applies
+            // them.
+            facts: ["NBITS", "NCHAN", "NPOL", "NSBLK", "TBIN", "CHAN_BW"]
+                .into_iter()
+                .map(|key| TableFact::named(key, card_value(key)).unit_from(card_at(key, &["body", "comment"])))
+                .collect(),
             ..Default::default()
         };
         T::structure("Search samples", vec![("samples", T::array(T::UInt { bits, endian: Big }, count.at_most(room)))])

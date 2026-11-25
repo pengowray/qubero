@@ -12,6 +12,7 @@
 
 import { el } from "./dom.ts";
 import { TABLE } from "./strings.ts";
+import type { TableFact } from "./doc.ts";
 import { canTurn, TURN_MAX, type TablePlan } from "./tableplan.ts";
 
 /** How many views have made a rows-or-columns choice, for naming each one's
@@ -61,7 +62,7 @@ export function tableBar(opts: BarOpts): Bar {
     const button = el("button", {
       type: "button",
       className: "tbl-fact",
-      textContent: `${fact.label} ${factValue(fact.value)}`,
+      textContent: `${fact.label} ${factText(fact)}`,
     });
     button.title = TABLE.factTitle(fact.label);
     button.addEventListener("click", () => opts.onFactPick(fact.path));
@@ -104,6 +105,13 @@ function arrangeChoice(opts: BarOpts): HTMLElement {
   group.setAttribute("aria-label", TABLE.arrange(opts.plan.rowWord));
   group.title = TABLE.arrangeTitle(opts.plan.rowWord);
   return group;
+}
+
+/** A fact's value and its unit, as the bar and the report show them:
+ *  `0.000125 s`, `44,100 Hz`, `96`. */
+export function factText(fact: TableFact): string {
+  const value = factValue(fact.value);
+  return fact.unit === "" || value === "" ? value : `${value} ${fact.unit}`;
 }
 
 /** A fact's value as the bar shows it: a whole number gets its thousands

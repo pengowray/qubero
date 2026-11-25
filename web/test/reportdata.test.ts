@@ -111,17 +111,20 @@ test("a count and its verb agree", () => {
   assert.equal(landmarks(profile([], { lengths_before: 1 })).at(-1), "1 field gives the length or count of a later field.");
 });
 
-test("a table's facts go by their own field's name, and numbers get separators", () => {
+test("a table's facts go by their own field's name, and numbers get separators and units", () => {
   const rows = factRows([
-    { label: "body.sample_rate", path: [1, 1, 3], value: "500000" },
-    { label: "body.format", path: [1, 1, 0], value: "pcm" },
+    { label: "body.sample_rate", path: [1, 1, 3], value: "500000", unit: "Hz" },
+    { label: "body.format", path: [1, 1, 0], value: "pcm", unit: "" },
     // Two facts that would share a name keep the structures they came through.
-    { label: "fmt.size", path: [1, 0, 1], value: "16" },
-    { label: "data.size", path: [1, 1, 1], value: "300000" },
+    { label: "fmt.size", path: [1, 0, 1], value: "16", unit: "" },
+    { label: "data.size", path: [1, 1, 1], value: "300000", unit: "" },
+    // A FITS card is named by its keyword, and its unit is from its comment.
+    { label: "TBIN", path: [0, 2, 0, 41], value: "6.4E-05", unit: "s" },
   ]);
-  assert.deepEqual(rows.map((r) => r.name), ["sample_rate", "format", "fmt.size", "data.size"]);
-  assert.equal(rows[0]?.value, (500000).toLocaleString());
+  assert.deepEqual(rows.map((r) => r.name), ["sample_rate", "format", "fmt.size", "data.size", "TBIN"]);
+  assert.equal(rows[0]?.value, `${(500000).toLocaleString()} Hz`);
   assert.equal(rows[1]?.value, "pcm");
+  assert.equal(rows[4]?.value, "6.4E-05 s");
 });
 
 test("the kinds a file does not use are counted by the table's two halves", () => {

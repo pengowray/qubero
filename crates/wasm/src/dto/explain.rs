@@ -534,13 +534,17 @@ impl From<CellAt> for CellAtDto {
 /// it says.
 #[derive(Serialize)]
 pub(crate) struct TableFactDto {
-    /// The field as the reader would name it: `body.sample_rate`.
+    /// The name the format gives the field, `TBIN`, or its path where the
+    /// template gave none: `body.sample_rate`.
     pub(crate) label: String,
     /// Where it is, so the reader can go there. Empty when it is nowhere this
     /// reading can point at.
     pub(crate) path: Vec<f64>,
     /// What it says, in brief. Empty when it could not be read.
     pub(crate) value: String,
+    /// The unit the value is in, as a UCUM code: `s`, `MHz`, `Hz`. Empty
+    /// when the fact has none.
+    pub(crate) unit: String,
 }
 
 /// The moment a field means, once the template's epoch has been applied to the

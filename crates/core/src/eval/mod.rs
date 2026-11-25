@@ -88,7 +88,7 @@ pub use cells::Cell;
 pub use picklecells::{CellAt, FrameCell};
 pub use check::{Blanked, CheckInfo, Verdict};
 pub use valid::ValidVerdict;
-pub use table::TableShapeInfo;
+pub use table::{TableFactInfo, TableShapeInfo};
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use profile::{template_profile, ChoiceUse, Profile, ProfileFacts, ProfileRow};

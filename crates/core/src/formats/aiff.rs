@@ -6,7 +6,7 @@
 //! nothing else in common use writes. The IR reads one now, so the field says
 //! 44100 rather than sitting there as ten bytes nobody can spend.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Time, Ty as T, Valid};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableFact, TableShape, Template, Time, Ty as T, Valid};
 
 use super::iff::{cc, chunk_text, iff};
 
@@ -131,10 +131,10 @@ fn sample_table() -> T {
         // An 80-bit extended float, and 44100.0 of them a second is a rate.
         rate: Some(E::sibling(&["body", "sample_rate"])),
         facts: vec![
-            E::sibling(&["body", "channels"]),
-            E::sibling(&["body", "sample_size"]),
-            E::sibling(&["body", "sample_rate"]),
-            E::sibling(&["body", "compression"]),
+            E::sibling(&["body", "channels"]).into(),
+            E::sibling(&["body", "sample_size"]).into(),
+            TableFact::from(E::sibling(&["body", "sample_rate"])).in_unit("Hz"),
+            E::sibling(&["body", "compression"]).into(),
         ],
         // A run of numbers, so a cell is where the count says.
         cells: None,
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(shape.columns, Some(2));
         // The rate is the 80-bit extended float the COMM holds, and 44100.0
         // of anything a second is a rate of 44100.
-        assert_eq!(shape.rate, Some(44100));
+        assert_eq!(shape.rate, Some(44100.0));
         assert_eq!(shape.row_word.as_deref(), Some("sample"));
         assert_eq!(shape.column_word.as_deref(), Some("channel"));
         let labels: Vec<&str> = shape.facts.iter().map(|f| f.label.as_str()).collect();

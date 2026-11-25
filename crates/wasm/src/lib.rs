@@ -1803,7 +1803,7 @@ impl Editor {
                         units: t.units,
                         column_word: t.column_word,
                         row_word: t.row_word,
-                        rate: t.rate.map(|r| r as f64),
+                        rate: t.rate,
                         facts: t
                             .facts
                             .into_iter()
@@ -1811,6 +1811,7 @@ impl Editor {
                                 label: o.label,
                                 path: o.path.into_iter().map(|x| x as f64).collect(),
                                 value: o.value,
+                                unit: o.unit,
                             })
                             .collect(),
                         cells: t.cells.map(|c| match c {

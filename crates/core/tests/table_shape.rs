@@ -62,7 +62,7 @@ fn a_stereo_wave_says_how_many_channels_a_row_is_and_how_fast_the_rows_come() {
 
     let shape = ev.table_shape(&doc, &samples).unwrap().expect("a shape");
     assert_eq!(shape.columns, Some(2));
-    assert_eq!(shape.rate, Some(44100));
+    assert_eq!(shape.rate, Some(44100.0));
     assert_eq!(shape.names, ["left", "right"]);
     assert_eq!(shape.row_word.as_deref(), Some("sample"));
     assert_eq!(shape.column_word.as_deref(), Some("channel"));
@@ -133,7 +133,7 @@ fn au_samples(ev: &mut Evaluator, doc: &Document<MemSource>) -> Vec<usize> {
 /// the facts above the table is stored.
 fn a_run_of_samples(shape: &TableShapeInfo, columns: u64, rate: u64) {
     assert_eq!(shape.columns, Some(columns));
-    assert_eq!(shape.rate, Some(rate));
+    assert_eq!(shape.rate, Some(rate as f64));
     assert_eq!(shape.row_word.as_deref(), Some("sample"));
     assert_eq!(shape.column_word.as_deref(), Some("channel"));
     assert!(!shape.facts.is_empty(), "no facts");

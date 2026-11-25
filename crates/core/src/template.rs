@@ -2108,11 +2108,73 @@ pub struct TableShape {
     pub rate: Option<Expr>,
     /// Fields that describe the table, shown above it with links to where they
     /// are stored: sample rate, channels, bits per sample.
-    pub facts: Vec<Expr>,
+    pub facts: Vec<TableFact>,
     /// Where a row's cells are, when a row is not a run of values. None: the
     /// rows are `columns` values each, which is every table declared by a
     /// template.
     pub cells: Option<Cells>,
+}
+
+/// One field that describes a table: where its value is, and, where the
+/// field's own path is not what a reader calls it, the name to show and the
+/// unit the value is in.
+///
+/// A FITS card is `cards[12].body.value` by its path and `TBIN` to anyone who
+/// reads the format, and its unit is written in the card's comment. A WAV
+/// sample rate is in hertz because the format says so.
+#[derive(Debug, Clone)]
+pub struct TableFact {
+    pub value: Expr,
+    /// The name to show instead of the field's path. None: the path.
+    pub label: Option<Arc<str>>,
+    pub unit: Option<FactUnit>,
+}
+
+/// Where a fact's unit comes from.
+#[derive(Debug, Clone)]
+pub enum FactUnit {
+    /// A unit the format fixes, as a UCUM code: `Hz`, `s`, `MHz`.
+    Fixed(Arc<str>),
+    /// The unit written in square brackets at the front of the text this
+    /// expression reaches, which is where the FITS standard (section 4.3.2)
+    /// recommends a card's comment put it: `[s] Time per bin or sample`. No
+    /// unit when the text does not open with one.
+    Bracketed(Expr),
+}
+
+impl From<Expr> for TableFact {
+    fn from(value: Expr) -> Self {
+        TableFact { value, label: None, unit: None }
+    }
+}
+
+impl TableFact {
+    /// A fact shown by `label` rather than by the field's path.
+    pub fn named(label: &str, value: Expr) -> Self {
+        TableFact { value, label: Some(label.into()), unit: None }
+    }
+    /// The same fact, in a unit the format fixes.
+    pub fn in_unit(mut self, unit: &str) -> Self {
+        self.unit = Some(FactUnit::Fixed(unit.into()));
+        self
+    }
+    /// The same fact, in the unit the text `comment` reaches writes in
+    /// brackets at its front. See [`FactUnit::Bracketed`].
+    pub fn unit_from(mut self, comment: Expr) -> Self {
+        self.unit = Some(FactUnit::Bracketed(comment));
+        self
+    }
+}
+
+/// The unit a text writes in square brackets at its front, after any blanks
+/// and the `/` a FITS comment opens with: `/ [MHz] Channel width` is `MHz`.
+/// None when the text opens with anything else, or the brackets hold nothing.
+pub fn bracketed_unit(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    let rest = text.strip_prefix('/').unwrap_or(text).trim_start();
+    let inside = rest.strip_prefix('[')?;
+    let unit = inside[..inside.find(']')?].trim();
+    (!unit.is_empty()).then_some(unit)
 }
 
 /// How a table's cells are found, for a table whose rows are nodes rather than

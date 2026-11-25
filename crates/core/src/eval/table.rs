@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use super::origin::{Role, Sink};
 use super::*;
-use crate::template::{Cells, TableShape};
+use crate::template::{bracketed_unit, Cells, FactUnit, TableShape};
 
 /// A table shape with its expressions worked out in the file at hand.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,14 +34,32 @@ pub struct TableShapeInfo {
     pub column_word: Option<String>,
     /// What one row is: "sample", "record".
     pub row_word: Option<String>,
-    /// Rows per second, when the rows are spaced in time.
-    pub rate: Option<u64>,
+    /// Rows per second, when the rows are spaced in time. A real, since a
+    /// filterbank written every 0.9 s has 1.11 rows a second and one sampled
+    /// every 15 s has less than one.
+    pub rate: Option<f64>,
     /// The fields that describe the table, with where they are and what they
     /// say, as the At-cursor panel shows any other origin.
-    pub facts: Vec<Origin>,
+    pub facts: Vec<TableFactInfo>,
     /// Where a row's cells are, when a row is a node rather than a run of
     /// values. None for every table a template declares.
     pub cells: Option<Cells>,
+}
+
+/// One field that describes a table, worked out: what to call it, where it
+/// is, what it says and what unit that is in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableFactInfo {
+    /// The name the template gave the fact, or the field's path where it gave
+    /// none: `TBIN`, `body.sample_rate`.
+    pub label: String,
+    /// Where it is, so the reader can go there. Empty when the number came
+    /// from somewhere with no field of its own.
+    pub path: Vec<usize>,
+    /// What it says, in brief. Empty when it could not be read.
+    pub value: String,
+    /// The unit, as a UCUM code, or empty when the fact has none.
+    pub unit: String,
 }
 
 impl Evaluator {
@@ -62,13 +80,31 @@ impl Evaluator {
             None => None,
         };
         let rate = match &shape.rate {
-            Some(e) => self.count_at(doc, path, &e.clone())?,
+            Some(e) => self.rate_at(doc, path, &e.clone())?,
             None => None,
         };
-        let mut sink = Sink::told(true);
-        for e in shape.facts.iter() {
-            let e = e.clone();
-            self.from_expr(doc, path, &e, Role::Describes, &mut sink)?;
+        let mut facts = Vec::new();
+        for fact in shape.facts.iter() {
+            let mut sink = Sink::told(true);
+            self.from_expr(doc, path, &fact.value.clone(), Role::Describes, &mut sink)?;
+            let unit = match &fact.unit {
+                None => String::new(),
+                Some(FactUnit::Fixed(u)) => u.to_string(),
+                Some(FactUnit::Bracketed(e)) => match self.text_at(doc, path, &e.clone(), None) {
+                    Ok(text) => bracketed_unit(&text).unwrap_or_default().to_string(),
+                    Err(err) if err.interrupted() => return Err(err),
+                    Err(_) => String::new(),
+                },
+            };
+            // A name and a unit are said of one field. An expression that
+            // reaches several keeps each of them under its own path.
+            let one = sink.out.len() == 1;
+            facts.extend(sink.out.into_iter().map(|o| TableFactInfo {
+                label: fact.label.as_deref().filter(|_| one).map_or(o.label, str::to_string),
+                path: o.path,
+                value: o.value,
+                unit: if one { unit.clone() } else { String::new() },
+            }));
         }
         Ok(Some(TableShapeInfo {
             columns,
@@ -77,7 +113,7 @@ impl Evaluator {
             column_word: shape.column_word.as_ref().map(|w| w.to_string()),
             row_word: shape.row_word.as_ref().map(|w| w.to_string()),
             rate,
-            facts: sink.out,
+            facts,
             cells: shape.cells.clone(),
         }))
     }
@@ -129,17 +165,29 @@ impl Evaluator {
         }
     }
 
-    /// The same number asked for again as a real, for the file that wrote it
-    /// as one.
+    /// Rows a second, as the real the expression comes to. Nothing for a rate
+    /// that is not a number above nought, since a time column worked out from
+    /// one would put every row at the same instant.
     ///
-    /// AIFF's sample rate is an 80-bit extended float, so it says 44100.0 and
-    /// the whole-number reading of a field will not have it: a field that is a
-    /// float either refuses outright or, reached as a sibling, answers with
-    /// the nought that means nothing was found. That is right everywhere else,
-    /// because a length or an offset that is not whole is a misread rather
-    /// than a number to truncate. Rows a second is a count either way, and a
-    /// rate the file states exactly is the one place where dropping the
-    /// fraction is what the reader meant.
+    /// Asked as a real first, because a rate is a real however the file wrote
+    /// it: `1/TBIN` is 2,929,687.5 for a GUPPI block, and AIFF's sample rate is
+    /// an 80-bit float. A rate the real reading will not have is asked again
+    /// as a whole number.
+    fn rate_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], e: &Expr) -> R<Option<f64>> {
+        let here = self.memo.get(path).map(|r| (r.offset, r.limit));
+        match self.eval_real_at(doc, path, e, here) {
+            Ok(v) if v.is_finite() && v > 0.0 => return Ok(Some(v)),
+            Ok(_) => return Ok(None),
+            Err(err) if err.interrupted() => return Err(err),
+            Err(_) => {}
+        }
+        Ok(self.count_at(doc, path, e)?.map(|n| n as f64))
+    }
+
+    /// A count asked for again as a real, for the file that wrote it as one,
+    /// with the fraction dropped. A field that is a float either refuses the
+    /// whole-number reading or, reached as a sibling, answers with the nought
+    /// that means nothing was found.
     fn real_count_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], e: &Expr) -> R<Option<u64>> {
         let here = self.memo.get(path).map(|r| (r.offset, r.limit));
         match self.eval_real_at(doc, path, e, here) {
@@ -148,5 +196,20 @@ impl Evaluator {
             Err(err) if err.interrupted() => Err(err),
             Err(_) => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::template::bracketed_unit;
+
+    #[test]
+    fn a_unit_is_read_from_the_brackets_a_comment_opens_with() {
+        assert_eq!(bracketed_unit("/ [s] Time per bin or sample"), Some("s"));
+        assert_eq!(bracketed_unit(" [MHz] Channel/sub-band width"), Some("MHz"));
+        assert_eq!(bracketed_unit("/ Nr of bits/datum [bits]"), None);
+        assert_eq!(bracketed_unit("/ [] nothing"), None);
+        assert_eq!(bracketed_unit("/ [s unclosed"), None);
+        assert_eq!(bracketed_unit(""), None);
     }
 }

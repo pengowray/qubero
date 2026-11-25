@@ -67,7 +67,7 @@ fn refs(def: &StructDef, selectors: bool) -> Vec<Option<usize>> {
         // as much as its length is, and a view of what depends on what that
         // left the shape out would draw the samples depending on nothing.
         if let Some(t) = &f.table {
-            for e in t.columns.iter().chain(t.rate.iter()).chain(t.facts.iter()) {
+            for e in t.columns.iter().chain(t.rate.iter()).chain(t.facts.iter().map(|f| &f.value)) {
                 expr_refs(e, &mut names);
             }
         }

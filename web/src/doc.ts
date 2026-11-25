@@ -332,9 +332,13 @@ export type TemplateNode = {
  *  path and value the panel at the cursor shows, since both come from the
  *  origins of the expressions the shape was written with. */
 export type TableFact = {
+  /** The name the format gives the field (`TBIN`), or its path where the
+   *  template gave none (`body.sample_rate`). */
   readonly label: string;
   readonly path: readonly number[];
   readonly value: string;
+  /** The unit the value is in, as a UCUM code (`s`, `MHz`), or "". */
+  readonly unit: string;
 };
 
 /**

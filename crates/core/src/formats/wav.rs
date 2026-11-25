@@ -27,7 +27,7 @@
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
 //! read by the same template that reads one at the front of an MP3.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Until, Valid};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableFact, TableShape, Template, Ty as T, Until, Valid};
 
 /// A four-character chunk id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -341,10 +341,10 @@ fn as_sample_table(holder: T) -> T {
         row_word: Some("sample".into()),
         rate: Some(E::sibling(&["body", "sample_rate"])),
         facts: vec![
-            E::sibling(&["body", "format"]),
-            E::sibling(&["body", "channels"]),
-            E::sibling(&["body", "sample_rate"]),
-            E::sibling(&["body", "bits_per_sample"]),
+            E::sibling(&["body", "format"]).into(),
+            E::sibling(&["body", "channels"]).into(),
+            TableFact::from(E::sibling(&["body", "sample_rate"])).in_unit("Hz"),
+            E::sibling(&["body", "bits_per_sample"]).into(),
         ],
         // A run of numbers, so a cell is where the count says.
         cells: None,
@@ -1425,7 +1425,7 @@ mod tests {
                 assert_eq!(ev.node(&d, &[3, 1, 2, 1, i]).unwrap().value, Value::Int(i128::from(*want)));
             }
             let shape = ev.table_shape(&d, &[3, 1, 2, 1]).unwrap().expect("a shape");
-            assert_eq!((shape.columns, shape.rate), (Some(1), Some(500_000)));
+            assert_eq!((shape.columns, shape.rate), (Some(1), Some(500_000.0)));
 
             let riff_size = ev.valid_of(&d, &[1]).unwrap().unwrap();
             assert_eq!(riff_size.ok, fixed, "{}", riff_size.text);

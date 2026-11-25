@@ -476,13 +476,16 @@ fn a_search_mode_bit_column_reads_as_one_bit_samples() {
     let run = ev.child_named(&d, &[0, 1, 3, 1, 0, 0, 1], "samples").unwrap().unwrap();
     let shape = ev.table_shape(&d, &run).unwrap().expect("a shape");
     // `TBIN` is 0.000125 s, so 8000 samples a second.
-    assert_eq!((shape.columns, shape.rate), (Some(8), Some(8000)));
+    assert_eq!((shape.columns, shape.rate), (Some(8), Some(8000.0)));
     assert_eq!((shape.column_word.as_deref(), shape.row_word.as_deref()), (Some("channel"), Some("sample")));
     // The cards that size and time the samples are the table's facts, each
     // with the card it was read from.
     let said: Vec<&str> = shape.facts.iter().map(|f| f.value.trim()).collect();
     assert_eq!(said, ["1", "8", "1", "2", "0.000125", "-3."], "{:?}", shape.facts);
     assert!(shape.facts.iter().all(|f| !f.path.is_empty()));
+    // Each is called by its keyword, in the unit its comment opens with.
+    let named: Vec<(&str, &str)> = shape.facts.iter().map(|f| (f.label.as_str(), f.unit.as_str())).collect();
+    assert_eq!(named, [("NBITS", ""), ("NCHAN", ""), ("NPOL", ""), ("NSBLK", ""), ("TBIN", "s"), ("CHAN_BW", "MHz")]);
 }
 
 /// The same column written as bytes, at two bits and at four bits a sample.
@@ -509,7 +512,19 @@ fn a_tbin_with_an_exponent_gives_the_rate() {
     b[at..at + 8].copy_from_slice(b" 6.4E-05");
     let (d, mut ev) = eval(b);
     let run = ev.child_named(&d, &[0, 1, 3, 1, 0, 0, 1], "samples").unwrap().unwrap();
-    assert_eq!(ev.table_shape(&d, &run).unwrap().unwrap().rate, Some(15625));
+    assert_eq!(ev.table_shape(&d, &run).unwrap().unwrap().rate, Some(15625.0));
+}
+
+/// A `TBIN` whose rate is not a whole number of samples a second keeps its
+/// fraction: GBT's 40.96 microseconds is 24,414.0625 samples a second.
+#[test]
+fn a_rate_keeps_its_fraction() {
+    let mut b = search_table("16X", 1, 8, 2, &[0; 2]);
+    let at = b.windows(8).position(|w| w == b"0.000125").unwrap();
+    b[at..at + 8].copy_from_slice(b"4.096E-5");
+    let (d, mut ev) = eval(b);
+    let run = ev.child_named(&d, &[0, 1, 3, 1, 0, 0, 1], "samples").unwrap().unwrap();
+    assert_eq!(ev.table_shape(&d, &run).unwrap().unwrap().rate, Some(24_414.0625));
 }
 
 /// A fold-mode file, and some search-mode writers, quote the PSRFITS cards

@@ -8,7 +8,7 @@ import { problemGlyph } from "../dom.ts";
 import { fieldClass } from "../fieldstyle.ts";
 import { childWord, codecWords, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
 import { formatOffset } from "../format.ts";
-import { factValue } from "../tablebar.ts";
+import { factText } from "../tablebar.ts";
 import type { TablePlan } from "../tableplan.ts";
 import type { ReportData } from "./data.ts";
 import { byteRef, dumpRows, pointAt } from "./refs.ts";
@@ -182,13 +182,13 @@ function withoutLead(line: string, names: readonly string[]): string {
  * A table's facts as the report shows them. Each is named by its own field,
  * without the structures it was read through: `body.sample_rate` is
  * `sample_rate`, unless two facts would then have one name. A number gets its
- * thousands separators, as the table view writes it.
+ * thousands separators, as the table view writes it, and its unit after it.
  */
 export function factRows(facts: readonly TableFact[]): { readonly name: string; readonly value: string }[] {
   const short = facts.map((f) => f.label.replace(/^.*\./, ""));
   return facts.map((f, i) => {
     const name = short[i] ?? f.label;
-    return { name: short.indexOf(name) === short.lastIndexOf(name) ? name : f.label, value: factValue(f.value) };
+    return { name: short.indexOf(name) === short.lastIndexOf(name) ? name : f.label, value: factText(f) };
   });
 }
 

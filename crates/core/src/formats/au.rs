@@ -7,7 +7,7 @@
 //! be. The samples run to the end here either way, so nothing has to special
 //! case it.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Valid};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableFact, TableShape, Template, Ty as T, Valid};
 
 /// The encodings, which is really a list of every way a telephone company has
 /// written a sample. 1 is mu-law, the one an `.au` almost always is.
@@ -104,7 +104,7 @@ fn sample_table() -> T {
         column_word: Some("channel".into()),
         row_word: Some("sample".into()),
         rate: Some(E::field("sample_rate")),
-        facts: vec![E::field("encoding"), E::field("sample_rate"), E::field("channels")],
+        facts: vec![E::field("encoding").into(), TableFact::from(E::field("sample_rate")).in_unit("Hz"), E::field("channels").into()],
         // A run of numbers, so a cell is where the count says.
         cells: None,
     };
@@ -182,7 +182,7 @@ mod tests {
         // the wrapper, which a plain field name reaches from inside it.
         let shape = ev.table_shape(&d, &samples).unwrap().expect("a shape");
         assert_eq!(shape.columns, Some(2));
-        assert_eq!(shape.rate, Some(22050));
+        assert_eq!(shape.rate, Some(22050.0));
         assert_eq!(shape.row_word.as_deref(), Some("sample"));
         assert_eq!(shape.column_word.as_deref(), Some("channel"));
         let labels: Vec<&str> = shape.facts.iter().map(|f| f.label.as_str()).collect();

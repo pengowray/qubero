@@ -88,7 +88,7 @@ pub fn dbf() -> Template {
         .field_doc("record_length", "One more than the columns' widths added up, for the deletion flag.")
         .field_elem_named_from("fields", E::elem_field("fields", E::idx(), &["name"]))
         // Each record is a row and no more.
-        .field_table("records", TableShape { row_word: Some("record".into()), facts: vec![E::field("record_count")], ..Default::default() })
+        .field_table("records", TableShape { row_word: Some("record".into()), facts: vec![E::field("record_count").into()], ..Default::default() })
         .counted_as("record")
         .machinery(&["fields", "terminator", "header_rest"])
         .payload(&["records"]),
