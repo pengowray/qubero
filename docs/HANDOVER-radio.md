@@ -20,7 +20,7 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | A table fact carries a label and a unit (`TableFact`, `FactUnit` in `template.rs`). The PSRFITS sample table shows `TBIN 0.000125 s` and `CHAN_BW -3 MHz`, by keyword, with the unit read from the `[...]` at the front of the card's comment; WAV, AIFF and AU sample rates are in Hz. The report shows the same. | 6ff6e25a |
 | A table's rate is a real. `1/TBIN` for GBT's 40.96 us is 24,414.0625 rows a second, and a filterbank sampled every 15 s has a rate below one. | 6ff6e25a |
 | SIGPROC filterbank (`sigproc.rs`) and GUPPI raw voltages (`guppi.rs`), each sniffed, each a table with facts, and both checked against numpy readers (see below). Toolbar: "SIGPROC filterbank file", "GUPPI raw voltages". | 99b18b1a, e42f4dd6 |
-| A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
+| A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096 channels."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
 
 ### Bit order inside a byte
 

@@ -939,7 +939,7 @@ export const TABLE = {
     `Too many ${plural(rowWord)} to show as columns. The limit is ${limit.toLocaleString()}.`,
   /** Why `rows` cannot be chosen, on a table too wide to draw across. */
   acrossTooMany: (rowWord: string, columnWord: string | null, limit: number): string =>
-    `Too many ${plural(columnWord ?? "column")} to show ${plural(rowWord)} as rows. The limit is ${limit.toLocaleString()}.`,
+    `Too many ${plural(columnWord ?? "column")} to show ${plural(rowWord)} as rows. The limit is ${limit.toLocaleString()} ${plural(columnWord ?? "column")}.`,
   /** The sentence saying what a row is, for a table drawn turned, where it is
    *  a column that is one. */
   columnMeaning: (rowWord: string, columnWord: string, spacing: string): string =>
