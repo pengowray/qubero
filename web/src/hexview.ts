@@ -416,6 +416,18 @@ export class HexView {
    *  a second time. The first drawing is never seen: both happen inside one
    *  event, and the browser paints once at the end of it. */
   private settling = false;
+  /** Whether the last frame drawn had the cursor's whole cell on screen, and
+   *  where the view stood for it. A frame that starts from the same place
+   *  and pushes the cursor off has grown rows above it: chips and values for
+   *  bytes that arrived after the jump, which a large file sends in pieces.
+   *  That frame brings the cursor back. One that starts from somewhere else
+   *  was scrolled, and is left where the scroll put it. */
+  private cursorShown: { readonly topRow: number; readonly topPx: number } | null = null;
+  /** True while `revealCursor` is moving the view, so the frames it draws do
+   *  not each start another reveal. */
+  private revealing = false;
+  /** How many draws are under way, so only the outermost one decides. */
+  private drawing = 0;
 
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. `atBit`, when there is one, is
@@ -651,13 +663,14 @@ export class HexView {
    *  cursor's row push it down, so it is brought back on screen if that
    *  pushed it off; a cursor that was already off screen is left there. */
   setSections(sections: readonly OutlineHeading[]): void {
+    const shown = this.cursorInView();
     this.sections = sections;
     this.rebuildStructural();
     // The measurements stand: what is kept is what a row's chips wrapped to,
     // over and above the headings it was reckoned to carry, and a heading
     // arriving or leaving changes the reckoning rather than the wrapping.
     this.render();
-    this.revealCursor();
+    if (shown) this.revealCursor();
   }
 
   setBytesPerRow(n: number): void {
@@ -956,18 +969,45 @@ export class HexView {
    * second hand on the view would double it.
    */
   private revealCursor(): void {
-    if (this.selDrag !== null) return;
+    if (this.selDrag !== null || this.revealing) return;
+    this.revealing = true;
+    try {
+      const bpr = this.bytesPerRow;
+      const cursorRow = Math.floor(this.cursor / bpr);
+      for (let pass = 0; pass < 6; pass++) {
+        if (cursorRow < this.topRow) return;
+        const cell = this.grid.cellFor(cursorRow - this.topRow, this.cursor - cursorRow * bpr);
+        const was = this.scrollY;
+        if (cell === undefined) {
+          // Past the last row element: the rows above it came out taller than
+          // the count of elements allowed for. The draw just made measured
+          // them, so placing the row by the ledger again lands nearer, and
+          // the next pass finishes the job from the cell.
+          this.scrollCursorIntoView();
+          this.render();
+        } else {
+          const deficit = cell.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
+          if (deficit <= 0.5) return;
+          this.scrollToY(was + deficit);
+        }
+        if (this.scrollY === was) return;
+      }
+    } finally {
+      this.revealing = false;
+    }
+  }
+
+  /** Whether the cursor's whole cell is inside the box the rows are clipped
+   *  to, as last drawn. */
+  private cursorInView(): boolean {
     const bpr = this.bytesPerRow;
     const cursorRow = Math.floor(this.cursor / bpr);
-    for (let pass = 0; pass < 6; pass++) {
-      const cell = this.grid.cellFor(cursorRow - this.topRow, this.cursor - cursorRow * bpr);
-      if (cursorRow < this.topRow || cell === undefined) return;
-      const deficit = cell.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
-      if (deficit <= 0.5) return;
-      const was = this.scrollY;
-      this.scrollToY(was + deficit);
-      if (this.scrollY === was) return;
-    }
+    if (cursorRow < this.topRow) return false;
+    const cell = this.grid.cellFor(cursorRow - this.topRow, this.cursor - cursorRow * bpr);
+    if (cell === undefined) return false;
+    const c = cell.getBoundingClientRect();
+    const box = this.rowsEl.getBoundingClientRect();
+    return c.height > 0 && c.top >= box.top - 0.5 && c.bottom <= box.bottom + 0.5;
   }
 
   /** How far a page key moves, in pixels: everything on screen but nothing
@@ -2021,6 +2061,23 @@ export class HexView {
     // a detached or hidden grid gives it the wrong shape and builds cells that
     // will immediately be rebuilt when the view is shown through relayout().
     if (this.settling || this.el.hidden || !this.el.isConnected) return;
+    const shown = this.cursorShown;
+    const steady = shown !== null && shown.topRow === this.topRow && shown.topPx === this.topPx;
+    this.drawing++;
+    try {
+      this.draw();
+    } finally {
+      this.drawing--;
+    }
+    // Only the outermost draw decides, once the rows have settled: one asked
+    // for by a listener while this one was still drawing, and a reveal's
+    // own, are part of this one.
+    if (this.revealing || this.drawing > 0) return;
+    if (steady && !this.cursorInView()) this.revealCursor();
+    this.cursorShown = this.cursorInView() ? { topRow: this.topRow, topPx: this.topPx } : null;
+  }
+
+  private draw(): void {
     this.fitRows();
     const f = this.frame();
     // What each row will be tall once the browser has laid it out, from what
@@ -2032,7 +2089,7 @@ export class HexView {
       // Those rows were drawn against a column width that has just changed, so
       // how tall they came out says nothing about how tall they will be.
       if (widened) this.ledger.clearMeasured();
-      this.render();
+      this.draw();
       return;
     }
     // How tall each row actually came out. A row past the end of the file is
@@ -2041,7 +2098,7 @@ export class HexView {
     const real = this.grid.heights(heights);
     if (this.settleHeights(real) && this.renormPasses < 3) {
       this.renormPasses++;
-      this.render();
+      this.draw();
       this.renormPasses--;
       return;
     }
