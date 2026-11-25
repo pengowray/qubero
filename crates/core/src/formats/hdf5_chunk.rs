@@ -20,12 +20,13 @@
 //! when a filter made that chunk bigger, which deflate does for data that is
 //! already compressed. A skipped filter is listed and stepped over.
 //!
-//! What is undone: deflate (with or without its zlib wrapper), shuffle, and
-//! the two checks that only add bytes, fletcher32 and the 32-bit checksum. The
-//! rest are named and stop the walk: `szip`, `nbit` and `scaleoffset` are real
-//! compression schemes, and the ones from 32000 up are somebody's own library,
-//! which is the point of the number being that high. What has been undone up
-//! to that point is still reported.
+//! What is undone: deflate (with or without its zlib wrapper), shuffle,
+//! bitshuffle (32008) with or without its LZ4 blocks, and the two checks that
+//! only add bytes, fletcher32 and the 32-bit checksum. The rest are named and
+//! stop the walk: `szip`, `nbit` and `scaleoffset` are real compression
+//! schemes, and the other ones from 32000 up are somebody's own library, which
+//! is the point of the number being that high. What has been undone up to
+//! that point is still reported.
 
 /// What [`StructDef::packed`](crate::template::StructDef::packed) calls this,
 /// so the template can mark a filtered chunk and the panel can find its way
@@ -123,6 +124,24 @@ pub fn decode(data: &[u8], filters: &[Filter], mask: u32, element_size: usize) -
                 }
             },
             2 => Some(unshuffle(&chunk.bytes, shuffle_width(filter, element_size))),
+            32008 => match unbitshuffle(&chunk.bytes, filter, element_size) {
+                Ok((bytes, lz4)) => {
+                    // Two steps of one filter: the LZ4 blocks unpacked, then
+                    // the bits of each block put back into their elements.
+                    let mut in_bytes = in_bytes;
+                    if lz4 {
+                        chunk.steps.push(Step { filter: "bitshuffle LZ4".into(), in_bytes, out_bytes: bytes.len(), skipped: false });
+                        in_bytes = bytes.len();
+                    }
+                    chunk.steps.push(Step { filter: name, in_bytes, out_bytes: bytes.len(), skipped: false });
+                    chunk.bytes = bytes;
+                    continue;
+                }
+                Err(why) => {
+                    chunk.problem = Some(format!("Stopped at bitshuffle: {why}"));
+                    return chunk;
+                }
+            },
             // Everything else is either a check taken off below, or a filter
             // nothing here undoes.
             _ => None,
@@ -176,6 +195,105 @@ fn inflate(data: &[u8]) -> Option<Vec<u8>> {
     use miniz_oxide::inflate::decompress_to_vec_with_limit as raw;
     use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit as zlib;
     zlib(data, DECODED_LIMIT).ok().or_else(|| raw(data, DECODED_LIMIT).ok())
+}
+
+/// Undo the bitshuffle filter (32008, from Kiyoshi Masui's `bitshuffle`
+/// library, which Breakthrough Listen writes its filterbank files with).
+/// Returns the elements' bytes, and whether the chunk was LZ4 blocks.
+///
+/// The filter's client data is the library's version (two numbers), how wide
+/// an element is, how many elements a block holds (0 for the library's
+/// default), and the compression: 0 for none, 2 for LZ4, 3 for zstd.
+///
+/// A compressed chunk starts with the size the elements come to, as a
+/// big-endian u64, and a block's size in bytes, as a big-endian u32. Then
+/// each block is a big-endian u32 size and that many bytes of one LZ4 block.
+/// Every block holds the block size's worth of elements but the last, which
+/// holds what is left rounded down to a multiple of 8. The last 0 to 7
+/// elements are not in a block at all: they follow the blocks as they are.
+///
+/// Inside a block the bits are transposed. For a block of `n` elements, each
+/// `elem` bytes wide, the block is `8 * elem` rows of `n` bits: row
+/// `8 * j + k` is bit `k` (counted from the low bit) of byte `j` of every
+/// element in turn, and element `i`'s bit is bit `i % 8` of byte `i / 8` of
+/// the row.
+pub fn unbitshuffle(data: &[u8], filter: &Filter, element_size: usize) -> Result<(Vec<u8>, bool), String> {
+    let cd = |i: usize| filter.client_data.get(i).copied().unwrap_or(0) as usize;
+    let elem = if cd(2) > 0 { cd(2) } else { element_size.max(1) };
+    let compression = cd(4);
+    let be32 = |b: &[u8], at: usize| b.get(at..at + 4).map(|s| u32::from_be_bytes(s.try_into().unwrap()) as usize);
+    let short = || "the chunk is shorter than its header.".to_string();
+    let (total, block_elems, mut at) = match compression {
+        0 => (data.len(), if cd(3) > 0 { cd(3) } else { default_block(elem) }, 0),
+        2 => {
+            let total = data.get(..8).map(|s| u64::from_be_bytes(s.try_into().unwrap())).ok_or_else(short)?;
+            let block_bytes = be32(data, 8).ok_or_else(short)?;
+            if total > DECODED_LIMIT as u64 {
+                return Err(format!("the chunk says it comes to {total} bytes, over this viewer's limit."));
+            }
+            (total as usize, block_bytes / elem, 12)
+        }
+        3 => return Err("its blocks are zstd, which isn't undone here.".into()),
+        n => return Err(format!("compression {n} isn't one the library writes.")),
+    };
+    if block_elems == 0 || block_elems % 8 != 0 {
+        return Err(format!("a block of {block_elems} elements isn't a multiple of 8."));
+    }
+    let count = total / elem;
+    let mut out = Vec::with_capacity(total);
+    let mut done = 0;
+    while count - done >= 8 {
+        let n = block_elems.min((count - done) / 8 * 8);
+        let bytes = n * elem;
+        let block = if compression == 2 {
+            let size = be32(data, at).ok_or("the chunk ends before its last block.")?;
+            let end = (at + 4).checked_add(size).filter(|&e| e <= data.len()).ok_or("a block runs past the end of the chunk.")?;
+            let packed = &data[at + 4..end];
+            at = end;
+            let mut block = vec![0u8; bytes];
+            match lz4_flex::block::decompress_into(packed, &mut block) {
+                Ok(got) if got == bytes => block,
+                _ => return Err("an LZ4 block would not unpack to the size it should.".into()),
+            }
+        } else {
+            let raw = data.get(at..at + bytes).ok_or("a block runs past the end of the chunk.")?;
+            at += bytes;
+            raw.to_vec()
+        };
+        out.extend_from_slice(&untranspose_bits(&block, n, elem));
+        done += n;
+    }
+    // The last few elements, as they are.
+    let rest = total - out.len();
+    out.extend_from_slice(data.get(at..at + rest).ok_or("the chunk ends before its last elements.")?);
+    Ok((out, compression == 2))
+}
+
+/// How many elements the library puts in a block when it is not told: what
+/// fits in 8 KB, rounded down to a multiple of 8, and never under 128.
+fn default_block(elem: usize) -> usize {
+    (8192 / elem / 8 * 8).max(128)
+}
+
+/// Put one block's bits back into its `n` elements of `elem` bytes. See
+/// [`unbitshuffle`] for the order they are in.
+fn untranspose_bits(block: &[u8], n: usize, elem: usize) -> Vec<u8> {
+    let mut out = vec![0u8; n * elem];
+    let row_bytes = n / 8;
+    for j in 0..elem {
+        for k in 0..8 {
+            let row = &block[(8 * j + k) * row_bytes..][..row_bytes];
+            for (g, &byte) in row.iter().enumerate() {
+                if byte == 0 {
+                    continue;
+                }
+                for b in 0..8 {
+                    out[(g * 8 + b) * elem + j] |= (byte >> b & 1) << k;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Undo the shuffle: the filter writes all the first bytes of every element,
@@ -292,5 +410,55 @@ mod tests {
         let chunk = decode(&data, &[Filter { id: 3, client_data: vec![] }], 0, 4);
         assert_eq!(chunk.bytes, want);
         assert_eq!(chunk.problem, None);
+    }
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// Twenty u32s, `i * 1000003`, as h5py and hdf5plugin 5 wrote them in one
+    /// chunk through bitshuffle: with LZ4 (client data 0,4,4,0,2) and without
+    /// (0,4,4,0,0). Sixteen of them make one block and the last four follow it
+    /// as they are.
+    const BITSHUFFLE_LZ4: &str = "0000000000000050000020000000003bf00daaaa6666b4b438c7c00700f8aaaaccccf0f0aa55cc66f078007f00801000f6025a5ac6393ef8fe0754559899e0e100fe0001005000000000003024f40073660301b6a81201f9ea2101";
+    const BITSHUFFLE_PLAIN: &str = "aaaa6666b4b438c7c00700f8aaaaccccf0f0aa55cc66f078007f0080aaaacccc5a5ac6393ef8fe0754559899e0e100fe000000000000000000000000000000003024f40073660301b6a81201f9ea2101";
+
+    fn twenty() -> Vec<u8> {
+        (0..20u32).flat_map(|i| (i * 1_000_003).to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn a_bitshuffled_chunk_is_unpacked_and_its_bits_put_back() {
+        let filter = Filter { id: 32008, client_data: vec![0, 4, 4, 0, 2] };
+        let chunk = decode(&hex(BITSHUFFLE_LZ4), std::slice::from_ref(&filter), 0, 4);
+        assert_eq!(chunk.problem, None);
+        assert_eq!(chunk.bytes, twenty());
+        let steps: Vec<(&str, usize, usize)> = chunk.steps.iter().map(|s| (s.filter.as_str(), s.in_bytes, s.out_bytes)).collect();
+        assert_eq!(steps, [("bitshuffle LZ4", 91, 80), ("bitshuffle", 80, 80)]);
+        // Without LZ4 the chunk is the transposed blocks and nothing else.
+        let plain = Filter { id: 32008, client_data: vec![0, 4, 4, 0, 0] };
+        let chunk = decode(&hex(BITSHUFFLE_PLAIN), &[plain], 0, 4);
+        assert_eq!((chunk.bytes, chunk.problem), (twenty(), None));
+        assert_eq!(chunk.steps.len(), 1);
+    }
+
+    /// A block of one-byte elements: each of the eight rows is one bit of
+    /// every element, the low bit first.
+    #[test]
+    fn a_block_of_bytes_is_eight_rows_of_bits() {
+        // Eight elements, so each row is one byte.
+        let mut block = vec![0u8; 8];
+        block[0] = 0b0000_0001; // bit 0 of element 0
+        block[7] = 0b1000_0001; // bit 7 of elements 0 and 7
+        assert_eq!(untranspose_bits(&block, 8, 1), [0b1000_0001, 0, 0, 0, 0, 0, 0, 0b1000_0000]);
+    }
+
+    /// A chunk cut short says so rather than unpacking what it can.
+    #[test]
+    fn a_bitshuffled_chunk_cut_short_stops_the_walk() {
+        let filter = Filter { id: 32008, client_data: vec![0, 4, 4, 0, 2] };
+        let packed = hex(BITSHUFFLE_LZ4);
+        let chunk = decode(&packed[..40], &[filter], 0, 4);
+        assert!(chunk.problem.expect("a problem").starts_with("Stopped at bitshuffle"));
     }
 }
