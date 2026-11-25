@@ -1170,6 +1170,37 @@ function buildDocument(tab: Tab): Page {
   let bytesPerRow = narrow ? 8 : 16;
   view.setBytesPerRow(bytesPerRow);
   let byteMode: "hex" | "binary" = "hex";
+  /** Whether the reader has picked a row width in the settings. Until then it
+   *  follows the window: sixteen bytes where a whole row of sixteen fits,
+   *  eight where sixteen would be cut off at the right, which is what an
+   *  800 px window with the inspector open does to the hex and text. */
+  let rowWidthPicked = false;
+  let fitTries = 0;
+  const fitRowWidth = (): void => {
+    if (rowWidthPicked || byteMode !== "hex" || view.el.hidden) return;
+    const fits = view.fitsBytesPerRow(16);
+    // No row drawn yet to measure: ask again on a later frame, for a while.
+    if (fits === null) {
+      if (fitTries++ < 120) queueFit();
+      return;
+    }
+    const want = fits ? 16 : 8;
+    if (want === bytesPerRow) return;
+    bytesPerRow = want;
+    view.setBytesPerRow(want);
+  };
+  let fitQueued = false;
+  const queueFit = (): void => {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(() => {
+      fitQueued = false;
+      fitRowWidth();
+    });
+  };
+  const rowWidthWatch = new ResizeObserver(queueFit);
+  rowWidthWatch.observe(view.el);
+  tab.release.push(() => rowWidthWatch.disconnect());
   /** The width the stride button was offered at, kept while it is the row
    *  width in use: the button the reader chose has to go on saying what they
    *  chose. */
@@ -1253,6 +1284,7 @@ function buildDocument(tab: Tab): Page {
       },
       bytesPerRow: () => bytesPerRow,
       setBytesPerRow: (n) => {
+        rowWidthPicked = true;
         bytesPerRow = n;
         view.setBytesPerRow(n);
       },

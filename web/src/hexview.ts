@@ -673,6 +673,27 @@ export class HexView {
     if (shown) this.revealCursor();
   }
 
+  /**
+   * Whether a row of `n` bytes, its address, hex and text, fits across the
+   * view without being cut off at the right. Worked out from the row drawn at
+   * the top, at the width it is drawn now; null before there is one.
+   */
+  fitsBytesPerRow(n: number): boolean | null {
+    const line = this.rowsEl.querySelector<HTMLElement>(".hv-line");
+    const addr = line?.querySelector<HTMLElement>(".hv-addr");
+    const cells = line?.querySelector<HTMLElement>(".hv-hex, .hv-bits");
+    if (line == null || addr == null || cells == null) return null;
+    const text = this.showsText ? line.querySelector<HTMLElement>(".hv-ascii") : null;
+    const pitch = cells.firstElementChild?.getBoundingClientRect().width ?? 0;
+    const charW = text?.firstElementChild?.getBoundingClientRect().width ?? 0;
+    if (pitch === 0) return null;
+    const left = addr.getBoundingClientRect().left;
+    const right = (text ?? cells).getBoundingClientRect().right;
+    const need = right - left + (n - this.bytesPerRow) * (pitch + charW);
+    const body = this.rowsEl.getBoundingClientRect();
+    return need <= body.right - left + 0.5;
+  }
+
   setBytesPerRow(n: number): void {
     this.bytesPerRow = n;
     this.remeasure();
