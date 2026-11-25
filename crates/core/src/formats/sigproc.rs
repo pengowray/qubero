@@ -20,8 +20,9 @@
 //! - 8, 16 and 32-bit samples read as numbers: unsigned bytes (signed when the
 //!   header says `signed = 1`), unsigned 16-bit, and 32-bit floats, which is
 //!   what sigproc writes at each width. Breakthrough Listen writes 32 and 8.
-//! - 1, 2 and 4-bit samples are left as bytes. No sample file of that width
-//!   was at hand to check the order of the samples inside a byte against.
+//! - 1, 2 and 4-bit samples are left as bytes, under `Packed samples`. No
+//!   file of that width was at hand to check the order of the samples inside
+//!   a byte against.
 //! - `src_raj` and `src_dej` are the doubles the file holds, which sigproc
 //!   writes as `hhmmss.s` and `ddmmss.s`, not as degrees.
 
@@ -129,15 +130,18 @@ fn samples() -> T {
         ],
         ..Default::default()
     };
-    let values = T::switch(
+    let table = |values: T| {
+        T::structure("Samples", vec![("samples", values), ("part_row", T::bytes(E::Remaining))])
+            .payload(&["samples"])
+            .field_table("samples", shape.clone())
+    };
+    T::switch(
         header("nbits"),
-        vec![(8, bytes), (16, run(16, T::u16(Little))), (32, run(32, T::F32(Little)))],
-        // 1, 2 and 4 bits, or a width sigproc does not write.
-        T::bytes(E::lit(0)),
-    );
-    T::structure("Samples", vec![("samples", values), ("part_row", T::bytes(E::Remaining))])
-        .payload(&["samples"])
-        .field_table("samples", shape)
+        vec![(8, table(bytes)), (16, table(run(16, T::u16(Little)))), (32, table(run(32, T::F32(Little))))],
+        // 1, 2 and 4 bits, or a width sigproc does not write: the bytes, as
+        // bytes, since the order of the samples inside one is not known here.
+        T::structure("Packed samples", vec![("bytes", T::bytes(E::Remaining))]),
+    )
 }
 
 /// What follows the header: the samples when the header ended where it should,
@@ -274,6 +278,18 @@ mod tests {
         let rest = ev.node(&d, &[1]).unwrap();
         assert_eq!(rest.type_name, "Unread");
         assert_eq!(rest.offset_bits + rest.size_bits, b.len() as u64 * 8);
+    }
+
+    #[test]
+    fn samples_narrower_than_a_byte_stay_bytes() {
+        let b = file(&common(2), &[0x1b; 6]);
+        let d = Document::new(MemSource(b.clone()));
+        let mut ev = Evaluator::new(sigproc());
+        let data = ev.node(&d, &[1]).unwrap();
+        assert_eq!(data.type_name, "Packed samples");
+        let bytes = ev.node(&d, &[1, 0]).unwrap();
+        assert_eq!((bytes.size_bits, bytes.offset_bits + bytes.size_bits), (48, b.len() as u64 * 8));
+        assert_eq!(ev.table_shape(&d, &[1, 0]).unwrap(), None);
     }
 
     #[test]

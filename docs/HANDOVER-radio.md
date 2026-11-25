@@ -117,6 +117,16 @@ factor of 2.
 
 ### Things to fix in what was done
 
+- In the web app, the 200 MB GJ699 `.gpuspec.0002.h5` opens, and then
+  going to an offset inside a chunk (`2504`) keeps the page busy for minutes:
+  scripts answer only now and then and nothing is drawn. A build of
+  8b816386, before this work's changes, does the same, so the cause is older.
+  The small `hdf5/filterbank-bitshuffle.h5` shows its chunk panel at once.
+  Not investigated further.
+- The toolbar label is cut with an ellipsis: "PSRFITS searc..." at 800 px,
+  and "Hierarchical Dat..." for HDF5 even at 1440 px. The full text is in
+  the page.
+
 - The `DATA` column's `TUNITn` (`Jy` in both Parkes files) is not shown on
   the sample table, on purpose: the samples are the digitiser's levels until
   `DAT_SCL` and `DAT_OFFS` are applied. Once they are applied, the unit
