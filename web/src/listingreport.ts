@@ -138,6 +138,15 @@ export class ListingReport {
   private items: readonly Item[] = [];
   /** How many chunks of the file the last whole walk read nodes from. */
   private chunks = 0;
+  /** The folds `reveal` opened by itself to take the reader to a field, which
+   *  the next reveal shuts again. Going to one chunk of an HDF5 file after
+   *  another otherwise left the index entries around each of them open, and
+   *  after eight or nine the listing read more of the file than the chunk
+   *  cache holds and stopped settling. A fold the reader opens or shuts by
+   *  hand is theirs and leaves this set. The value says whether the reader
+   *  had shut the fold before the reveal opened it, so shutting it again puts
+   *  that back. */
+  private revealed: ReadonlyMap<string, boolean> = new Map();
   /** The rows standing in the document right now, by key. Scrolling a listing
    *  moves the window by an item or two, and drawing all thirty again costs
    *  the browser a fresh layout of every one of them. A row whose key is still
@@ -989,6 +998,7 @@ export class ListingReport {
     // the sets are all there is to go on.
     const isOpen = item !== undefined && (item.kind === "heading" || item.kind === "row") ? item.open : this.state.open.has(key) && !this.state.closed.has(key);
     if (isOpen === want) return;
+    if (this.revealed.has(key)) this.revealed = new Map([...this.revealed].filter(([k]) => k !== key));
     const open = new Set(this.state.open);
     const closed = new Set(this.state.closed);
     let bytes = this.state.bytes;
@@ -1190,13 +1200,24 @@ export class ListingReport {
       // through it is one of the elements drawn.
       const open = new Set(this.state.open);
       const closed = new Set(this.state.closed);
-      for (let n = 1; n <= path.length; n++) {
-        const step = pathString(path.slice(0, n));
+      const steps = new Set(Array.from({ length: path.length }, (_, n) => pathString(path.slice(0, n + 1))));
+      // What the last reveal opened and this one does not need is shut again.
+      for (const [k, wasClosed] of this.revealed) {
+        if (steps.has(k)) continue;
+        open.delete(k);
+        if (wasClosed) closed.add(k);
+      }
+      const revealed = new Map<string, boolean>();
+      for (const step of steps) {
+        const before = this.revealed.get(step);
+        if (before !== undefined) revealed.set(step, before);
+        else if (!open.has(step)) revealed.set(step, closed.has(step));
         open.add(step);
         // A step the reader shut is opened again: they asked to be taken to
         // the field, and it is inside.
         closed.delete(step);
       }
+      this.revealed = revealed;
       this.state = { ...this.state, open, closed, shown: this.framed(path) };
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
