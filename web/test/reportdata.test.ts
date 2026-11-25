@@ -6,7 +6,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { factRows } from "../src/report/bodies.ts";
-import { spacing } from "../src/tablebar.ts";
 import type { LedgerRow, Profile, ProfileRow } from "../src/report/coredata.ts";
 import { sameOrder } from "../src/report/directories.ts";
 import { extentWindow } from "../src/report/extentfigure.ts";
@@ -125,14 +124,13 @@ test("a table's facts go by their own field's name, and numbers get separators a
   assert.deepEqual(rows.map((r) => r.name), ["sample_rate", "format", "fmt.size", "data.size", "TBIN"]);
   assert.equal(rows[0]?.value, `${(500000).toLocaleString()} Hz`);
   assert.equal(rows[1]?.value, "pcm");
-  assert.equal(rows[4]?.value, "6.4E-05 s");
+  // In seconds, it is said in the unit that suits it, as any length of time is.
+  assert.equal(rows[4]?.value, "64 µs");
 });
 
-test("rows a whole number of times a second are 1/rate apart, and others the interval", () => {
-  assert.equal(spacing(8000), `1/${(8000).toLocaleString()} s`);
-  const sig = (n: number): string => n.toLocaleString(undefined, { maximumSignificantDigits: 4 });
-  assert.equal(spacing(1 / 0.00029257142857143294), `${sig(0.0002926)} s`);
-  assert.equal(spacing(1 / 0.899), `${sig(0.899)} s`);
+test("a table's heading in the report says how long its rows last", () => {
+  assert.equal(RV.tableHeading(12_000, "sample", 8000), "12,000 samples at 8,000 a second, 1.5 s");
+  assert.equal(RV.tableHeading(26_460_000, "sample", 44_100), "26,460,000 samples at 44,100 a second, 10 min 0 s");
 });
 
 test("the kinds a file does not use are counted by the table's two halves", () => {

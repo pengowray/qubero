@@ -29,14 +29,13 @@ import {
   startsTurned,
   ACROSS_MAX,
   canDrawAcross,
-  timeDigits,
-  timeText,
   timeWidth,
   TURN_MAX,
   turnsByDefault,
   uniformColumns,
 } from "../src/tableplan.ts";
 import { PROBLEMS } from "../src/strings.ts";
+import { columnTimeText, timeColumn } from "../src/timetext.ts";
 
 /** A node as the core sends one, with the few fields this file reads set and
  *  the rest at something harmless. */
@@ -163,20 +162,6 @@ test("one column is a list, and one element is not enough to see a pattern in", 
   assert.equal(uniformColumns([]), null);
 });
 
-test("the time column carries enough decimals for neighbouring rows to differ", () => {
-  assert.equal(timeDigits(44100), 6);
-  assert.equal(timeDigits(8000), 5);
-  assert.equal(timeDigits(1), 1);
-  // Past nine the digits say more than the number they came from knows.
-  assert.equal(timeDigits(1e12), 9);
-  assert.notEqual(timeText(1, 44100), timeText(2, 44100));
-});
-
-test("a rate of nothing asks for no decimals rather than for infinitely many", () => {
-  assert.equal(timeDigits(0), 0);
-  assert.equal(timeDigits(-1), 0);
-});
-
 test("a cell says the value, and a field of fields says how many", () => {
   assert.deepEqual(cellOf(node({ name: "age", value: "37" })), { text: "37", kind: "uint" });
   assert.deepEqual(
@@ -233,9 +218,9 @@ test("the row number and time columns are as wide as their last row", () => {
   assert.equal(indexWidth(400), 3);
   assert.equal(indexWidth(26_000_000), "25,999,999".length);
   assert.equal(indexWidth(0), 3);
-  // `time (s)` is the floor: at 8 kHz the last of 400 rows is `0.04988`.
-  assert.equal(timeWidth(400, 8000), "time (s)".length);
-  assert.equal(timeWidth(26_000_000, 44100), timeText(25_999_999, 44100).length);
+  // The heading is the floor: at 8 kHz the last of 400 rows is `49.88` ms.
+  assert.equal(timeWidth(400, 8000), "time (ms)".length);
+  assert.equal(timeWidth(26_000_000, 44100), columnTimeText(25_999_999, timeColumn(26_000_000, 44100)).length);
 });
 
 // ----- which way round a table is drawn -----

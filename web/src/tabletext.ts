@@ -14,15 +14,17 @@
 
 import { TABLE } from "./strings.ts";
 import { copiedAddress } from "./tableaddress.ts";
-import { isNumberKind, timeText, type TableRow } from "./tableplan.ts";
+import { isNumberKind, type TableRow } from "./tableplan.ts";
+import { columnTimeText, type TimeColumn } from "./timetext.ts";
 
 /** Which columns go around the values: the ones that are about the row rather
  *  than in it. The row's number is always there. */
 export type Lead = {
   /** The rows have names of their own. */
   readonly named: boolean;
-  /** Rows a second, or null for rows that are not spaced in time. */
-  readonly rate: number | null;
+  /** How the time column is written, or null for rows that are not spaced
+   *  in time. */
+  readonly time: TimeColumn | null;
   /** The reader has asked where each row is stored. */
   readonly addresses: boolean;
 };
@@ -35,7 +37,7 @@ export type FieldRange = { readonly from: number; readonly to: number };
 export function headerCells(headings: readonly string[], lead: Lead, fields?: FieldRange): string[] {
   const out: string[] = [TABLE.index];
   if (lead.named) out.push(TABLE.rowName);
-  if (lead.rate !== null) out.push(TABLE.time);
+  if (lead.time !== null) out.push(TABLE.time(lead.time.unit.symbol));
   for (const heading of fields === undefined ? headings : headings.slice(fields.from, fields.to)) out.push(heading);
   if (lead.addresses) out.push(TABLE.storedAt, TABLE.size);
   return out;
@@ -50,7 +52,7 @@ export type Part = { readonly text: string; readonly numeric: boolean };
 export function recordParts(i: number, row: TableRow, width: number, lead: Lead, fields?: FieldRange): Part[] {
   const out: Part[] = [{ text: String(i), numeric: true }];
   if (lead.named) out.push({ text: row.name ?? "", numeric: false });
-  if (lead.rate !== null) out.push({ text: timeText(i, lead.rate), numeric: true });
+  if (lead.time !== null) out.push({ text: columnTimeText(i, lead.time), numeric: true });
   const from = fields?.from ?? 0;
   const to = fields?.to ?? width;
   for (let c = from; c < to; c++) {
@@ -74,7 +76,7 @@ export function recordCells(i: number, row: TableRow, width: number, lead: Lead,
 
 /** How many columns come before the values. */
 export function leadBefore(lead: Lead): number {
-  return 1 + (lead.named ? 1 : 0) + (lead.rate !== null ? 1 : 0);
+  return 1 + (lead.named ? 1 : 0) + (lead.time !== null ? 1 : 0);
 }
 
 /** The same lines with rows and columns changed over: line `j` of the answer
@@ -107,7 +109,7 @@ export function turnedLines(headings: readonly string[], records: readonly Table
 export function leadKinds(lead: Lead): ("index" | "name" | "time" | "at" | "size")[] {
   const out: ("index" | "name" | "time" | "at" | "size")[] = ["index"];
   if (lead.named) out.push("name");
-  if (lead.rate !== null) out.push("time");
+  if (lead.time !== null) out.push("time");
   if (lead.addresses) out.push("at", "size");
   return out;
 }

@@ -10,7 +10,7 @@ import { exportName, exportSize, exportText, scopeOf, type ExportJob } from "../
 import type { TableRow } from "../src/tableplan.ts";
 import { csvLine, jsonObject, uniqueKeys, type Lead } from "../src/tabletext.ts";
 
-const PLAIN: Lead = { named: false, rate: null, addresses: false };
+const PLAIN: Lead = { named: false, time: null, addresses: false };
 
 function row(cells: readonly (readonly [string, string])[], o: Partial<TableRow> = {}): TableRow {
   return { cells: cells.map(([text, kind]) => ({ text, kind })), offsetBits: 0, sizeBits: 0, path: [], ...o };
@@ -116,7 +116,7 @@ test("a file is the values, with no address columns however the table is shown",
   // The reader has the address columns on screen. A file of the table is its
   // values, so the columns that say where each row is stored are left out,
   // and the size line agrees with what is written.
-  const shown = job({ lead: { named: false, rate: null, addresses: true } });
+  const shown = job({ lead: { named: false, time: null, addresses: true } });
   assert.equal(await written(shown), await written(job({})));
   assert.deepEqual(exportSize(shown), exportSize(job({})));
   assert.equal(await written(job({ ...shown, format: "tsv", asShown: true })), await written(job({ format: "tsv", asShown: true })));

@@ -24,6 +24,7 @@
 import type { Doc, FrameCell, TableFact, TableShape, TemplateNode } from "./doc.ts";
 import { isRecordList, recordTable, type CellPlace, type RecordCell, type RecordTable } from "./records.ts";
 import { childWord, countText, TABLE } from "./strings.ts";
+import { columnTimeText, timeColumn } from "./timetext.ts";
 
 /** One column of the table: what it is called, and what it is measured in.
  *  The unit is a UCUM code and is empty for a column that has none. */
@@ -239,25 +240,6 @@ export function uniformColumns(rows: readonly (readonly string[])[]): string[] |
 }
 
 /**
- * How many decimals a time column needs for two rows in a row to differ.
- *
- * At 44,100 rows a second neighbouring rows are 23 microseconds apart, and a
- * column showing three decimals would print the same number for forty-four of
- * them. Nine is the cap: past that the digits are longer than the double they
- * came from is exact.
- */
-export function timeDigits(rate: number): number {
-  if (!(rate > 0)) return 0;
-  return Math.min(9, Math.ceil(Math.log10(rate)) + 1);
-}
-
-/** Where row `i` falls in time, in seconds. */
-export function timeText(i: number, rate: number): string {
-  const digits = timeDigits(rate);
-  return (i / rate).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
-}
-
-/**
  * How wide a column is drawn, in characters, and which way its values sit.
  *
  * A track list has to be one list shared by the header and every row, so the
@@ -308,9 +290,10 @@ export function indexWidth(count: number): number {
   return Math.max(3, Math.max(0, count - 1).toLocaleString().length);
 }
 
-/** How wide the time column is, for the last row's time. */
+/** How wide the time column is, for its heading and the last row's time. */
 export function timeWidth(count: number, rate: number): number {
-  return Math.max(TABLE.time.length, timeText(Math.max(0, count - 1), rate).length);
+  const column = timeColumn(count, rate);
+  return Math.max(TABLE.time(column.unit.symbol).length, columnTimeText(Math.max(0, count - 1), column).length);
 }
 
 // ----- which way round the table is drawn -----

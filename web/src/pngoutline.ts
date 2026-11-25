@@ -18,6 +18,7 @@ import { formatOffset } from "./format.ts";
 import type { Doc, TemplateNode, TemplateReply } from "./doc.ts";
 import type { LogicalNode, LogicalOutline } from "./logicaloutline.ts";
 import { countText } from "./strings.ts";
+import { durationText } from "./timetext.ts";
 
 /** Chunks read for the outline. A PNG with more is a picture cut into many
  *  IDAT chunks, and what the outline says of the run is a count and a total
@@ -301,7 +302,7 @@ function describe(doc: Doc, type: string, data: TemplateNode | undefined, d: Fie
     case "fcTL": {
       const seconds = num(d.get("delay_seconds"));
       const size = `${num(d.get("width"))} × ${num(d.get("height"))} at ${num(d.get("x_offset"))}, ${num(d.get("y_offset"))}`;
-      return plain(Number.isFinite(seconds) ? `${size} · ${short(seconds, 3)} s` : size);
+      return plain(Number.isFinite(seconds) ? `${size} · ${durationText(seconds)}` : size);
     }
     default:
       return plain(data === undefined ? "" : data.composite ? "" : `${countText(data.size_bits / 8, "byte")}`);

@@ -16,6 +16,7 @@ import { el } from "./dom.ts";
 import { PROBLEMS, TABLE } from "./strings.ts";
 import { copiedAddress } from "./tableaddress.ts";
 import { FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { timeColumn } from "./timetext.ts";
 import { headerCells, leadKinds, recordCells, turnedLines, type Lead } from "./tabletext.ts";
 
 /** How wide a column of addresses and one of sizes start out, in characters.
@@ -150,7 +151,8 @@ export class TableColumns {
     const plan = this.of.plan;
     const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
     if (plan.rowNames) cells.push(el("span", { className: "tbl-th", textContent: TABLE.rowName }));
-    if (this.of.rate() !== null) cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
+    const rate = this.of.rate();
+    if (rate !== null) cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time(timeColumn(plan.count, rate).unit.symbol) }));
     // A loop rather than a spread: a spread of a very wide table's heads is
     // more arguments than a call can take.
     for (const column of this.columns) cells.push(column.head);

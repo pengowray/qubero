@@ -862,6 +862,9 @@ export const TABLE = {
    *  the value are what the reader came for, and where it lives is the answer
    *  to pressing it. */
   factTitle: (label: string): string => `Show where ${label} is stored`,
+  /** The same, for a fact the bar writes in another unit than the file does:
+   *  the value as written comes first. */
+  factTitleWritten: (label: string, written: string): string => `${label} = ${written}. Show where ${label} is stored`,
   /** The row's number. A bare `#` because the column beside it already says
    *  what the rows are. */
   index: "#",
@@ -869,8 +872,9 @@ export const TABLE = {
    *  TDMS channel's path. */
   rowName: "name",
   /** When the rows are spaced in time, where they are in it. The unit is in
-   *  the heading rather than in every cell. */
-  time: "time (s)",
+   *  the heading rather than in every cell, and is the one the last row's
+   *  time calls for: `time (ms)` for 4,096 samples 64 µs apart. */
+  time: (unit: string): string => `time (${unit})`,
   /** A column the shape's names do not cover, numbered from 1 the way the
    *  format numbers its channels. */
   column: (columnWord: string, n: number): string => `${columnWord} ${n}`,

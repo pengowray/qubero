@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 
 import type { TableRow } from "../src/tableplan.ts";
 import { headerCells, leadBefore, leadKinds, recordCells, tsvLine, turned, turnedLines, type Lead } from "../src/tabletext.ts";
+import { timeColumn } from "../src/timetext.ts";
 
-const PLAIN: Lead = { named: false, rate: null, addresses: false };
+const PLAIN: Lead = { named: false, time: null, addresses: false };
 
 function row(texts: readonly string[], o: Partial<TableRow> = {}): TableRow {
   return { cells: texts.map((text) => ({ text, kind: "float" })), offsetBits: 0, sizeBits: 0, path: [], ...o };
@@ -21,7 +22,8 @@ test("a line is the row's number and then its values", () => {
 });
 
 test("name, time and addresses go around the values in a fixed order", () => {
-  const lead: Lead = { named: true, rate: 10, addresses: true };
+  // Ten rows a second for a minute: the column is in seconds, to two places.
+  const lead: Lead = { named: true, time: timeColumn(600, 10), addresses: true };
   assert.deepEqual(headerCells(["v"], lead), ["#", "name", "time (s)", "v", "Stored at", "Size"]);
   const cells = recordCells(5, row(["9"], { name: "Phase", offsetBits: 0x80, sizeBits: 64 }), 1, lead);
   assert.equal(cells.length, 6);
@@ -54,7 +56,7 @@ test("turning changes rows for columns and turning again changes them back", () 
 
 test("a turned table is headings about the records, then a line a field", () => {
   const records = [row(["1", "2", "3"], { name: "Amplitude" }), row(["4", "5", "6"], { name: "Phase" })];
-  const lead: Lead = { named: true, rate: null, addresses: false };
+  const lead: Lead = { named: true, time: null, addresses: false };
   assert.deepEqual(turnedLines(["[0]", "[1]", "[2]"], records, lead, { from: 1, to: 3 }), [
     ["#", "0", "1"],
     ["name", "Amplitude", "Phase"],
@@ -65,7 +67,7 @@ test("a turned table is headings about the records, then a line a field", () => 
 
 test("turned, where a record is stored is a heading line and not the last one", () => {
   const records = [row(["1"], { offsetBits: 0, sizeBits: 8 })];
-  const lines = turnedLines(["v"], records, { named: false, rate: null, addresses: true }, { from: 0, to: 1 });
+  const lines = turnedLines(["v"], records, { named: false, time: null, addresses: true }, { from: 0, to: 1 });
   assert.deepEqual(
     lines.map((line) => line[0]),
     ["#", "Stored at", "Size", "v"],

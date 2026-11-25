@@ -24,6 +24,7 @@ import { goToBits, goToField } from "./pick.ts";
 import { onSchemeChange } from "./schemewatch.ts";
 import { hideTip, hoverTip, tipAt, tipCard } from "./tip.ts";
 import type { RunSource, RunValues } from "./valuerun.ts";
+import { axisTimes, timeAtText } from "../timetext.ts";
 
 // ----- formatting -----
 
@@ -35,11 +36,6 @@ export function tickText(v: number): string {
   return Math.abs(v) >= 10_000 ? compact.format(v) : plain.format(v);
 }
 
-/** Seconds to as many decimals as a tick step of `step` seconds needs. */
-export function secondsText(s: number, step: number): string {
-  const decimals = step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(step) - 1e-9));
-  return `${s.toFixed(decimals)} s`;
-}
 
 /** Tick steps in frames that are round numbers of seconds at `rate`, or
  *  round numbers of frames with no rate. */
@@ -186,7 +182,7 @@ export function drawLinePlot(
   placeNames();
 
   const xValues = (_u: uPlot, splits: number[], _ax: number, _space: number, incr: number): string[] =>
-    data.rate === null ? splits.map((s) => Math.round(s).toLocaleString()) : splits.map((s) => secondsText(s / (data.rate as number), incr / (data.rate as number)));
+    data.rate === null ? splits.map((s) => Math.round(s).toLocaleString()) : axisTimes(splits.map((s) => s / (data.rate as number)), incr / (data.rate as number));
 
   const paintMarker = (u: uPlot, lane: number): void => {
     if (sel === null) return;
@@ -368,7 +364,7 @@ export function drawLinePlot(
         ? VIZ.valuePlot.index(hit.frame)
         : data.rate === null
           ? VIZ.valuePlot.at(data.rowWord, hit.frame)
-          : VIZ.valuePlot.atTime(data.rowWord, hit.frame, secondsText(hit.frame / data.rate, 1 / data.rate));
+          : VIZ.valuePlot.atTime(data.rowWord, hit.frame, timeAtText(hit.frame / data.rate, 1 / data.rate));
     const lines: string[] = [];
     data.channels.forEach((c, i) => {
       const v = valueText(c.values[hit.frame * c.stride + c.channel] ?? NaN, data.float);

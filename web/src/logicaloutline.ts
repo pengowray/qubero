@@ -2,6 +2,7 @@ import { formatBytes, formatOffset } from "./doc.ts";
 import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
 import { pngOutline } from "./pngoutline.ts";
 import { countText, TEMPLATE_FIELD_MISSING } from "./strings.ts";
+import { durationText } from "./timetext.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
  * connects it back to the storage template without making that template's
@@ -1382,16 +1383,6 @@ function isoOutline(
       nodes, total: nodes.length + omitted, sizeLabel: "Data size", ...(more.length > 0 ? { more } : {}),
     },
   };
-}
-
-function durationText(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "";
-  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(2) : seconds.toFixed(1)} s`;
-  const whole = Math.round(seconds);
-  const hours = Math.floor(whole / 3600);
-  const minutes = Math.floor((whole % 3600) / 60);
-  const rest = whole % 60;
-  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}` : `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
 const WAV_METADATA = new Set(["guan", "wamd", "bext", "iXML", "_PMX", "axml", "id3", "ID3", "LIST", "cue", "smpl", "inst", "plst"]);

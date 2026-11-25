@@ -9,6 +9,7 @@ import type { CodecKind } from "../doc.ts";
 import { formatBytes, percentText } from "../format.ts";
 import { codecWords, DECODED_REFUSED, type CodecWords } from "../strings.ts";
 import type { ExtentCheck } from "./coredata.ts";
+import { durationText } from "../timetext.ts";
 
 /** `1 byte`, `5,770 bytes`. */
 export function bytesText(n: number): string {
@@ -206,7 +207,7 @@ export const RV = {
     const base = counted(count, rowWord);
     if (rate === null || rate <= 0) return sentenceCase(base);
     const seconds = count / rate;
-    return sentenceCase(`${base} at ${rate.toLocaleString()} a second, ${secondsText(seconds)}`);
+    return sentenceCase(`${base} at ${rate.toLocaleString()} a second, ${durationText(seconds)}`);
   },
   firstRows: (shown: number, total: number, word: string): string =>
     `The first ${shown.toLocaleString()} of ${counted(total, word)}.`,
@@ -628,11 +629,3 @@ export function sentenceCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Seconds as a reader says them: `0.30 seconds`, `4 minutes 12 seconds`. */
-export function secondsText(s: number): string {
-  if (s < 1) return `${s.toFixed(s < 0.1 ? 3 : 2)} seconds`;
-  if (s < 60) return `${s.toFixed(1)} seconds`;
-  const m = Math.floor(s / 60);
-  const rest = Math.round(s - m * 60);
-  return `${m.toLocaleString()} ${m === 1 ? "minute" : "minutes"} ${rest} ${rest === 1 ? "second" : "seconds"}`;
-}

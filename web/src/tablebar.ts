@@ -13,6 +13,7 @@
 import { el } from "./dom.ts";
 import { TABLE } from "./strings.ts";
 import type { TableFact } from "./doc.ts";
+import { secondsValueText, spacingText } from "./timetext.ts";
 import { ACROSS_MAX, canDrawAcross, canTurn, TURN_MAX, type TablePlan } from "./tableplan.ts";
 
 /** How many views have made a rows-or-columns choice, for naming each one's
@@ -49,7 +50,7 @@ export function tableBar(opts: BarOpts): Bar {
   const sayMeaning = (turned: boolean): void => {
     if (rate === null) return;
     const word = plan.columnWord;
-    const said = spacing(rate);
+    const said = spacingText(rate);
     const rows = plan.rowWord;
     if (turned) meaning.textContent = word === null ? TABLE.columnMeaningPlain(rows, said) : TABLE.columnMeaning(rows, word, said);
     else meaning.textContent = word === null ? TABLE.rowMeaningPlain(rows, said) : TABLE.rowMeaning(rows, word, said);
@@ -64,7 +65,8 @@ export function tableBar(opts: BarOpts): Bar {
       className: "tbl-fact",
       textContent: `${fact.label} ${factText(fact)}`,
     });
-    button.title = TABLE.factTitle(fact.label);
+    const written = factAsWritten(fact);
+    button.title = written === null ? TABLE.factTitle(fact.label) : TABLE.factTitleWritten(fact.label, written);
     button.addEventListener("click", () => opts.onFactPick(fact.path));
     bar.append(button);
   }
@@ -108,20 +110,21 @@ function arrangeChoice(opts: BarOpts): HTMLElement {
   return group;
 }
 
-/** How far apart two rows are, for the sentence under the bar: `1/8,000 s`
- *  for a whole number of rows a second, which is how the rate is usually
- *  quoted, and the interval itself otherwise, `0.0002926 s` rather than
- *  `1/3,417.969 s`. */
-export function spacing(rate: number): string {
-  if (Number.isInteger(rate)) return `1/${rate.toLocaleString()} s`;
-  return `${(1 / rate).toLocaleString(undefined, { maximumSignificantDigits: 4 })} s`;
-}
-
 /** A fact's value and its unit, as the bar and the report show them:
- *  `0.000125 s`, `44,100 Hz`, `96`. */
+ *  `125 µs`, `44,100 Hz`, `96`. A value in seconds is said in the unit that
+ *  suits it, as every other length of time is. */
 export function factText(fact: TableFact): string {
+  const seconds = secondsValueText(fact.value, fact.unit);
+  if (seconds !== null) return seconds;
   const value = factValue(fact.value);
   return fact.unit === "" || value === "" ? value : `${value} ${fact.unit}`;
+}
+
+/** The fact as the file writes it, when the bar says it another way: a FITS
+ *  `TBIN = 6.4E-05` shows as `64 µs`, and the hover keeps `6.4E-05 s`. Null
+ *  when the two are the same. */
+export function factAsWritten(fact: TableFact): string | null {
+  return secondsValueText(fact.value, fact.unit) === null ? null : `${fact.value.trim()} ${fact.unit}`;
 }
 
 /** A fact's value as the bar shows it: a whole number gets its thousands

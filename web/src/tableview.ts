@@ -55,7 +55,8 @@ import { cellPlaceIn, drawAddress, fieldWhereLines, rowHasBytes, whatLines, wher
 import { tableBar, type Bar } from "./tablebar.ts";
 import { TableColumns } from "./tablecolumns.ts";
 import { TableExportPanel } from "./tableexportpanel.ts";
-import { rowRun, startsTurned, timeText, turnsByDefault, type TablePlan, type TableRow } from "./tableplan.ts";
+import { rowRun, startsTurned, turnsByDefault, type TablePlan, type TableRow } from "./tableplan.ts";
+import { columnTimeText, timeColumn, type TimeColumn } from "./timetext.ts";
 import { ROW, RowScroll } from "./tablescroll.ts";
 import { headerCells, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
 
@@ -218,10 +219,17 @@ export class TableView {
     const rate = this.plan.rate;
     return rate !== null && rate > 0 ? rate : null;
   }
+  /** How the time column is written: one unit for the column, from the last
+   *  row's time. */
+  private get time(): TimeColumn | null {
+    const rate = this.rate;
+    return rate === null ? null : timeColumn(this.plan.count, rate);
+  }
+
 
   /** The columns that are about a record rather than in it. */
   private get lead(): Lead {
-    return { named: this.plan.rowNames, rate: this.rate, addresses: this.addresses };
+    return { named: this.plan.rowNames, time: this.time, addresses: this.addresses };
   }
 
   /**
@@ -413,8 +421,8 @@ export class TableView {
       name.title = row.name ?? "";
       element.append(name);
     }
-    const rate = this.rate;
-    if (rate !== null) element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
+    const time = this.time;
+    if (time !== null) element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: columnTimeText(i, time) }));
     for (let c = 0; c < this.plan.columns.length; c++) {
       const cell = this.drawCell(row.cells[c], this.columns.numeric(c));
       // Which column was clicked, for a table whose cells are each in a place
