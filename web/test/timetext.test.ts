@@ -12,6 +12,8 @@ test("a length of time is in the unit its size calls for", () => {
   assert.equal(durationText(0.1), "100 ms");
   assert.equal(durationText(0.9), "900 ms");
   assert.equal(durationText(1), "1 s");
+  assert.equal(durationText(0.99996), "1 s");
+  assert.equal(durationText(0.00099996), "1 ms");
   assert.equal(durationText(12.345), "12.35 s");
   assert.equal(durationText(0), "0 s");
   assert.equal(durationText(Number.NaN), "");

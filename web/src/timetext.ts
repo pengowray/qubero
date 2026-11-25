@@ -70,7 +70,9 @@ export function durationText(seconds: number): string {
   const a = Math.abs(seconds);
   // Rounded first, so 59.99 s reads as a minute rather than as `60 s`.
   if (a < 60 && Number(a.toPrecision(SIGNIFICANT)) < 60) {
-    const unit = timeUnit(seconds);
+    // The unit is picked after rounding, so 0.99996 s is `1 s` and not
+    // `1,000 ms`.
+    const unit = timeUnit(Number(seconds.toPrecision(SIGNIFICANT)));
     return `${significant(seconds / unit.seconds)} ${unit.symbol}`;
   }
   const sign = seconds < 0 ? "-" : "";

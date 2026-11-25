@@ -155,7 +155,11 @@ Read; see Done. Left:
 - A file of 45,056 channels and 4 IFs is a table of 180,224 columns, named
   `IF 1 channel 1` to `IF 4 channel 45,056`. PSRFITS `NPOL` names them the
   same way, `pol 2 channel 5`. The PSRFITS `POL_TYPE` card (`AABBCRCI`) is
-  not read, so a column says `pol 2` and not `BB`.
+  not read, so a column says `pol 2` and not `BB`. That a SIGPROC time
+  sample is every channel of IF 1 and then every channel of IF 2 is from
+  memory of sigproc's writer; no reference or real multi-IF file checked it.
+- A table's time column changes unit with its length, and a copy or an
+  export of the table carries the same unit in its heading: `time (ms)`.
 - A table both too wide to draw across (over 4,096 columns) and too long to
   turn (over 1,000 rows) is drawn across, and will be slow or fail.
 - `telescope_id` and `machine_id` are numbers, not names.

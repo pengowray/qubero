@@ -46,7 +46,9 @@ export function fitText(el: HTMLElement, forms: readonly string[]): void {
   // text, not the element it is in.
   const range = document.createRange();
   range.selectNodeContents(el);
-  const min = shortest === "" ? "" : `${Math.ceil(range.getBoundingClientRect().width) + 1}px`;
+  // Never wider than the row, so a long name with no shorter form is cut
+  // there rather than pushing the page sideways on a phone.
+  const min = shortest === "" ? "" : `min(${Math.ceil(range.getBoundingClientRect().width) + 1}px, 100%)`;
   if (el.style.minWidth !== min) el.style.minWidth = min;
   for (const form of forms) {
     el.textContent = form;
