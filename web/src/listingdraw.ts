@@ -23,6 +23,7 @@ import { drawFormatCard as drawCardOf } from "./formatcards.ts";
 import { fileMap } from "./filemap.ts";
 import { recordTable } from "./records.ts";
 import { tablePlan } from "./tableplan.ts";
+import { docPlaces } from "./tableplace.ts";
 import { headingButtonsFor } from "./viz/headingbuttons.ts";
 import { headingFiguresFor } from "./viz/headingfigures.ts";
 import { rowGlyphsFor } from "./viz/rowglyphs.ts";
@@ -615,7 +616,7 @@ function offerTable(c: DrawContext, row: HTMLElement, node: TemplateNode | null)
   if (plan === null) return;
   const b = el("button", "rp-bytes rp-table", TABLE.open(plan.rowWord));
   b.type = "button";
-  b.title = TABLE.tabTooltip(plan.rowWord, node.name, c.doc.name);
+  b.title = TABLE.tabTooltip(plan.rowWord, node.name, c.doc.name, docPlaces(c.doc, node.path));
   b.dataset["table"] = pathKey(node.path);
   row.append(b);
 }

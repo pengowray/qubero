@@ -229,10 +229,10 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | Where | String |
 |---|---|
 | Buttons | `View {rows} as table` ({rows} = plural row word: samples, records, values) |
-| Tab title | `{field} as table · {file}`; in counted lists, `{field} as table · {list word} {n}, ... · {file}`: `samples as table · block 2, channel 3 · voyager.raw` |
-| Tab tooltip | `Table of {rows} from {field} of {file}`; in counted lists, `Table of {rows} from {field}, {list word} {n} of {count}, ..., of {file}` |
-| Bar title | `{field}`; in counted lists, outermost first and numbered from 1, `{field}, {list word} {n} of {count}, ...`: `samples, block 2 of 128, channel 3 of 64` |
-| Export file name | `{file}.{field}.{format}`; in counted lists `{file}.{field}.{list word}{n}....{format}`: `voyager.raw.samples.block2.channel3.csv` |
+| Tab title | `{field} as table · {file}`; in counted lists, `{field} as table · {list}[{i}], ... · {file}`: `samples as table · blocks[1], channels[2] · voyager.raw` |
+| Tab tooltip | `Table of {rows} from {field} of {file}`; in counted lists, `Table of {rows} from {field}, {list}[{i}] (of {count}), ..., of {file}` |
+| Bar title | `{field}`; in counted lists, outermost first, `{field}, {list}[{i}] (of {count}), ...`: `samples, blocks[1] (of 128), channels[2] (of 64)`. `{list}[{i}]` is the list's field name and the element's index from 0, as the inspector writes it and as the `#` column counts. The index has no thousands separator; the count does |
+| Export file name | `{file}.{field}.{format}`; in counted lists `{file}.{field}.{list}[{i}]....{format}`: `voyager.raw.samples.blocks[1].channels[2].csv` |
 | Count | `{n} {rows}` |
 | Row meaning, with rate and columns | `Each row is one {row} of each {column word}, {spacing} apart.` |
 | Row meaning, with rate only | `Each row is one {row}, {spacing} apart.` |

@@ -11,6 +11,7 @@ import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
+import { docPlaces } from "./tableplace.ts";
 import type { CodecKind, DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
@@ -1264,7 +1265,7 @@ export class Inspector {
       button.type = "button";
       button.className = "insp-check-button";
       button.textContent = TABLE.open(table.rowWord);
-      button.title = TABLE.tabTooltip(table.rowWord, table.name, this.doc.name);
+      button.title = TABLE.tabTooltip(table.rowWord, table.name, this.doc.name, docPlaces(this.doc, table.path));
       const at = table.path;
       button.addEventListener("click", () => this.onOpenTable(at));
       parts.push(button);

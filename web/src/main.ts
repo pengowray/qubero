@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -22,7 +22,7 @@ import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { isTable, tablePlan } from "./tableplan.ts";
 import { TableView } from "./tableview.ts";
-import { tablePlaces } from "./tableplace.ts";
+import { docPlaces } from "./tableplace.ts";
 import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
@@ -332,14 +332,6 @@ function build(tab: Tab): Page {
   return kind.view === "table" ? buildTable(tab, kind.path) : buildDocument(tab);
 }
 
-/** A field of `doc` by its path, or null for one that does not read. */
-function templateNodeOf(doc: Doc): (path: readonly number[]) => TemplateNode | null {
-  return (path) => {
-    const n = doc.templateNode(path);
-    return n.status === "ok" ? n.node : null;
-  };
-}
-
 /**
  * The tab a table opens in: the view and nothing else.
  *
@@ -360,7 +352,7 @@ function buildTable(tab: Tab, path: readonly number[]): Page {
     page.append(el("p", { className: "rp-empty", textContent: TABLE.gone }));
     return { el: page, shown: () => {} };
   }
-  const view = new TableView(doc, plan, { title: reply.node.name, places: tablePlaces(path, templateNodeOf(doc)) });
+  const view = new TableView(doc, plan, { title: reply.node.name, places: docPlaces(doc, path) });
   page.append(view.el);
   /** The document tab these rows are stored in, which is where a pick goes. */
   const home = (): Tab | undefined => tabs.all.find((t) => t.kind.view === "document" && t.doc === doc);
@@ -838,7 +830,7 @@ function buildDocument(tab: Tab): Page {
       return;
     }
     const rows = tablePlan(doc, n.node)?.rowWord ?? childWord(n.node);
-    const places = tablePlaces(path, templateNodeOf(doc));
+    const places = docPlaces(doc, path);
     tabs.add({
       doc,
       title: TABLE.tabTitle(n.node.name, doc.name, places),

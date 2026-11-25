@@ -832,11 +832,13 @@ export const UNPACKED = {
  * the strings take the singular and make the plural here, rather than each
  * caller working out whether it holds one word or two.
  */
-/** Which block, channel or row a table is, outermost first: `block 2 of 128,
- *  channel 3 of 64`, or without the counts, `block 2, channel 3`, where room
- *  is short. */
+/** Which block, channel or row a table is, outermost first, written the way
+ *  the inspector writes an element and counted from 0 as it is:
+ *  `blocks[1] (of 2), channels[2] (of 64)`, or without the counts,
+ *  `blocks[1], channels[2]`, where room is short. The index is never grouped
+ *  with commas, since `blocks[1,024]` reads as two indices. */
 function placesText(places: readonly TablePlace[], counts: boolean): string {
-  return places.map((p) => (counts ? `${p.word} ${p.n.toLocaleString()} of ${p.of.toLocaleString()}` : `${p.word} ${p.n.toLocaleString()}`)).join(", ");
+  return places.map((p) => (counts ? `${p.list}[${p.index}] (of ${p.of.toLocaleString()})` : `${p.list}[${p.index}]`)).join(", ");
 }
 
 export const TABLE = {
@@ -857,12 +859,12 @@ export const TABLE = {
       ? `Table of ${plural(rowWord)} from ${field} of ${file}`
       : `Table of ${plural(rowWord)} from ${field}, ${placesText(places, true)}, of ${file}`,
   /** The table's name over it, with which one of several it is when it sits
-   *  in counted lists: `samples, block 2 of 128, channel 3 of 64`. */
+   *  in counted lists: `samples, blocks[1] (of 2), channels[2] (of 64)`. */
   title: (field: string, places: readonly TablePlace[]): string =>
     places.length === 0 ? field : `${field}, ${placesText(places, true)}`,
-  /** What the export's file name says the table is: `samples.block2.channel3`. */
+  /** What the export's file name says the table is: `samples.blocks[1].channels[2]`. */
   exportTable: (field: string, places: readonly TablePlace[]): string =>
-    [field, ...places.map((p) => `${p.word}${p.n}`)].join("."),
+    [field, ...places.map((p) => `${p.list}[${p.index}]`)].join("."),
   /** How many rows there are, in the bar above them. */
   count: (n: number, rowWord: string): string => countText(n, rowWord),
   /**

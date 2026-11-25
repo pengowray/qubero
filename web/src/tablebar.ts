@@ -23,7 +23,7 @@ let arrangeGroups = 0;
 
 export type BarOpts = {
   readonly title: string;
-  /** Which one of several this table is, nearest list first. */
+  /** Which one of several this table is, outermost list first. */
   readonly places: readonly TablePlace[];
   readonly plan: TablePlan;
   /** Which way round the table is drawn as the bar is built. */

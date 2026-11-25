@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import { tablePlaces } from "../src/tableplace.ts";
 import { TABLE } from "../src/strings.ts";
+import { exportName } from "../src/tableexport.ts";
 import type { TemplateNode } from "../src/doc.ts";
 
 /** A node with only what the places read set. */
@@ -25,16 +26,23 @@ const GUPPI = tree({
   "0/1/2/0/2/0": node("samples", true, undefined, 32),
 });
 
-test("a table in counted lists names them, outermost first, from 1", () => {
+test("a table in counted lists names them as the inspector does, outermost first, from 0", () => {
   const places = tablePlaces([0, 1, 2, 0, 2, 0], GUPPI);
   assert.deepEqual(places, [
-    { word: "block", n: 2, of: 128 },
-    { word: "channel", n: 3, of: 64 },
+    { list: "blocks", index: 1, of: 128 },
+    { list: "channels", index: 2, of: 64 },
   ]);
-  assert.equal(TABLE.title("samples", places), "samples, block 2 of 128, channel 3 of 64");
-  assert.equal(TABLE.tabTitle("samples", "a.raw", places), "samples as table · block 2, channel 3 · a.raw");
-  assert.equal(TABLE.tabTooltip("sample", "samples", "a.raw", places), "Table of samples from samples, block 2 of 128, channel 3 of 64, of a.raw");
-  assert.equal(TABLE.exportTable("samples", places), "samples.block2.channel3");
+  assert.equal(TABLE.title("samples", places), "samples, blocks[1] (of 128), channels[2] (of 64)");
+  assert.equal(TABLE.tabTitle("samples", "a.raw", places), "samples as table · blocks[1], channels[2] · a.raw");
+  assert.equal(TABLE.tabTooltip("sample", "samples", "a.raw", places), "Table of samples from samples, blocks[1] (of 128), channels[2] (of 64), of a.raw");
+  assert.equal(TABLE.exportTable("samples", places), "samples.blocks[1].channels[2]");
+  assert.equal(exportName("a.raw", TABLE.exportTable("samples", places), "csv"), "a.raw.samples.blocks[1].channels[2].csv");
+});
+
+test("an index is written without digit grouping, and a count with it", () => {
+  const places = [{ list: "rows", index: 1024, of: 4096 }];
+  assert.equal(TABLE.title("samples", places), "samples, rows[1024] (of 4,096)");
+  assert.equal(TABLE.exportTable("samples", places), "samples.rows[1024]");
 });
 
 test("a list of plain items is not a place, and a table in none keeps its name", () => {
