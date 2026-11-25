@@ -351,6 +351,28 @@ button.welcome-crystal {
   padding: 4px 8px 4px 4px;
   color: var(--muted);
 }
+/* On a phone two tabs do not fit side by side, and a strip that scrolls
+   sideways cut the second tab's name off at the screen edge with nothing to
+   say there was more. The tabs go onto as many lines as they need instead,
+   and a name longer than the screen wraps inside its tab. Each line of tabs
+   gets its own rule under it; the last one sits on the strip's. */
+@media (max-width: 700px) {
+  .tabstrip-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .tab {
+    max-width: 100%;
+    margin-bottom: -1px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tab-pick {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+}
 .tab-close:hover {
   color: var(--warn);
 }
