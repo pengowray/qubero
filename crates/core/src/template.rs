@@ -2102,6 +2102,14 @@ pub struct TableShape {
     /// What to call a column when `names` does not fit: "channel" gives
     /// "channel 1", "channel 2", ...
     pub column_word: Option<Arc<str>>,
+    /// What each of `names` means, for a reader who does not know the
+    /// format's shorthand: `pol 1 real` is "Polarisation 1, real part".
+    /// Parallel to `names`, or empty.
+    pub titles: Vec<Arc<str>>,
+    /// Columns that come in runs of equal length, one run per group: a
+    /// filterbank with two IFs has every channel of the first IF and then
+    /// every channel of the second. None: one run.
+    pub groups: Option<ColumnGroups>,
     /// What one row is: "sample", "record".
     pub row_word: Option<Arc<str>>,
     /// Rows per second, when rows are spaced in time. Gives the time column.
@@ -2113,6 +2121,20 @@ pub struct TableShape {
     /// rows are `columns` values each, which is every table declared by a
     /// template.
     pub cells: Option<Cells>,
+}
+
+/// The groups a table's columns come in: how many, and what one is called.
+/// With more than one, a column numbered by `column_word` is named by its
+/// group as well: "IF 2 channel 5".
+#[derive(Debug, Clone)]
+pub struct ColumnGroups {
+    pub count: Expr,
+    /// The format's own word for a group, as short as the header needs it:
+    /// "IF", "pol".
+    pub word: Arc<str>,
+    /// The same word written out, for the column's hover: "Intermediate
+    /// frequency (IF)", "Polarisation".
+    pub spelled: Arc<str>,
 }
 
 /// One field that describes a table: where its value is, and, where the

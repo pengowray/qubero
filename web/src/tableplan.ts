@@ -31,6 +31,9 @@ import { columnTimeText, timeColumn } from "./timetext.ts";
 export type TableColumn = {
   readonly name: string;
   readonly unit: string;
+  /** What the name means, for its hover, where the name is shorthand:
+   *  `pol 1 real` is "Polarisation 1, real part". */
+  readonly title?: string;
 };
 
 /** One row, and where its bytes are so the reader can go to them. The cells
@@ -149,10 +152,31 @@ export function shapeColumns(shape: TableShape, columns: number): TableColumn[] 
   const named = shape.names.length === columns;
   const unit = (i: number): string => (shape.units.length === columns ? (shape.units[i] ?? "") : "");
   const word = shape.column_word ?? TABLE.columnFallback;
-  return Array.from({ length: columns }, (_, i) => ({
-    name: named ? (shape.names[i] ?? TABLE.column(word, i + 1)) : TABLE.column(word, i + 1),
-    unit: unit(i),
-  }));
+  if (named) {
+    const titled = shape.titles.length === columns;
+    return Array.from({ length: columns }, (_, i) => ({
+      name: shape.names[i] ?? TABLE.column(word, i + 1),
+      unit: unit(i),
+      ...(titled ? { title: shape.titles[i] ?? "" } : {}),
+    }));
+  }
+  // Columns in groups are named by their group as well, `IF 2 channel 5`,
+  // when there is more than one group and the groups divide the row evenly.
+  // Otherwise a column named by its group would be wrong somewhere.
+  const g = shape.groups;
+  if (g !== null && g.count > 1 && columns % g.count === 0) {
+    const per = columns / g.count;
+    return Array.from({ length: columns }, (_, i) => {
+      const group = Math.floor(i / per) + 1;
+      const n = (i % per) + 1;
+      return {
+        name: TABLE.groupColumn(g.word, group, word, n),
+        unit: unit(i),
+        title: TABLE.groupColumnTitle(g.spelled, group, g.count, word, n, per),
+      };
+    });
+  }
+  return Array.from({ length: columns }, (_, i) => ({ name: TABLE.column(word, i + 1), unit: unit(i) }));
 }
 
 /**

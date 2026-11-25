@@ -75,7 +75,7 @@ function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
 }
 
 function shape(o: Partial<TableShape> = {}): TableShape {
-  return { columns: null, names: [], units: [], column_word: null, row_word: null, rate: null, facts: [], cells: null, ...o };
+  return { columns: null, names: [], units: [], column_word: null, titles: [], groups: null, row_word: null, rate: null, facts: [], cells: null, ...o };
 }
 
 test("elements are grouped into rows by the column count", () => {
@@ -106,6 +106,24 @@ test("names that do not fit the row are dropped for numbers", () => {
     shapeColumns(s, 3).map((c) => c.name),
     ["channel 1", "channel 2", "channel 3"],
   );
+});
+
+test("columns in groups are named by their group, with the group written out on hover", () => {
+  // A filterbank with two IFs of three channels: IF 1's channels, then IF 2's.
+  const s = shape({ column_word: "channel", groups: { count: 2, word: "IF", spelled: "Intermediate frequency (IF)" } });
+  const columns = shapeColumns(s, 6);
+  assert.deepEqual(columns.map((c) => c.name), ["IF 1 channel 1", "IF 1 channel 2", "IF 1 channel 3", "IF 2 channel 1", "IF 2 channel 2", "IF 2 channel 3"]);
+  assert.equal(columns[4]?.title, "Intermediate frequency (IF) 2 of 2, channel 2 of 3");
+  // One group, or groups that do not divide the row, and the columns are
+  // channels alone.
+  const one = shape({ column_word: "channel", groups: { count: 1, word: "pol", spelled: "Polarisation" } });
+  assert.deepEqual(shapeColumns(one, 2).map((c) => c.name), ["channel 1", "channel 2"]);
+  assert.deepEqual(shapeColumns(s, 5).map((c) => c.name)[4], "channel 5");
+});
+
+test("named columns carry what their shorthand means for the hover", () => {
+  const s = shape({ names: ["pol 1 real", "pol 1 imaginary"], titles: ["Polarisation 1, real part", "Polarisation 1, imaginary part"] });
+  assert.equal(shapeColumns(s, 2)[1]?.title, "Polarisation 1, imaginary part");
 });
 
 test("a shape with no word for a column still names its columns", () => {

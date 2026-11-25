@@ -51,6 +51,8 @@ function shape(names: string[]): TableShape {
     names,
     units: [],
     column_word: null,
+    titles: [],
+    groups: null,
     row_word: "row",
     rate: null,
     facts: [],

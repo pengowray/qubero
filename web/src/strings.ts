@@ -878,6 +878,13 @@ export const TABLE = {
   /** A column the shape's names do not cover, numbered from 1 the way the
    *  format numbers its channels. */
   column: (columnWord: string, n: number): string => `${columnWord} ${n}`,
+  /** A column of a table whose columns come in groups, each group numbered
+   *  from 1 the way the format numbers them: `IF 2 channel 5`. */
+  groupColumn: (groupWord: string, group: number, columnWord: string, n: number): string => `${groupWord} ${group} ${columnWord} ${n}`,
+  /** The same on hover, with the group's word written out and both counts:
+   *  `Polarisation 2 of 4, channel 5 of 96`. */
+  groupColumnTitle: (spelled: string, group: number, groups: number, columnWord: string, n: number, per: number): string =>
+    `${spelled} ${group} of ${groups}, ${columnWord} ${n} of ${per}`,
   /** The word to number columns by when the shape gives none. */
   columnFallback: "column",
   /** The two columns of the data lens: where the row is kept, and how much of

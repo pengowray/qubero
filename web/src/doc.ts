@@ -358,6 +358,11 @@ export type TableShape = {
   readonly units: readonly string[];
   /** What to call a column the names do not cover: `channel 1`, `channel 2`. */
   readonly column_word: string | null;
+  /** What each of `names` means, for the column's hover, or empty. */
+  readonly titles: readonly string[];
+  /** The groups the columns come in: with two IFs, every channel of the
+   *  first and then every channel of the second. Null for one run. */
+  readonly groups: { readonly count: number; readonly word: string; readonly spelled: string } | null;
   /** What one row is: a sample, a record. */
   readonly row_word: string | null;
   /** Rows a second, when the rows are spaced in time. Gives the time column. */

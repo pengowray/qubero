@@ -1802,6 +1802,8 @@ impl Editor {
                         names: t.names,
                         units: t.units,
                         column_word: t.column_word,
+                        titles: t.titles,
+                        groups: t.groups.map(|g| ColumnGroupsDto { count: g.count as f64, word: g.word, spelled: g.spelled }),
                         row_word: t.row_word,
                         rate: t.rate,
                         facts: t

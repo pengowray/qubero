@@ -450,6 +450,12 @@ pub(crate) struct TableShapeDto {
     /// What to call a column that `names` does not reach: "channel" gives
     /// "channel 1", "channel 2". Null when the format has no word for one.
     pub(crate) column_word: Option<String>,
+    /// What each of `names` means, for the column's hover, parallel to
+    /// `names` or empty.
+    pub(crate) titles: Vec<String>,
+    /// The groups the columns come in, when the file says how many: "IF 2
+    /// channel 5". Null for one run of columns.
+    pub(crate) groups: Option<ColumnGroupsDto>,
     /// What one row is: "sample", "record". Null when the format has no word.
     pub(crate) row_word: Option<String>,
     /// Rows per second, when the rows are spaced in time. Null otherwise.
@@ -461,6 +467,15 @@ pub(crate) struct TableShapeDto {
     /// run of values. Null for every table a template declares, where a row is
     /// `columns` values and a reader works the rest out from the count.
     pub(crate) cells: Option<CellsDto>,
+}
+
+/// The groups a table's columns come in. See
+/// [`qubero_core::template::ColumnGroups`].
+#[derive(Serialize)]
+pub(crate) struct ColumnGroupsDto {
+    pub(crate) count: f64,
+    pub(crate) word: String,
+    pub(crate) spelled: String,
 }
 
 /// Where a table's cells are, for a table whose rows are nodes rather than a

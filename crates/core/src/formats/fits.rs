@@ -163,7 +163,7 @@
 //!   size is a search by the text of another card.
 
 use super::fits_cards::card;
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, TableFact, TableShape, Template, Ty as T, Until};
+use crate::template::{Anchor, ColumnGroups, Encoding, Endian::Big, Expr as E, KeyPart, Step, StrLen, TableFact, TableShape, Template, Ty as T, Until};
 
 /// The block every part of a FITS file is padded out to.
 const BLOCK: u32 = 2880;
@@ -898,6 +898,8 @@ fn search_samples(plain: T, cell_bits: E) -> T {
         let shape = TableShape {
             columns: Some(per_sample.clone()),
             column_word: Some("channel".into()),
+            // Every channel of the first polarisation, then of the next.
+            groups: Some(ColumnGroups { count: card_value("NPOL"), word: "pol".into(), spelled: "Polarisation".into() }),
             row_word: Some("sample".into()),
             // `TBIN` is the time between samples in seconds, so a second
             // holds one over it. It is written as a real, `6.4E-05`.

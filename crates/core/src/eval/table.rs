@@ -32,6 +32,10 @@ pub struct TableShapeInfo {
     pub units: Vec<String>,
     /// What to call a column `names` does not reach: "channel".
     pub column_word: Option<String>,
+    /// What each of `names` means, parallel to it, or empty.
+    pub titles: Vec<String>,
+    /// The groups the columns come in, when the file says how many.
+    pub groups: Option<ColumnGroupsInfo>,
     /// What one row is: "sample", "record".
     pub row_word: Option<String>,
     /// Rows per second, when the rows are spaced in time. A real, since a
@@ -44,6 +48,15 @@ pub struct TableShapeInfo {
     /// Where a row's cells are, when a row is a node rather than a run of
     /// values. None for every table a template declares.
     pub cells: Option<Cells>,
+}
+
+/// The groups a table's columns come in, worked out. See
+/// [`ColumnGroups`](crate::template::ColumnGroups).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnGroupsInfo {
+    pub count: u64,
+    pub word: String,
+    pub spelled: String,
 }
 
 /// One field that describes a table, worked out: what to call it, where it
@@ -79,6 +92,14 @@ impl Evaluator {
             Some(e) => self.count_at(doc, path, &e.clone())?,
             None => None,
         };
+        let groups = match &shape.groups {
+            Some(g) => self.count_at(doc, path, &g.count.clone())?.map(|count| ColumnGroupsInfo {
+                count,
+                word: g.word.to_string(),
+                spelled: g.spelled.to_string(),
+            }),
+            None => None,
+        };
         let rate = match &shape.rate {
             Some(e) => self.rate_at(doc, path, &e.clone())?,
             None => None,
@@ -111,6 +132,8 @@ impl Evaluator {
             names: shape.names.iter().map(|n| n.to_string()).collect(),
             units: shape.units.iter().map(|u| u.to_string()).collect(),
             column_word: shape.column_word.as_ref().map(|w| w.to_string()),
+            titles: shape.titles.iter().map(|t| t.to_string()).collect(),
+            groups,
             row_word: shape.row_word.as_ref().map(|w| w.to_string()),
             rate,
             facts,

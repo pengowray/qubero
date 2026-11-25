@@ -398,7 +398,8 @@ export class TableView {
     if (records === null) return this.drawWaiting(label, "tbl-label");
     const element = el("div", { className: this.isOn(j) ? "tbl-row is-on" : "tbl-row" });
     const heading = el("span", { className: "tbl-cell tbl-label", textContent: label });
-    heading.title = this.addresses ? [label, ...fieldWhereLines(records, j)].join("\n") : label;
+    const hover = this.columns.hoverOf(j);
+    heading.title = this.addresses ? [hover, ...fieldWhereLines(records, j)].join("\n") : hover;
     element.append(heading);
     const numeric = this.columns.numeric(j);
     for (const [i, row] of records.entries()) {

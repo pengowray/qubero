@@ -478,6 +478,8 @@ fn a_search_mode_bit_column_reads_as_one_bit_samples() {
     // `TBIN` is 0.000125 s, so 8000 samples a second.
     assert_eq!((shape.columns, shape.rate), (Some(8), Some(8000.0)));
     assert_eq!((shape.column_word.as_deref(), shape.row_word.as_deref()), (Some("channel"), Some("sample")));
+    // One polarisation: a single group, so the columns are channels alone.
+    assert_eq!(shape.groups.as_ref().map(|g| (g.count, g.word.as_str())), Some((1, "pol")));
     // The cards that size and time the samples are the table's facts, each
     // with the card it was read from.
     let said: Vec<&str> = shape.facts.iter().map(|f| f.value.trim()).collect();

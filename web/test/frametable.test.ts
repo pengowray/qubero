@@ -59,6 +59,8 @@ function shape(rows: number): TableShape {
     names: ["index", "id", "score"],
     units: ["int64", "int64", "float64"],
     column_word: null,
+    titles: [],
+    groups: null,
     row_word: "row",
     rate: null,
     facts: [],

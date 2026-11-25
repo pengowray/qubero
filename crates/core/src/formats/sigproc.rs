@@ -26,7 +26,7 @@
 //! - `src_raj` and `src_dej` are the doubles the file holds, which sigproc
 //!   writes as `hhmmss.s` and `ddmmss.s`, not as degrees.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, TableFact, TableShape, Template, Ty as T, Until};
+use crate::template::{ColumnGroups, Encoding, Endian::Little, Expr as E, StrLen, TableFact, TableShape, Template, Ty as T, Until};
 
 /// The first sixteen bytes of every filterbank file: the length of the string
 /// `HEADER_START`, and the string.
@@ -117,6 +117,9 @@ fn samples() -> T {
     let shape = TableShape {
         columns: Some(per_sample()),
         column_word: Some("channel".into()),
+        // A time sample is every channel of the first IF, then every channel
+        // of the next.
+        groups: Some(ColumnGroups { count: header("nifs").or(E::lit(1)), word: "IF".into(), spelled: "Intermediate frequency (IF)".into() }),
         row_word: Some("sample".into()),
         rate: Some(E::real(1.0).div(header("tsamp"))),
         facts: vec![
@@ -245,6 +248,9 @@ mod tests {
         let shape = ev.table_shape(&d, &[1, 0]).unwrap().expect("a shape");
         assert_eq!(shape.columns, Some(6));
         assert_eq!(shape.rate, Some(1.0 / 0.9));
+        // Two IFs of three channels each, so a column is named by its IF too.
+        let groups = shape.groups.as_ref().expect("groups");
+        assert_eq!((groups.count, groups.word.as_str()), (2, "IF"));
         let facts: Vec<(&str, &str, &str)> = shape.facts.iter().map(|f| (f.label.as_str(), f.value.as_str(), f.unit.as_str())).collect();
         assert_eq!(facts[0], ("nchans", "3", ""));
         assert_eq!(facts[3], ("tsamp", "0.9", "s"));

@@ -70,6 +70,13 @@ fn channel() -> T {
         columns: Some(card_value("NPOL")),
         names: vec!["pol 1 real".into(), "pol 1 imaginary".into(), "pol 2 real".into(), "pol 2 imaginary".into()],
         units: vec!["".into(), "".into(), "".into(), "".into()],
+        // The headers stay short; what `pol` stands for is on hover.
+        titles: vec![
+            "Polarisation 1, real part".into(),
+            "Polarisation 1, imaginary part".into(),
+            "Polarisation 2, real part".into(),
+            "Polarisation 2, imaginary part".into(),
+        ],
         // The four columns have names; a word for a column would only make
         // the sentence under the table say "one sample of each value".
         column_word: None,
@@ -221,6 +228,7 @@ pub(crate) mod tests {
         assert_eq!(shape.columns, Some(4));
         assert_eq!(shape.rate, Some(1.0 / 3.41333333333e-7));
         assert_eq!(shape.names[0], "pol 1 real");
+        assert_eq!(shape.titles[0], "Polarisation 1, real part");
         let facts: Vec<(&str, &str)> = shape.facts.iter().map(|f| (f.label.as_str(), f.unit.as_str())).collect();
         assert_eq!(facts[3], ("TBIN", "s"));
         // The two blocks fill the file.

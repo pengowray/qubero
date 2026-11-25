@@ -98,6 +98,14 @@ export class TableColumns {
     return column.unit === "" ? column.name : `${column.name} (${column.unit})`;
   }
 
+  /** A heading's hover: what its name stands for, where the name is
+   *  shorthand, then the heading as drawn. */
+  hoverOf(c: number): string {
+    const text = this.headTextOf(c);
+    const title = this.of.plan.columns[c]?.title ?? "";
+    return title === "" ? text : `${title}\n${text}`;
+  }
+
   /** Every heading, as an export and a copy want them. */
   headings(): string[] {
     return this.columns.map((_, c) => this.headingOf(c));
@@ -264,7 +272,7 @@ export class TableColumns {
     const text = this.headTextOf(c);
     if (column.head.textContent === text) return false;
     column.head.textContent = text;
-    column.head.title = text;
+    column.head.title = this.hoverOf(c);
     const width = Math.min(FIT_MAX, Math.max(column.fit.width, text.length));
     if (width === column.fit.width) return false;
     column.fit = { width, numeric: column.fit.numeric };
