@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use qubero_core::checksum::{adler32, crc32};
+use qubero_core::checksum::{adler32, crc32, crc32_update};
 use qubero_wasm::Editor;
 use serde_json::Value;
 
@@ -203,10 +203,10 @@ fn deflate_head_then_zeros(head: &[u8], zeros: usize) -> Vec<u8> {
     b.done()
 }
 
-/// A tar of one file of `size` zero bytes, packed as a zlib stream:
-/// 70 MiB of tar from under half a megabyte of file, which is past the
-/// 64 MiB a stream is unpacked whole under.
-fn zlib_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
+/// A tar of one file of `size` zero bytes, as its header and how many zero
+/// bytes follow it: the file's, rounded up to a block, and the two empty
+/// blocks that end the archive.
+fn tar_of_zeros(size: usize) -> (Vec<u8>, usize) {
     let mut header = vec![0u8; 512];
     header[..9].copy_from_slice(b"zeros.bin");
     header[100..108].copy_from_slice(b"0000644\0");
@@ -217,7 +217,14 @@ fn zlib_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
     header[148..156].copy_from_slice(b"        ");
     let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
     header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
-    let zeros = size.div_ceil(512) * 512 + 1024;
+    (header, size.div_ceil(512) * 512 + 1024)
+}
+
+/// That tar packed as a zlib stream: 70 MiB of tar from under half a
+/// megabyte of file, which is past the 64 MiB a stream is unpacked whole
+/// under.
+fn zlib_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
+    let (header, zeros) = tar_of_zeros(size);
     let mut file = vec![0x78, 0x01];
     file.extend(deflate_head_then_zeros(&header, zeros));
     // The Adler-32 of the header and then the zeros, which leave the first
@@ -226,6 +233,24 @@ fn zlib_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
     let (a, b) = (a_b & 0xffff, a_b >> 16);
     let b = ((u64::from(b) + zeros as u64 * u64::from(a)) % 65521) as u32;
     file.extend(((b << 16) | a).to_be_bytes());
+    file
+}
+
+/// The same tar packed as a gzip of one member.
+fn gzip_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
+    let (header, zeros) = tar_of_zeros(size);
+    let mut file = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    file.extend(deflate_head_then_zeros(&header, zeros));
+    let block = vec![0u8; 1 << 20];
+    let mut crc = crc32(&header);
+    let mut left = zeros;
+    while left > 0 {
+        let n = left.min(block.len());
+        crc = crc32_update(crc, &block[..n]);
+        left -= n;
+    }
+    file.extend(crc.to_le_bytes());
+    file.extend(((header.len() + zeros) as u32).to_le_bytes());
     file
 }
 
@@ -294,6 +319,43 @@ fn a_recognised_tab_opened_again_after_an_edit_says_how_far_unpacking_has_got() 
     assert!(read > 0);
     assert!(parse(&ed.unpacking(tab))["node"].is_null(), "still unpacking once the tab answers");
     assert_eq!(name(&mut ed, tab), "zeros.bin");
+}
+
+/// A stream opened from a tab whose bytes were recognised is unpacked in that
+/// tab's own reading, and the tab says how far it has got: a gzip of a gzip,
+/// the inner one recognised and holding 70 MiB of tar.
+#[test]
+fn a_stream_opened_inside_a_recognised_tab_says_how_far_unpacking_has_got() {
+    let inner = gzip_of_a_tar_of_zeros(70 << 20);
+    let file = gzip_of(&inner);
+    let mut ed = Editor::new(file.len() as f64, CHUNK as u32, 1024);
+    for (i, part) in file.chunks(CHUNK).enumerate() {
+        ed.feed_chunk(i as f64, part);
+    }
+    assert!(ed.set_template("gzip"));
+    // The gzip's `decoded`, which is the inner gzip, a few hundred kilobytes.
+    let reply = parse(&ed.open_space(0, &[1]));
+    assert_eq!(reply["status"], "ok", "{reply}");
+    let gzip = reply["node"]["space"].as_f64().unwrap() as u32;
+    assert!(ed.space_recognised(gzip), "the inner gzip was not recognised");
+    let (mut goes, mut read) = (0, 0);
+    let tar = loop {
+        let reply = ed.open_space(gzip, &[1]);
+        match go(&reply, &ed, gzip) {
+            None => break parse(&reply)["node"]["space"].as_f64().unwrap() as u32,
+            Some(progress) => {
+                let now = read_bits(&progress);
+                assert!(now >= read, "{read} then {now}");
+                read = now;
+                goes += 1;
+            }
+        }
+        assert!(goes < 10_000);
+    };
+    assert!(goes >= 2, "unpacked in {goes} goes");
+    assert!(read > 0);
+    assert!(ed.space_recognised(tar), "the tar was not recognised");
+    assert_eq!(name(&mut ed, tar), "zeros.bin");
 }
 
 /// The name of the first file in the tar the tab reads.

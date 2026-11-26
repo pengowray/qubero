@@ -735,7 +735,9 @@ blocks.
   with no chunk asked for twice; a run longer than the editor's store asks
   again for chunks it was fed; and a tar of 70 MiB of zeros packed by hand as
   zlib, opened as a recognised tab and then opened again after an edit, says
-  how far that unpacking has got on every "working" reply about the tab.
+  how far that unpacking has got on every "working" reply about the tab. The
+  same tar packed as a gzip inside a gzip, opened from the tab of the inner
+  gzip, says how far it has got in that tab's own reading.
 - `web/test/openwait.test.ts`: `waitToOpen` loads and asks again through
   "pending" and "working" to the tab, and stops on the same chunks twice, on
   chunks pushed out by their own load, on a read that fails, after
