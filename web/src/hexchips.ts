@@ -41,11 +41,15 @@ export type ChipEl = HTMLButtonElement & {
   _runEnd?: number | undefined;
   _from?: number | undefined;
   _to?: number | undefined;
+  /** True for a chip whose press goes to what it names, bringing it on
+   *  screen, rather than picking a field beside the chip: the label that says
+   *  which offset placed a value. */
+  _go?: boolean | undefined;
 };
 
 /** What pressing a chip hands on: the field, the bits the chip stands for, and
  *  the end of the run when it folded one. */
-export type ChipPick = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number) => void;
+export type ChipPick = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number, go?: boolean) => void;
 
 /**
  * An empty chip, ready to be filled.
@@ -67,7 +71,7 @@ export function newChip(onPick: ChipPick): ChipEl {
   el.addEventListener("click", (e) => {
     e.stopPropagation();
     const path = el._path;
-    if (path !== undefined) onPick(path, { from: el._from ?? 0, to: el._to ?? 0 }, el._runEnd);
+    if (path !== undefined) onPick(path, { from: el._from ?? 0, to: el._to ?? 0 }, el._runEnd, el._go === true);
   });
   return el;
 }
@@ -192,6 +196,7 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
   el._runEnd = last === undefined ? undefined : last.offset_bits + last.size_bits;
   el._from = s.offset_bits;
   el._to = el._runEnd ?? s.offset_bits + s.size_bits;
+  el._go = undefined;
   // Read back by the view's own listener rather than by a handler per chip:
   // there are six hundred of these on screen and they are reused across
   // redraws, so what a chip offers has to live on the element.
@@ -233,6 +238,7 @@ function fillLead(el: ChipEl, c: Chip, text: ChipText): void {
   el._runEnd = undefined;
   el._from = s.offset_bits;
   el._to = s.offset_bits + s.size_bits;
+  el._go = c.lead === "from";
   delete el.dataset["opens"];
   delete el.dataset["table"];
   el.disabled = false;

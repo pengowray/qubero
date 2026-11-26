@@ -640,7 +640,13 @@ export class HexView {
   /** Pick the field a chip stands for, with the cursor on the bytes the chip is
    *  drawn beside. Held as one function for the life of the view, since every
    *  chip keeps it. */
-  private readonly pickField = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number): void => {
+  private readonly pickField = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number, go?: boolean): void => {
+    // A label naming the offset that placed a value goes to that offset, as a
+    // heading goes to its part: the offset is usually somewhere else.
+    if (go === true) {
+      this.onPickField(path, throughBit, bits.from);
+      return;
+    }
     const at = chipCursorBit(bits.from, bits.to, this.grid.firstByte * 8);
     this.inPlace(() => this.onPickField(path, throughBit, at));
   };
