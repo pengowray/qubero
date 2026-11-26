@@ -376,7 +376,10 @@ beside the stitched one. Indexes are also kept in a small registry keyed by
 where the run is (space, bit offset, bits, codec), so the member's `Decoded`
 node, the stitched part over the same run and the tab all share one index. The
 registry holds at most 64 MiB of compressed runs in total and drops the index
-used longest ago to make room.
+used longest ago to make room. A run whose pass refused it is kept beside the
+indexes, by the same key, with its refusal: `Evaluator::index_run` hands that
+refusal back to the next node or read over the run without another pass, and
+`Spaces::forget` drops it with the indexes.
 
 **`open_space_at`.** Calls `Evaluator::index_run`, which makes the pass of
 `decode_or_index` (see "The pass in steps"); a `Seekable` becomes
@@ -404,7 +407,10 @@ from a part's index pass refuses the stream as `Failed`. That includes a
 part's `TooLarge` (one zstd frame or xz block past 64 MiB), because the
 stream's own `TooLarge` means its parts take up too much of the file. A read
 of such a part says `is too large to unpack (over 64 MiB)`, and a read of a
-part that will not decode says `could not be unpacked`.
+part that will not decode says `could not be unpacked`. A part of a codec with
+no index (bzip2, LZMA and the rest) is decoded whole, and a read of one past
+64 MiB says `is too large to unpack (over 64 MiB)` as well. The words after
+"is" are `Refusal::message`, which FITS tiles and Parquet pages use too.
 
 **`Space` (the document of its own).** Its document becomes
 `Document<SpaceSource>`, where `SpaceSource` is an enum of `Whole(Arc<Vec<u8>>)`,
@@ -450,7 +456,9 @@ one opens now depends on how much of the file its parts take up, which only
 the core knows, so every joined stream is offered and a refusal is said in the
 status bar when the button is pressed (`JOINED.refused`: `tooLarge`,
 `partTooLarge` for `too-large-lazy`, and `failed`). `DECODED_REFUSED` has a
-string for `too-large-lazy`.
+string for `too-large-lazy`, and the report's finding for a stream left as
+bytes (`RV.refused` in `report/text.ts`) says "Too large to unpack here" for
+it, as for `too-large`.
 
 ## The browser
 

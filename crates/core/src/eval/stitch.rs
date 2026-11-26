@@ -64,13 +64,15 @@ enum PartTrouble {
 }
 
 /// What a read of a packed part says after the part's name when the part's
-/// decoder refused it. The words a compressed run's own row has for the same
-/// refusal (`DECODED_REFUSED` in the web's `strings.ts`).
-fn part_refused(why: Refusal) -> &'static str {
+/// decoder refused it. A part too large says "is" and [`Refusal::message`],
+/// the words a compressed run's own row has (`DECODED_REFUSED` in the web's
+/// `strings.ts`). Any other refusal says "could not be unpacked": the other
+/// messages, such as "unpacking failed", do not read as a sentence after a
+/// field's name.
+fn part_refused(why: Refusal) -> String {
     match why {
-        Refusal::TooLarge => "is too large to unpack (over 64 MiB)",
-        Refusal::TooLargeLazy => "is too large to unpack (over 1 GiB)",
-        _ => "could not be unpacked",
+        Refusal::TooLarge | Refusal::TooLargeLazy => format!("is {}", why.message()),
+        _ => "could not be unpacked".into(),
     }
 }
 
@@ -336,8 +338,19 @@ impl Evaluator {
                 n,
                 stitch.parts[i].len
             )),
-            Err(PartTrouble::Refused(why)) => fail(format!("{} {}", self.part_label(stitch, i), part_refused(why))),
+            Err(PartTrouble::Refused(why)) => self.part_refusal(stitch, i, why),
         }
+    }
+
+    /// A read of packed part `i` failing because its decoder refused it, said
+    /// after the part's name: `blocks[0].compressed is too large to unpack
+    /// (over 1 GiB)`. Out of line, so that the `format!` adds nothing to the
+    /// stack frame of `read_stitched`, which a read deep inside an evaluation
+    /// can reach.
+    #[cold]
+    #[inline(never)]
+    fn part_refusal<T>(&self, stitch: &Stitch, i: usize, why: Refusal) -> R<T> {
+        fail(format!("{} {}", self.part_label(stitch, i), part_refused(why)))
     }
 
     /// The bytes of a packed run, unpacked. The outer error is the run's bytes
@@ -398,8 +411,8 @@ impl Evaluator {
                 PartSource::Packed { .. } => match self.part_index(doc, stitch, i)? {
                     Some(index) => {
                         let mut got = vec![0u8; take as usize];
-                        if index.read(from, &mut got).is_err() {
-                            return fail(format!("{} could not be unpacked", self.part_label(stitch, i)));
+                        if let Err(why) = index.read(from, &mut got) {
+                            return self.part_refusal(stitch, i, why);
                         }
                         bytes.extend_from_slice(&got);
                     }
@@ -451,7 +464,7 @@ impl Evaluator {
         };
         let bytes = match unpacked {
             Ok(bytes) => checked(Arc::new(bytes))?,
-            Err(_) => return fail(format!("{} could not be unpacked", self.part_label(stitch, i))),
+            Err(why) => return self.part_refusal(stitch, i, why),
         };
         stitch.cache.borrow_mut().put(i, bytes.clone());
         Ok(bytes)
@@ -1631,6 +1644,89 @@ mod tests {
         assert_eq!(opened, None);
         assert_eq!(e.open_refusal(&[1]), Some(Refusal::Failed));
         assert_eq!(why(&e, &d, space), "blocks[0].compressed could not be unpacked");
+    }
+
+    /// A part refused by its index pass is refused from then on without
+    /// another pass: by each read of it, and by the block's own compressed run
+    /// opened as a stream of its own. Dropped with the indexes, so a file
+    /// read again after an edit is indexed again.
+    #[test]
+    fn a_part_refused_by_its_index_pass_is_not_indexed_again() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::{Codec, Refusal};
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let limits = Limits { whole: 4096, lazy: 20_000, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() };
+        // Past `Limits::lazy`, and then the same block made a deflate block
+        // type that does not exist.
+        for (spoil, refusal) in [(false, Refusal::TooLargeLazy), (true, Refusal::Failed)] {
+            let mut file = bgzf_of(&[&big, b"and a short block after it"]);
+            if spoil {
+                file[18] = 0xff;
+            }
+            let d = Document::new(MemSource(file));
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            e.spaces.set_whole_cap(10_000);
+            e.spaces.set_lazy_limits(limits);
+            assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+            let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
+            assert_eq!(e.spaces.passes.get(), 1, "opening it as a document indexed the first block");
+            for _ in 0..2 {
+                assert!(e.read_in(&d, space, 0, 8).is_err());
+            }
+            assert_eq!(e.spaces.passes.get(), 1, "two reads of the first block");
+            let compressed = e.child_named(&d, &[0, 0], "compressed").unwrap().expect("a block has its compressed run");
+            assert_eq!(e.open_space(&d, 0, &compressed).unwrap(), None);
+            assert_eq!(e.open_refusal(&compressed), Some(refusal));
+            assert_eq!(e.spaces.passes.get(), 1, "the block's own run, opened");
+            // The block after it is under `Limits::whole` and needs no pass.
+            assert_eq!(e.read_in(&d, space, 30_000 * 8, 24).unwrap(), b"and");
+            assert_eq!(e.spaces.passes.get(), 1);
+
+            let super::PartSource::Packed { space: run_space, at_bits, size_bits, .. } = e.spaces.stitch(space).unwrap().parts[0].source else {
+                panic!("the first block is packed")
+            };
+            let key = (run_space, at_bits, size_bits);
+            assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), Some(refusal));
+            e.spaces.forget();
+            assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), None);
+            assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+            assert_eq!(e.spaces.passes.get(), 2, "after the indexes were dropped");
+        }
+    }
+
+    /// A packed part whose codec has no index, and which comes to more than a
+    /// run may be decoded whole at, says so when it is read rather than that
+    /// it could not be unpacked.
+    #[test]
+    fn a_part_too_large_to_unpack_whole_says_it_is_too_large() {
+        use crate::codec::Codec;
+        use crate::eval::EvalError;
+        // A Snappy block starts with how many bytes it comes to, as a varint,
+        // and one that says more than 64 MiB is refused before anything is
+        // decoded.
+        let claimed: u32 = 100 << 20;
+        let mut file = claimed.to_be_bytes().to_vec();
+        let mut n = claimed;
+        while n >= 0x80 {
+            file.push(n as u8 | 0x80);
+            n >>= 7;
+        }
+        file.push(n as u8);
+        file.extend_from_slice(&[0x08, b'a', b'b', b'c']);
+        let member = T::structure(
+            "Member",
+            vec![("claimed", T::u32(Big)), ("run", T::decoded(E::Remaining, Codec::Snappy, T::bytes(E::Remaining)))],
+        );
+        let joined = T::stitched(vec![Step::field("member"), Step::field("run")], Some(E::field("claimed")), None, T::bytes(E::Remaining));
+        let template = Template::new("snappy-part", T::structure("File", vec![("member", member), ("joined", joined)]));
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(template);
+        let super::Opened::Space(space) = e.open_stitched_at(&d, &[1]).unwrap() else { panic!("the stream did not open") };
+        assert_eq!(e.spaces.len_bits(space), u64::from(claimed) * 8);
+        match e.read_in(&d, space, 0, 8) {
+            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run is too large to unpack (over 64 MiB)"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

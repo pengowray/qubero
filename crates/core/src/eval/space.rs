@@ -839,6 +839,16 @@ pub(super) struct Spaces {
     indexes: std::cell::RefCell<Indexes>,
     /// Indexes still being made. A cell for the same reason.
     unfinished: std::cell::RefCell<Unfinished>,
+    /// Why the index pass over a run refused it, by where the run is and its
+    /// codec, so that a run past `Limits::lazy` or one that will not decode
+    /// is not decoded again, up to a gigabyte of output, by every read that
+    /// reaches it. Kept beside the indexes, and dropped with them. A cell for
+    /// the same reason.
+    refused_runs: std::cell::RefCell<FxHashMap<(RunKey, Codec), Refusal>>,
+    /// How many index passes have been started, for a test that wants to see
+    /// a pass is not made twice.
+    #[cfg(test)]
+    pub(super) passes: std::cell::Cell<u32>,
 }
 
 impl Default for Spaces {
@@ -852,6 +862,9 @@ impl Default for Spaces {
             lazy_limits: Limits::default(),
             indexes: Default::default(),
             unfinished: Default::default(),
+            refused_runs: Default::default(),
+            #[cfg(test)]
+            passes: Default::default(),
         }
     }
 }
@@ -887,6 +900,12 @@ impl Spaces {
     /// Keep an index of the run at `key`.
     pub(super) fn keep_index(&self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
         self.indexes.borrow_mut().put(key, codec, index);
+    }
+
+    /// Why the index pass over the run at `key`, packed with `codec`, refused
+    /// it, if one did.
+    pub(super) fn run_refusal(&self, key: RunKey, codec: Codec) -> Option<Refusal> {
+        self.refused_runs.borrow().get(&(key, codec)).copied()
     }
 
     /// The limits a run too large to hold whole is indexed under.
@@ -1007,6 +1026,7 @@ impl Spaces {
         // Kept by where a run is, and an edit can change what is there.
         self.indexes.borrow_mut().entries.clear();
         self.unfinished.borrow_mut().entries.clear();
+        self.refused_runs.borrow_mut().clear();
     }
 
     /// The run being indexed most recently, and how far its pass has got,
@@ -1022,7 +1042,9 @@ impl super::Evaluator {
     /// a step at a time. Each step is charged to this go's allowance, and a go
     /// that runs out hands back `Busy` with the pass kept, to be carried on
     /// from where it stopped the next time anything asks for the same run.
-    /// `Ok(Err)` is the run refusing, as it would refuse in one go.
+    /// `Ok(Err)` is the run refusing, as it would refuse in one go. A refusal
+    /// is kept by where the run is, and handed back from then on without
+    /// another pass.
     /// `known_large` is a caller that knows the run comes to more than the
     /// cap, which lets the pass skip the part that might have been a run held
     /// whole: see [`lazy::Indexing::known_large`].
@@ -1034,10 +1056,24 @@ impl super::Evaluator {
     /// Takes the evaluator shared, since a read of a stitched stream reaches
     /// here, and reads do.
     pub(super) fn index_run<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
+        if let Some(why) = self.spaces.run_refusal(key, codec) {
+            return Ok(Err(why));
+        }
+        let done = self.index_pass(doc, key, codec, known_large)?;
+        if let Err(why) = done {
+            self.spaces.refused_runs.borrow_mut().insert((key, codec), why);
+        }
+        Ok(done)
+    }
+
+    /// The pass behind [`Self::index_run`], for a run with no refusal kept.
+    fn index_pass<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
         let started = self.spaces.unfinished.borrow_mut().take(key, codec);
         let mut pass = match started {
             Some(pass) => pass,
             None => {
+                #[cfg(test)]
+                self.spaces.passes.set(self.spaces.passes.get() + 1);
                 if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
                     return Ok(Err(Refusal::TooLarge));
                 }
