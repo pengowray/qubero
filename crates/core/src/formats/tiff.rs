@@ -523,9 +523,117 @@ fn ifd(e: Endian, space: Space) -> T {
     if space == Space::Jxr {
         fields.extend(super::jxr::codestreams());
     }
+    let images = matches!(space, Space::Tiff | Space::Sony);
+    if images {
+        fields.extend(image_data(e));
+    }
     // The entries are what a directory is; `entries` is only the list's name,
     // so the listing shows them beside the count rather than a level down.
-    T::structure(space.shown(), fields).contents("entries")
+    let ifd = T::structure(space.shown(), fields).contents("entries");
+    if !images {
+        return ifd;
+    }
+    ifd.field_aside("strip_offsets")
+        .field_aside("strip_byte_counts")
+        .field_aside("tile_offsets")
+        .field_aside("tile_byte_counts")
+        .machinery(&["strip_offsets", "strip_byte_counts", "tile_offsets", "tile_byte_counts"])
+        .field_elem_named_from("strips", E::words("strip {}", E::idx()))
+        .field_elem_named_from("tiles", E::words("tile {}", E::idx()))
+        .field_doc("strip_offsets", "The values of StripOffsets (273), read again as a list so that each strip's offset can be looked up by its number.")
+        .field_doc("strip_byte_counts", "The values of StripByteCounts (279), read again as a list so that each strip's length can be looked up by its number.")
+        .field_doc("tile_offsets", "The values of TileOffsets (324), read again as a list so that each tile's offset can be looked up by its number.")
+        .field_doc("tile_byte_counts", "The values of TileByteCounts (325), read again as a list so that each tile's length can be looked up by its number.")
+        .field_doc("strips", "The image data, split into strips of whole rows. Each strip is at the offset given in StripOffsets and has the length given in StripByteCounts. Strips are numbered from 0.")
+        .field_doc("tiles", "The image data, split into tiles. Each tile is at the offset given in TileOffsets and has the length given in TileByteCounts. Tiles are numbered from 0, left to right and then top to bottom.")
+}
+
+/// The image data a directory's entries point at: its strips or its tiles.
+///
+/// A strip's offset and its length are in two entries, StripOffsets and
+/// StripByteCounts, each holding one number per strip. An element of the
+/// list of strips has to find number `i` of each, and no expression indexes
+/// into the values of an entry found by its tag. So each of the two entries
+/// is read a second time, here, as a list that can be indexed: the same
+/// bytes, which is why the copy is aside and counts for nothing. Tiles are
+/// the same with TileOffsets and TileByteCounts.
+///
+/// The strips are only read when both entries are there. A file that leaves
+/// StripByteCounts out (some early writers did, for one uncompressed strip)
+/// says where its image starts but not where it ends.
+fn image_data(e: Endian) -> Vec<(&'static str, T)> {
+    vec![
+        ("strip_offsets", numbers(e, 273)),
+        ("strip_byte_counts", numbers(e, 279)),
+        ("strips", pieces("strip_offsets", "strip_byte_counts", 273, 279)),
+        ("tile_offsets", numbers(e, 324)),
+        ("tile_byte_counts", numbers(e, 325)),
+        ("tiles", pieces("tile_offsets", "tile_byte_counts", 324, 325)),
+    ]
+}
+
+/// Field `field` of the entry with this tag, in the directory being read.
+/// Zero when the directory has no such entry.
+fn entry_with(tag: i128, field: &[&str]) -> E {
+    E::tagged("entries", &["tag"], tag, field)
+}
+
+/// Whether the directory being read has an entry with this tag.
+fn has(tag: i128) -> E {
+    entry_with(tag, &["tag"]).equal_to(E::lit(tag))
+}
+
+/// The values of the entry with this tag, read again as a list of numbers
+/// wherever they are: in the entry's own four bytes when they fit there, and
+/// at the entry's offset when they do not. SHORT and LONG are the two types
+/// the specification allows for offsets and byte counts; any other type is
+/// read as an empty list.
+///
+/// Values stored elsewhere are read at the entry's offset, which counts from
+/// the start of the TIFF, as the entry itself reads them. Values stored in the
+/// entry are read where the entry's `value` field starts. That position is an
+/// address in the file rather than in the TIFF, so it is read back with
+/// `at_origin`, which counts from the same place `start_of` does.
+fn numbers(e: Endian, tag: i128) -> T {
+    let count = || entry_with(tag, &["count"]);
+    let list = T::inline_structure(
+        "Numbers",
+        vec![(
+            "values",
+            T::switch(
+                entry_with(tag, &["type"]),
+                vec![(3, T::array(T::u16(e), count())), (4, T::array(T::u32(e), count()))],
+                T::array(T::u32(e), E::lit(0)),
+            ),
+        )],
+    );
+    T::when(
+        has(tag),
+        T::switch(
+            entry_with(tag, &["room"]).div(E::lit(5)),
+            vec![(0, T::at_origin(E::start_of(entry_with(tag, &["value"])), list.clone()))],
+            T::at_in_window(entry_with(tag, &["value", "offset"]), list),
+        ),
+    )
+}
+
+/// One piece of image data for each offset, as long as the byte count beside
+/// it says. Only when the directory has both entries, and only as many pieces
+/// as the shorter of the two lists has numbers.
+///
+/// A piece whose offset is past the end of the TIFF is not read at all: a
+/// Panasonic RW2 writes 0xffffffff in StripOffsets and keeps the real offset
+/// in a tag of its own. A piece that runs past the end is read as far as the
+/// file goes, which is what a file cut short still has.
+fn pieces(offsets: &str, byte_counts: &str, offset_tag: i128, count_tag: i128) -> T {
+    let offset = E::elem_within(&[offsets, "values"], E::idx(), &[]);
+    let length = E::elem_within(&[byte_counts, "values"], E::idx(), &[]);
+    let piece = T::when(
+        offset.clone().less_than(E::WindowSize),
+        T::at_in_window(offset.clone(), T::sized(length.at_most(E::WindowSize.sub(offset)), T::bytes(E::Remaining))),
+    );
+    let n = entry_with(offset_tag, &["count"]).at_most(entry_with(count_tag, &["count"]));
+    T::when(has(offset_tag).both(has(count_tag)), T::array(piece, n))
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
@@ -1028,6 +1136,120 @@ mod tests {
         assert!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0]).is_err());
         // And the entry beside it is unharmed.
         assert_eq!(ev.node(&d, &[1, 2, 0, 1, 1, 4, 1, 0]).unwrap().value, Value::Str("qubero".into()));
+    }
+
+    /// A little-endian TIFF: the header, then `data` from byte 8, then one
+    /// directory holding these entries, then the values too big to sit in an
+    /// entry. Each entry is a tag, a type (3 for SHORT, 4 for LONG) and its
+    /// values. `next` is the directory's next IFD offset.
+    fn le_tiff(data: &[u8], entries: &[(u16, u16, &[u32])], next: u32) -> Vec<u8> {
+        let ifd_at = 8 + data.len() as u32;
+        let mut v = b"II".to_vec();
+        v.extend_from_slice(&42u16.to_le_bytes());
+        v.extend_from_slice(&ifd_at.to_le_bytes());
+        v.extend_from_slice(data);
+        let mut overflow_at = ifd_at + 2 + 12 * entries.len() as u32 + 4;
+        let mut overflow = Vec::new();
+        v.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, kind, values) in entries {
+            let bytes: Vec<u8> = values
+                .iter()
+                .flat_map(|x| if *kind == 3 { (*x as u16).to_le_bytes().to_vec() } else { x.to_le_bytes().to_vec() })
+                .collect();
+            v.extend_from_slice(&tag.to_le_bytes());
+            v.extend_from_slice(&kind.to_le_bytes());
+            v.extend_from_slice(&(values.len() as u32).to_le_bytes());
+            if bytes.len() <= 4 {
+                v.extend_from_slice(&bytes);
+                v.extend(std::iter::repeat(0).take(4 - bytes.len()));
+            } else {
+                v.extend_from_slice(&overflow_at.to_le_bytes());
+                overflow_at += bytes.len() as u32;
+                overflow.extend_from_slice(&bytes);
+            }
+        }
+        v.extend_from_slice(&next.to_le_bytes());
+        v.extend_from_slice(&overflow);
+        v
+    }
+
+    /// The path of field `field` of the first directory, then `tail`.
+    fn in_ifd0(field: usize, tail: &[usize]) -> Vec<usize> {
+        [&[1, 2, 0, field][..], tail].concat()
+    }
+
+    const STRIPS: usize = 5;
+    const TILES: usize = 8;
+
+    #[test]
+    fn one_strip_whose_offset_and_length_fit_in_their_entries_is_placed_and_named() {
+        let d = Document::new(MemSource(le_tiff(&[1, 2, 3, 4, 5, 6], &[(256, 3, &[3]), (273, 4, &[8]), (279, 4, &[6])], 0)));
+        let mut ev = Evaluator::new(tiff());
+        let strips = ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap();
+        assert_eq!(strips.name, "strips");
+        assert_eq!(strips.child_count, 1);
+        // The element is the pointer, which takes no room; what it points at
+        // is the six bytes after the header.
+        let strip = ev.node(&d, &in_ifd0(STRIPS, &[0, 0])).unwrap();
+        assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (8, 6));
+        let p = ev.locate(&d, 10 * 8).unwrap();
+        assert!(p.starts_with(&in_ifd0(STRIPS, &[0])), "{p:?}");
+        assert!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().name.contains("strip 0"));
+    }
+
+    #[test]
+    fn strips_listed_elsewhere_are_placed_from_short_and_long_values() {
+        // Three strips of 2, 3 and 1 bytes, out of order in the file. The
+        // offsets are SHORTs and the byte counts LONGs, and neither list fits
+        // in four bytes.
+        let data = [0xa0, 0xa1, 0xb0, 0xb1, 0xb2, 0xc0];
+        let entries: &[(u16, u16, &[u32])] = &[(273, 3, &[13, 8, 10]), (279, 4, &[1, 2, 3])];
+        let d = Document::new(MemSource(le_tiff(&data, entries, 0)));
+        let mut ev = Evaluator::new(tiff());
+        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap().child_count, 3);
+        for (i, (at, len)) in [(13u64, 1u64), (8, 2), (10, 3)].into_iter().enumerate() {
+            let strip = ev.node(&d, &in_ifd0(STRIPS, &[i, 0])).unwrap();
+            assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (at, len), "strip {i}");
+            assert!(ev.node(&d, &in_ifd0(STRIPS, &[i])).unwrap().name.contains(&format!("strip {i}")));
+        }
+        // Two SHORT offsets take four bytes, so they sit in the entry itself.
+        let entries: &[(u16, u16, &[u32])] = &[(273, 3, &[10, 8]), (279, 3, &[3, 2])];
+        let d = Document::new(MemSource(le_tiff(&data, entries, 0)));
+        let mut ev = Evaluator::new(tiff());
+        let second = ev.node(&d, &in_ifd0(STRIPS, &[1, 0])).unwrap();
+        assert_eq!((second.offset_bits / 8, second.size_bits / 8), (8, 2));
+    }
+
+    #[test]
+    fn tiles_are_placed_from_their_offsets_and_byte_counts() {
+        let data = [1, 1, 2, 2, 3, 3, 4, 4];
+        let entries: &[(u16, u16, &[u32])] = &[(322, 3, &[16]), (323, 3, &[16]), (324, 4, &[8, 10, 12, 14]), (325, 4, &[2, 2, 2, 2])];
+        let d = Document::new(MemSource(le_tiff(&data, entries, 0)));
+        let mut ev = Evaluator::new(tiff());
+        let tile = ev.node(&d, &in_ifd0(TILES, &[3, 0])).unwrap();
+        assert_eq!((tile.offset_bits / 8, tile.size_bits / 8), (14, 2));
+        let p = ev.locate(&d, 12 * 8).unwrap();
+        assert!(p.starts_with(&in_ifd0(TILES, &[2])), "{p:?}");
+        assert!(ev.node(&d, &in_ifd0(TILES, &[2])).unwrap().name.contains("tile 2"));
+        // No strips in this file, so the list is not there.
+        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap().child_count, 0);
+    }
+
+    #[test]
+    fn a_strip_past_the_end_is_left_out_and_one_running_past_it_is_cut_short() {
+        // A Panasonic RW2 writes 0xffffffff as its strip offset. The second
+        // strip says it is a thousand bytes long, and the file ends sooner.
+        let data = [9, 9, 9, 9];
+        let entries: &[(u16, u16, &[u32])] = &[(273, 4, &[0xffff_ffff, 8]), (279, 4, &[100, 1000])];
+        let file = le_tiff(&data, entries, 0);
+        let len = file.len() as u64;
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(tiff());
+        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().child_count, 0);
+        let second = ev.node(&d, &in_ifd0(STRIPS, &[1, 0])).unwrap();
+        assert_eq!(second.offset_bits / 8, 8);
+        assert_eq!(second.size_bits / 8, len - 8);
     }
 
     #[test]
