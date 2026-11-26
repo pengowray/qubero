@@ -109,7 +109,15 @@ pub(super) fn sample_content() -> T {
     for c in BRAW {
         cases.push((code(c), T::Named("BrawFrame".into())));
     }
-    T::switch(format, cases, T::bytes(E::Remaining))
+    T::switch(format, cases, coded_frame())
+}
+
+/// A sample read no further: one coded frame. A structure of its own, so
+/// that each sample is an entry of its own in the hex view's column rather
+/// than part of one run of bytes covering a whole chunk.
+fn coded_frame() -> T {
+    T::structure("CodedFrame", vec![("frame", T::bytes(E::Remaining))])
+        .field_doc("frame", "One coded frame, as the encoder wrote it. Only a decoder for the track's format reads it further.")
 }
 
 /// QuickTime's `twos` and `sowt`: signed integers, 16 bits unless the

@@ -222,3 +222,45 @@ fn auxc() -> T {
     T::structure("AuxiliaryType", fields)
         .field_doc("aux_type", "What the auxiliary image is: urn:mpeg:mpegB:cicp:systems:auxiliary:alpha for an alpha plane.")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::mp4;
+    use super::super::tests::{boxed, cat, full, value, walk};
+    use crate::document::Document;
+    use crate::eval::{Evaluator, Value};
+    use crate::source::MemSource;
+
+    /// A meta box with one item of type `kind`, whose one extent is `length`
+    /// bytes at `offset`, and the item info after the locations, the way an
+    /// AVIF writes them.
+    fn meta(kind: &[u8; 4], offset: u32, length: u32) -> Vec<u8> {
+        let mut hdlr = vec![0; 4];
+        hdlr.extend_from_slice(b"pict");
+        hdlr.extend_from_slice(&[0; 13]);
+        let mut iloc = vec![0x44, 0x40, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+        iloc.extend_from_slice(&offset.to_be_bytes());
+        iloc.extend_from_slice(&length.to_be_bytes());
+        let mut infe = vec![0, 1, 0, 0];
+        infe.extend_from_slice(kind);
+        infe.push(0);
+        let iinf = full(b"iinf", 0, 0, &cat(&[&[0, 1], &full(b"infe", 2, 0, &infe)]));
+        full(b"meta", 0, 0, &cat(&[&full(b"hdlr", 0, 0, &hdlr), &full(b"iloc", 0, 0, &iloc), &iinf]))
+    }
+
+    #[test]
+    fn an_item_extent_is_placed_over_the_mdat_and_read_by_its_type() {
+        let probe = meta(b"Exif", 0, 0);
+        let at = probe.len() as u32 + 8;
+        let exif = [0, 0, 0, 6, 0xaa, 0xbb];
+        let file = cat(&[&meta(b"Exif", at, exif.len() as u32), &boxed(b"mdat", &exif)]);
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp4());
+        let item = ["0", "body", "boxes", "1", "body", "items", "0"];
+        let at_item = |names: &[&'static str]| -> Vec<&'static str> { item.iter().chain(names).copied().collect() };
+        assert_eq!(value(&mut ev, &d, &at_item(&["item_type"])), Value::Str("Exif".into()));
+        let offset = walk(&mut ev, &d, &at_item(&["extents", "0", "data", "0", "tiff_header_offset"]));
+        assert_eq!(ev.node(&d, &offset).unwrap().value, Value::UInt(6));
+        assert_eq!(ev.locate(&d, (at as u64 + 1) * 8).unwrap(), offset);
+    }
+}

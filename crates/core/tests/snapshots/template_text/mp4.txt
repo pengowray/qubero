@@ -3101,29 +3101,29 @@ type H264NalUnit = NalUnit (named by unit_type) {
       1 => SliceRbsp (named by header, contents header) {
         header: SliceHeader (named by slice_type) {
           first_mb_in_slice: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           // I: decoded on its own. P: predicted from earlier pictures. B: predicted from up to
               two pictures per block. 5 to 9: as 0 to 4, and every slice in the picture has the
               same type.
           slice_type: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info enum SliceType {
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info enum SliceType {
               0 = P, 1 = B, 2 = I, 3 = SP, 4 = SI, 5 = P (all), 6 = B (all), 7 = I (all),
               8 = SP (all), 9 = SI (all)
             }
           }
           pic_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
               {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
         }
         // The bits of the rest that come before the next byte boundary.
@@ -3137,29 +3137,29 @@ type H264NalUnit = NalUnit (named by unit_type) {
       1 => SliceRbsp (named by header, contents header) {
         header: SliceHeader (named by slice_type) {
           first_mb_in_slice: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           // I: decoded on its own. P: predicted from earlier pictures. B: predicted from up to
               two pictures per block. 5 to 9: as 0 to 4, and every slice in the picture has the
               same type.
           slice_type: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info enum SliceType {
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info enum SliceType {
               0 = P, 1 = B, 2 = I, 3 = SP, 4 = SI, 5 = P (all), 6 = B (all), 7 = I (all),
               8 = SP (all), 9 = SI (all)
             }
           }
           pic_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
               {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
         }
         // The bits of the rest that come before the next byte boundary.
@@ -3219,20 +3219,20 @@ type H264NalUnit = NalUnit (named by unit_type) {
           level_idc: u8be
           seq_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
               {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           chroma_format_idc: optional(when profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
               or profile_idc == 86 or profile_idc == 118 or profile_idc == 128 or profile_idc ==
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info enum ChromaFormat {
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info enum ChromaFormat {
               0 = monochrome, 1 = 4:2:0, 2 = 4:2:2, 3 = 4:4:4
             }
           }
@@ -3246,20 +3246,20 @@ type H264NalUnit = NalUnit (named by unit_type) {
               or profile_idc == 86 or profile_idc == 118 or profile_idc == 128 or profile_idc ==
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           bit_depth_chroma_minus8: optional(when profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
               or profile_idc == 86 or profile_idc == 118 or profile_idc == 128 or profile_idc ==
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           qpprime_y_zero_transform_bypass_flag:
               optional(when profile_idc == 100 or profile_idc == 110 or profile_idc == 122 or
@@ -3277,10 +3277,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135 ?
               seq_scaling_matrix_present_flag == 0 : 1) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           pic_order_cnt_type: optional(when profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3288,10 +3288,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135 ?
               seq_scaling_matrix_present_flag == 0 : 1) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           log2_max_pic_order_cnt_lsb_minus4: optional(when (profile_idc == 100 or profile_idc ==
               110 or profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or
@@ -3299,10 +3299,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               or profile_idc == 138 or profile_idc == 139 or profile_idc == 134 or profile_idc
               == 135 ? seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value ==
               0) ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           max_num_ref_frames: optional(when (profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3310,10 +3310,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135 ?
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1)
               ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           gaps_in_frame_num_value_allowed_flag:
               optional(when (profile_idc == 100 or profile_idc == 110 or profile_idc == 122 or
@@ -3328,10 +3328,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               138 or profile_idc == 139 or profile_idc == 134 or profile_idc == 135 ?
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1)
               ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           pic_height_in_map_units_minus1: optional(when (profile_idc == 100 or profile_idc ==
               110 or profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or
@@ -3339,10 +3339,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               or profile_idc == 138 or profile_idc == 139 or profile_idc == 134 or profile_idc
               == 135 ? seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value !=
               1) ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           frame_mbs_only_flag: optional(when (profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3372,10 +3372,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1 and
               frame_cropping_flag) ExpGolomb (named by value, machinery leading_zeros marker
               info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           frame_crop_right_offset: optional(when (profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3384,10 +3384,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1 and
               frame_cropping_flag) ExpGolomb (named by value, machinery leading_zeros marker
               info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           frame_crop_top_offset: optional(when (profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3396,10 +3396,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1 and
               frame_cropping_flag) ExpGolomb (named by value, machinery leading_zeros marker
               info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           frame_crop_bottom_offset: optional(when (profile_idc == 100 or profile_idc == 110 or
               profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc == 83
@@ -3408,10 +3408,10 @@ type H264NalUnit = NalUnit (named by unit_type) {
               seq_scaling_matrix_present_flag == 0 : 1) and pic_order_cnt_type.value != 1 and
               frame_cropping_flag) ExpGolomb (named by value, machinery leading_zeros marker
               info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           vui_parameters_present_flag: optional(when (profile_idc == 100 or profile_idc == 110
               or profile_idc == 122 or profile_idc == 244 or profile_idc == 44 or profile_idc ==
@@ -3467,17 +3467,17 @@ type H264NalUnit = NalUnit (named by unit_type) {
         header: PictureParameterSet {
           pic_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
               {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           seq_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
               {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           entropy_coding_mode_flag: u1be enum EntropyCoding {0 = CAVLC, 1 = CABAC}
           bottom_field_pic_order_in_frame_present_flag: u1be
@@ -3485,51 +3485,51 @@ type H264NalUnit = NalUnit (named by unit_type) {
               (baseline and extended profiles); the rest of the PPS is then left unparsed.
           num_slice_groups_minus1: ExpGolomb (named by value, machinery leading_zeros marker
               info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           num_ref_idx_l0_default_active_minus1:
               optional(when num_slice_groups_minus1.value == 0) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           num_ref_idx_l1_default_active_minus1:
               optional(when num_slice_groups_minus1.value == 0) ExpGolomb
               (named by value, machinery leading_zeros marker info) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            value: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            value: computed (1 << count of leading_zeros) - 1 + info
           }
           weighted_pred_flag: optional(when num_slice_groups_minus1.value == 0) u1be
           weighted_bipred_idc: optional(when num_slice_groups_minus1.value == 0) u2be
           pic_init_qp_minus26: optional(when num_slice_groups_minus1.value == 0) SignedExpGolomb
               (named by value, machinery leading_zeros marker info code) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            code: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            code: computed (1 << count of leading_zeros) - 1 + info
             value: computed code & 1 ? (code + 1) / 2 : 0 - code / 2
           }
           pic_init_qs_minus26: optional(when num_slice_groups_minus1.value == 0) SignedExpGolomb
               (named by value, machinery leading_zeros marker info code) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            code: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            code: computed (1 << count of leading_zeros) - 1 + info
             value: computed code & 1 ? (code + 1) / 2 : 0 - code / 2
           }
           chroma_qp_index_offset: optional(when num_slice_groups_minus1.value == 0)
               SignedExpGolomb (named by value, machinery leading_zeros marker info code) {
-            leading_zeros: u(15 - log2(remaining >= 2 ? peek(u16be) : peek(u8be) << 8))be
+            leading_zeros: repeat(while peek(u1be) == 0) u1be
             marker: u1be
-            info: u(bitsof(leading_zeros))be
-            code: computed (1 << bitsof(leading_zeros)) - 1 + info
+            info: u(count of leading_zeros)be
+            code: computed (1 << count of leading_zeros) - 1 + info
             value: computed code & 1 ? (code + 1) / 2 : 0 - code / 2
           }
           deblocking_filter_control_present_flag:
@@ -3675,7 +3675,11 @@ type SampleContent = switch format {
   'brvl' => BrawFrame
   'brvn' => BrawFrame
   'brvo' => BrawFrame
-  _ => bytes[remaining]
+  _ => CodedFrame {
+    // One coded frame, as the encoder wrote it. Only a decoder for the track's format reads it
+        further.
+    frame: bytes[remaining]
+  }
 }
 
 type TrackReference {

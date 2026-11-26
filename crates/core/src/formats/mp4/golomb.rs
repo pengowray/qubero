@@ -3,9 +3,9 @@
 //!
 //! An exp-Golomb number, ue(v), is n zero bits, a one bit, then n more bits,
 //! and its value is 2^n - 1 plus those n bits: `1` is 0, `010` is 1, `011` is
-//! 2, `00100` is 3. The zeros are counted by looking at the next 16 bits
-//! before reading them, so each number is three fields a reader can check
-//! against the bits, and a fourth with the value.
+//! 2, `00100` is 3. Each number is read as the zero bits one at a time, the
+//! one bit, and the n bits after it, so a reader can check every part against
+//! the bits, and then a field with the value.
 //!
 //! A NAL unit's payload is not quite its bits. Wherever the encoder would have
 //! written `00 00 00`, `00 00 01`, `00 00 02` or `00 00 03`, it writes an extra
@@ -22,7 +22,7 @@
 //! just past it the fields after it would read wrong.
 
 use super::bits;
-use crate::template::{Endian::*, Expr as E, Ty as T};
+use crate::template::{Endian::*, Expr as E, Ty as T, Until};
 
 /// One ue(v) number. `value` is what it says.
 fn ue() -> T {
@@ -35,43 +35,33 @@ fn ue_named(name: &str, cases: &[(i128, &str)]) -> T {
 }
 
 fn value() -> E {
-    E::lit(1).shl(E::bits_of("leading_zeros")).sub(E::lit(1)).add(E::field("info"))
+    E::lit(1).shl(E::len_of("leading_zeros")).sub(E::lit(1)).add(E::field("info"))
+}
+
+/// The parts every exp-Golomb number has: the zero bits, read one at a time
+/// for as long as the next bit is zero, the one bit that ends them, and as
+/// many bits again.
+fn golomb_parts() -> Vec<(&'static str, T)> {
+    vec![
+        ("leading_zeros", T::repeat(bits(1), Until::While(E::peek(1, Big).equal_to(E::lit(0))))),
+        ("marker", bits(1)),
+        ("info", T::uint_expr(E::len_of("leading_zeros"), Big)),
+    ]
 }
 
 fn ue_with(value: T) -> T {
-    // The next 16 bits, or the next 8 with zeros after them where fewer than
-    // two bytes are left.
-    let ahead = E::cond(E::Remaining.greater_or_equal(E::lit(2)), E::peek(16, Big), E::peek(8, Big).shl(E::lit(8)));
-    T::structure(
-        "ExpGolomb",
-        vec![
-            ("leading_zeros", T::uint_expr(E::lit(15).sub(ahead.log2()), Big)),
-            ("marker", bits(1)),
-            ("info", T::uint_expr(E::bits_of("leading_zeros"), Big)),
-            ("value", value),
-        ],
-    )
-    .named_by("value")
-    .machinery(&["leading_zeros", "marker", "info"])
+    let mut fields = golomb_parts();
+    fields.push(("value", value));
+    T::structure("ExpGolomb", fields).named_by("value").machinery(&["leading_zeros", "marker", "info"])
 }
 
 /// One se(v) number: a ue(v) code k read as 0, 1, -1, 2, -2, ... in turn.
 fn se() -> T {
     let code = E::field("code");
     let signed = E::cond(code.clone().and(E::lit(1)), code.clone().add(E::lit(1)).div(E::lit(2)), E::lit(0).sub(code.div(E::lit(2))));
-    let ahead = E::cond(E::Remaining.greater_or_equal(E::lit(2)), E::peek(16, Big), E::peek(8, Big).shl(E::lit(8)));
-    T::structure(
-        "SignedExpGolomb",
-        vec![
-            ("leading_zeros", T::uint_expr(E::lit(15).sub(ahead.log2()), Big)),
-            ("marker", bits(1)),
-            ("info", T::uint_expr(E::bits_of("leading_zeros"), Big)),
-            ("code", T::computed(value())),
-            ("value", T::computed(signed)),
-        ],
-    )
-    .named_by("value")
-    .machinery(&["leading_zeros", "marker", "info", "code"])
+    let mut fields = golomb_parts();
+    fields.extend(vec![("code", T::computed(value())), ("value", T::computed(signed))]);
+    T::structure("SignedExpGolomb", fields).named_by("value").machinery(&["leading_zeros", "marker", "info", "code"])
 }
 
 fn v(field: &str) -> E {
@@ -256,4 +246,54 @@ pub(super) fn slice_rbsp() -> T {
         )],
         T::bytes(E::Remaining),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::mp4;
+    use super::super::tests::{boxed, value};
+    use crate::document::Document;
+    use crate::eval::{Evaluator, Value};
+    use crate::source::MemSource;
+
+    /// Bits written as text, packed into bytes, the last one padded with
+    /// zeros.
+    fn packed(bits: &str) -> Vec<u8> {
+        let bits: Vec<u8> = bits.bytes().filter(|b| *b == b'0' || *b == b'1').map(|b| b - b'0').collect();
+        bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |acc, (i, b)| acc | (b << (7 - i)))).collect()
+    }
+
+    #[test]
+    fn an_sps_with_cropping_and_a_pps_with_negative_numbers_read_their_values() {
+        // Baseline SPS: id 0, log2_max_frame_num_minus4 0, picture order count
+        // type 2, 1 reference frame, 20 by 15 macroblocks, frame macroblocks
+        // only, direct 8x8, cropped 0 left, 2 right, 0 top, 3 bottom, no VUI.
+        let sps_bits = "1 1 011 010 0 000010100 0001111 1 1 1 1 011 1 00100 0 1";
+        let mut sps = vec![0x67, 66, 0xc0, 30];
+        sps.extend_from_slice(&packed(sps_bits));
+        // PPS: ids 0, CAVLC, one slice group, no weighting, pic_init_qp_minus26
+        // -3, pic_init_qs_minus26 0, chroma_qp_index_offset -2.
+        let pps_bits = "1 1 0 0 1 1 1 0 00 00111 1 00101 1 0 0 1";
+        let mut pps = vec![0x68];
+        pps.extend_from_slice(&packed(pps_bits));
+        let mut avcc = vec![1, 66, 0xc0, 30, 0xff, 0xe1];
+        avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        avcc.extend_from_slice(&sps);
+        avcc.push(1);
+        avcc.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+        avcc.extend_from_slice(&pps);
+        let d = Document::new(MemSource(boxed(b"avcC", &avcc)));
+        let mut ev = Evaluator::new(mp4());
+        let sps = |names: &[&'static str]| -> Vec<&'static str> {
+            ["0", "body", "sps", "0", "nal", "rbsp", "header"].iter().chain(names).copied().collect()
+        };
+        assert_eq!(value(&mut ev, &d, &sps(&["pic_width_in_mbs_minus1", "value"])), Value::Int(19));
+        assert_eq!(value(&mut ev, &d, &sps(&["frame_crop_bottom_offset", "value"])), Value::Int(3));
+        assert_eq!(value(&mut ev, &d, &sps(&["width"])), Value::Int(316));
+        assert_eq!(value(&mut ev, &d, &sps(&["height"])), Value::Int(234));
+        let pps = |name: &'static str| -> Vec<&'static str> { vec!["0", "body", "pps", "0", "nal", "rbsp", "header", name, "value"] };
+        assert_eq!(value(&mut ev, &d, &pps("pic_init_qp_minus26")), Value::Int(-3));
+        assert_eq!(value(&mut ev, &d, &pps("pic_init_qs_minus26")), Value::Int(0));
+        assert_eq!(value(&mut ev, &d, &pps("chroma_qp_index_offset")), Value::Int(-2));
+    }
 }

@@ -438,15 +438,141 @@ mod tests {
     fn movie(sizes: &[u32], per_chunk: &[(u32, u32)], chunk_at: &[u32]) -> Vec<u8> {
         // Six reserved bytes and a data reference index, and nothing else.
         let entry = boxed(b"zzzz", &[0, 0, 0, 0, 0, 0, 0, 1]);
-        let stsd = full(b"stsd", 0, 0, &cat(&[&u32s(&[1]), &entry]));
+        let stsz_body: Vec<u32> = [0, sizes.len() as u32].into_iter().chain(sizes.iter().copied()).collect();
+        track(&entry, &u32s(&stsz_body), per_chunk, chunk_at, false)
+    }
+
+    /// A moov with one track: this sample entry, these stsz fields, and the
+    /// chunks at these offsets, in a co64 when `wide`.
+    fn track(entry: &[u8], stsz: &[u8], per_chunk: &[(u32, u32)], chunk_at: &[u32], wide: bool) -> Vec<u8> {
+        let stsd = full(b"stsd", 0, 0, &cat(&[&u32s(&[1]), entry]));
         let stsc_body: Vec<u32> = std::iter::once(per_chunk.len() as u32).chain(per_chunk.iter().flat_map(|(f, n)| [*f, *n, 1])).collect();
         let stsc = full(b"stsc", 0, 0, &u32s(&stsc_body));
-        let stsz_body: Vec<u32> = [0, sizes.len() as u32].into_iter().chain(sizes.iter().copied()).collect();
-        let stsz = full(b"stsz", 0, 0, &u32s(&stsz_body));
-        let stco_body: Vec<u32> = std::iter::once(chunk_at.len() as u32).chain(chunk_at.iter().copied()).collect();
-        let stco = full(b"stco", 0, 0, &u32s(&stco_body));
+        let stsz = full(b"stsz", 0, 0, stsz);
+        let mut offsets = u32s(&[chunk_at.len() as u32]);
+        for at in chunk_at {
+            if wide {
+                offsets.extend_from_slice(&(*at as u64).to_be_bytes());
+            } else {
+                offsets.extend_from_slice(&at.to_be_bytes());
+            }
+        }
+        let stco = full(if wide { b"co64" } else { b"stco" }, 0, 0, &offsets);
         let stbl = boxed(b"stbl", &cat(&[&stsd, &stsc, &stsz, &stco]));
         boxed(b"moov", &boxed(b"trak", &boxed(b"mdia", &boxed(b"minf", &stbl))))
+    }
+
+    /// The path to `sample_data` in a file made by `track`, then `names`.
+    fn data(names: &[&'static str]) -> Vec<&'static str> {
+        ["0", "body", "0", "body", "0", "body", "0", "body", "0", "body", "sample_data"].iter().chain(names).copied().collect()
+    }
+
+    /// A file of a moov made by `make` for chunks at the given offsets into
+    /// the mdat, then the mdat holding `media`.
+    fn with_mdat(make: impl Fn(&[u32]) -> Vec<u8>, chunk_at: &[u32], media: &[u8]) -> Vec<u8> {
+        let mdat_at = make(&vec![0; chunk_at.len()]).len() as u32 + 8;
+        let moved: Vec<u32> = chunk_at.iter().map(|at| at + mdat_at).collect();
+        cat(&[&make(&moved), &boxed(b"mdat", media)])
+    }
+
+    /// A visual sample entry of the given format with these boxes after it.
+    fn visual_entry(format: &[u8; 4], boxes: &[u8]) -> Vec<u8> {
+        let mut body = vec![0, 0, 0, 0, 0, 0, 0, 1];
+        body.extend_from_slice(&[0; 16]);
+        body.extend_from_slice(&[0, 64, 0, 48, 0, 72, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 1]);
+        body.extend_from_slice(&[0; 32]);
+        body.extend_from_slice(&[0, 24, 0xff, 0xff]);
+        body.extend_from_slice(boxes);
+        boxed(format, &body)
+    }
+
+    #[test]
+    fn h264_samples_read_as_nal_units_with_their_sei_and_slice_header() {
+        // avcC with four-byte lengths and no parameter sets.
+        let avcc = boxed(b"avcC", &[1, 0x42, 0xc0, 0x1e, 0xff, 0xe0, 0]);
+        let entry = visual_entry(b"avc1", &avcc);
+        // An SEI of unregistered user data, then an IDR slice whose header is
+        // first_mb_in_slice 0, slice_type 7 (I, all slices), pps 0.
+        let mut sei = vec![0x06, 5, 18];
+        sei.extend_from_slice(&[0x11; 16]);
+        sei.extend_from_slice(b"hi");
+        sei.push(0x80);
+        let idr = [0x65u8, 0x88, 0x80, 0xaa, 0xbb];
+        let mut sample = (sei.len() as u32).to_be_bytes().to_vec();
+        sample.extend_from_slice(&sei);
+        sample.extend_from_slice(&(idr.len() as u32).to_be_bytes());
+        sample.extend_from_slice(&idr);
+        let stsz = u32s(&[0, 1, sample.len() as u32]);
+        let file = with_mdat(|at| track(&entry, &stsz, &[(1, 1)], at, false), &[0], &sample);
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp4());
+        let first = data(&["runs", "0", "chunks", "0", "0", "samples", "0"]);
+        let at = |names: &[&'static str]| -> Vec<&'static str> { first.iter().chain(names).copied().collect() };
+        assert_eq!(value(&mut ev, &d, &at(&["0", "nal", "rbsp", "messages", "0", "payload", "text"])), Value::Str("hi".into()));
+        let slice_type = value(&mut ev, &d, &at(&["1", "nal", "rbsp", "header", "slice_type", "value"]));
+        assert_eq!(slice_type, Value::Enum { raw: 7, name: Some("I (all)".into()), hex: false });
+        assert_eq!(value(&mut ev, &d, &at(&["1", "nal", "rbsp", "rest_bits"])), Value::UInt(0));
+        let rest = walk(&mut ev, &d, &at(&["1", "nal", "rbsp", "rest"]));
+        assert_eq!(ev.node(&d, &rest).unwrap().size_bits, 16);
+    }
+
+    #[test]
+    fn pcm_samples_of_one_size_read_as_a_number_per_channel_from_a_co64() {
+        // A big-endian PCM entry with two channels of 16 bits.
+        let mut sound = vec![0, 0, 0, 0, 0, 0, 0, 1];
+        sound.extend_from_slice(&[0; 8]);
+        sound.extend_from_slice(&[0, 2, 0, 16, 0, 0, 0, 0, 0x1f, 0x40, 0, 0]);
+        let entry = boxed(b"twos", &sound);
+        let stsz = u32s(&[4, 2]);
+        let media = [0x00u8, 0x01, 0xff, 0xfe, 0x7f, 0xff, 0x80, 0x00];
+        let file = with_mdat(|at| track(&entry, &stsz, &[(1, 2)], at, true), &[0], &media);
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp4());
+        let sample = |i: &'static str, ch: &'static str| data(&["runs", "0", "chunks", "0", "0", "samples", i, ch]);
+        assert_eq!(value(&mut ev, &d, &sample("0", "1")), Value::Int(-2));
+        assert_eq!(value(&mut ev, &d, &sample("1", "1")), Value::Int(-32768));
+    }
+
+    #[test]
+    fn group_tables_dependency_bytes_and_compact_sizes_read_their_entries() {
+        // sgpd version 1 with one default length, and one with a length per
+        // entry for a grouping type nothing reads further.
+        let mut roll = b"roll".to_vec();
+        roll.extend_from_slice(&u32s(&[2, 1]));
+        roll.extend_from_slice(&(-1i16).to_be_bytes());
+        let mut other = b"abcd".to_vec();
+        other.extend_from_slice(&u32s(&[0, 2, 3]));
+        other.extend_from_slice(&[1, 2, 3]);
+        other.extend_from_slice(&u32s(&[1]));
+        other.push(9);
+        let mut sbgp = b"roll".to_vec();
+        sbgp.extend_from_slice(&u32s(&[1, 23, 1]));
+        // sdtp: an independent sample, then one that depends on others.
+        let sdtp = [0x20u8, 0x10];
+        // stz2 with 4-bit sizes 1, 2 and 3.
+        let mut stz2 = vec![0, 0, 0, 4];
+        stz2.extend_from_slice(&u32s(&[3]));
+        stz2.extend_from_slice(&[0x12, 0x30]);
+        let file = cat(&[
+            &full(b"sgpd", 1, 0, &roll),
+            &full(b"sgpd", 1, 0, &other),
+            &full(b"sbgp", 0, 0, &sbgp),
+            &full(b"sdtp", 0, 0, &sdtp),
+            &full(b"stz2", 0, 0, &stz2),
+        ]);
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp4());
+        assert_eq!(value(&mut ev, &d, &["0", "body", "entries", "0", "entry", "roll_distance"]), Value::Int(-1));
+        let second = walk(&mut ev, &d, &["1", "body", "entries", "1", "entry"]);
+        assert_eq!(ev.node(&d, &second).unwrap().size_bits, 8);
+        assert_eq!(value(&mut ev, &d, &["2", "body", "entries", "0", "sample_count"]), Value::UInt(23));
+        let independent = value(&mut ev, &d, &["3", "body", "samples", "0", "depends_on"]);
+        assert_eq!(independent, Value::Enum { raw: 2, name: Some("independent".into()), hex: false });
+        let dependent = value(&mut ev, &d, &["3", "body", "samples", "1", "depends_on"]);
+        assert_eq!(dependent, Value::Enum { raw: 1, name: Some("depends on other samples".into()), hex: false });
+        for (i, want) in [("0", 1u128), ("1", 2), ("2", 3)] {
+            assert_eq!(value(&mut ev, &d, &["4", "body", "entry_sizes", i]), Value::UInt(want), "stz2 entry {i}");
+        }
     }
 
     #[test]
@@ -476,7 +602,7 @@ mod tests {
         // A byte of mdat reads as the sample over it, and the bytes between the
         // chunks read as the mdat's own data.
         let p = ev.locate(&d, (mdat_at as u64 + 11) * 8).unwrap();
-        assert_eq!(p, fourth);
+        assert!(p.starts_with(&fourth), "{p:?} is not in {fourth:?}");
         let gap = ev.locate(&d, (mdat_at as u64 + 7) * 8).unwrap();
         assert!(ev.node(&d, &gap).unwrap().name.starts_with("body"), "{:?}", ev.node(&d, &gap).unwrap().name);
     }
@@ -507,10 +633,13 @@ mod tests {
         let last_bit = (file.len() as u64 - 1) * 8;
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(mp4());
+        // The cursor lands on the frame inside the sample, and the sample is
+        // the structure holding it.
         let p = ev.locate(&d, last_bit).unwrap();
         let node = ev.node(&d, &p).unwrap();
         assert_eq!(node.offset_bits, last_bit);
         assert_eq!(node.size_bits, 8);
-        assert!(node.name.contains(&format!("sample {total}")), "{}", node.name);
+        let sample = ev.node(&d, &p[..p.len() - 1]).unwrap();
+        assert!(sample.name.contains(&format!("sample {total}")), "{}", sample.name);
     }
 }

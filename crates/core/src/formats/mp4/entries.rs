@@ -992,6 +992,37 @@ mod tests {
     }
 
     #[test]
+    fn an_hevc_configuration_reads_its_parameter_set_arrays() {
+        // Main profile, level 93, four-byte NAL lengths, and one array holding
+        // one VPS of two bytes: the NAL unit header 40 01.
+        let mut hvcc = vec![1, 0x01];
+        hvcc.extend_from_slice(&[0x60, 0, 0, 0]);
+        hvcc.extend_from_slice(&[0x90, 0, 0, 0, 0, 0]);
+        hvcc.extend_from_slice(&[93, 0xf0, 0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0, 0, 0x0f, 1]);
+        hvcc.extend_from_slice(&[0xa0, 0, 1, 0, 2, 0x40, 0x01]);
+        let d = Document::new(MemSource(boxed(b"hvcC", &hvcc)));
+        let mut ev = Evaluator::new(mp4());
+        assert_eq!(value(&mut ev, &d, &["0", "body", "general_profile_idc"]), named(1, "Main"));
+        assert_eq!(value(&mut ev, &d, &["0", "body", "general_level_idc"]), Value::UInt(93));
+        assert_eq!(value(&mut ev, &d, &["0", "body", "chroma_format"]), named(1, "4:2:0"));
+        assert_eq!(value(&mut ev, &d, &["0", "body", "length_size_minus_one"]), Value::UInt(3));
+        let vps = value(&mut ev, &d, &["0", "body", "arrays", "0", "nalus", "0", "nal", "unit_type"]);
+        assert_eq!(vps, named(32, "VPS"));
+    }
+
+    #[test]
+    fn a_high_profile_avc_configuration_reads_its_extra_fields() {
+        // High profile, no parameter sets, then 4:2:0, 8-bit luma and chroma,
+        // and no SPS extensions.
+        let avcc = [1u8, 100, 0, 30, 0xff, 0xe0, 0, 0xfd, 0xf8, 0xf8, 0];
+        let d = Document::new(MemSource(boxed(b"avcC", &avcc)));
+        let mut ev = Evaluator::new(mp4());
+        assert_eq!(value(&mut ev, &d, &["0", "body", "high_profile", "chroma_format"]), named(1, "4:2:0"));
+        assert_eq!(value(&mut ev, &d, &["0", "body", "high_profile", "bit_depth_luma_minus8"]), Value::UInt(0));
+        assert_eq!(value(&mut ev, &d, &["0", "body", "high_profile", "sps_ext_count"]), Value::UInt(0));
+    }
+
+    #[test]
     fn a_quicktime_pcm_entry_reads_its_channel_layout() {
         let mut chan = vec![0u8; 4];
         chan.extend_from_slice(&0x0064_0001u32.to_be_bytes());

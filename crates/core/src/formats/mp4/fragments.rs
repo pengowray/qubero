@@ -376,7 +376,28 @@ mod tests {
         let node = ev.node(&d, &second).unwrap();
         assert_eq!(node.offset_bits / 8, moof_at + moof_len as u64 + 8 + 3);
         assert_eq!(node.size_bits, 5 * 8);
-        assert_eq!(ev.locate(&d, (moof_at + moof_len as u64 + 8 + 4) * 8).unwrap(), second);
+        let p = ev.locate(&d, (moof_at + moof_len as u64 + 8 + 4) * 8).unwrap();
+        assert!(p.starts_with(&second), "{p:?} is not in {second:?}");
+    }
+
+    #[test]
+    fn a_random_access_entry_reads_numbers_as_wide_as_the_box_says() {
+        // Version 1, track 1; traf numbers one byte, trun numbers two, sample
+        // numbers four.
+        let mut body = u32s(&[1, 0b00_01_11]);
+        body.extend_from_slice(&u32s(&[1]));
+        body.extend_from_slice(&9000u64.to_be_bytes());
+        body.extend_from_slice(&1239u64.to_be_bytes());
+        body.extend_from_slice(&[1, 0, 2]);
+        body.extend_from_slice(&u32s(&[7]));
+        let d = Document::new(MemSource(full(b"tfra", 1, 0, &body)));
+        let mut ev = Evaluator::new(mp4());
+        let entry = |name: &'static str| -> Vec<&'static str> { vec!["0", "body", "entries", "0", name] };
+        assert_eq!(value(&mut ev, &d, &entry("time")), Value::UInt(9000));
+        assert_eq!(value(&mut ev, &d, &entry("moof_offset")), Value::UInt(1239));
+        assert_eq!(value(&mut ev, &d, &entry("traf_number")), Value::UInt(1));
+        assert_eq!(value(&mut ev, &d, &entry("trun_number")), Value::UInt(2));
+        assert_eq!(value(&mut ev, &d, &entry("sample_number")), Value::UInt(7));
     }
 
     #[test]
