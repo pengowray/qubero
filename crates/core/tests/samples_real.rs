@@ -57,9 +57,7 @@ const KNOWN_FAILURES: &[&str] = &[
     // no form for that. Nothing has been written for pcapng.
     "pcap/ethernet-ipv4-udp.pcap",
     "pcapng/ethernet-ipv4-udp.pcapng",
-    // Formats that open with a magic, for which no template exists yet. The
-    // WebP is a RIFF, and `ksy:riff` would read the outer chunk and nothing
-    // inside it.
+    // Formats that open with a magic, for which no template exists yet.
     "dds/magick-dxt5-rgba.dds",
     "exr/magick-rgb-half.exr",
     "flac/ffmpeg-sine-mono-16k.flac",
@@ -69,7 +67,6 @@ const KNOWN_FAILURES: &[&str] = &[
     "nrrd/volume-int16-gzip.nrrd",
     "nrrd/volume-int16-raw.nrrd",
     "wavpack/ffmpeg-lossless-mono.wv",
-    "webp/pillow-rgba-lossless.webp",
     // Text formats. No template reads a file of lines or of XML elements.
     "dif/libreoffice7-dif.dif",
     "fods/libreoffice7-flat-xml.fods",
