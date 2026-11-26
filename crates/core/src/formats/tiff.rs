@@ -1481,6 +1481,41 @@ mod tests {
         assert_eq!((bytes.offset_bits / 8, bytes.size_bits / 8), (68, 3));
     }
 
+    /// A file from the sample collection, or nothing when it is not there.
+    fn sample(path: &str) -> Option<Vec<u8>> {
+        let samples = std::env::var_os("QUBERO_SAMPLES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples")));
+        std::fs::read(samples.join(path)).ok()
+    }
+
+    #[test]
+    fn real_pages_and_an_exif_thumbnail_are_placed_where_their_tags_say() {
+        // Three pages of three strips each: IFD 1's strips are at 568, 707
+        // and 846, 139 bytes each.
+        if let Some(bytes) = sample("tiff/pillow-three-pages-deflate-strips.tif") {
+            let d = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(tiff());
+            assert_eq!(ev.node(&d, &[1, NEXT_IFDS]).unwrap().child_count, 2);
+            for (i, at) in [568u64, 707, 846].into_iter().enumerate() {
+                let strip = ev.node(&d, &[1, NEXT_IFDS, 0, STRIPS, i]).unwrap();
+                assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (at, 139), "strip {i}");
+            }
+        }
+        // IFD 1 says the thumbnail is 658 bytes, 278 from the start of the
+        // TIFF, and the byte there is the thumbnail's start of image.
+        if let Some(bytes) = sample("jpeg/pillow-exif-ifd1-thumbnail.jpg") {
+            let tiff_at = bytes.windows(6).position(|w| w == b"Exif\0\0").unwrap() as u64 + 6;
+            let d = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(crate::formats::jpeg());
+            let p = ev.locate(&d, (tiff_at + 278) * 8).unwrap();
+            let soi = ev.node(&d, &p).unwrap();
+            assert_eq!((soi.offset_bits / 8, soi.name.as_str()), (tiff_at + 278, "soi"));
+            let thumbnail = ev.node(&d, &p[..p.len() - 1]).unwrap();
+            assert_eq!((thumbnail.type_name.as_str(), thumbnail.size_bits / 8), ("JPEG", 658));
+        }
+    }
+
     #[test]
     fn an_ifd0_that_names_itself_as_the_next_one_is_read_once() {
         let d = Document::new(MemSource(le_tiff(&[], &[(256, 3, &[1])], 8)));
