@@ -2034,4 +2034,53 @@ mod tests {
         let second = member(0, &[], b"and me as well");
         assert_eq!(gzip(&[good, second].concat()).err(), Some(Refusal::Failed));
     }
+
+    /// A wrapper's header read from a head shorter than the run says where
+    /// the deflate data is, the same as from the whole run, or asks for a
+    /// longer head, never longer than the header; a head grown as asked comes
+    /// to the framing. A header that is not one is refused from any head that
+    /// holds the bytes saying so, and the whole run never asks for more.
+    #[test]
+    fn a_wrapper_read_from_a_short_head_asks_for_what_it_needs() {
+        let text = b"a header read a piece at a time. ".repeat(30);
+        // An extra field of 3 bytes, a name, a comment of 3,000 bytes and a
+        // header sum: every field a gzip header may have.
+        let front = [&[3, 0, 7, 8, 9][..], b"name.txt\0", &[b'c'; 3000], &[0, 0, 0]].concat();
+        let gz = member(0x04 | 0x08 | 0x10 | 0x02, &front, &text);
+        let zlib = miniz_oxide::deflate::compress_to_vec_zlib(&text, 6);
+        let raw = miniz_oxide::deflate::compress_to_vec(&text, 6);
+        for (wrapper, run) in [(Wrapper::Gzip, &gz), (Wrapper::Zlib, &zlib), (Wrapper::Raw, &raw)] {
+            let want = framing(wrapper, run, run.len()).expect("a header").found().expect("the whole run");
+            let header = (want.start / 8) as usize;
+            for n in 0..run.len() {
+                match framing(wrapper, &run[..n], run.len()) {
+                    Ok(Framed::At(f)) => assert_eq!(f, want, "{wrapper:?}, a head of {n}"),
+                    Ok(Framed::NeedsHead(m)) => assert!(m > n && m <= header, "{wrapper:?}: a head of {n} asks for {m}"),
+                    Err(e) => panic!("{wrapper:?}, a head of {n}: {e:?}"),
+                }
+            }
+            let (mut n, mut reads) = (0, 0);
+            while let Framed::NeedsHead(m) = framing(wrapper, &run[..n], run.len()).expect("a header") {
+                (n, reads) = (m, reads + 1);
+            }
+            assert!(reads <= header + 1, "{wrapper:?}: {reads} reads");
+            assert_eq!(&run[want.trailer()], &run[run.len() - want.trailer().len()..]);
+        }
+        // Not a gzip header, said by its third byte.
+        let mut bad = gz.clone();
+        bad[2] = 9;
+        for n in 3..bad.len() {
+            assert_eq!(framing(Wrapper::Gzip, &bad[..n], bad.len()), Err(Refusal::Failed), "a head of {n}");
+        }
+        // A comment that runs to the end of the member asks for more until
+        // the head is the whole member, which it is refused from.
+        let endless = [&[0x1f, 0x8b, 8, 0x10, 0, 0, 0, 0, 0, 3][..], &[b'c'; 30]].concat();
+        assert_eq!(framing(Wrapper::Gzip, &endless[..20], endless.len()), Ok(Framed::NeedsHead(21)));
+        assert_eq!(framing(Wrapper::Gzip, &endless, endless.len()), Err(Refusal::Failed));
+        // A trailer of the wrong length never agrees.
+        let f = framing(Wrapper::Zlib, &zlib, zlib.len()).unwrap().found().unwrap();
+        let sum = crate::checksum::adler32(&text);
+        assert!(trailer_agrees(&f, &zlib[f.trailer()], text.len() as u64, || 0, || sum));
+        assert!(!trailer_agrees(&f, &zlib[f.trailer().start - 1..], text.len() as u64, || 0, || sum));
+    }
 }
