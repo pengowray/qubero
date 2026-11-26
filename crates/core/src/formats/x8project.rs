@@ -55,8 +55,8 @@ const MAX_MS_DECODE: u8 = 3;
 const APPS: &[(i128, &str)] =
     &[(1, "ASMR"), (2, "MANUAL"), (3, "MUSIC"), (4, "VOICE"), (5, "FIELD"), (6, "PODCAST"), (9, "POCKET STUDIO")];
 
-/// The DUAL REC setting's values. The firmware's code also handles 0, but no
-/// setting in V2.03 writes it.
+/// The DUAL REC setting's values. The firmware's code also tests for 0 and
+/// 2, but no setting in V2.03 writes either.
 const DUAL_REC: &[(i128, &str)] = &[(1, "ON"), (3, "OFF")];
 
 /// The MS DECODE setting's values, named as in the reference manual.
@@ -152,7 +152,7 @@ pub fn x8project() -> Template {
             "unknown_0a",
             "A setting from 0 to 8, set by the firmware's internal settings message 0xFFD. The firmware's audio code reads it as bits: bit 0 when the app is VOICE, bit 1 when it is MUSIC and bit 2 when it is PODCAST. Each of those bits changes how channels 3 and 4 are routed in the mixer. The screen setting it belongs to was not found. All 127 files compared have 0.",
         )
-        .field_doc("unknown_0b", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
+        .field_doc("unknown_0b", "No code was found in V2.03 that reads or writes this byte on its own. The firmware copies it together with the neighbouring bytes. All 127 files compared have 0.")
         .field_doc("ms_decode", "The MS DECODE setting: OFF, or the pair of tracks whose mid-side signal the mixer decodes to left and right.")
         .field_doc(
             "ms_decode_width",
@@ -162,22 +162,22 @@ pub fn x8project() -> Template {
             "unknown_0e",
             "A mixer setting from 0 to 100, set by the firmware's internal settings message 0xC06, which follows 0xC05 (the MS decode width). The default is 100. The firmware stores the value and can report it, but no audio code reads it, so in V2.03 the value has no effect on the sound. All 127 files compared have 100.",
         )
-        .field_doc("unknown_0f", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
+        .field_doc("unknown_0f", "No code was found in V2.03 that reads or writes this byte on its own. The firmware copies it together with the neighbouring bytes. All 127 files compared have 0.")
         .field_doc("channels", "The mixer channels of tracks 1 to 6, in track order, 4 bytes each.")
         .field_doc(
             "unused_channels",
-            "Two more entries laid out like a mixer channel. The firmware's defaults set both to level 97, the first with pan 0 and the second with pan 40, and no code changes them afterwards. The audio code's mixer reads only the six track channels. All 127 files compared have the defaults.",
+            "Two more entries laid out like a mixer channel. The firmware's defaults set both to level 97, the first with pan 0 and the second with pan 40, and no code was found that changes them afterwards. The audio code's mixer reads only the six track channels. All 127 files compared have the defaults.",
         )
         .field_doc(
             "master_level",
             "The mixer's master level, from 0 to 127. The default is 97. Like a channel's level, the value is an index into the firmware's gain table. The 127 files compared have 97, 100 or 113.",
         )
-        .field_doc("unknown_31", "The firmware's defaults set this byte to 70, and no other code reads or writes it by itself. All 127 files compared have 70.")
+        .field_doc("unknown_31", "The firmware's defaults set this byte to 70. No other code was found that reads or writes it on its own. All 127 files compared have 70.")
         .field_doc(
             "solo",
-            "The SOLO switch, which solos one track for monitoring (AFL); added in firmware V2.00 for MANUAL and PODCAST. The firmware passes this switch and the soloed track to the audio code. The audio code builds the solo mix only in MANUAL, PODCAST and POCKET STUDIO, and only on two screens, probably INPUT SETTINGS and MIXER SETTINGS. The file does not record which track was soloed. Of the 127 files compared, 86 have 0 and 41 have 1. The 41 are consecutive takes from 4 to 18 February 2026, so the switch stays as it was left from one take to the next.",
+            "The SOLO switch, which solos one track for monitoring (AFL); added in firmware V2.00 for MANUAL and PODCAST. The firmware passes this switch and the soloed track to the audio code. On two screens, probably INPUT SETTINGS and MIXER SETTINGS, the audio code solos the chosen track only while this switch is 1; on other screens it solos a chosen track whatever the switch is. The file does not record which track was soloed. Of the 127 files compared, 86 have 0 and 41 have 1. The 41 are consecutive takes from 4 to 18 February 2026, so the switch stays as it was left from one take to the next.",
         )
-        .field_doc("unknown_33", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
+        .field_doc("unknown_33", "No code was found in V2.03 that reads or writes this byte on its own. The firmware copies it together with the neighbouring bytes. All 127 files compared have 0.")
         .field_doc("unused", "Three bytes the firmware does not write. All 127 files compared have zeros.")
         .field_doc(
             "unknown_37",
@@ -290,7 +290,7 @@ fn metronome() -> T {
     .field_doc("beat", "The number of beats in a bar, from 1 to 9. The default is 4.")
     .field_doc("level", "The metronome's level, from 0 to 100. The default is 50.")
     .field_doc("sound", "The click sound: CLICK, STICK or BELL. The default is CLICK.")
-    .field_doc("bar_display", "1 if the project status bar counts in bars and beats instead of hours, minutes and seconds. The default is 0.")
+    .field_doc("bar_display", "1 if the project status bar counts in bars and beats instead of hours, minutes and seconds. The default is 0. This is the one switch in the manual's metronome settings left after ACCENT and CLICK were matched; the firmware only stores it and reports it to the screens.")
     .field_doc("accent", "1 if the metronome plays a different sound on the first beat of each bar. The default is 1.")
     .field_doc("click", "When the click is heard: OFF, REC (while recording) or REC&PLAY (while recording and playing). The default is OFF.")
     .field_doc("unused_bits", "The top 4 bits of the byte that holds bar_display, accent and click. The firmware leaves them at 0.")
