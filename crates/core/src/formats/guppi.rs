@@ -87,7 +87,10 @@ fn channel() -> T {
         rate: Some(E::real(1.0).div(E::real_text(card_at("TBIN", &["body", "value"])))),
         facts: vec![
             TableFact::named("NBITS", card_value("NBITS")),
-            TableFact::named("NPOL", card_value("NPOL")),
+            // NPOL counts the values in a time sample, so 4 is two
+            // polarisations of complex samples. The columns and their hovers
+            // count the polarisations, so the bar says how the two agree.
+            TableFact::named("NPOL", card_value("NPOL")).noted_when(4, "2 pols, each real and imaginary"),
             TableFact::named("OBSNCHAN", card_value("OBSNCHAN")),
             TableFact::named("TBIN", card_value("TBIN")).in_unit("s"),
             TableFact::named("CHAN_BW", card_value("CHAN_BW")).in_unit("MHz"),
@@ -236,6 +239,8 @@ pub(crate) mod tests {
         assert_eq!(shape.titles[3], "Polarisation [1] (of 2), imaginary part");
         let facts: Vec<(&str, &str)> = shape.facts.iter().map(|f| (f.label.as_str(), f.unit.as_str())).collect();
         assert_eq!(facts[3], ("TBIN", "s"));
+        assert_eq!(shape.facts[1].note, "2 pols, each real and imaginary");
+        assert_eq!(shape.facts[0].note, "");
         // The two blocks fill the file.
         let last = ev.node(&d, &[0, 1]).unwrap();
         assert_eq!(last.offset_bits + last.size_bits, b.len() as u64 * 8);

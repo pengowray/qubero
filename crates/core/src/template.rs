@@ -2150,6 +2150,10 @@ pub struct TableFact {
     /// The name to show instead of the field's path. None: the path.
     pub label: Option<Arc<str>>,
     pub unit: Option<FactUnit>,
+    /// A few words shown after the value when it is this number, for a value
+    /// whose meaning does not match what the table shows: a GUPPI `NPOL` of
+    /// 4 is two polarisations of complex samples. None: no note.
+    pub note: Option<(i128, Arc<str>)>,
 }
 
 /// Where a fact's unit comes from.
@@ -2166,14 +2170,19 @@ pub enum FactUnit {
 
 impl From<Expr> for TableFact {
     fn from(value: Expr) -> Self {
-        TableFact { value, label: None, unit: None }
+        TableFact { value, label: None, unit: None, note: None }
     }
 }
 
 impl TableFact {
     /// A fact shown by `label` rather than by the field's path.
     pub fn named(label: &str, value: Expr) -> Self {
-        TableFact { value, label: Some(label.into()), unit: None }
+        TableFact { value, label: Some(label.into()), unit: None, note: None }
+    }
+    /// The same fact, with `note` shown after it when its value is `when`.
+    pub fn noted_when(mut self, when: i128, note: &str) -> Self {
+        self.note = Some((when, note.into()));
+        self
     }
     /// The same fact, in a unit the format fixes.
     pub fn in_unit(mut self, unit: &str) -> Self {

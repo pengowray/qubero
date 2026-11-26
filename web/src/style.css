@@ -4233,11 +4233,14 @@ button.insp-xrow-where:hover {
   gap: 8px 14px;
   margin-inline-start: auto;
 }
+/* A choice the reader can make is in the text colour and one they cannot is
+   muted, as in the export form and the settings. Greying it with opacity took
+   it below 4.5:1 contrast. */
 .tbl-check {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: var(--muted);
+  color: var(--fg);
   cursor: pointer;
 }
 /* One question and its two answers, kept together as the bar wraps. */
@@ -4248,7 +4251,7 @@ button.insp-xrow-where:hover {
   color: var(--muted);
 }
 .tbl-check.is-off {
-  opacity: 0.6;
+  color: var(--muted);
   cursor: default;
 }
 .tbl-copy {

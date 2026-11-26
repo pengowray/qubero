@@ -1844,6 +1844,7 @@ impl Editor {
                                 path: o.path.into_iter().map(|x| x as f64).collect(),
                                 value: o.value,
                                 unit: o.unit,
+                                note: o.note,
                             })
                             .collect(),
                         cells: t.cells.map(|c| match c {

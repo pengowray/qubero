@@ -57,8 +57,8 @@ test("turning changes rows for columns and turning again changes them back", () 
 test("a turned table is headings about the records, then a line a field", () => {
   const records = [row(["1", "2", "3"], { name: "Amplitude" }), row(["4", "5", "6"], { name: "Phase" })];
   const lead: Lead = { named: true, time: null, addresses: false };
-  assert.deepEqual(turnedLines(["[0]", "[1]", "[2]"], records, lead, { from: 1, to: 3 }), [
-    ["#", "0", "1"],
+  assert.deepEqual(turnedLines(["[0]", "[1]", "[2]"], records, lead, { from: 1, to: 3 }, "channel"), [
+    ["channel #", "0", "1"],
     ["name", "Amplitude", "Phase"],
     ["[1]", "2", "5"],
     ["[2]", "3", "6"],
@@ -67,10 +67,10 @@ test("a turned table is headings about the records, then a line a field", () => 
 
 test("turned, where a record is stored is a heading line and not the last one", () => {
   const records = [row(["1"], { offsetBits: 0, sizeBits: 8 })];
-  const lines = turnedLines(["v"], records, { named: false, time: null, addresses: true }, { from: 0, to: 1 });
+  const lines = turnedLines(["v"], records, { named: false, time: null, addresses: true }, { from: 0, to: 1 }, "sample");
   assert.deepEqual(
     lines.map((line) => line[0]),
-    ["#", "Stored at", "Size", "v"],
+    ["sample #", "Stored at", "Size", "v"],
   );
 });
 

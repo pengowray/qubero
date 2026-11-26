@@ -40,6 +40,9 @@ export type ExportJob = {
   readonly fields?: FieldRange;
   /** Write it turned, a record to a column. Not for JSON. */
   readonly asShown: boolean;
+  /** What one record is, `sample`: the label of the line of record numbers
+   *  in a file written turned. */
+  readonly rowWord: string;
 };
 
 /** A piece of the file, and how many rows of the table have gone into the
@@ -94,7 +97,7 @@ export async function* exportText(job: ExportJob, row: (i: number) => Promise<Ta
     // drawn turned is ever asked for this way.
     const records: TableRow[] = [];
     for (let i = 0; i < job.count; i++) records.push(await row(i));
-    const lines = turnedLines(job.headings, records, lead, job.fields ?? { from: 0, to: width });
+    const lines = turnedLines(job.headings, records, lead, job.fields ?? { from: 0, to: width }, job.rowWord);
     yield { text: lines.map((line) => lineOf(job.format, line)).join(""), done: lines.length - 1 };
     return;
   }

@@ -237,6 +237,8 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | Row meaning, with rate and columns | `Each row is one {row} of each {column word}, {spacing} apart.` |
 | Row meaning, with rate only | `Each row is one {row}, {spacing} apart.` |
 | Index column | `#` |
+| Index line, turned (screen, copy, export as shown) | `{row} #`: `sample #` above 0, 1, 2 |
+| Fact with a note for its value | `{label} {value} ({note})`: `NPOL 4 (2 pols, each real and imaginary)` for GUPPI; the report shows the same value and note |
 | Time column | `time (s)` |
 | Unnamed column | `{column word} {n}`, {n} from 0 with no thousands separator: `channel 0` |
 | Column in a group (SIGPROC `nifs`, PSRFITS `NPOL`) | `{group word} {g} {column word} {n}`, both from 0: `IF 1 channel 4`; hover `{group spelled} [{g}] (of {groups}), {column word} [{n}] (of {per group})`: `Intermediate frequency (IF) [1] (of 4), channel [4] (of 45,056)` |
@@ -248,7 +250,7 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | A cell's address, on its hover | `{address} · {size}`, then `Offset within the unpacked stream` for an address in one |
 | Row name column | `name` |
 | Rows-or-columns choice | `{Rows} in:` `rows` / `columns` (radio pair); hover `One {row} per row, or one {row} per column. (Display only)` |
-| `columns` greyed, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
+| `columns` greyed (in `--muted`, where a choice that can be made is in `--fg`), too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
 | Column meaning, turned | `Each column is one {row} of each {column word}, {spacing} apart.` |
 | {spacing} | One over the rate, as a length of time: `125 µs`, `22.68 µs`, `341.3 ns` |
 | Copy button, nothing selected (disabled) | `Copy selected rows`; hover `Select rows to copy them as tab-separated text` |
