@@ -172,6 +172,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   ogg: ["ogg", "oga", "ogv", "opus"],
   wav: ["wav"],
   w4v: ["wav", "w4v"],
+  mp3: ["mp3", "mp2", "mpa"],
   midi: ["mid", "midi"],
   swf: ["swf"],
   png: ["png"],

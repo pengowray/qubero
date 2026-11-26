@@ -177,6 +177,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   au: "Sun AU audio",
   midi: "MIDI",
   id3: "ID3 tag",
+  mp3: "MPEG audio",
   sqlite: "SQLite database",
   pe: "Windows PE executable",
   coff: "COFF object",

@@ -92,8 +92,12 @@ pub(super) fn file_tag() -> T {
             ("footer", T::when(E::field("version").equal_to(E::lit(4)).both(E::field("flags").bit(4)), footer())),
         ],
     )
-    .field_doc("padding", "Zero bytes after the last frame, left so that the tag can grow without moving the audio after it.")
-    .field_doc("footer", "A copy of the tag header with the ID 3DI, so that the tag can be found from its end.")
+    .field_doc("padding", "Zero bytes after the last ID3v2 frame, so a tagger can add to the tag without moving the audio.")
+    .field_doc(
+        "footer",
+        "10-byte copy of the tag header with the ID \"3DI\", so that a program can find the tag by searching back from \
+         its end. Only in ID3v2.4.",
+    )
 }
 
 /// The bits of the tag header's flags byte.

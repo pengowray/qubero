@@ -48,7 +48,19 @@ fn file() -> T {
             ("id3v1", T::when(trailer_id3v1().greater_than(E::lit(0)), T::sized(E::lit(128), id3v1()))),
         ],
     )
-    .field_doc("id3v2", "ID3v2 tag: title, artist, cover art and other information about the recording.")
+    .field_doc("id3v2", "ID3v2 tag at the start of the file, with information such as the title, artist and cover art.")
+    .field_doc("audio", "The MPEG audio frames: everything between the ID3v2 tag at the start of the file and the tags at the end.")
+    .field_doc("apev2", "APEv2 tag near the end of the file: a list of key and value pairs. It comes before any Lyrics3v2 or ID3v1 tag.")
+    .field_doc(
+        "lyrics3",
+        "Lyrics3v2 tag, just before the ID3v1 tag. It contains lyrics and other text, such as the author and extended \
+         versions of the title, artist and album.",
+    )
+    .field_doc(
+        "id3v1",
+        "ID3v1 tag: the last 128 bytes of the file, starting with \"TAG\". It has fixed-size fields for the title, artist, \
+         album, year, comment and genre.",
+    )
 }
 
 /// MPEG audio frames to the end of the window they are in: the part of an MP3
@@ -64,9 +76,14 @@ pub(super) fn audio() -> T {
         ],
     )
     .field_doc(
+        "frames",
+        "The MPEG audio frames, one after another. The list can also contain runs of zero bytes between frames, and \
+         another ID3v2 tag where several files were joined into one.",
+    )
+    .field_doc(
         "not_frames",
-        "Bytes after the last frame that do not start with a valid frame header. Often the end of a frame \
-         that was cut off, or a tag this template does not read.",
+        "Bytes after the last frame that Qubero cannot read as a frame or as one of the tags at the end. For example, \
+         free-format frames, whose length is not in the header, or a tag in a format Qubero does not read.",
     )
 }
 
@@ -102,7 +119,11 @@ fn element() -> T {
         vec![
             (FRAME, T::sized(frame_length(&Peeked).at_most(E::Remaining), frame())),
             (TAG, super::id3::file_tag()),
-            (ZEROS, T::structure("Padding", vec![("zeros", T::bytes(E::run(&[0])))])),
+            (
+                ZEROS,
+                T::structure("Padding", vec![("zeros", T::bytes(E::run(&[0])))])
+                    .field_doc("zeros", "Zero bytes between frames. Some taggers leave a run of zero bytes after the ID3v2 tag."),
+            ),
         ],
         T::bytes(E::Remaining),
     )
@@ -268,8 +289,12 @@ const LAYER: &[(i128, &str)] = &[(0, "reserved"), (1, "Layer III"), (2, "Layer I
 const PROTECTION: &[(i128, &str)] = &[(0, "CRC follows"), (1, "no CRC")];
 const CHANNEL_MODE: &[(i128, &str)] = &[(0, "stereo"), (1, "joint stereo"), (2, "dual channel"), (3, "single channel")];
 const EMPHASIS: &[(i128, &str)] = &[(0, "none"), (1, "50/15 µs"), (2, "reserved"), (3, "CCITT J.17")];
-const MODE_EXTENSION_LAYER_1_2: &[(i128, &str)] =
-    &[(0, "bands 4 to 31"), (1, "bands 8 to 31"), (2, "bands 12 to 31"), (3, "bands 16 to 31")];
+const MODE_EXTENSION_LAYER_1_2: &[(i128, &str)] = &[
+    (0, "intensity stereo in subbands 4 to 31"),
+    (1, "intensity stereo in subbands 8 to 31"),
+    (2, "intensity stereo in subbands 12 to 31"),
+    (3, "intensity stereo in subbands 16 to 31"),
+];
 const MODE_EXTENSION_LAYER_3: &[(i128, &str)] = &[
     (0, "intensity stereo off, M/S stereo off"),
     (1, "intensity stereo on, M/S stereo off"),
@@ -358,6 +383,71 @@ fn frame() -> T {
         ],
     )
     .field_valid("sync", Valid::Eq(E::lit(0x7ff)))
+    .field_doc("sync", "11 bits, all set to 1, at the start of every frame header.")
+    .field_doc(
+        "version",
+        "MPEG version: MPEG-1, MPEG-2 or MPEG-2.5; value 1 is reserved. MPEG-2 uses half the sample rates of MPEG-1, \
+         and MPEG-2.5 (an unofficial extension) uses a quarter of them.",
+    )
+    .field_doc("layer", "MPEG audio layer: Layer I, II or III. Value 0 is reserved.")
+    .field_doc("protection_bit", "0 means a 16-bit CRC follows the frame header, and 1 means there is no CRC.")
+    .field_doc(
+        "bitrate_index",
+        "Index into the bitrate table for this frame's MPEG version and layer, shown as the bitrate in kbit/s. \
+         0 means free format (the bitrate is not in the header), and 15 is not allowed.",
+    )
+    .field_doc("sample_rate_index", "Index into the sample rate table for this frame's MPEG version, shown as the sample rate in Hz.")
+    .field_doc(
+        "padding_bit",
+        "1 means the frame has one extra slot: 4 bytes in Layer I, 1 byte in Layers II and III. Encoders set it on \
+         some frames so that the stream matches the bitrate exactly.",
+    )
+    .field_doc("private_bit", "A bit for applications to use; decoders ignore it.")
+    .field_doc("channel_mode", "Stereo, joint stereo, dual channel or single channel. Dual channel is two independent mono channels.")
+    .field_doc(
+        "mode_extension",
+        "Joint stereo settings, used only when channel_mode is joint stereo. In Layer III they say whether intensity \
+         stereo and M/S stereo are on; in Layers I and II they say which subbands use intensity stereo.",
+    )
+    .field_doc("copyright", "1 means the audio is copyrighted.")
+    .field_doc("original", "1 means original media, 0 means a copy.")
+    .field_doc("emphasis", "Type of de-emphasis the decoder must apply to the audio. Most files have none.")
+    .field_doc(
+        "frame_length",
+        "Length of the frame in bytes, including the header. Qubero computes it from the bitrate, sample rate and \
+         padding bit; it is not stored in the file.",
+    )
+    .field_doc("crc", "16-bit CRC that a decoder can use to check the frame. Present only when protection_bit is 0.")
+    .field_doc(
+        "side_info",
+        "Layer III side information: where this frame's main data starts, and how the main data for each granule \
+         and channel is coded.",
+    )
+    .field_doc(
+        "xing",
+        "Xing header in a frame that contains no audio, written by LAME and FFmpeg so that players know the playing \
+         time and can seek. In constant bitrate files its ID is \"Info\" instead of \"Xing\".",
+    )
+    .field_doc(
+        "vbri",
+        "VBRI header, written by Fraunhofer encoders in a frame that contains no audio. It always starts 36 bytes \
+         after the start of the frame.",
+    )
+    .field_doc(
+        "main_data",
+        "The part of this frame's main data (scale factors and Huffman-coded samples) that is stored in this frame. \
+         The first main_data_begin bytes of the main data are at the end of earlier frames, in the bit reservoir.",
+    )
+    .field_doc(
+        "ancillary_data",
+        "Bytes after this frame's main data that are not main data for any frame: ancillary data or encoder padding. \
+         LAME writes its version string here, for example \"LAME3.100\".",
+    )
+    .field_doc(
+        "later_main_data",
+        "Main data for the next frame or frames, which the encoder stored in spare bytes of this frame (the bit reservoir).",
+    )
+    .field_doc("audio_data", "Layers I and II: bit allocation, scale factors and samples for this frame.")
 }
 
 /// How many bytes of this frame's main data are in this frame. The main data
@@ -405,28 +495,42 @@ fn channels() -> E {
 /// each granule of each channel is coded. MPEG-1 has two granules per frame;
 /// MPEG-2 and 2.5 have one, and a wider `scalefac_compress`.
 fn side_info() -> T {
+    let docs = |t: T| {
+        t.field_doc(
+            "main_data_begin",
+            "Number of bytes of this frame's main data that are in earlier frames, not counting the headers and side \
+             information of those frames. 0 means the main data starts in this frame.",
+        )
+        .field_doc("private_bits", "Bits for applications to use.")
+        .field_doc(
+            "scfsi",
+            "MPEG-1 only: 4 bits for each channel, one for each of 4 groups of scale factor bands. A bit set to 1 means \
+             granule 1 reuses the scale factors of granule 0 for that group.",
+        )
+        .field_doc("granules", "Coding settings for each granule and channel: 2 granules in MPEG-1, 1 granule in MPEG-2 and 2.5.")
+    };
     T::switch(
         E::field("version"),
         vec![(
             3,
-            T::structure(
+            docs(T::structure(
                 "SideInfo",
                 vec![
                     ("main_data_begin", bits(9)),
-                    ("private_bits", T::UIntExpr { bits: Box::new(E::cond(mono(), E::lit(5), E::lit(3))), endian: Big }),
+                    ("private_bits", T::switch(mono(), vec![(1, bits(5))], bits(3))),
                     ("scfsi", T::array(bits(4), channels())),
                     ("granules", T::array(T::array(granule(true), channels()), E::lit(2))),
                 ],
-            ),
+            )),
         )],
-        T::structure(
+        docs(T::structure(
             "SideInfo",
             vec![
                 ("main_data_begin", bits(8)),
-                ("private_bits", T::UIntExpr { bits: Box::new(channels()), endian: Big }),
+                ("private_bits", T::switch(mono(), vec![(1, bits(1))], bits(2))),
                 ("granules", T::array(T::array(granule(false), channels()), E::lit(1))),
             ],
-        ),
+        )),
     )
 }
 
@@ -454,6 +558,27 @@ fn granule(mpeg_1: bool) -> T {
     fields.push(("scalefac_scale", bits(1)));
     fields.push(("count1table_select", bits(1)));
     T::structure("Granule", fields)
+        .field_doc("part2_3_length", "Number of bits of scale factors and Huffman-coded data for this granule and channel.")
+        .field_doc("big_values", "Number of pairs of Huffman-coded values in the big-values region of this granule and channel.")
+        .field_doc("global_gain", "Quantizer step size for this granule and channel.")
+        .field_doc("scalefac_compress", "Code for the number of bits the scale factors use.")
+        .field_doc(
+            "window_switching_flag",
+            "1 means this granule and channel use a block type other than normal, and block_type and mixed_block_flag follow.",
+        )
+        .field_doc("block_type", "Block type for this granule and channel: start, short (3 short windows) or end. Value 0 is reserved.")
+        .field_doc("mixed_block_flag", "1 means the lowest bands use long blocks and the rest use short blocks.")
+        .field_doc(
+            "table_select",
+            "Which Huffman table each region of the big-values region uses: 2 regions when window_switching_flag is 1, \
+             otherwise 3.",
+        )
+        .field_doc("subblock_gain", "Gain offset for each of the 3 short windows.")
+        .field_doc("region0_count", "Boundary between region 0 and region 1 of the big-values region, in scale factor bands.")
+        .field_doc("region1_count", "Boundary between region 1 and region 2 of the big-values region, in scale factor bands.")
+        .field_doc("preflag", "MPEG-1 only: 1 adds a preset amount to the scale factors of the high-frequency bands.")
+        .field_doc("scalefac_scale", "Step size of the scale factors: 0 means √2 and 1 means 2.")
+        .field_doc("count1table_select", "Which of two Huffman tables codes the count1 region, where each value is -1, 0 or 1.")
 }
 
 const XING: i128 = 0x58_69_6e_67;
@@ -488,6 +613,21 @@ fn xing() -> T {
             ),
         ],
     )
+    .field_doc("id", "\"Xing\" in variable bitrate files, \"Info\" in constant bitrate files.")
+    .field_doc("flags", "Which of frame_count, byte_count, toc and quality are present.")
+    .field_doc("frame_count", "Number of audio frames.")
+    .field_doc("byte_count", "Number of bytes of audio frames, including this frame.")
+    .field_doc(
+        "toc",
+        "Seek table of 100 entries. Entry i is the offset into the audio at which i% of the playing time has passed, \
+         in units of byte_count / 256.",
+    )
+    .field_doc(
+        "quality",
+        "Quality number: Xing defined 0 as best and 100 as worst. LAME writes 100 − 10 × V − q, where V and q are its \
+         -V and -q settings.",
+    )
+    .field_doc("lame", "LAME tag: 36 bytes of encoder settings, ReplayGain values, and the encoder delay and end padding.")
 }
 
 const VBR_METHOD: &[(i128, &str)] = &[
@@ -512,11 +652,11 @@ const STEREO_MODE: &[(i128, &str)] = &[
     (6, "intensity stereo"),
     (7, "undefined"),
 ];
-const SOURCE_RATE: &[(i128, &str)] = &[(0, "32 kHz or lower"), (1, "44.1 kHz"), (2, "48 kHz"), (3, "higher than 48 kHz")];
+const SOURCE_RATE: &[(i128, &str)] = &[(0, "32000 Hz or lower"), (1, "44100 Hz"), (2, "48000 Hz"), (3, "higher than 48000 Hz")];
 const SURROUND: &[(i128, &str)] = &[(0, "none"), (1, "Dolby Pro Logic"), (2, "Dolby Pro Logic II"), (3, "Ambisonic")];
-const GAIN_NAME: &[(i128, &str)] = &[(0, "not set"), (1, "radio"), (2, "audiophile")];
+const GAIN_NAME: &[(i128, &str)] = &[(0, "not set"), (1, "radio (track gain)"), (2, "audiophile (album gain)")];
 const GAIN_ORIGINATOR: &[(i128, &str)] =
-    &[(0, "not set"), (1, "set by artist"), (2, "set by user"), (3, "set by model"), (4, "set by RMS average")];
+    &[(0, "not set"), (1, "set by artist"), (2, "set by user"), (3, "set automatically"), (4, "set from an RMS average")];
 
 fn replay_gain() -> T {
     T::structure(
@@ -528,6 +668,10 @@ fn replay_gain() -> T {
             ("gain_tenths_db", bits(9)),
         ],
     )
+    .field_doc("name", "Which gain this is: radio (track gain), audiophile (album gain) or not set.")
+    .field_doc("originator", "Who or what set this gain.")
+    .field_doc("negative", "Sign bit of the gain: 1 means the gain is negative.")
+    .field_doc("gain_tenths_db", "Size of the gain adjustment in tenths of a dB. The negative bit gives the sign.")
 }
 
 /// The 36 bytes LAME adds after the Xing header.
@@ -542,7 +686,14 @@ fn lame() -> T {
             ("peak", T::F32(Big)),
             ("radio_gain", replay_gain()),
             ("audiophile_gain", replay_gain()),
-            ("encoding_flags", T::flags("LameFlags", bits(4), &[(0, "nspsytune"), (1, "nssafejoint"), (2, "continues in the next track"), (3, "continues the previous track")])),
+            (
+                "encoding_flags",
+                T::flags(
+                    "LameFlags",
+                    bits(4),
+                    &[(0, "--nspsytune"), (1, "--nssafejoint"), (2, "continues into the next track"), (3, "continues from the previous track")],
+                ),
+            ),
             ("ath_type", bits(4)),
             ("bitrate", T::u8()),
             ("encoder_delay", bits(12)),
@@ -560,6 +711,53 @@ fn lame() -> T {
             ("tag_crc", T::u16(Big)),
         ],
     )
+    .field_doc(
+        "encoder",
+        "Encoder name and version in 9 characters, such as \"LAME3.100\". FFmpeg writes \"Lavc\" or \"Lavf\" followed by its version.",
+    )
+    .field_doc("revision", "Revision number of the LAME tag.")
+    .field_doc("vbr_method", "Bitrate mode the encoder used, such as constant bitrate, average bitrate (ABR) or one of the VBR methods.")
+    .field_doc("lowpass", "Frequency of the encoder's lowpass filter, in units of 100 Hz. 0 means unknown.")
+    .field_doc("peak", "Peak signal amplitude, where 1.0 is the largest amplitude the decoded format can store. 0 means unknown.")
+    .field_doc("radio_gain", "ReplayGain track gain (radio gain).")
+    .field_doc("audiophile_gain", "ReplayGain album gain (audiophile gain).")
+    .field_doc(
+        "encoding_flags",
+        "Flags for the LAME options --nspsytune and --nssafejoint, and for gapless encoding (--nogap) that continues \
+         into the next track or from the previous track.",
+    )
+    .field_doc("ath_type", "Type of LAME's absolute threshold of hearing model.")
+    .field_doc(
+        "bitrate",
+        "Bitrate in kbit/s: the target bitrate for ABR, the bitrate for CBR, and the minimum bitrate for VBR. 255 means \
+         255 kbit/s or more.",
+    )
+    .field_doc(
+        "encoder_delay",
+        "Number of samples the encoder added at the start of the audio. A player drops these samples to get back the original audio.",
+    )
+    .field_doc(
+        "end_padding",
+        "Number of zero samples the encoder added at the end to complete the last frame. A player drops these samples \
+         to get back the original audio.",
+    )
+    .field_doc("source_sample_rate", "Sample rate of the audio before it was encoded.")
+    .field_doc("unwise_settings", "1 means the encoder was run with settings that are likely to lower the audio quality.")
+    .field_doc("stereo_mode", "Stereo mode the encoder used.")
+    .field_doc("noise_shaping", "LAME noise shaping type, 0 to 3.")
+    .field_doc(
+        "mp3_gain",
+        "Gain applied losslessly by a tool such as mp3gain, in steps of 1.5 dB. The value is a sign bit and a magnitude.",
+    )
+    .field_doc("surround", "Surround sound format of the audio.")
+    .field_doc("preset", "LAME preset number used for encoding. 0 means no preset.")
+    .field_doc(
+        "music_length",
+        "Number of bytes from the start of this frame to the end of the last audio frame, when LAME wrote the file. \
+         Tags at the end of the file are not counted.",
+    )
+    .field_doc("music_crc", "CRC-16 of the audio frames after this frame, computed when LAME wrote them.")
+    .field_doc("tag_crc", "CRC-16 of the first 190 bytes of this frame.")
 }
 
 const VBRI: i128 = 0x56_42_52_49;
@@ -595,6 +793,12 @@ fn vbri() -> T {
             ),
         ],
     )
+    .field_doc("before", "Bytes between the side information and the VBRI header.")
+    .field_doc("version", "Version of the VBRI header.")
+    .field_doc("toc_entries", "Number of entries in toc, the seek table.")
+    .field_doc("toc_scale", "Scale factor for the entries in toc.")
+    .field_doc("toc_entry_size", "Size of each entry in toc, in bytes.")
+    .field_doc("toc", "Seek table: toc_entries entries, each toc_entry_size bytes long.")
 }
 
 // The tags at the back, found from the end of the file the way players find
@@ -661,6 +865,13 @@ fn apev2() -> T {
             ("footer", ape_header()),
         ],
     )
+    .field_doc("header", "32-byte tag header with the same layout as the footer. Present when the footer's flags say the tag has a header.")
+    .field_doc("items", "The tag's items: key and value pairs.")
+    .field_doc(
+        "footer",
+        "32 bytes at the end of the tag, with the same layout as the header. Programs reading from the end of the file \
+         find the tag by the \"APETAGEX\" in this footer.",
+    )
 }
 
 /// `APETAGEX`, as the big-endian number a 64-bit peek reads it as.
@@ -676,10 +887,17 @@ fn ape_header() -> T {
             ("version", T::enumeration("ApeVersion", T::u32(Little), APE_VERSION)),
             ("tag_size", T::u32(Little)),
             ("item_count", T::u32(Little)),
-            ("flags", T::flags("ApeFlags", T::u32(Little), &[(0, "read-only"), (29, "this is the header"), (30, "has a footer"), (31, "has a header")])),
+            // Bit 30 set means there is no footer. The Hydrogenaudio wiki's
+            // APEv2 page says the opposite, but TagLib reads it this way and
+            // writes it clear, and so do the files.
+            ("flags", T::flags("ApeFlags", T::u32(Little), &[(0, "read-only"), (29, "this is the header"), (30, "has no footer"), (31, "has a header")])),
             ("reserved", T::bytes(E::lit(8))),
         ],
     )
+    .field_doc("version", "APE tag version: 1000 means 1.0 and 2000 means 2.0.")
+    .field_doc("tag_size", "Size in bytes of the items and the footer, not counting the header.")
+    .field_doc("flags", "Flags for whether the tag has a header, whether it has a footer, whether this is the header, and whether the tag is read-only.")
+    .field_doc("reserved", "8 reserved bytes, all zero.")
 }
 
 const APE_CONTENT: &[(i128, &str)] = &[(0, "UTF-8 text"), (1, "binary"), (2, "external locator"), (3, "reserved")];
@@ -699,6 +917,11 @@ fn ape_item() -> T {
             ("value", T::switch(E::field("content_type"), vec![(0, utf8()), (2, utf8())], T::bytes(size()))),
         ],
     )
+    .field_doc("value_size", "Size of the value in bytes.")
+    .field_doc("flags", "Flags for this item: whether it is read-only.")
+    .field_doc("content_type", "Type of the item's value: UTF-8 text, binary, or an external locator (a URL or file path).")
+    .field_doc("key", "Name of the item: ASCII text ending with a zero byte.")
+    .field_doc("value", "The item's value: value_size bytes, of the type given by content_type.")
 }
 
 fn lyrics3() -> T {
@@ -711,6 +934,14 @@ fn lyrics3() -> T {
             ("end", T::magic(b"LYRICS200")),
         ],
     )
+    .field_doc("begin", "The text \"LYRICSBEGIN\", which starts the Lyrics3v2 tag.")
+    .field_doc(
+        "fields",
+        "Each field is a 3-letter ID, a 5-digit size and the text. The IDs are IND (indications), LYR (lyrics), INF \
+         (information), AUT (author), EAL, EAR and ETT (extended album, artist and title), and IMG (image links).",
+    )
+    .field_doc("size", "Size of the tag as 6 digits: the number of bytes from \"LYRICSBEGIN\" to the end of the last field.")
+    .field_doc("end", "The text \"LYRICS200\", which ends the Lyrics3v2 tag.")
 }
 
 fn lyrics3_field() -> T {
@@ -747,6 +978,14 @@ fn id3v1() -> T {
             ("genre", T::enumeration("Genre", T::u8(), &genres)),
         ],
     )
+    .field_doc("title", "Title: 30 bytes of ISO-8859-1 text, padded with zero bytes.")
+    .field_doc("artist", "Artist: 30 bytes of ISO-8859-1 text, padded with zero bytes.")
+    .field_doc("album", "Album: 30 bytes of ISO-8859-1 text, padded with zero bytes.")
+    .field_doc("year", "Year as 4 characters of text.")
+    .field_doc("comment", "Comment: 30 bytes of text, or 28 bytes in ID3v1.1, where zero_byte and track take the last 2 bytes.")
+    .field_doc("zero_byte", "ID3v1.1 only: a zero byte that ends the comment and means the next byte is a track number.")
+    .field_doc("track", "ID3v1.1 only: the track number.")
+    .field_doc("genre", "Genre, as a number in the ID3v1 genre list. 255 means none.")
 }
 
 /// ID3v1 genres: 0 to 79 from the original list, 80 to 125 added by Winamp,
@@ -1130,12 +1369,12 @@ mod tests {
         assert_eq!(name(value(&mut ev, &d, &l("encoder"))), "LAME3.100");
         assert_eq!(name(value(&mut ev, &d, &l("vbr_method"))), "VBR method 1");
         assert_eq!(value(&mut ev, &d, &l("peak")), Value::Float(0.5));
-        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "xing", "lame", "radio_gain", "name"])), "radio");
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "xing", "lame", "radio_gain", "name"])), "radio (track gain)");
         assert_eq!(uint(value(&mut ev, &d, &["audio", "frames", "0", "xing", "lame", "radio_gain", "gain_tenths_db"])), 30);
         assert_eq!(uint(value(&mut ev, &d, &l("encoder_delay"))), 576);
         assert_eq!(uint(value(&mut ev, &d, &l("end_padding"))), 1200);
         assert_eq!(name(value(&mut ev, &d, &l("stereo_mode"))), "joint stereo");
-        assert_eq!(name(value(&mut ev, &d, &l("source_sample_rate"))), "44.1 kHz");
+        assert_eq!(name(value(&mut ev, &d, &l("source_sample_rate"))), "44100 Hz");
         assert_eq!(value(&mut ev, &d, &l("mp3_gain")), Value::Int(-3));
         assert_eq!(uint(value(&mut ev, &d, &l("music_length"))), 41_700);
         assert_eq!(size(&mut ev, &d, &["audio", "frames", "1", "xing"]), 0);
