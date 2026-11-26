@@ -103,7 +103,8 @@ fn sections(large: bool) -> T {
     )
 }
 
-fn resource() -> T {
+/// One image resource, as a PSD stores it and as a JPEG's APP13 does too.
+pub(crate) fn resource() -> T {
     let name_total = E::field("name_length").add(E::lit(1));
     let name_pad = name_total
         .clone()
