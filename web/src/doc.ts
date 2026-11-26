@@ -2076,12 +2076,22 @@ function signatureName(id: Identification): string {
   return (id.mime.split("/").pop() ?? "").replace(/^x-/, "");
 }
 
+/**
+ * What the core said to one question. A "working" answer to
+ * `templateChildren` may carry `ready`: the children before the first one
+ * that waits, which a listing can draw above a placeholder for the rest. It
+ * is never a whole answer, so it is never under "ok". It is children
+ * whatever `T` is, so that a reply that is not "ok" can be handed on as the
+ * reply to another question.
+ */
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
   | { readonly status: "pending"; readonly reachedBytes: number }
   /** Still being worked out. `reachedBytes` is how far into the file the
-   * reading has got. Asking again carries on from there. */
-  | { readonly status: "working"; readonly reachedBytes: number }
+   * reading has got. Asking again carries on from there. `unpacking`, from
+   * `templateChildren`, is how far the pass the rest of the answer waits on
+   * has got, when it waits on one. */
+  | { readonly status: "working"; readonly reachedBytes: number; readonly ready?: readonly TemplateNode[]; readonly unpacking?: Unpacking }
   | { readonly status: "error"; readonly message: string };
 
 /**
@@ -2300,7 +2310,7 @@ export type ExtentEstimate = {
 type RawReply<T> =
   | { status: "ok"; node: T; wanted?: number[] }
   | { status: "pending"; chunks: number[]; reached_bytes: number }
-  | { status: "working"; reached_bytes: number }
+  | { status: "working"; reached_bytes: number; ready?: TemplateNode[]; wanted?: number[]; unpacking?: Unpacking }
   | { status: "error"; message: string };
 
 export class ReadFailure extends Error {
@@ -2636,10 +2646,12 @@ export class Doc {
     return { step: r.node, out: out.status === "ok" ? out.node : null };
   }
 
-  /** How far the core has got unpacking a large stream for this document's
-   *  reading, or null when nothing is being unpacked. Worth asking after a
-   *  reply said "working": the unpacking is carried on by whichever call
-   *  reaches the stream, a go at a time. */
+  /** How far the core has got unpacking the large stream that the last call
+   *  in this document's reading waits on, or null when that call did not
+   *  wait on one. Asked right after a reply said "working", it is the stream
+   *  that call waits on, and not another that a later call carried on: the
+   *  unpacking is carried on by whichever call reaches a stream, a go at a
+   *  time. */
   unpacking(): Unpacking | null {
     const r: RawReply<Unpacking | null> = JSON.parse(this.editor.unpacking(this.space));
     return r.status === "ok" ? r.node : null;
@@ -3066,7 +3078,13 @@ export class Doc {
       // it has to ask itself again. Yielding first lets the page draw what it
       // has and stay usable while the rest is worked out.
       this.scheduleMoreWork();
-      return { status: "working", reachedBytes: r.reached_bytes };
+      for (const c of r.wanted ?? []) this.fetchChunk(c);
+      return {
+        status: "working",
+        reachedBytes: r.reached_bytes,
+        ...(r.ready === undefined ? {} : { ready: r.ready }),
+        ...(r.unpacking === undefined ? {} : { unpacking: r.unpacking }),
+      };
     }
     return r;
   }

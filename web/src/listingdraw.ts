@@ -98,10 +98,12 @@ export function spaceOf(item: Item): number {
 /** How much of the file this is, for a part big enough for the answer to mean
  *  anything. Under a per cent, the number says less than the range does. */
 /** What a stretch of the listing still being read says: how far the core has
- *  got unpacking a large stream, while it is unpacking one, since that is what
- *  the fields under it wait on; and otherwise that bytes are on their way. */
-export function pendingText(doc: Doc): string {
-  const u = doc.unpacking();
+ *  got unpacking the large stream its fields wait on, while they wait on one;
+ *  and otherwise that bytes are on their way. The stream is the one this
+ *  stretch's own fields were asked for, which is not always the one unpacked
+ *  most recently: Open unpacked may be carrying on another. */
+export function pendingText(item: Extract<Item, { kind: "pending" }>): string {
+  const u = item.unpacking;
   return u === null ? REPORT.reading : REPORT.unpacking(percentText(u.read_bits, u.run_bits));
 }
 
@@ -163,7 +165,7 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
     case "more":
       return drawMore(c, item);
     case "pending":
-      return el("div", "rp-item rp-block rp-pending", pendingText(c.doc));
+      return el("div", "rp-item rp-block rp-pending", pendingText(item));
     case "card":
       return drawCard(c.doc, item, c.shown);
     case "switch":
