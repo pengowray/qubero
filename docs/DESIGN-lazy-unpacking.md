@@ -643,8 +643,6 @@ blocks.
 - A run refused because one frame or block is past 64 MiB says "over 64 MiB"
   like any other run past the cap. It could say that one frame or block is
   too large.
-- A test of a joined stream mixing stored and packed parts past the cap: the
-  stored parts' path in `Joined` (`JoinedBytes::Held`) has no test of its own.
 - A joined stream with a part past 1 GiB is refused as failed rather than as
   too large, since the part's own refusal is not carried through.
 
@@ -666,6 +664,11 @@ blocks.
   stream held whole, row for row, down to the codes, the value table's cells,
   the column beside the bytes and the code panel's answer; and the Rubin raw
   lists its blocks under `members[0].compressed`.
+- Joined streams (`eval::stitch`), with the limits made small: a BGZF stream
+  past the cap read a part at a time, and a stream of stored and packed parts
+  past the cap, from a template of the test's own, whose bytes, `map_out` for
+  every byte and `map_in` for every bit of the file match the same stream held
+  whole.
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
 - The pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,

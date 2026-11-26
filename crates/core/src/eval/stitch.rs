@@ -1452,6 +1452,94 @@ mod tests {
         assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::TooLarge));
     }
 
+    /// Four runs, each as many bytes as its entry in `lens` says, and a stream
+    /// joined from them in the order they are declared: bytes stored as they
+    /// are, a deflate run, a run whose codec copies (as a ZIP declares a stored
+    /// entry), and another deflate run. A BP5 dataset in a ZIP can join
+    /// stored and deflated entries too, but its template is built from the
+    /// archive, and this one puts each kind of part where a test wants it.
+    fn mixed() -> Template {
+        use crate::codec::Codec;
+        let len = |i: i128| E::elem("lens", E::lit(i));
+        let runs = T::structure(
+            "Runs",
+            vec![
+                ("head", T::bytes(len(0))),
+                ("big", T::decoded(len(1), Codec::Deflate, T::bytes(E::Remaining))),
+                ("kept", T::decoded(len(2), Codec::Stored, T::bytes(E::Remaining))),
+                ("small", T::decoded(len(3), Codec::Deflate, T::bytes(E::Remaining))),
+            ],
+        );
+        let parts = vec![Step::field("runs"), Step::fields(&["head", "big", "kept", "small"])];
+        Template::new(
+            "mixed",
+            T::structure(
+                "Mixed",
+                vec![("lens", T::array(T::u16(Big), E::lit(4))), ("runs", runs), ("joined", T::stitched(parts, None, None, T::bytes(E::Remaining)))],
+            ),
+        )
+    }
+
+    /// A joined stream of stored and packed parts past the cap opens a part at
+    /// a time: the stored parts' bytes are kept, one packed part is decoded
+    /// whole when it is read and the other is read through its index. Every
+    /// byte reads, and every byte and every bit of the file maps to the step
+    /// it does when the same stream is held whole.
+    #[test]
+    fn a_joined_stream_of_stored_and_packed_parts_past_the_cap_opens_a_part_at_a_time() {
+        use crate::codec::lazy::Limits;
+        use crate::eval::space::SpaceSource;
+        let head: Vec<u8> = (0..100).collect();
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let kept: Vec<u8> = (0..100).map(|i| 255 - i).collect();
+        let small: Vec<u8> = (0..100).flat_map(|i| format!("{i:03} ").into_bytes()).collect();
+        let packed = |data: &[u8]| miniz_oxide::deflate::compress_to_vec(data, 6);
+        let runs = [head.clone(), packed(&big), kept.clone(), packed(&small)];
+        let mut file: Vec<u8> = runs.iter().flat_map(|r| (r.len() as u16).to_be_bytes()).collect();
+        for run in &runs {
+            file.extend_from_slice(run);
+        }
+        let text = [head, big, kept, small].concat();
+        let d = Document::new(MemSource(file.clone()));
+        const MIXED: usize = 2;
+
+        let mut whole = Evaluator::new(mixed());
+        let held = whole.open_space(&d, 0, &[MIXED]).unwrap().expect("opens whole");
+        let held = whole.space(held).unwrap();
+        assert_eq!(held.bytes(), text);
+        assert_eq!(held.runs().iter().map(|r| r.packed).collect::<Vec<_>>(), [false, true, false, true]);
+
+        let mut e = Evaluator::new(mixed());
+        // Under the cap: the stored parts and the two compressed runs come to
+        // about 7,600 bytes, and the stream to 30,600.
+        e.spaces.set_whole_cap(10_000);
+        e.spaces.set_lazy_limits(Limits { whole: 4096, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() });
+        let id = e.open_space(&d, 0, &[MIXED]).unwrap().expect("opens a part at a time");
+        let space = e.space(id).unwrap();
+        let SpaceSource::Joined(_) = space.source() else { panic!("held whole") };
+        assert_eq!(space.runs(), held.runs().iter().map(|r| super::JoinedRun { in_start: 0, ..r.clone() }).collect::<Vec<_>>());
+        // `big` is past the cap a part may be decoded whole at, and `small` is
+        // not.
+        let indexed = |r: &super::JoinedRun| e.spaces.indexed((r.run_space, r.run_offset_bits, r.run_bits), crate::codec::Codec::Deflate).is_some();
+        assert_eq!(space.runs().iter().map(indexed).collect::<Vec<_>>(), [false, true, false, false]);
+        let mut got = vec![0u8; text.len()];
+        assert!(space.source().read(0, &mut got));
+        assert_eq!(got, text);
+        // Across each edge between parts, read on its own.
+        for r in &space.runs()[1..] {
+            let at = r.out_bytes.start - 3;
+            let mut got = [0u8; 6];
+            assert!(space.source().read(at, &mut got));
+            assert_eq!(got, text[at as usize..at as usize + 6], "at {at}");
+        }
+        for byte in 0..text.len() as u64 {
+            assert_eq!(space.map_out(byte), held.map_out(byte), "byte {byte}");
+        }
+        for bit in 0..file.len() as u64 * 8 {
+            assert_eq!(space.map_in(bit), held.map_in(bit), "bit {bit}");
+        }
+    }
+
     #[test]
     fn a_joined_stream_over_the_cap_is_refused_as_a_document_and_still_reads() {
         let d = Document::new(MemSource(file(20)));
