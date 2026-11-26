@@ -117,20 +117,27 @@ impl Code {
 }
 
 /// The fixed code every deflate stream may use without writing a table.
-fn fixed_codes() -> (Code, Code) {
-    let mut lit = [0u8; 288];
-    for (i, l) in lit.iter_mut().enumerate() {
-        *l = match i {
-            0..=143 => 8,
-            144..=255 => 9,
-            256..=279 => 7,
-            _ => 8,
-        };
-    }
-    // Thirty-two codes of five bits, of which the format leaves the last two
-    // unused: a code that did not fill its space would not be a code.
-    let dist = [5u8; 32];
-    (Code::build(&lit, false).expect("the fixed code is a code"), Code::build(&dist, false).expect("likewise"))
+///
+/// Built once and kept. A fixed block's header is three bits, so a stream can
+/// start a new one every ten bits, and building the two codes for each of
+/// those was most of what an empty fixed block cost to decode.
+fn fixed_codes() -> &'static (Code, Code) {
+    static FIXED: std::sync::OnceLock<(Code, Code)> = std::sync::OnceLock::new();
+    FIXED.get_or_init(|| {
+        let mut lit = [0u8; 288];
+        for (i, l) in lit.iter_mut().enumerate() {
+            *l = match i {
+                0..=143 => 8,
+                144..=255 => 9,
+                256..=279 => 7,
+                _ => 8,
+            };
+        }
+        // Thirty-two codes of five bits, of which the format leaves the last
+        // two unused: a code that did not fill its space would not be a code.
+        let dist = [5u8; 32];
+        (Code::build(&lit, false).expect("the fixed code is a code"), Code::build(&dist, false).expect("likewise"))
+    })
 }
 
 /// A whole raw deflate stream: the bytes it comes to and what was read where.
@@ -700,7 +707,7 @@ pub(crate) fn run<K: Sink>(
                 let (lit, dist) = fixed_codes();
                 skip(&mut bits, &mut skip_to, out, b)?;
                 let paused = unmute(b, paused.take());
-                (BlockKind::Fixed, symbols(&mut bits, block_in, out, b, &lit, &dist, &mut coarse, paused)?)
+                (BlockKind::Fixed, symbols(&mut bits, block_in, out, b, lit, dist, &mut coarse, paused)?)
             }
             2 => {
                 let (lit, dist) = dynamic_tables(&mut bits, out.len(), b)?;
@@ -1085,12 +1092,16 @@ pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedSte
         .find(|&k| !trace.step(k as usize).is_some_and(|s| matches!(s.kind, StepKind::Header(..) | StepKind::Table(_))))
         .unwrap_or(block.steps.end);
     let head = block.steps.start..head_end;
+    let rebuilt;
     let (lit, dist, owner, hlit) = match block.kind {
         BlockKind::Fixed => {
             let (lit, dist) = fixed_codes();
-            (lit, dist, Vec::new(), 0)
+            (lit, dist, &[][..], 0)
         }
-        BlockKind::Dynamic => rebuild(trace, head.clone())?,
+        BlockKind::Dynamic => {
+            rebuilt = rebuild(trace, head.clone())?;
+            (&rebuilt.0, &rebuilt.1, &rebuilt.2[..], rebuilt.3)
+        }
         // A stored block holds no codes, and the rest of the kinds belong to
         // other codecs entirely.
         _ => return None,
