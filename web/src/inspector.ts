@@ -2008,7 +2008,22 @@ export class Inspector {
       // room for is the other one.
       const at = n.read_at;
       const also = at === null ? undefined : { text: PROPERTIES.readAt(formatAddress(at, n.space)), at: formatAddress(at, n.space), bit: at };
-      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, also, detail, plus: plusTitle(n) });
+      // A link to the field's first byte. In a field hundreds of rows long the
+      // cursor is usually somewhere in the middle of it, and this is where its
+      // start is written. Only for an address of the file: the hex view
+      // numbers no other space.
+      const start = n.space === 0 ? fieldStart(n.offset_bits, n.lsb_first) : null;
+      out.push({
+        key: `${prefix}position`,
+        label: PROPERTIES.row.position,
+        value,
+        bit: start,
+        how: clause,
+        also,
+        detail,
+        plus: plusTitle(n),
+        tip: PROPERTIES.goToStart,
+      });
     }
     if (!terse || said_(["length", "width"])) {
       const value = bitSizeText(n.size_bits);
@@ -2468,6 +2483,7 @@ export class Inspector {
     if (value instanceof HTMLButtonElement) {
       value.type = "button";
       value.dataset["bit"] = String(p.bit);
+      if (p.tip !== undefined) value.title = p.tip;
     }
     // The `+` on a stream address carries what it counts from, the same as the
     // address line at the top of the panel. Read off the text rather than
@@ -3335,6 +3351,8 @@ type Property = {
   /** What the `+` of an address answer counts from, where that is not an
    *  unpacked stream. */
   readonly plus?: string;
+  /** The hover on an answer that is a link. */
+  readonly tip?: string;
 };
 
 /**

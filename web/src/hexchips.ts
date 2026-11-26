@@ -159,7 +159,7 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
   } else if (c.carried) {
     // The arrow says "this began further up", which a screen reader cannot
     // see and a first-time reader should not have to work out.
-    title = `Starts above the visible rows: ${path}, ${detail}`;
+    title = `Starts above the visible rows: ${path}, ${detail}\nAlt+↑ goes to its start.`;
     label = `starts above: ${name}, ${detail}`;
   } else if (c.element === true) {
     // The chip shows its value and nothing else, so which element it is has to

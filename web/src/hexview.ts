@@ -31,6 +31,7 @@ import { RowHeights, type StructuralExtra } from "./rowheights.ts";
 import { HEXGLYPHS } from "./strings.ts";
 import type { Cell } from "./doc.ts";
 import { ValueFetch } from "./valuefetch.ts";
+import { fieldStep, type FieldAt } from "./fieldstep.ts";
 import {
   alignedWidth,
   chooseLayout,
@@ -1507,6 +1508,20 @@ export class HexView {
 
   // ----- editing -----
 
+  /** Pick the field Alt+↑ or Alt+↓ goes to; picking it puts the cursor on its
+   *  start and brings that on screen. */
+  private stepField(dir: "up" | "down"): void {
+    const at: FieldAt = (bit) => {
+      const found = this.doc.locate(bit);
+      if (found.status !== "ok") return null;
+      const n = this.doc.templateNode(found.node);
+      if (n.status !== "ok") return null;
+      return { path: found.node, start: n.node.offset_bits, end: n.node.offset_bits + n.node.size_bits };
+    };
+    const to = fieldStep(at, this.cursorState.bitOffset, dir, this.doc.lengthBits);
+    if (to !== null) this.onPickField(to.path);
+  }
+
   private onKey(e: KeyboardEvent): void {
     this.stopGlide();
     const bpr = this.bytesPerRow;
@@ -1532,6 +1547,11 @@ export class HexView {
       e.preventDefault();
       void this.copySelection();
       return;
+    }
+    // Alt+↑ and Alt+↓ move by fields rather than rows. See `fieldstep.ts`.
+    if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      return this.stepField(e.key === "ArrowUp" ? "up" : "down");
     }
     if (mod && (e.key === "Home" || e.key === "End")) {
       // Ctrl+Home and Ctrl+End are the ends of the file. Plain Home and End

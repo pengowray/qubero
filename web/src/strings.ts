@@ -3177,6 +3177,9 @@ function fromFields(c: HowContext): string {
  * Name; five verbs would be five things to learn.
  */
 export const PROPERTIES = {
+  /** The hover on the Position row's address, which is a link to the field's
+   *  first byte. Names the hex view's keys that do the same. */
+  goToStart: "Go to the start of this field (Alt+↑). Alt+↓ goes to the next field.",
   /**
    * The section heading. What every inspector calls the list of a selected
    * thing's attributes, from DevTools to Blender, so it costs nothing to
