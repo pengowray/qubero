@@ -692,7 +692,7 @@ impl Unfinished {
     /// puts it back in the place it left, and a pass only starts in a free
     /// place.
     fn put(&mut self, key: RunKey, codec: Codec, held: Held, stamp: u64) {
-        assert!(self.has_room(), "no free place to put a pass in");
+        debug_assert!(self.has_room(), "no free place to put a pass in");
         self.entries.push((key, codec, held, stamp));
     }
 
@@ -740,8 +740,8 @@ impl Unfinished {
 /// `StreamLen` inside a larger expression might not.
 #[derive(Default)]
 pub(super) struct Measures {
-    /// Each walk with the bytes it walks and the stamp it was put back with.
-    walking: Vec<(RunKey, Codec, Vec<u8>, inflate::Measuring, u64)>,
+    /// Each walk with the bytes it walks.
+    walking: Vec<(RunKey, Codec, Vec<u8>, inflate::Measuring)>,
     /// Where each stream ended, in bytes from its start, or why it has no end
     /// to give. Oldest first.
     ended: std::collections::VecDeque<(RunKey, Codec, Result<u64, Refusal>)>,
@@ -771,7 +771,7 @@ impl Measures {
     /// The walk over the stream at `key`, taken out to be stepped.
     fn take(&mut self, key: RunKey, codec: Codec) -> Option<(Vec<u8>, inflate::Measuring)> {
         let i = self.walking.iter().position(|e| e.0 == key && e.1 == codec)?;
-        let (_, _, data, walk, _) = self.walking.swap_remove(i);
+        let (_, _, data, walk) = self.walking.swap_remove(i);
         Some((data, walk))
     }
 
@@ -781,9 +781,9 @@ impl Measures {
 
     /// Put a walk back to be carried on next go. As in [`Unfinished::put`],
     /// a place has to be free.
-    fn put(&mut self, key: RunKey, codec: Codec, data: Vec<u8>, walk: inflate::Measuring, stamp: u64) {
-        assert!(self.has_room(), "no free place to put a walk in");
-        self.walking.push((key, codec, data, walk, stamp));
+    fn put(&mut self, key: RunKey, codec: Codec, data: Vec<u8>, walk: inflate::Measuring) {
+        debug_assert!(self.has_room(), "no free place to put a walk in");
+        self.walking.push((key, codec, data, walk));
     }
 
     /// The walk with the fewest bits left to read, taken out to be carried on
@@ -792,8 +792,7 @@ impl Measures {
     /// only a guess at which walk frees a place soonest.
     fn take_nearest_its_end(&mut self) -> Option<(RunKey, Codec, Vec<u8>, inflate::Measuring)> {
         let i = (0..self.walking.len()).min_by_key(|&i| (self.walking[i].2.len() as u64 * 8).saturating_sub(self.walking[i].3.read_bits()))?;
-        let (key, codec, data, walk, _) = self.walking.swap_remove(i);
-        Some((key, codec, data, walk))
+        Some(self.walking.swap_remove(i))
     }
 
     fn is_empty(&self) -> bool {
@@ -998,8 +997,8 @@ pub(super) struct Spaces {
     /// Deflate streams being measured to find where they end, and the ends
     /// found.
     measures: Measures,
-    /// A count of passes put back, indexing and measuring both, so that a
-    /// table that is full lets go of the pass stepped longest ago.
+    /// A count of what has been put in `Unfinished`, so that when both its
+    /// places hold a finished run, the one put there first is let go of.
     stamps: std::cell::Cell<u64>,
 }
 
@@ -1379,8 +1378,7 @@ impl super::Evaluator {
                 } else {
                     self.go.ran_out_waiting();
                 }
-                let stamp = self.spaces.stamp();
-                self.spaces.measures.put(key, codec, data, walk, stamp);
+                self.spaces.measures.put(key, codec, data, walk);
                 return Err(busy);
             }
             let from = walk.read_bits();
@@ -2147,11 +2145,53 @@ mod tests {
         }
     }
 
+    /// A call with an unlimited allowance, as the wasm crate makes where it
+    /// works to the end in one call, opens a third stream while both places
+    /// are taken, without waiting and without touching the two passes in
+    /// them. Those carry on afterwards from where they were.
+    #[test]
+    fn a_call_with_no_limit_opens_a_stream_beside_two_unfinished() {
+        use crate::eval::EvalError;
+        let texts: Vec<Vec<u8>> = (0..3).map(|i| numbered_lines(140_000, 50 + i)).collect();
+        let (file, starts) = zip_of(&texts);
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(formats::builtin("zip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        for i in [0, 1] {
+            e.begin_slice();
+            assert!(matches!(e.open_space(&d, 0, &zip_data(i)), Err(EvalError::Busy { .. })), "entry {i} opened in one go");
+        }
+        let held = |e: &Evaluator| -> Vec<(u64, u64)> {
+            let mut held: Vec<(u64, u64)> = e.spaces.unfinished.borrow().entries.iter().map(|(key, _, h, _)| match h {
+                super::Held::Pass(pass) => (key.1, pass.progress().read_bits),
+                super::Held::Whole(..) => panic!("a run held whole"),
+            }).collect();
+            held.sort();
+            held
+        };
+        let before = held(&e);
+        assert_eq!(before.iter().map(|h| h.0).collect::<Vec<_>>(), [starts[0], starts[1]]);
+        e.set_slice(None);
+        e.begin_slice();
+        let third = e.open_space(&d, 0, &zip_data(2)).unwrap().expect("the third entry opens in one call");
+        assert!(bytes_of(&e, third) == texts[2]);
+        assert_eq!(held(&e), before, "the two passes held were touched");
+        e.set_slice(Some(600));
+        let opened = open_by_turns(&mut e, &d, &starts, &[0, 1]);
+        assert_eq!(e.spaces.passes.get(), 3, "a held pass started again");
+        e.set_slice(None);
+        for i in [0, 1] {
+            assert!(bytes_of(&e, opened[i].expect("opened")) == texts[i], "entry {i}'s bytes");
+        }
+    }
+
     /// The same for the walks measuring where deflate streams end: three
     /// streams measured by turns each carry on from where they stopped, and
-    /// each comes to its own end. The gzip template never has two walks under
-    /// way, since a member's start is known only once the member before it
-    /// has been measured, but a template of one's own can.
+    /// each comes to its own end. No template has two walks under way today:
+    /// only gzip's measures streams, and a member's start is known only once
+    /// the member before it has been measured. A template measuring streams
+    /// that are read independently of each other would.
     #[test]
     fn three_streams_measured_by_turns_all_end() {
         use crate::codec::Codec;

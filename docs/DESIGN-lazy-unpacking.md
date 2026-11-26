@@ -700,9 +700,9 @@ from a stream waiting for a place (see "Waiting for a place"), or from any
 other reading that takes more than one go. "Loading bytes needed to map these
 fields…" is said only while bytes of the file are loading.
 
-Each entry in `Unfinished` and `Measures` still has the stamp it was put there
-with. It is now used only to choose which finished run to drop when both
-places in `Unfinished` hold one (see "Waiting for a place").
+Each entry in `Unfinished` still has the stamp it was put there with. It is
+now used only to choose which finished run to drop when both places hold one
+(see "Waiting for a place"). The walks in `Measures` no longer have one.
 
 ### Waiting for a place
 
@@ -742,14 +742,18 @@ while both places are taken waits for a place, and does work meanwhile
   runs beside the two in `Unfinished`, as it did before. A go that has spent
   all of its allowance starts no pass, since the pass would take a place
   having done nothing.
-- `put` asserts that a place is free, rather than pushing a pass out.
+- `put` no longer pushes a pass out. It checks that a place is free in a
+  debug build (`debug_assert!`), so that a test fails if that ever breaks,
+  without stopping the page in a release build.
 
 Measuring walks wait the same way in `Measures`, and the end a waiting call
 finds for another call's stream is kept in `Measures` with the other ends
-found. The gzip template never has two walks under way, since a member's start
-is known only once the member before it has been measured, and its tests check
-that. A template written in the text form can use `StreamLen` in fields that
-are read independently of each other, and then its walks can wait for a place.
+found. No template has two walks under way today. Only the gzip template uses
+`StreamLen` (the text form of a template prints it but cannot read it back),
+and a gzip member's start is known only once the member before it has been
+measured, which the gzip tests check. The waiting is there so that a template
+measuring streams read independently of each other would not bring the
+problem back.
 
 **Why waiting, and not more places.** Two other ways were considered.
 
@@ -1300,7 +1304,10 @@ The `hash` feature makes that module 2.3 KB larger.
   entries started and never asked for again, then a third: the third opens,
   past the cap with three passes made, and under it, where both places come
   to hold runs held whole, with four, the first of those having been let go
-  of; then the first two open and read back their text. Three deflate streams
+  of; then the first two open and read back their text. A call with an
+  unlimited allowance opens a third entry in one call beside two passes held,
+  which it leaves as they were, and those then finish with no pass made
+  twice. Three deflate streams
   measured by turns each come to their own end, and the gzip template's
   members are measured one walk at a time. Before the change, the three
   entries and the three streams stayed at one go's progress for 300 rounds.
