@@ -109,6 +109,19 @@ test("the open button and its refusals say joined, not unpacked", () => {
     JOINED.failed(JOINED.tabTitle("stream", "range.bam")),
     "Couldn't open stream joined from range.bam: one of its parts couldn't be read or unpacked.",
   );
+  assert.equal(
+    JOINED.partTooLarge(JOINED.tabTitle("decoded", "big.gz")),
+    "Couldn't open decoded joined from big.gz: one of its parts unpacks to over 1 GiB.",
+  );
+});
+
+test("a refusal of a joined stream is said by the core's word for it", () => {
+  const tab = JOINED.tabTitle("stream", "range.bam");
+  assert.equal(JOINED.refused("too-large", tab), JOINED.tooLarge(tab));
+  assert.equal(JOINED.refused("too-large-lazy", tab), JOINED.partTooLarge(tab));
+  assert.equal(JOINED.refused("failed", tab), JOINED.failed(tab));
+  // Any other word is said as a part that will not read, as before.
+  assert.equal(JOINED.refused("unaligned", tab), JOINED.failed(tab));
 });
 
 /** A node with only what the offer reads set. */
