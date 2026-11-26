@@ -371,6 +371,13 @@ test("a stream that would not decode says why, with its codec's verb", () => {
   assert.equal(RV.streamNotMeasured, "not measured");
 });
 
+test("a finding for a stream left as bytes says it is too large past either limit", () => {
+  assert.equal(RV.refused("too-large"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-lazy"), "Too large to unpack here");
+  assert.equal(RV.refused("unaligned"), "Does not start on a byte boundary, so it was not unpacked");
+  assert.equal(RV.refused("failed"), "Did not unpack");
+});
+
 test("the ribbon's sentences count no codes where there is not one, and say what writes no bytes", () => {
   assert.equal(RV.ribbonKinds.match, "A copy repeats earlier bytes, so its band widens toward the output bytes.");
   assert.equal(RV.ribbonKinds.stored, "A stored run is copied to the output as it is.");

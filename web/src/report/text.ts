@@ -167,8 +167,16 @@ export const RV = {
   gapNonzero: (bytes: number): string => `${bytesText(bytes)} that no field describes`,
   gapZeros: (bytes: number): string => `${bytesText(bytes)} of zeros that no field describes`,
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
+  /** A finding's text for a stream left as bytes, by the core's refusal word.
+   *  `too-large-lazy` is a stream the core reads a piece at a time (deflate,
+   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and reads the
+   *  same as `too-large`. */
   refused: (why: string): string =>
-    why === "too-large" ? "Too large to unpack here" : why === "unaligned" ? "Does not start on a byte boundary, so it was not unpacked" : "Did not unpack",
+    why === "too-large" || why === "too-large-lazy"
+      ? "Too large to unpack here"
+      : why === "unaligned"
+        ? "Does not start on a byte boundary, so it was not unpacked"
+        : "Did not unpack",
   stored: "Stored",
 
   // Text inside a list of numbers. "List of numbers" throughout, for what

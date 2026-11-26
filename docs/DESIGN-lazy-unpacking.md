@@ -452,7 +452,9 @@ one opens now depends on how much of the file its parts take up, which only
 the core knows, so every joined stream is offered and a refusal is said in the
 status bar when the button is pressed (`JOINED.refused`: `tooLarge`,
 `partTooLarge` for `too-large-lazy`, and `failed`). `DECODED_REFUSED` has a
-string for `too-large-lazy`.
+string for `too-large-lazy`, and the report's finding for a stream left as
+bytes (`RV.refused` in `report/text.ts`) says "Too large to unpack here" for
+it, as for `too-large`.
 
 ## The browser
 
