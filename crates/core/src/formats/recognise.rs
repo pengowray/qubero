@@ -398,6 +398,11 @@ const PROBES: &[Probe] = &[
     // exactly 268 bytes and by every field with a known range being inside
     // that range: see `x8project::is_project`.
     Probe::Is("x8project", x8project::is_project),
+    // An Anabat zero-crossing file, which has no signature. It is recognised
+    // by the pointer every one of them has at the front, the zero bytes
+    // around its file type, text in its text header, and a data table whose
+    // values fit the file: see `zc::is_zc`.
+    Probe::Is("zc", zc::is_zc),
     // A record of who logged in, which has no header at all: it is recognised
     // by every record in it being the right size and shape.
     Probe::Is("utmp", utmp::is_utmp),
@@ -559,6 +564,8 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     // for one because its size is not the file's.
     ("icc", "icc", icc::is_named_icc),
     ("icm", "icc", icc::is_named_icc),
+    // An Anabat file whose header the bytes alone do not take for one.
+    ("zc", "zc", zc::is_named_zc),
 ];
 
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the

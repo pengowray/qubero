@@ -6,13 +6,13 @@
 //! multiply because the expression language has no modulo.
 //!
 //! GUANO (`guan`) is the metadata format bat detectors write: UTF-8 lines of
-//! `Key:Value`, one per line, sometimes with a trailing NUL inside the chunk
-//! size. Lines are read with a terminator that tolerates its own absence, so
-//! the last line reads whether or not it ends in a newline.
+//! `Key: Value`, one per line, sometimes with a trailing NUL inside the chunk
+//! size. Each line is read as a namespace, a key and a value; see [`guano`].
 //!
 //! `wamd` is Wildlife Acoustics' own metadata: a flat stream of 16-bit tag,
-//! 32-bit length, payload. Its tag numbers here were read out of files, not
-//! from a specification.
+//! 32-bit length, payload. Its tag numbers are the ones guano-py's
+//! `wamd2guano.py` gives, and two more seen in SM4BAT files; Wildlife
+//! Acoustics has not published them.
 //!
 //! A Pettersson D500X writes no metadata chunk. It puts a block of its own at
 //! the front of the `data` chunk and leaves it out of the chunk's size, which
@@ -22,10 +22,12 @@
 //! enough to hold both. Its layout was read out of one file, not from a
 //! specification: the manual says what the fields mean and not where they are.
 //!
-//! The rest is what studio files carry: the extensible format header, the
-//! broadcast extension `bext` (EBU Tech 3285), `smpl` and `inst` for samplers,
-//! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
-//! read by the same template that reads one at the front of an MP3.
+//! The rest is what studio files carry: the extensible format header and the
+//! extension fields of the compressed formats (`mmreg.h`), the broadcast
+//! extension `bext` (EBU Tech 3285), `smpl` and `inst` for samplers, `plst`,
+//! the labels in an `adtl` list, the `data` and `slnt` chunks of a wave list
+//! (`LIST` of type `wavl`), XML chunks, and an ID3 tag, which is read by the
+//! same template that reads one at the front of an MP3.
 
 use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableFact, TableShape, Template, Ty as T, Until, Valid};
 
@@ -63,17 +65,38 @@ const LOOP_TYPE: &[(i128, &str)] = &[(0, "forward"), (1, "alternating"), (2, "ba
 const SMPTE_FORMAT: &[(i128, &str)] =
     &[(0, "none"), (24, "24 fps"), (25, "25 fps"), (29, "30 fps drop"), (30, "30 fps")];
 
-/// `wamd` tag numbers, as seen in Song Meter files.
+/// `wamd` tag numbers. 0x00 to 0x13 are the ones guano-py's `wamd2guano.py`
+/// names; SM4BAT firmware 2 also writes 0x14, the position in place of 0x06,
+/// and 0x15, the temperature as text such as `16.25C`.
 const WAMD_TAG: &[(i128, &str)] = &[
-    (0, "version"),
-    (1, "model"),
-    (2, "serial"),
-    (3, "firmware"),
-    (4, "prefix"),
-    (5, "timestamp"),
-    (6, "position"),
-    (7, "temperature"),
+    (0x00, "version"),
+    (0x01, "model"),
+    (0x02, "serial"),
+    (0x03, "firmware"),
+    (0x04, "prefix"),
+    (0x05, "timestamp"),
+    (0x06, "position"),
+    (0x07, "GPS track"),
+    (0x08, "software"),
+    (0x09, "software licence"),
+    (0x0a, "notes"),
+    (0x0b, "auto ID"),
+    (0x0c, "manual ID"),
+    (0x0d, "voice note"),
+    (0x0e, "auto ID statistics"),
+    (0x0f, "time expansion"),
+    (0x10, "program"),
+    (0x11, "run state"),
+    (0x12, "microphone"),
+    (0x13, "sensitivity"),
+    (0x14, "position (firmware 2)"),
+    (0x15, "temperature"),
 ];
+
+/// The `wamd` tags whose value is text. The version and the time expansion
+/// factor are 16-bit numbers; the voice note is audio, and the program and
+/// run state are settings in a binary layout nobody has published.
+const WAMD_TEXT: &[i128] = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0e, 0x12, 0x13, 0x14, 0x15];
 
 pub fn wav() -> Template {
     Template::new(
@@ -462,9 +485,9 @@ fn fmt(endian: Endian) -> T {
             ("byte_rate", T::u32(endian)),
             ("block_align", T::u16(endian)),
             ("bits_per_sample", T::u16(endian)),
-            // 16-byte fmt chunks stop here. Longer ones carry an extension,
-            // which the extensible format fills in and others leave opaque.
-            ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible(endian))], T::bytes(E::Remaining))),
+            // 16-byte fmt chunks stop here. Longer ones carry an extension:
+            // its size, then what the format tag says goes there.
+            ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible(endian))], extension(endian))),
         ],
     )
     .reads_as(&[
@@ -475,17 +498,86 @@ fn fmt(endian: Endian) -> T {
     ])
 }
 
+/// The rest of the GUID every `KSDATAFORMAT_SUBTYPE` for a format tag shares,
+/// `{xxxxxxxx-0000-0010-8000-00aa00389b71}`, after the format tag in its
+/// first two bytes: the top half of the first field, then the other three, as
+/// a little-endian file stores them.
+const SUBTYPE_GUID_REST: [u8; 14] = [0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
+
+/// The extension after a 16-byte `fmt ` chunk in a format other than
+/// `WAVE_FORMAT_EXTENSIBLE`: `cbSize`, then the fields the format tag defines
+/// there, from Microsoft's `mmreg.h`. A-law and mu-law write a size of 0.
+fn extension(endian: Endian) -> T {
+    let i16e = || T::Int { bits: 16, endian };
+    let samples_per_block = || ("samples_per_block", T::u16(endian));
+    let coefficient = T::structure("Coefficient", vec![("coefficient_1", i16e()), ("coefficient_2", i16e())]);
+    let by_format = T::switch(
+        E::field("format"),
+        vec![
+            (
+                0x0002,
+                T::structure(
+                    "MsAdpcm",
+                    vec![
+                        samples_per_block(),
+                        ("coefficient_count", T::u16(endian)),
+                        ("coefficients", T::array(coefficient, E::field("coefficient_count"))),
+                    ],
+                )
+                .field_doc("coefficients", "The predictor coefficient pairs a block's header picks from, in units of 1/256."),
+            ),
+            (0x0011, T::structure("ImaAdpcm", vec![samples_per_block()])),
+            (0x0031, T::structure("Gsm610", vec![samples_per_block()])),
+            (
+                0x0055,
+                T::structure(
+                    "MpegLayer3",
+                    vec![
+                        ("id", T::u16(endian)),
+                        ("flags", T::enumeration("Mp3Padding", T::u32(endian), &[(0, "ISO padding"), (1, "always padded"), (2, "never padded")])),
+                        ("block_size", T::u16(endian)),
+                        ("frames_per_block", T::u16(endian)),
+                        ("codec_delay", T::u16(endian)),
+                    ],
+                )
+                .field_doc("id", "1 for MPEG audio.")
+                .field_doc("block_size", "Bytes in a block of frames.")
+                .field_doc("codec_delay", "Samples of delay the encoder added at the start."),
+            ),
+        ],
+        T::bytes(E::Remaining),
+    );
+    let fields = T::structure(
+        "Extension",
+        vec![
+            ("extension_size", T::u16(endian)),
+            ("fields", T::sized(E::field("extension_size").at_most(E::Remaining), by_format)),
+            ("after_extension", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
+        ],
+    )
+    .field_doc("extension_size", "How many bytes of format-specific fields follow.")
+    .field_doc("after_extension", "Bytes in the chunk after the extension_size bytes of fields.");
+    T::switch(E::lit(2).less_or_equal(E::Remaining), vec![(1, fields)], T::bytes(E::Remaining))
+}
+
+/// A run of bytes as the big-endian number a peek compares it with.
+fn be_number(bytes: &[u8]) -> i128 {
+    bytes.iter().fold(0i128, |acc, b| (acc << 8) | *b as i128)
+}
+
 /// What `WAVE_FORMAT_EXTENSIBLE` adds: how many of the bits per sample are
 /// real, which speaker each channel drives, and the format tag again, this
 /// time as the first two bytes of a GUID.
 fn extensible(endian: Endian) -> T {
+    let rest_is_standard = E::lit(14).less_or_equal(E::Remaining).both(E::peek(112, Big).equal_to(E::lit(be_number(&SUBTYPE_GUID_REST))));
     let sub_format = T::structure(
         "SubFormat",
         vec![
             ("format", T::enumeration_hex("FormatTag", T::u16(endian), FORMAT_TAG)),
-            ("guid", T::bytes(E::lit(14))),
+            ("guid", T::switch(rest_is_standard, vec![(1, T::magic(&SUBTYPE_GUID_REST))], T::bytes(E::lit(14)))),
         ],
-    );
+    )
+    .field_doc("guid", "The rest of the sub-format GUID. For a format with a format tag it is the same for every format: 0000-0010-8000-00aa00389b71.");
     T::structure(
         "Extensible",
         vec![
@@ -497,11 +589,60 @@ fn extensible(endian: Endian) -> T {
     )
 }
 
-/// GUANO: one `Key:Value` per line, in UTF-8.
-fn guano() -> T {
-    T::repeat(
+/// GUANO: one `Key: Value` per line, in UTF-8, and zero bytes after the last
+/// line when the writer padded the block. Each line is split the way guano-py
+/// splits it: the key runs to the first colon, and a namespace is the part of
+/// the key before its first `|`, so `WA|Song Meter|Prefix` is the key
+/// `Song Meter|Prefix` in the namespace `WA`. Spaces after the colon are not
+/// part of the value. A line with no colon is read as a line of text.
+///
+/// Also what an Anabat type 132 file holds between its header and its
+/// intervals, when ZCANT wrote it.
+pub(super) fn guano() -> T {
+    T::structure(
+        "Guano",
+        vec![
+            ("fields", T::sized(E::run_except(b"\0"), T::repeat(guano_line(), Until::End))),
+            ("padding", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
+        ],
+    )
+    .field_doc("padding", "Zero bytes after the last line.")
+}
+
+/// One line of GUANO, with its newline. Measured first, so that a line with
+/// no colon in it ends at its own newline rather than at a colon on a later
+/// line.
+fn guano_line() -> T {
+    // Whether the first of `stops` on this line is `b`.
+    let first_is = |stops: &'static [u8], b: u8| {
+        let to = || E::run_except(stops);
+        to().less_than(E::Remaining).both(E::peek_at(to().mul(E::lit(8)), 8, Big).equal_to(E::lit(b as i128)))
+    };
+    // The last line need not end in a newline, and then its value runs to
+    // the end of the line with any spaces in front of it, since a token
+    // needs something to end it.
+    let ends_in_newline = E::lit(0)
+        .less_than(E::Remaining)
+        .both(E::peek_at(E::Remaining.sub(E::lit(1)).mul(E::lit(8)), 8, Big).equal_to(E::lit(b'\n' as i128)));
+    let value = T::switch(
+        ends_in_newline,
+        vec![(1, T::text(StrLen::token(b" \t", b"\n"), Encoding::Utf8))],
         T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Utf8),
-        Until::End,
+    );
+    let field = T::structure(
+        "GuanoField",
+        vec![
+            ("namespace", T::when(first_is(b"|:\n", b'|'), T::text(StrLen::Terminated { end: b'|', or_end: false }, Encoding::Utf8))),
+            ("key", T::text(StrLen::Terminated { end: b':', or_end: false }, Encoding::Utf8)),
+            ("value", value),
+        ],
+    )
+    .named_by("key")
+    .field_doc("namespace", "Who defined the key: GUANO for the format's own keys, or a vendor's prefix such as WA for Wildlife Acoustics. Keys in the GUANO standard have none.");
+    let line = T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Utf8);
+    T::sized(
+        E::run_except(b"\n").add(E::lit(1)).at_most(E::Remaining),
+        T::switch(first_is(b":\n", b':'), vec![(1, field)], line),
     )
 }
 
@@ -511,21 +652,20 @@ fn wamd_item(endian: Endian) -> T {
         vec![
             ("tag", T::enumeration("WamdTag", T::u16(endian), WAMD_TAG)),
             ("length", T::u32(endian)),
-            // Ids 1 to 6 hold text; the rest are bytes, so read them as text
-            // only when they say they are.
-            (
-                "value",
-                T::sized(
-                    E::field("length"),
-                    T::switch(
-                        E::field("tag"),
-                        (1..=7).map(|t| (t as i128, T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1))).collect(),
-                        T::bytes(E::Remaining),
-                    ),
-                ),
-            ),
+            ("value", T::sized(E::field("length"), wamd_value(endian))),
         ],
     ).named_by("tag")
+}
+
+/// What a `wamd` item holds, by its tag. Text is read up to the zero bytes
+/// some recorders pad it with.
+fn wamd_value(endian: Endian) -> T {
+    let text = || T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Latin1);
+    let mut cases: Vec<(i128, T)> = WAMD_TEXT.iter().map(|t| (*t, text())).collect();
+    let number = || T::switch(E::Remaining.equal_to(E::lit(2)), vec![(1, T::u16(endian))], T::bytes(E::Remaining));
+    cases.push((0x00, number()));
+    cases.push((0x0f, number()));
+    T::switch(E::field("tag"), cases, T::bytes(E::Remaining))
 }
 
 fn cue(endian: Endian) -> T {
@@ -583,6 +723,10 @@ fn list_item(endian: Endian) -> T {
                             (cc("labl"), labelled(endian)),
                             (cc("note"), labelled(endian)),
                             (cc("ltxt"), labelled_text(endian)),
+                            // A wave list's members: stretches of samples,
+                            // and the silences between them.
+                            (cc("data"), sample_table(endian)),
+                            (cc("slnt"), silence(endian)),
                         ],
                         // INFO items are NUL-terminated Latin-1 text.
                         T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1),
@@ -602,6 +746,15 @@ fn labelled(endian: Endian) -> T {
             ("text", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1)),
         ],
     )
+}
+
+/// `slnt`, in a wave list (`LIST` of type `wavl`, from the 1991 RIFF
+/// specification): a stretch of silence between two `data` chunks, given as
+/// a length instead of as samples of zero. Oversample counts it in frames,
+/// one sample for every channel.
+fn silence(endian: Endian) -> T {
+    T::structure("Silence", vec![("sample_count", T::u32(endian))])
+        .field_doc("sample_count", "How long the silence is, in samples per channel.")
 }
 
 /// `ltxt`: a label that covers a stretch of samples rather than a point.
@@ -1008,6 +1161,8 @@ mod tests {
             ev.node(&d, &[3, 0, 2, 6, 3, 0]).unwrap().value,
             Value::Enum { raw: 1, name: Some("pcm".into()), hex: true }
         );
+        // The rest of the GUID is the one every format tag's GUID shares.
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 3, 1]).unwrap().type_name, "magic[14]");
 
         // Broadcast extension, version 2: the UMID and the loudness values are
         // both there, and the reserved area is what they left.
@@ -1094,14 +1249,19 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 3, 2, 1, 0, 0]).unwrap().value, Value::Str("IART".into()));
         assert_eq!(ev.node(&d, &[3, 3, 2, 1, 0, 2]).unwrap().value, Value::Str("Wildlife Acoustics".into()));
 
-        // GUANO lines.
-        let lines = ev.node(&d, &[3, 4, 2]).unwrap();
-        assert_eq!(lines.child_count, 4); // three fields and the trailing NUL
-        assert_eq!(ev.node(&d, &[3, 4, 2, 0]).unwrap().value, Value::Str("GUANO|Version:1.0".into()));
-        assert_eq!(
-            ev.node(&d, &[3, 4, 2, 2]).unwrap().value,
-            Value::Str("Loc Position:-26.46550 31.94508".into())
-        );
+        // GUANO: three fields, each split into its namespace, key and value,
+        // and the zero byte after them.
+        assert_eq!(ev.node(&d, &[3, 4, 2]).unwrap().type_name, "Guano");
+        let lines = ev.node(&d, &[3, 4, 2, 0]).unwrap();
+        assert_eq!(lines.child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 0, 0]).unwrap().value, Value::Str("GUANO".into()));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 0, 1]).unwrap().value, Value::Str("Version".into()));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 0, 2]).unwrap().value, Value::Str("1.0".into()));
+        // No namespace: the field is there, and holds nothing.
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 2, 0]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 2, 1]).unwrap().value, Value::Str("Loc Position".into()));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0, 2, 2]).unwrap().value, Value::Str("-26.46550 31.94508".into()));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 1]).unwrap().size_bits, 8);
 
         // wamd is a stream of tagged items.
         let wamd = ev.node(&d, &[3, 5, 2, 0]).unwrap();
@@ -1112,6 +1272,133 @@ mod tests {
         );
         assert_eq!(ev.node(&d, &[3, 5, 2, 0, 2]).unwrap().value, Value::Str("SM4BAT-FS".into()));
     }
+    /// A RIFF of `fmt ` and then `rest`, 16-bit mono.
+    fn wave_of(rest: &[u8]) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        for x in [1u16, 1] {
+            fmt.extend_from_slice(&x.to_le_bytes());
+        }
+        fmt.extend_from_slice(&8000u32.to_le_bytes());
+        fmt.extend_from_slice(&16000u32.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&16u16.to_le_bytes());
+        let mut body = b"WAVE".to_vec();
+        body.extend(chunk_bytes(b"fmt ", &fmt));
+        body.extend_from_slice(rest);
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend(body);
+        out
+    }
+
+    /// GUANO with namespaced keys, a key that itself has a `|` in it, a value
+    /// with colons in it, a line with no colon, and a last line with no
+    /// newline.
+    #[test]
+    fn guano_lines_split_into_namespace_key_and_value() {
+        let text = b"GUANO|Version: 1.0\nWA|Song Meter|Prefix: SM4\nTimestamp: 2024-03-15T21:04:59+10:00\nnot a field\nMake:Titley";
+        let d = Document::new(MemSource(wave_of(&chunk_bytes(b"guan", text))));
+        let mut ev = Evaluator::new(wav());
+        let fields = [3, 1, 2, 0];
+        assert_eq!(ev.node(&d, &fields).unwrap().child_count, 5);
+        let at = |ev: &mut Evaluator, line: usize, field: usize| ev.node(&d, &[3, 1, 2, 0, line, field]).unwrap().value;
+        assert_eq!(at(&mut ev, 1, 0), Value::Str("WA".into()));
+        assert_eq!(at(&mut ev, 1, 1), Value::Str("Song Meter|Prefix".into()));
+        assert_eq!(at(&mut ev, 1, 2), Value::Str("SM4".into()));
+        assert_eq!(at(&mut ev, 2, 1), Value::Str("Timestamp".into()));
+        assert_eq!(at(&mut ev, 2, 2), Value::Str("2024-03-15T21:04:59+10:00".into()));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0, 3]).unwrap().value, Value::Str("not a field".into()));
+        assert_eq!(at(&mut ev, 4, 1), Value::Str("Make".into()));
+        assert_eq!(at(&mut ev, 4, 2), Value::Str("Titley".into()));
+        // No zero bytes after the text, so no padding.
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1]).unwrap().size_bits, 0);
+    }
+
+    /// A wave list: samples, a silence, samples again. The samples inside the
+    /// list are read at the width the `fmt ` chunk outside it declares.
+    #[test]
+    fn a_wave_list_reads_its_samples_and_silences() {
+        let mut wavl = b"wavl".to_vec();
+        wavl.extend(chunk_bytes(b"data", &[1, 0, 2, 0]));
+        wavl.extend(chunk_bytes(b"slnt", &8000u32.to_le_bytes()));
+        wavl.extend(chunk_bytes(b"data", &[0xfd, 0xff]));
+        let d = Document::new(MemSource(wave_of(&chunk_bytes(b"LIST", &wavl))));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0]).unwrap().value, Value::Str("wavl".into()));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1, 0, 2]).unwrap().type_name, "Samples");
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1, 0, 2, 0, 1]).unwrap().value, Value::Int(2));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1, 1, 2]).unwrap().type_name, "Silence");
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1, 1, 2, 0]).unwrap().value, Value::UInt(8000));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1, 2, 2, 0, 0]).unwrap().value, Value::Int(-3));
+    }
+
+    /// `wamd` items by tag: the version and time expansion as numbers, the
+    /// rest of the text ones as text, and 0x07 as the GPS track rather than
+    /// a temperature.
+    #[test]
+    fn wamd_items_read_by_their_tag() {
+        let item = |tag: u16, value: &[u8]| {
+            let mut v = tag.to_le_bytes().to_vec();
+            v.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            v.extend_from_slice(value);
+            v
+        };
+        let mut wamd = item(0x00, &1u16.to_le_bytes());
+        wamd.extend(item(0x07, b"WGS84,51.5,N,0.1,W\0"));
+        wamd.extend(item(0x0f, &10u16.to_le_bytes()));
+        wamd.extend(item(0x15, b"16.25C"));
+        wamd.extend(item(0x10, &[1, 2, 3]));
+        let d = Document::new(MemSource(wave_of(&chunk_bytes(b"wamd", &wamd))));
+        let mut ev = Evaluator::new(wav());
+        let item = |ev: &mut Evaluator, i: usize, f: usize| ev.node(&d, &[3, 1, 2, i, f]).unwrap().value;
+        assert_eq!(item(&mut ev, 0, 2), Value::UInt(1));
+        assert_eq!(item(&mut ev, 1, 0), Value::Enum { raw: 7, name: Some("GPS track".into()), hex: false });
+        assert_eq!(item(&mut ev, 1, 2), Value::Str("WGS84,51.5,N,0.1,W".into()));
+        assert_eq!(item(&mut ev, 2, 2), Value::UInt(10));
+        assert_eq!(item(&mut ev, 3, 0), Value::Enum { raw: 0x15, name: Some("temperature".into()), hex: false });
+        assert_eq!(item(&mut ev, 3, 2), Value::Str("16.25C".into()));
+        assert!(!ev.node(&d, &[3, 1, 2, 4, 2]).unwrap().composite);
+    }
+
+    /// The extension after a 16-byte `fmt `: its size, then what the format
+    /// tag says is there. IMA ADPCM has one field; MS ADPCM a table.
+    #[test]
+    fn a_format_extension_reads_by_its_format_tag() {
+        let fmt_of = |tag: u16, ext: &[u8]| {
+            let mut fmt = Vec::new();
+            fmt.extend_from_slice(&tag.to_le_bytes());
+            fmt.extend_from_slice(&1u16.to_le_bytes());
+            fmt.extend_from_slice(&22050u32.to_le_bytes());
+            fmt.extend_from_slice(&11100u32.to_le_bytes());
+            fmt.extend_from_slice(&512u16.to_le_bytes());
+            fmt.extend_from_slice(&4u16.to_le_bytes());
+            fmt.extend_from_slice(&(ext.len() as u16).to_le_bytes());
+            fmt.extend_from_slice(ext);
+            let mut body = b"WAVE".to_vec();
+            body.extend(chunk_bytes(b"fmt ", &fmt));
+            let mut out = b"RIFF".to_vec();
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend(body);
+            out
+        };
+        let d = Document::new(MemSource(fmt_of(0x0011, &1017u16.to_le_bytes())));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 0]).unwrap().value, Value::UInt(2));
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 1, 0]).unwrap().value, Value::UInt(1017));
+
+        let mut ms = 2036u16.to_le_bytes().to_vec();
+        ms.extend_from_slice(&2u16.to_le_bytes());
+        for c in [256i16, 0, 512, -256] {
+            ms.extend_from_slice(&c.to_le_bytes());
+        }
+        let d = Document::new(MemSource(fmt_of(0x0002, &ms)));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 1]).unwrap().type_name, "MsAdpcm");
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 1, 2, 1, 1]).unwrap().value, Value::Int(-256));
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6, 2]).unwrap().size_bits, 0);
+    }
+
     /// A `fmt ` chunk, something in between, and then samples: the width comes
     /// from the chunk that declared it however far back it sits.
     fn with_samples(bits: u16, format: u16, channels: u16, body: &[u8]) -> Vec<u8> {

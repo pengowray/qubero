@@ -112,6 +112,7 @@ mod hackrffw;
 mod imxrt;
 mod tascamfw;
 mod x8project;
+mod zc;
 mod bfldr;
 pub mod hardening;
 mod hdf4;
@@ -279,6 +280,7 @@ pub use hackrffw::hackrffw;
 pub use imxrt::imxrt;
 pub use tascamfw::tascamfw;
 pub use x8project::x8project;
+pub use zc::zc;
 pub use bfldr::bfldr;
 pub use hdf4::hdf4;
 pub use hdf5::hdf5;
@@ -512,6 +514,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("imxrt", |_| imxrt()),
     ("tascamfw", |_| tascamfw()),
     ("x8project", |_| x8project()),
+    ("zc", |_| zc()),
     ("bfldr", |_| bfldr()),
     ("gif", |_| gif()),
     ("aiff", |_| aiff()),
