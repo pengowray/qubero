@@ -124,6 +124,7 @@ function overUnpacked(what: string, at: number, bytes: number, exact: boolean, k
 const ALGORITHM: Readonly<Record<string, string>> = {
   crc32: "CRC-32",
   crc16: "CRC-16",
+  crc8: "CRC-8",
   /** LHA's header check: every byte added up, kept to eight bits. Shares its
    *  name with `sum` below; see there. */
   sum8: "Checksum",
