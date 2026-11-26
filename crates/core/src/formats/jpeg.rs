@@ -141,10 +141,10 @@ pub fn jpeg() -> Template {
                 // file was before it was overwritten. Named as what it is
                 // rather than read as segments that are not there.
                 ("trailer", T::bytes(E::Remaining)),
-                // The ICC profile, which a long one is cut into APP2 pieces
-                // for, joined back together in the order the segments are
-                // in. The walk lands on `profile`, which only an APP2 piece
-                // has, so every other segment is passed over.
+                // An ICC profile too long for one APP2 segment, joined back
+                // together from its pieces in the order the segments are in.
+                // The walk lands on `piece`, which only a piece of a longer
+                // profile has, so every other segment is passed over.
                 (
                     "icc_profile",
                     T::stitched(
@@ -154,7 +154,7 @@ pub fn jpeg() -> Template {
                             Step::field("body"),
                             Step::field("contents"),
                             Step::field("data"),
-                            Step::field("profile"),
+                            Step::field("piece"),
                         ],
                         None,
                         None,
@@ -545,19 +545,15 @@ fn app2() -> T {
                                 // is most of them, is read where it is, so the
                                 // hex view names its fields. A piece of a longer
                                 // one is only bytes here and is read whole in
-                                // `icc_profile`, joined to the others.
-                                (
-                                    "profile",
-                                    T::switch(
-                                        E::field("piece_count"),
-                                        vec![(1, super::icc::icc_part().root)],
-                                        T::bytes(E::Remaining),
-                                    ),
-                                ),
+                                // `icc_profile`, joined to the others. Two
+                                // fields, so that the join finds only pieces.
+                                ("profile", T::when(E::field("piece_count").equal_to(E::lit(1)), super::icc::icc_part().root)),
+                                ("piece", T::when(E::lit(1).less_than(E::field("piece_count")), T::bytes(E::Remaining))),
                             ],
                         )
                         .field_doc("sequence_number", "Which piece of the profile this is, counting from 1.")
-                        .field_doc("piece_count", "How many APP2 segments the profile is cut into."),
+                        .field_doc("piece_count", "How many APP2 segments the profile is cut into.")
+                        .field_doc("piece", "This segment's piece of a profile split across several APP2 segments. The whole profile is read in icc_profile, from all the pieces joined in order."),
                     )],
                     T::bytes(E::Remaining),
                 ),
@@ -983,7 +979,8 @@ mod tests {
         let data = [1usize, 0, 1, 1, 1];
         assert_eq!(ev.node(&d, &[data.as_slice(), &[0]].concat()).unwrap().value, Value::UInt(2));
         assert_eq!(ev.node(&d, &[data.as_slice(), &[1]].concat()).unwrap().value, Value::UInt(3));
-        assert_eq!(ev.node(&d, &[data.as_slice(), &[2]].concat()).unwrap().size_bits, 6 * 8);
+        assert!(ev.node(&d, &[data.as_slice(), &[2]].concat()).unwrap().absent);
+        assert_eq!(ev.node(&d, &[data.as_slice(), &[3]].concat()).unwrap().size_bits, 6 * 8);
     }
 
     #[test]
@@ -1075,7 +1072,8 @@ mod tests {
         let here = ev.node(&d, &[1, 0, 1, 1, 1, 2]).unwrap();
         assert_eq!(here.type_name, "ICCProfile");
         assert_eq!(here.size_bits, profile.len() as u64 * 8);
-        // The joined stream still reads it too, as the same profile.
-        assert_eq!(ev.node(&d, &[3, 0]).unwrap().size_bits, profile.len() as u64 * 8);
+        // Nothing is joined, so the profile is read once.
+        assert_eq!(ev.node(&d, &[3]).unwrap().size_bits, 0);
+        assert!(ev.node(&d, &[3, 0]).map(|n| n.absent).unwrap_or(true));
     }
 }
