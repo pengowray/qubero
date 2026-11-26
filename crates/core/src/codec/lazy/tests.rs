@@ -12,7 +12,7 @@ use crate::codec::{BlockKind, Step, StepField, StepKind};
 /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
 /// than 12 of them, and the cache holds 40 KiB.
 fn small() -> Limits {
-    Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, whole_steps: crate::codec::MAX_STEPS, block_marks: MAX_BLOCK_MARKS, span: 64 << 10 }
+    Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, whole_steps: crate::codec::MAX_STEPS, block_marks: MAX_BLOCK_MARKS, span: 64 << 10, measure: crate::codec::CAP_BYTES as u64 }
 }
 
 fn rand_from(mut seed: u64) -> impl FnMut() -> u64 {

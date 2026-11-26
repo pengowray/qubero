@@ -270,6 +270,17 @@ impl Go {
         Ok(())
     }
 
+    /// Take `n` elements' worth of work already done off the allowance. Never
+    /// hands back, since the work is done: it may take the allowance past
+    /// empty, and the next charge hands back. For work whose cost is known only
+    /// once it is done: the caller checks with `charge(0)` that some allowance
+    /// is left before the work, and calls this after it.
+    pub(super) fn spent(&self, n: u64) {
+        if let Some(left) = self.left.get() {
+            self.left.set(Some(left.saturating_sub(n)));
+        }
+    }
+
     /// Note that one more read is open, and refuse it if the stack this go has
     /// spent is past what a read may. `depth` is only for what it says.
     ///

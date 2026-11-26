@@ -1060,6 +1060,13 @@ impl Evaluator {
     /// otherwise cost and the price of a length nothing wrote down. Nothing
     /// measured when it will not decode, so that the template can say what
     /// the run is then.
+    ///
+    /// The decode is done a step at a time and charged to the go, so a go can
+    /// run out part-way through it and hand back `Busy`: see
+    /// [`Evaluator::stream_end`](super::Evaluator::stream_end). Cold, and out
+    /// of line, since it reads bytes and no other expression should carry its
+    /// frame.
+    #[cold]
     #[inline(never)]
     fn stream_len_at<S: Source>(
         &mut self,
@@ -1080,8 +1087,8 @@ impl Evaluator {
         // runs out of bytes and measures as nothing, the way one past the cap
         // is refused when opened.
         let total = ((limit - offset) / 8).min(crate::codec::CAP_BYTES as u64);
-        let data = self.read_in(doc, self.space_at(at), offset, total * 8)?;
-        Ok(match crate::codec::stream_len(codec, &data) {
+        let key = (self.space_at(at), offset, total * 8);
+        Ok(match self.stream_end(doc, key, codec)? {
             Ok(n) => n as i128,
             Err(_) => 0,
         })
