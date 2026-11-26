@@ -89,20 +89,34 @@ fn one(rel: &str, bytes: Vec<u8>, list: bool, out: &mut Vec<String>) {
             return;
         }
     };
+    // Counted in bits, since a byte can hold two four-bit fields, and turned
+    // into bytes only for the report.
     let mut sum = [0u64; 4];
     let mut worst: Vec<(u64, u64, Pile, String)> = Vec::new();
-    let mut covered = 0u64;
+    // Where the spans so far reach, so that a stretch no span came back for
+    // is listed where it is, with what comes after it.
+    let mut reach = 0u64;
     for s in &spans {
-        let b = s.size_bits / 8;
-        covered += b;
+        let (start, end) = (s.offset_bits, s.offset_bits + s.size_bits);
+        if start > reach {
+            sum[Pile::Gap as usize] += start - reach;
+            worst.push(((start - reach) / 8, reach / 8, Pile::Gap, format!("no span, before {}", describe(s))));
+        }
+        // Only what this span adds past the ones before it, so an overlap is
+        // counted once.
+        let new = end.saturating_sub(reach.max(start));
+        reach = reach.max(end);
         let p = pile(s);
-        sum[p as usize] += b;
+        sum[p as usize] += new;
         if p != Pile::Named {
-            worst.push((b, s.offset_bits / 8, p, describe(s)));
+            worst.push((s.size_bits / 8, start / 8, p, describe(s)));
         }
     }
-    // Bytes no span came back for at all are gaps too.
-    sum[Pile::Gap as usize] += len.saturating_sub(covered);
+    if reach < len * 8 {
+        sum[Pile::Gap as usize] += len * 8 - reach;
+        worst.push((len - reach / 8, reach / 8, Pile::Gap, "no span, to the end of the file".into()));
+    }
+    let sum = sum.map(|b| b / 8);
     let pct = |n: u64| if len == 0 { 0.0 } else { n as f64 * 100.0 / len as f64 };
     out.push(format!(
         "{rel}\t{name}\t{len}\tgap {} ({:.0}%)\topaque {} ({:.0}%)\tone-row {} ({:.0}%)",
