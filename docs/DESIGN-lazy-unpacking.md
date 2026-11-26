@@ -7,7 +7,7 @@ other codecs are covered at the end.
 
 **State, 2026-10-26:** built as described below and merged into main, in
 `codec/lazy.rs`, `eval/space.rs`, `eval/stitch.rs` and the wasm crate. It was
-built in four parts:
+built in five parts:
 
 - 2026-10-21: the index, the spans and reading a run through them.
 - 2026-10-26: the `blocks` listing for these runs. See "Blocks".
@@ -38,7 +38,8 @@ cap:
 1. `members[0].compressed` is a `Decoded` run sized by
    `E::stream_len(Codec::Deflate)`. `inflate_len` inflates it to the cap,
    refuses, and the template falls back to "everything before the trailer".
-   That costs a 64 MiB inflate (about 170 ms native) before anything is shown.
+   That costs a 64 MiB inflate (about 170 ms native, when this was written
+   and the inflate still kept its output) before anything is shown.
 2. `decoded` is a `Stitched` stream over every member's `compressed` run, with
    each part as long as the member's `original_size`. A read of it reaches
    `Evaluator::unpacked_part`, which inflates the whole part through
@@ -282,11 +283,14 @@ the same fallback past 64 MiB.
   separate from `Unfinished`, so measuring one member never evicts another
   member's index pass.
 - **The ends found.** `Measures` also keeps the last 64 results: where each
-  stream ended, or why it was refused. A go can run out after a walk has
-  finished but before the field that the walk sizes is placed. The next go
-  then asks for the same stream again. Without the result kept, each go would
-  start the walk again from the beginning, and for a stream that takes more
-  than one go to measure, every go would run out before the walk finished.
+  stream ended, or why it was refused. This is a guard. If a go ran out after
+  a walk had finished but before the field that the walk sizes was placed, the
+  next go would ask for the same stream again, and without the result kept it
+  would start the walk again from the beginning. For a stream that takes more
+  than one go to measure, every go could then run out before the walk
+  finished. The gzip template places the field as soon as the walk finishes,
+  and its tests pass with the results not kept; a template that puts
+  `StreamLen` inside a larger expression might not.
 - **Edits.** An edit clears the spaces only when `Spaces::any` says there are
   some. Before this change `Spaces::any` counted only streams that had been
   opened. A member is measured before anything opens it, so an edit could have
@@ -296,10 +300,12 @@ the same fallback past 64 MiB.
 - **Progress.** `Evaluator::unpacking` reports a walk in the same way as an
   index pass: the bits of the measured bytes read so far, and the bytes of
   output counted. If a walk and an index pass are both under way, it reports
-  whichever was stepped most recently (`Spaces::stamp`). For a member past
-  64 MiB, the walk stops at 64 MiB of output and then the index pass starts
-  from the beginning of the run, so the percentage in the listing and the
-  status bar drops back to 0 once.
+  whichever was stepped most recently (`Spaces::stamp`). The percentage is of
+  the bytes the walk measures, which run from the start of the member to the
+  end of the file, at most 64 MiB of them. So in a file of several members,
+  each walk ends short of 100% and the next one starts at 0. For a member
+  whose output is past 64 MiB, the walk stops at 64 MiB of output, and then
+  the index pass starts again from the beginning of the run.
 - **The cap.** `Limits::measure` is how much output a walk counts before it
   refuses: 64 MiB. It is a separate limit from `Limits::whole`, so that a test
   can make the runs held whole small and still measure members larger than
@@ -754,9 +760,11 @@ blocks.
 
 ## Still to do
 
-- For a gzip member past 64 MiB, the percentage in the listing and the status
-  bar goes up to where the measuring walk reached 64 MiB of output, then drops
-  back to 0 when the index pass starts. Saying which of the two passes is
+- While gzip members are measured, the percentage in the listing and the
+  status bar is of the bytes from the member being measured to the end of the
+  file. So in a file of several members it goes back to 0 for each member,
+  and for a member past 64 MiB it goes up to where the walk reached 64 MiB of
+  output and goes back to 0 when the index pass starts. Saying which pass is
   running, or reporting them as one, would need the interface to know there
   are two.
 - An index pass stops a step only once the output has grown by the step's

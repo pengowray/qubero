@@ -690,11 +690,13 @@ impl Unfinished {
 /// Kept apart from [`Unfinished`], so that measuring one gzip member never
 /// puts back the indexing pass of another, or the other way round.
 ///
-/// The ends are kept as well as the walks. A go can run out after a walk has
-/// finished and before the field it sizes is placed, and the next go asks
-/// again. Without the end kept, each go would start the walk again from the
-/// front, and for a stream that takes more than one go to measure, every go
-/// would run out before the walk finished.
+/// The ends are kept as well as the walks, as a guard. If a go ran out after a
+/// walk had finished and before the field it sizes was placed, the next go
+/// would ask again, and without the end kept it would start the walk again
+/// from the front: for a stream that takes more than one go to measure, every
+/// go could then run out before the walk finished. The gzip template places
+/// the field as soon as the walk finishes, but a template that puts
+/// `StreamLen` inside a larger expression might not.
 #[derive(Default)]
 pub(super) struct Measures {
     /// Each walk with the bytes it walks and the stamp it was put back with.
