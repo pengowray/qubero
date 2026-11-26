@@ -512,9 +512,9 @@ impl Editor {
         // is as stale as one an edit marked. The core lets go of every space
         // whenever a reading is invalidated, so this catches a change that
         // did not pass through `forget_spaces`, and a home opened again since
-        // with a reading of its own that has nothing open yet.
-        let dropped = self.sheets[i].core_space != 0 && self.core_space(space).is_none();
-        if !self.sheets[i].stale && !dropped {
+        // with a reading of its own that has nothing open yet. See
+        // `needs_reopen`.
+        if !self.needs_reopen(i) {
             return Ok(());
         }
         self.reopen(i)
@@ -545,6 +545,34 @@ impl Editor {
             },
             _ => 0,
         }
+    }
+
+    /// Which sheet's reading the next call about the tab over `space` does
+    /// its work in. That is `reading_of(space)`, except while the tab's
+    /// stream, or a stream it was opened from, has to be opened again after
+    /// an edit: `ensure_open` opens those first, from the file down, each in
+    /// its home's reading, and a large one is unpacked there over several
+    /// goes. The first one still to open, from the file down, is the one
+    /// being worked on, so its home's reading is the one with the pass.
+    fn working_reading(&self, space: u32) -> usize {
+        let mut chain = Vec::new();
+        let mut i = space as usize;
+        while i != 0 && i < self.sheets.len() && !chain.contains(&i) {
+            chain.push(i);
+            i = self.sheets[i].home;
+        }
+        match chain.iter().rev().find(|&&i| self.needs_reopen(i)) {
+            Some(&i) => self.sheets[i].home,
+            None => self.reading_of(space),
+        }
+    }
+
+    /// Whether `ensure_open` would open sheet `i`'s stream again before
+    /// answering anything about it: the same test it makes, for a sheet whose
+    /// home is open.
+    fn needs_reopen(&self, i: usize) -> bool {
+        let sh = &self.sheets[i];
+        sh.stale || (sh.core_space != 0 && self.core_space(i as u32).is_none())
     }
 
     /// The sheet for a stream `open_in` opened, or an empty one for a stream
@@ -651,7 +679,7 @@ impl Editor {
     }
 
     /// How far the pass unpacking a large compressed stream has got, in the
-    /// reading the tab over `space` unpacks its streams in:
+    /// reading the tab over `space` is working in now (see `working_reading`):
     /// {status:"ok",node:{run_space,run_offset_bits,read_bits,run_bits,unpacked_bytes}},
     /// or a null node when no pass is under way.
     ///
@@ -659,9 +687,11 @@ impl Editor {
     /// same allowance as the rest of the reading, so a listing that reaches a
     /// stream's bytes, and Open unpacked, both carry it on. The bits count
     /// from the start of the compressed run, and `run_offset_bits` is where
-    /// that is in `run_space`, 0 being the file.
+    /// that is in `run_space`, which is numbered by that reading: 0 is the
+    /// file in the file's reading, and the stream's own bytes in the reading
+    /// of a stream whose bytes were recognised.
     pub fn unpacking(&self, space: u32) -> String {
-        let progress = self.sheets.get(self.reading_of(space)).and_then(|sh| sh.eval.as_ref()).and_then(|e| e.unpacking());
+        let progress = self.sheets.get(self.working_reading(space)).and_then(|sh| sh.eval.as_ref()).and_then(|e| e.unpacking());
         reply(Ok(progress.map(|p| UnpackingDto {
             run_space: p.run_space,
             run_offset_bits: p.run_offset_bits as f64,

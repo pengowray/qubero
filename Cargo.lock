@@ -817,6 +817,7 @@ name = "qubero-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "miniz_oxide",
  "qubero-core",
  "qubero-samples",
  "serde",
