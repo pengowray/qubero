@@ -401,27 +401,36 @@ from the text above:
   with and without skippable frames; every zstd span; an LZMA2 stream read a
   chunk at a time from windows that hold exactly the next chunk; every xz
   span's trace and reads.
-- **Speed: no change that the measurements can show.** Measured on
+- **Speed.** The span traces of a stream of short codes are about 2% slower;
+  everything else measured is the same within the noise. Measured on
   2026-11-26 in release builds, native, with harnesses outside `cargo test`,
   pinned to one core. "Before" is built from the commit this part started
-  from. Before and after runs alternated, and the table gives the fastest run
-  of each. The machine was loaded by other sessions (a load average of 6 to
-  14 on 12 cores), and single runs varied by 10% or more, so differences
-  under about 3% are noise. The files were generated for the measurement:
-  rows of CSV-like text packed by Python's `zlib` at level 6, and bytes that
-  are nine tenths one letter packed with Huffman coding only.
+  from. Before and after runs alternated, and the table gives the fastest of
+  each. The machine was loaded by other sessions (a load average of 4 to 14
+  on 12 cores), and single runs varied by 10% or more, so the tables compare
+  the fastest runs, and differences under about 2% are noise. The files were
+  generated for the measurement: rows of CSV-like text packed by Python's
+  `zlib` at level 6, and bytes that are nine tenths one letter packed with
+  Huffman coding only, whose codes are mostly one bit long.
 
-  | What | File | Before | After | Change |
-  |---|---|---|---|---|
-  | `decode_or_index` | 190 MB of CSV, 61 MB packed (6 runs each) | 1,952 ms | 1,909 ms | -2.2% |
-  | Reading all of it through the index, 4 MiB at a time | the same | 1,562 ms | 1,527 ms | -2.2% |
-  | Every span's trace | the same | 1,277 ms | 1,275 ms | -0.2% |
-  | `decode_or_index` | 300 MB of literals, 56 MB packed (6 runs each) | 3,957 ms | 3,886 ms | -1.8% |
-  | Reading all of it through the index | the same | 3,221 ms | 3,162 ms | -1.8% |
-  | Every span's trace | the same | 2,413 ms | 2,434 ms | +0.9% |
-  | User CPU time of the whole run | the same | 10.45 s | 10.39 s | -0.6% |
-  | `inflate::gzip`, traced | 60 MB of CSV, 19 MB packed (8 runs each, fastest of 5) | 619.7 ms | 619.1 ms | -0.1% |
-  | `inflate_len` | the same | 350.2 ms | 353.0 ms | +0.8% |
+  | What | File | Runs | Before | After | Change |
+  |---|---|---|---|---|---|
+  | `decode_or_index` | 190 MB of CSV, 61 MB packed | 6 | 1,952 ms | 1,909 ms | -2.2% |
+  | Reading all of it through the index, 4 MiB at a time | the same | 6 | 1,562 ms | 1,527 ms | -2.2% |
+  | Every span's trace | the same | 6 | 1,277 ms | 1,275 ms | -0.2% |
+  | `decode_or_index` | 100 MB of literals, 18.5 MB packed | 6 of 4 | 1,227 ms | 1,204 ms | -1.9% |
+  | Reading all of it through the index | the same | 6 of 4 | 950 ms | 956 ms | +0.7% |
+  | Every span's trace | the same | 6 of 4 | 858 ms | 878 ms | +2.3% |
+  | `inflate::gzip`, traced | 60 MB of CSV, 19 MB packed | 8 of 5 | 620 ms | 619 ms | -0.1% |
+  | `inflate_len` | the same | 8 of 5 | 350 ms | 353 ms | +0.8% |
+
+  "6 of 4" is six runs of a harness that takes the fastest of four tries.
+  The span traces of the literals were slower after in each of the six runs,
+  by 0.2% to 2.6%; that is the one difference the measurements show. The
+  likely cause: each code there makes a step, and each step's bit is now the
+  reader's base plus its place in the window, one addition more. Earlier comparisons on 300 MB of literals, one
+  try a run under a load of 12, ranged from -2% to +4% for the same three
+  rows.
 
 ## The index pass reads through a `RunInput`
 
