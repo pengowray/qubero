@@ -352,8 +352,8 @@ impl ZstdWalk {
                 // repeated. The last block of a frame has the checksum after
                 // it, which the decoder reads with it.
                 let head = held(window, at, end)?;
-                // A span that ends inside a block header, which the decoder
-                // would refuse as well.
+                // A span that ends inside a block header is refused, as the
+                // decoder would refuse it.
                 let [h0, h1, h2, ..] = *head else { return Err(Refusal::Failed) };
                 let header = u32::from_le_bytes([h0, h1, h2, 0]);
                 let body = match (header >> 1) & 3 {
@@ -456,9 +456,8 @@ fn held<'a>(window: Window<'a>, at: usize, end: usize) -> Result<&'a [u8], Refus
     window.get(at..end.min(window.end()).max(at)).ok_or(Refusal::Failed)
 }
 
-/// Whether a walk over a span ending at `end` has to have bytes `from..to` of
-/// the run, as far as the span goes, which `window` does not hold: those
-/// bytes, when it does not.
+/// Bytes `from..to` of the run, cut off at `end`, the end of the span a walk
+/// is over, when `window` does not hold all of them; nothing when it does.
 fn lacks(window: Window<'_>, from: usize, to: usize, end: usize) -> Option<std::ops::Range<usize>> {
     let to = to.min(end).max(from);
     (window.start() > from || window.end() < to).then_some(from..to)

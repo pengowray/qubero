@@ -55,10 +55,10 @@ pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// A decoder given a window counts every position it records from the run's
 /// front, as it does when given the whole run, so what it records from a
-/// window is what it records from the run. A window that ends before the run
-/// does is not the run being cut short: [`Window::reaches_end`] tells the
-/// two apart. See `docs/DESIGN-lazy-compressed-input.md`, "The decoders read
-/// a window".
+/// window is what it records from the run. [`Window::reaches_end`] says
+/// whether the window holds the run's last byte, which tells a window that
+/// ends early from a run that is cut short. See
+/// `docs/DESIGN-lazy-compressed-input.md`, "The decoders read a window".
 #[derive(Debug, Clone, Copy)]
 pub struct Window<'a> {
     bytes: &'a [u8],

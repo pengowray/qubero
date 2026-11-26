@@ -324,8 +324,9 @@ pub(crate) fn framing(wrapper: Wrapper, head: &[u8], run_len: usize) -> Result<F
     }
 }
 
-/// [`framing`], with a head too short given as how long it has to be, and a
-/// header that is not one as nothing.
+/// The work of [`framing`]. `Err(Some(n))` means the head has to be at least
+/// `n` bytes long to say where the deflate data is; `Err(None)` means the
+/// bytes are not a header of this wrapper.
 fn frame(wrapper: Wrapper, head: &[u8], run_len: usize) -> Result<Framing, Option<usize>> {
     // Byte `at` of the run: from the head, or a longer head asked for when
     // the run has the byte and the head does not.

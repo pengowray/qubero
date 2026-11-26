@@ -426,8 +426,8 @@ impl Seekable {
         Ok(starts)
     }
 
-    /// [`Seekable::group`] decoded from `input`, which holds the run from
-    /// kept start `g` to the next kept start, and nothing kept.
+    /// [`Seekable::group`] decoded from `input`, which has to hold the run
+    /// from kept start `g` to the next kept start. The list is not cached.
     pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<(u64, u64)>, Refusal> {
         let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
         let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()), stopped: None };
@@ -461,8 +461,8 @@ impl Seekable {
         Ok(t)
     }
 
-    /// [`Seekable::block_trace`] decoded from `input`, which holds block `i`,
-    /// and nothing kept.
+    /// [`Seekable::block_trace`] decoded from `input`, which has to hold
+    /// block `i`. The trace is not cached.
     pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, Refusal> {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
