@@ -36,10 +36,10 @@ const SAMPLES: &[Sample] = &[
 ];
 
 // Where things are: the root's fields, and a frame's.
-const AUDIO: usize = 1;
-const APEV2: usize = 2;
-const LYRICS3: usize = 3;
-const ID3V1: usize = 4;
+const AUDIO: usize = 4;
+const APEV2: usize = 5;
+const LYRICS3: usize = 6;
+const ID3V1: usize = 7;
 
 fn child(ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize], name: &str) -> Vec<usize> {
     let n = ev.node(d, path).unwrap().child_count as usize;

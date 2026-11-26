@@ -33,20 +33,47 @@ pub fn mp3() -> Template {
 
 /// The whole file: a tag in front, the frames, and the tags at the back.
 fn file() -> T {
-    let lyrics3_size = || trailer_lyrics3(trailer_id3v1()).sub(trailer_id3v1());
-    let apev2_size = || trailers().sub(trailer_lyrics3(trailer_id3v1()));
+    let f = E::field;
+    let present = |name: &str| f(name).greater_than(E::lit(0));
     T::structure(
         "MP3",
         vec![
             ("id3v2", T::when(id3v2_ahead(E::SpaceSize.sub(E::SpacePos)), id3v2(E::SpaceSize.sub(E::SpacePos)))),
-            // Everything between the front tag and the back ones. Worked out
-            // once here, so that a walk over the frames does not look at the
-            // end of the file again for each one.
-            ("audio", T::sized(E::SpaceSize.sub(E::SpacePos).sub(trailers()).at_least(E::lit(0)), audio())),
-            ("apev2", T::when(apev2_size().greater_than(E::lit(0)), T::sized(apev2_size(), apev2()))),
-            ("lyrics3", T::when(lyrics3_size().greater_than(E::lit(0)), T::sized(lyrics3_size(), lyrics3()))),
-            ("id3v1", T::when(trailer_id3v1().greater_than(E::lit(0)), T::sized(E::lit(128), id3v1()))),
+            // How long each tag at the end is, found from the end of the file.
+            // Worked out once here, so that the expressions below name them
+            // rather than repeat the search, and a walk over the frames does
+            // not look at the end of the file again for each one.
+            ("id3v1_size", T::computed(id3v1_size())),
+            ("lyrics3_size", T::computed(lyrics3_size(f("id3v1_size")))),
+            ("apev2_size", T::computed(apev2_size(f("id3v1_size").add(f("lyrics3_size"))))),
+            // Everything between the front tag and the back ones.
+            (
+                "audio",
+                T::sized(
+                    E::SpaceSize.sub(E::SpacePos).sub(f("id3v1_size")).sub(f("lyrics3_size")).sub(f("apev2_size")).at_least(E::lit(0)),
+                    audio(),
+                ),
+            ),
+            ("apev2", T::when(present("apev2_size"), T::sized(f("apev2_size"), apev2()))),
+            ("lyrics3", T::when(present("lyrics3_size"), T::sized(f("lyrics3_size"), lyrics3()))),
+            ("id3v1", T::when(present("id3v1_size"), T::sized(E::lit(128), id3v1()))),
         ],
+    )
+    .machinery(&["id3v1_size", "lyrics3_size", "apev2_size"])
+    .field_doc(
+        "id3v1_size",
+        "Size in bytes of the ID3v1 tag at the end of the file: 128, or 0 when there is none. Qubero computes it; it is \
+         not stored in the file.",
+    )
+    .field_doc(
+        "lyrics3_size",
+        "Size in bytes of the Lyrics3v2 tag before the ID3v1 tag, or 0 when there is none. Qubero computes it from the \
+         size the tag ends with.",
+    )
+    .field_doc(
+        "apev2_size",
+        "Size in bytes of the APEv2 tag before the Lyrics3v2 and ID3v1 tags, or 0 when there is none. Qubero computes \
+         it from the tag's footer.",
     )
     .field_doc("id3v2", "ID3v2 tag at the start of the file, with information such as the title, artist and cover art.")
     .field_doc("audio", "The MPEG audio frames: everything between the ID3v2 tag at the start of the file and the tags at the end.")
@@ -823,34 +850,36 @@ fn from_end(back: E, bits: u32, endian: crate::template::Endian) -> E {
 }
 
 /// How many bytes the ID3v1 tag takes: 128 when the file ends with one.
-fn trailer_id3v1() -> E {
+fn id3v1_size() -> E {
     let room = E::SpaceSize.greater_or_equal(E::lit(128));
     E::cond(room.both(from_end(E::lit(128), 24, Big).equal_to(E::lit(0x54_41_47))), E::lit(128), E::lit(0))
 }
 
-/// How many bytes the tags after `after` take, with the Lyrics3v2 tag added
-/// when one ends where they begin. Its size is six ASCII digits before the
-/// closing `LYRICS200`, and counts from `LYRICSBEGIN` up to those digits.
-fn trailer_lyrics3(after: E) -> E {
+/// How many bytes the Lyrics3v2 tag takes when one ends `after` bytes before
+/// the end of the file. Its size is six ASCII digits before the closing
+/// `LYRICS200`, and counts from `LYRICSBEGIN` up to those digits.
+fn lyrics3_size(after: E) -> E {
     let end = |n: i128| from_end(after.clone().add(E::lit(n)), 8, Big);
-    let digits = (0..6).fold(E::lit(0), |acc, i| acc.mul(E::lit(10)).add(end(15 - i).sub(E::lit(0x30))));
+    // Each digit times its place, added in pairs rather than one after
+    // another: the computed field this is part of is worked out inside other
+    // expressions, and a deep tree of them runs out of stack.
+    let digit = |i: u32| end(15 - i as i128).sub(E::lit(0x30)).mul(E::lit(10i128.pow(5 - i)));
+    let digits = digit(0).add(digit(1)).add(digit(2).add(digit(3))).add(digit(4).add(digit(5)));
     let total = digits.add(E::lit(15));
     let room = || E::SpaceSize.sub(after.clone());
-    let found = room()
+    // `LYRICS20` and then `0`: nine bytes, more than one peek holds.
+    let signed = room()
         .greater_or_equal(E::lit(15 + 11))
-        // `LYRICS20` and then `0`: nine bytes, more than one peek holds.
-        .both(from_end(after.clone().add(E::lit(9)), 64, Big).equal_to(E::lit(0x4c_59_52_49_43_53_32_30_i128)))
-        .both(end(1).equal_to(E::lit(0x30)))
-        .both(total.clone().less_or_equal(room()))
-        .both(total.clone().greater_or_equal(E::lit(15 + 11)))
-        .both(from_end(after.clone().add(total.clone()), 64, Big).equal_to(E::lit(0x4c_59_52_49_43_53_42_45_i128)));
-    E::cond(found, after.clone().add(total), after)
+        .both(from_end(after.clone().add(E::lit(9)), 64, Big).equal_to(E::lit(0x4c_59_52_49_43_53_32_30_i128)).both(end(1).equal_to(E::lit(0x30))));
+    let fits = total.clone().less_or_equal(room()).both(total.clone().greater_or_equal(E::lit(15 + 11)));
+    let begins = from_end(after.add(total.clone()), 64, Big).equal_to(E::lit(0x4c_59_52_49_43_53_42_45_i128));
+    E::cond(signed.both(fits).both(begins), total, E::lit(0))
 }
 
-/// The same, with an APEv2 tag added when its footer ends where the tags
-/// after it begin. The footer's size counts the items and the footer, and the
-/// header in front of them when its flags say there is one.
-fn trailer_apev2(after: E) -> E {
+/// How many bytes the APEv2 tag takes when its footer ends `after` bytes
+/// before the end of the file. The footer's size counts the items and the
+/// footer, and the header in front of them when its flags say there is one.
+fn apev2_size(after: E) -> E {
     let room = || E::SpaceSize.sub(after.clone());
     let size = from_end(after.clone().add(E::lit(20)), 32, Little);
     let header = from_end(after.clone().add(E::lit(12)), 32, Little).bit(31).mul(E::lit(32));
@@ -860,12 +889,7 @@ fn trailer_apev2(after: E) -> E {
         .both(from_end(after.clone().add(E::lit(32)), 64, Big).equal_to(E::lit(APETAGEX)))
         .both(size.greater_or_equal(E::lit(32)))
         .both(total.clone().less_or_equal(room()));
-    E::cond(found, after.clone().add(total), after)
-}
-
-/// Every tag at the back, in bytes.
-fn trailers() -> E {
-    trailer_apev2(trailer_lyrics3(trailer_id3v1()))
+    E::cond(found, total, E::lit(0))
 }
 
 fn apev2() -> T {
@@ -1118,6 +1142,10 @@ mod tests {
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
 
+    /// Where the audio is among the root's fields: after the ID3v2 tag and
+    /// the three sizes of the tags at the end.
+    const AUDIO: usize = 4;
+
     /// A frame header and a body of zeros that make up the length it says.
     fn frame_bytes(header: u32) -> Vec<u8> {
         let (len, _) = header_length(&header.to_be_bytes()).unwrap();
@@ -1149,9 +1177,9 @@ mod tests {
             file.extend(frame_bytes(header));
             let d = Document::new(MemSource(file));
             let mut ev = Evaluator::new(mp3());
-            let frames = ev.node(&d, &[1, 0]).unwrap();
+            let frames = ev.node(&d, &[AUDIO, 0]).unwrap();
             assert_eq!(frames.child_count, 2, "{header:08x}");
-            let first = ev.node(&d, &[1, 0, 0]).unwrap();
+            let first = ev.node(&d, &[AUDIO, 0, 0]).unwrap();
             assert_eq!(first.size_bits / 8, header_length(&header.to_be_bytes()).unwrap().0 as u64, "{header:08x}");
         }
     }
@@ -1423,7 +1451,7 @@ mod tests {
         let file = [frames.clone(), ape, lyrics, id3v1(b"A comment", Some(9), 17)].concat();
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(mp3());
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 2);
         assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), 0);
         assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "0", "value"])), "Caf\u{e9}");
         assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "1", "content_type"])), "binary");
@@ -1434,6 +1462,15 @@ mod tests {
         assert_eq!(name(value(&mut ev, &d, &["id3v1", "comment"])), "A comment");
         assert_eq!(uint(value(&mut ev, &d, &["id3v1", "track"])), 9);
         assert_eq!(name(value(&mut ev, &d, &["id3v1", "genre"])), "Rock");
+
+        // Each field of the root read first, by an evaluator that has read
+        // nothing else: the tag sizes are worked out inside one another then,
+        // and that has to stay within the stack a read may use.
+        for first in 0..8 {
+            let mut ev = Evaluator::new(mp3());
+            ev.node(&d, &[first]).unwrap_or_else(|e| panic!("root field {first} read first: {e:?}"));
+            read_all(&mut ev, &d, &[first], 3);
+        }
 
         // An APEv2 tag with no header, and an ID3v1.0 tag with no track.
         let ape = apev2(&[ape_item("Artist", b"Someone", 0)], false);
@@ -1453,7 +1490,7 @@ mod tests {
         let file = [frame_bytes(MONO), b"junk!".to_vec(), id3v1(b"", None, 0)].concat();
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(mp3());
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 1);
         assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), 5);
         assert_eq!(size(&mut ev, &d, &["id3v1"]), 128);
     }
@@ -1470,9 +1507,9 @@ mod tests {
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(mp3());
         assert_eq!(size(&mut ev, &d, &["id3v2", "padding"]), 20);
-        let frames = ev.node(&d, &[1, 0]).unwrap().child_count;
+        let frames = ev.node(&d, &[AUDIO, 0]).unwrap().child_count;
         assert_eq!(frames, 4);
-        let kinds: Vec<String> = (0..4).map(|i| ev.node(&d, &[1, 0, i]).unwrap().type_name).collect();
+        let kinds: Vec<String> = (0..4).map(|i| ev.node(&d, &[AUDIO, 0, i]).unwrap().type_name).collect();
         assert_eq!(kinds, ["Padding", "Frame", "ID3", "Frame"]);
     }
 
@@ -1497,7 +1534,7 @@ mod tests {
                 let d = Document::new(MemSource(file));
                 let mut ev = Evaluator::new(mp3());
                 read_all(&mut ev, &d, &[], 8);
-                assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 1, "cut at {cut}");
+                assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 1, "cut at {cut}");
                 assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), cut as u64, "cut at {cut}");
             }
         }
@@ -1526,8 +1563,8 @@ mod tests {
         body.extend([0; 20]);
         let d = Document::new(MemSource([id3v2(2, 0, &body), frames.clone()].concat()));
         let mut ev = Evaluator::new(mp3());
-        assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits / 8, 10 + body.len() as u64);
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[AUDIO]).unwrap().offset_bits / 8, 10 + body.len() as u64);
+        assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 2);
         assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "id"])), "TT2");
         assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "body", "text"])), "Hi");
         assert_eq!(size(&mut ev, &d, &["id3v2", "padding"]), 20);
@@ -1539,7 +1576,7 @@ mod tests {
         let mut ev = Evaluator::new(mp3());
         assert_eq!(size(&mut ev, &d, &["id3v2", "extended_header"]), 10);
         assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "body", "text"])), "Hi");
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 2);
 
         // A frame whose size runs past the end of the tag stops at the end of
         // the tag, and the audio is still where the header says.
@@ -1547,8 +1584,8 @@ mod tests {
         let d = Document::new(MemSource([id3v2(3, 0, &body), frames].concat()));
         let mut ev = Evaluator::new(mp3());
         read_all(&mut ev, &d, &[0], 6);
-        assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits / 8, 10 + body.len() as u64);
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[AUDIO]).unwrap().offset_bits / 8, 10 + body.len() as u64);
+        assert_eq!(ev.node(&d, &[AUDIO, 0]).unwrap().child_count, 2);
     }
 
     #[test]
