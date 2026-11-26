@@ -670,7 +670,12 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
     const to = breaks[b + 1] ?? kids.length;
     const first = kids[from];
     if (first === undefined) return;
-    if (to - from === 1 && first.composite) {
+    // Fields of no bytes after a structure join its part (see
+    // `sectionBreaks`), and they do not make it a run of plain fields: a
+    // JPEG's segments followed by an empty `trailer` are still the segments,
+    // not a part headed "Trailer". The empty fields are drawn after it.
+    const alone = kids.slice(from + 1, to).every((k) => !k.composite && k.size_bits === 0);
+    if (alone && first.composite) {
       // A part of the file that is one pointer is the part it points at. Only
       // when what it points at is a structure: a heading is a division of the
       // file with rows under it, and a pointer to a single string has none to
@@ -729,6 +734,7 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       } else {
         heading(w, only.path, only, 0, part.from, part.to, part.inner, titleOf(only, list), true, part.via);
       }
+      if (part.to - part.from > 1) rows(w, path, kids.slice(part.from + 1, part.to), base + part.from + 1, 1, null, kids.length, kids, base);
     } else {
       runHeading(w, path, kids, part.from, part.to, base);
     }

@@ -1087,7 +1087,10 @@ button.welcome-crystal {
 }
 .hv-chip > b {
   font-weight: 600;
-  flex: 0 1 auto;
+  /* The value gives way first. Both used to shrink together, and a pointer's
+     long value left its name as `v…`, so nothing said which field it was. */
+  flex: 0 0 auto;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
