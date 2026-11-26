@@ -24,7 +24,7 @@ pub(super) fn boxes() -> Vec<(&'static str, T)> {
         ("pixi", pixi()),
         ("auxC", auxc()),
         ("irot", T::structure("ImageRotation", vec![("reserved", bits(6)), ("angle", bits(2))]).field_doc("angle", "How far to turn the picture anticlockwise, in quarter turns.")),
-        ("imir", T::structure("ImageMirror", vec![("reserved", bits(7)), ("axis", T::enumeration("MirrorAxis", bits(1), &[(0, "vertical"), (1, "horizontal")]))])),
+        ("imir", T::structure("ImageMirror", vec![("reserved", bits(7)), ("axis", T::enumeration("MirrorAxis", bits(1), &[(0, "vertical axis, left and right swap"), (1, "horizontal axis, top and bottom swap")]))])),
         ("idat", T::structure("ItemData", vec![("data", T::bytes(E::Remaining))])),
         ("grpl", child_boxes()),
     ]

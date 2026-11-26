@@ -1049,7 +1049,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -1211,7 +1211,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -1373,7 +1373,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -2357,7 +2357,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -2519,7 +2519,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -2681,7 +2681,7 @@ type BoxBody = switch type {
                             0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
                             4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
                             8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = written out
+                            12 = 7350 Hz, 15 = given in sampling_frequency
                           }
                           sampling_frequency: optional(when sampling_frequency_index == 15)
                               u24be
@@ -3012,7 +3012,9 @@ type BoxBody = switch type {
   }
   'imir' => ImageMirror {
     reserved: u7be
-    axis: u1be enum MirrorAxis {0 = vertical, 1 = horizontal}
+    axis: u1be enum MirrorAxis {
+      0 = vertical axis, left and right swap, 1 = horizontal axis, top and bottom swap
+    }
   }
   'idat' => ItemData {
     data: bytes[remaining]

@@ -714,7 +714,7 @@ const FREQUENCY_INDEX: &[(i128, &str)] = &[
     (10, "11025 Hz"),
     (11, "8000 Hz"),
     (12, "7350 Hz"),
-    (15, "written out"),
+    (15, "given in sampling_frequency"),
 ];
 
 const CHANNEL_CONFIGURATION: &[(i128, &str)] = &[
