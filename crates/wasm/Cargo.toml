@@ -10,6 +10,8 @@ crate-type = ["cdylib", "rlib"]
 [dev-dependencies]
 # Where the sample collection is; see the note in `crates/core/Cargo.toml`.
 qubero-samples = { path = "../samples" }
+# Packs the streams the tests open, as the core's own tests do.
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 
 [dependencies]
 qubero-core = { path = "../core" }

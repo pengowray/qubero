@@ -86,8 +86,9 @@ export const streamsSection: Section = {
       if (notDrawn === null) {
         const r = ctx.doc.openSpace(node.path);
         // A large stream is unpacked over several goes, and the section waits
-        // for it as it waits for bytes.
-        if (r !== null && "working" in r) return WAIT;
+        // for it as it waits for bytes, which a stream whose compressed bytes
+        // are still loading also waits on.
+        if (r !== null && ("working" in r || "pending" in r)) return WAIT;
         space = r !== null && !("refused" in r) ? r : null;
         if (space !== null) openedBytes += bytes;
         else {
