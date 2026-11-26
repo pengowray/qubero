@@ -1,7 +1,10 @@
 //! Opening a stream as a tab when the answer is not ready yet, the way Open
 //! unpacked in the web asks for it: `open_space` answers "pending" with the
 //! chunks of the file it still needs, or "working" while a large stream is
-//! unpacked a go at a time, and `unpacking` says how far that has got.
+//! unpacked a go at a time, and `unpacking` says how far that has got. And
+//! the listing's side of the same wait: `template_children` answers "working"
+//! with the children that are ready, and how far the pass the rest wait on
+//! has got.
 //!
 //! The files are made here rather than taken from the sample collection, so
 //! these run everywhere.

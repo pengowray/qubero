@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { TemplateNode, TemplateReply } from "../src/doc.ts";
+import type { TemplateNode, TemplateReply, Unpacking } from "../src/doc.ts";
 import { emptyState, flatten, isComputed, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource } from "../src/flatten.ts";
 
@@ -1359,4 +1359,159 @@ test("a walk over a tree spread across the file settles inside the chunk cache",
   // its row, and one the reader opens shows its entries.
   const nodes = done.items.filter((i) => (i.kind === "row" || i.kind === "heading") && i.node !== null && /^\[\d+\]$/.test(i.node.name) && i.path.length === 2);
   assert.equal(nodes.length, 64);
+});
+
+/** A source whose children of some paths are still being worked out: the
+ *  first `ready` of them are given, as the core gives a slice whose later
+ *  children wait on a pass, with how far that pass has got. */
+function workingSource(root: Fixture, waiting: ReadonlyMap<string, { readonly ready: number; readonly unpacking?: Unpacking }>): TreeSource {
+  const inner = source(root);
+  return {
+    node: (path) => inner.node(path),
+    children(path, from, to) {
+      const reply = inner.children(path, from, to);
+      const wait = waiting.get(pathKey(path));
+      if (wait === undefined || reply.status !== "ok") return reply;
+      return {
+        status: "working",
+        reachedBytes: 0,
+        ready: reply.node.slice(0, wait.ready),
+        ...(wait.unpacking === undefined ? {} : { unpacking: wait.unpacking }),
+      };
+    },
+  };
+}
+
+/** How far a pass over the run at byte `at` has got, as a share of it. */
+function progress(at: number, share: number): Unpacking {
+  return { run_space: 0, run_offset_bits: at * 8, read_bits: share * 1000, run_bits: 1000, unpacked_bytes: 0 };
+}
+
+/** A gzip file of one member: a header of six fields, the stream, and the
+ *  trailer after it. */
+const GZIP: Spec = {
+  name: "file",
+  bytes: 1_010,
+  kids: [
+    {
+      name: "members",
+      bytes: 1_010,
+      kids: [
+        {
+          name: "[0]",
+          bytes: 1_010,
+          kids: [
+            { name: "magic", bytes: 2 },
+            { name: "method", bytes: 1 },
+            { name: "flg", bytes: 1 },
+            { name: "mtime", bytes: 4 },
+            { name: "extra_flags", bytes: 1 },
+            { name: "os", bytes: 1 },
+            { name: "compressed", bytes: 992, kind: "bytes" },
+            { name: "crc32", bytes: 4 },
+            { name: "original_size", bytes: 4 },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+test("the fields before a stream that is still unpacking are drawn above it", () => {
+  const root = build(GZIP, [], 0);
+  const done = flatten(workingSource(root, new Map([[pathKey([0, 0]), { ready: 6, unpacking: progress(10, 0.4) }]])), emptyState);
+  assert.equal(done.pending, true);
+  const header = ["magic", "method", "flg", "mtime", "extra_flags", "os"];
+  const rows = done.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.deepEqual(rows, header, JSON.stringify(shape(done.items)));
+  // One placeholder, after the header, over the rest of the member: the
+  // stream and the trailer, which are not a gap, and not "more" of a list.
+  const waits = done.items.filter((i) => i.kind === "pending");
+  assert.equal(waits.length, 1, JSON.stringify(shape(done.items)));
+  const wait = waits[0];
+  assert.ok(wait !== undefined && wait.kind === "pending");
+  assert.deepEqual([wait.offsetBits / 8, wait.sizeBits / 8], [10, 1_000]);
+  assert.deepEqual(wait.path, [0, 0]);
+  assert.equal(wait.working, true);
+  assert.deepEqual(wait.unpacking, progress(10, 0.4));
+  assert.equal(done.items.indexOf(wait), done.items.findIndex((i) => i.kind === "row" && i.node.name === "os") + 1);
+  assert.ok(!done.items.some((i) => i.kind === "gap" || i.kind === "more"), JSON.stringify(shape(done.items)));
+});
+
+test("a slice with none of its children ready waits as a whole, saying on what", () => {
+  const root = build(GZIP, [], 0);
+  const done = flatten(workingSource(root, new Map([[pathKey([0, 0]), { ready: 0, unpacking: progress(10, 0.1) }]])), emptyState);
+  const waits = done.items.filter((i) => i.kind === "pending");
+  assert.equal(waits.length, 1);
+  const wait = waits[0];
+  assert.ok(wait !== undefined && wait.kind === "pending");
+  assert.deepEqual([wait.offsetBits / 8, wait.sizeBits / 8], [0, 1_010]);
+  assert.deepEqual(wait.unpacking, progress(10, 0.1));
+  assert.ok(!done.items.some((i) => i.kind === "row"));
+});
+
+test("each placeholder says how far its own stream has got", () => {
+  // Two members, each waiting on its own stream: the second one's pass is
+  // further on, and the first one's placeholder must not say so.
+  const member = (n: number): Spec => ({
+    name: `[${n}]`,
+    bytes: 100,
+    kids: [
+      { name: "magic", bytes: 2 },
+      { name: "compressed", bytes: 90, kind: "bytes" },
+      { name: "crc32", bytes: 8 },
+    ],
+  });
+  const two: Spec = { name: "file", bytes: 200, kids: [{ name: "members", bytes: 200, kids: [member(0), member(1)] }] };
+  const root = build(two, [], 0);
+  const waiting = new Map([
+    [pathKey([0, 0]), { ready: 1, unpacking: progress(2, 0.2) }],
+    [pathKey([0, 1]), { ready: 1, unpacking: progress(102, 0.9) }],
+  ]);
+  const waits = flatten(workingSource(root, waiting), emptyState).items.filter((i) => i.kind === "pending");
+  assert.deepEqual(
+    waits.map((i) => (i.kind === "pending" ? [i.path, i.offsetBits / 8, i.unpacking?.run_offset_bits] : [])),
+    [
+      [[0, 0], 2, 16],
+      [[0, 1], 102, 816],
+    ],
+  );
+});
+
+test("parts of the file still to come are not bytes nothing describes", () => {
+  // The root's own slice stops at its second child, which waits: what is
+  // after the first part is waiting, not a hole in the file.
+  const file: Spec = {
+    name: "file",
+    bytes: 300,
+    kids: [
+      { name: "head", bytes: 100, kids: [{ name: "a", bytes: 100 }] },
+      { name: "body", bytes: 200, kids: [{ name: "b", bytes: 200 }] },
+    ],
+  };
+  const root = build(file, [], 0);
+  const done = flatten(workingSource(root, new Map([[pathKey([]), { ready: 1 }]])), emptyState, { fileBits: 300 * 8 });
+  assert.ok(!done.items.some((i) => i.kind === "gap"), JSON.stringify(shape(done.items)));
+  const wait = done.items[done.items.length - 1];
+  assert.ok(wait?.kind === "pending", JSON.stringify(shape(done.items)));
+  assert.deepEqual([wait.offsetBits / 8, wait.sizeBits / 8, wait.depth], [100, 200, 0]);
+  assert.equal(wait.working, true);
+  assert.equal(wait.unpacking, null);
+  assert.ok(done.items.some((i) => i.kind === "heading" && i.node?.name === "head"));
+});
+
+test("a list whose page stops at a child that waits counts no more after it", () => {
+  // A long list drawn a page at a time, whose page stops partway: an edge
+  // for the elements after the page would count the ones still on it.
+  const list: Spec = {
+    name: "file",
+    bytes: 1_000,
+    kids: [{ name: "items", bytes: 1_000, kids: Array.from({ length: 100 }, (_, n) => ({ name: `[${n}]`, bytes: 10 })) }],
+  };
+  const root = build(list, [], 0);
+  const done = flatten(workingSource(root, new Map([[pathKey([0]), { ready: 30 }]])), emptyState, { page: 50 });
+  assert.equal(done.items.filter((i) => i.kind === "row").length, 30, JSON.stringify(shape(done.items)));
+  assert.ok(!done.items.some((i) => i.kind === "more" || i.kind === "gap"), JSON.stringify(shape(done.items)));
+  const wait = done.items.find((i) => i.kind === "pending");
+  assert.deepEqual(wait === undefined ? null : [wait.offsetBits / 8, wait.sizeBits / 8], [300, 700]);
 });

@@ -12,7 +12,7 @@
 // are left, so the item count follows what the reader has opened rather than
 // how big the file is.
 
-import type { TemplateNode, TemplateReply } from "./doc.ts";
+import type { TemplateNode, TemplateReply, Unpacking } from "./doc.ts";
 import { isElementName } from "./elementname.ts";
 import { densityOf, type Density } from "./headingdensity.ts";
 
@@ -93,8 +93,11 @@ export type ListingState = {
 
 export const emptyState: ListingState = { open: new Set(), closed: new Set(), shown: new Map(), bytes: new Set() };
 
-/** The children of a list that are drawn, and where in it they start. */
-export type Slice = { readonly from: number; readonly nodes: readonly TemplateNode[] };
+/** The children of a list that are drawn, and where in it they start.
+ *  `waitsTo` is set when the core gave only the children before the first
+ *  one that waits: the window asked for runs to there, and the rest of it is
+ *  a placeholder after `nodes` until they arrive. */
+export type Slice = { readonly from: number; readonly nodes: readonly TemplateNode[]; readonly waitsTo?: number };
 
 type Common = {
   readonly key: string;
@@ -203,6 +206,14 @@ export type Item = Common &
         readonly kind: "pending";
         readonly path: readonly number[];
         readonly reachedBytes: number;
+        /** True when what it waits on is more work rather than bytes of
+         *  the file. */
+        readonly working: boolean;
+        /** How far the pass the children of `path` wait on had got when they
+         *  were asked for: the stream under this stretch, and not another
+         *  one being unpacked at the same time. Null when they wait on
+         *  something else. */
+        readonly unpacking: Unpacking | null;
       }
     | {
         /** What the file is a picture of, ahead of how it is written: the
@@ -499,8 +510,10 @@ class Walk {
     return { from, to: Math.min(count, Math.max(from + 1, win?.to ?? this.page)) };
   }
 
-  /** Children of `path` the reader has asked to see. Returns null once, having
-   *  recorded a pending item, when the bytes are not there yet. */
+  /** Children of `path` the reader has asked to see. Returns null, having
+   *  noted that the walk waits, when none of them is there yet; and when
+   *  only the first few are, those, with `waitsTo` set. Either way the
+   *  caller puts a pending item where the rest go. */
   kids(path: readonly number[], count: number): Slice | null {
     const { from, to } = this.window(path, count);
     const reply = this.src.children(path, from, to);
@@ -515,26 +528,40 @@ class Walk {
     // counted yet, since the nodes it is in have not come back. Counted as
     // one, under a number no real chunk has.
     if (this.opts.chunkBytes !== undefined) this.chunks.add(-1 - this.waits++);
-    return null;
+    const working = reply.status === "working";
+    this.waitedOn.set(pathKey(path), { working, unpacking: working ? (reply.unpacking ?? null) : null });
+    const ready = reply.ready ?? [];
+    if (ready.length === 0) return null;
+    this.count(ready);
+    return { from, nodes: ready, waitsTo: to };
   }
 
   /** Replies that were pending, for `kids` to number them. */
   private waits = 0;
 
+  /** What the children of each path `kids` was told to wait for wait on, by
+   *  `pathKey`, for the pending item put where they go. */
+  private readonly waitedOn = new Map<string, { readonly working: boolean; readonly unpacking: Unpacking | null }>();
+
   push(item: Item): void {
     this.items.push(item);
   }
 
-  waiting(path: readonly number[], depth: number, at: TemplateNode): void {
+  /** The pending item for the children of `path` that have not arrived,
+   *  over the stretch `over` they will take up. */
+  waiting(path: readonly number[], depth: number, over: { readonly offset_bits: number; readonly size_bits: number }): void {
+    const on = this.waitedOn.get(pathKey(path));
     this.push({
       kind: "pending",
       key: `wait:${pathKey(path)}`,
       section: this.section,
       depth,
-      offsetBits: at.offset_bits,
-      sizeBits: at.size_bits,
+      offsetBits: over.offset_bits,
+      sizeBits: over.size_bits,
       path,
       reachedBytes: this.reachedBytes,
+      working: on?.working ?? false,
+      unpacking: on?.unpacking ?? null,
     });
   }
 }
@@ -566,7 +593,7 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
     w.waiting([], 0, root.node);
     return { items: w.items, pending: true, reachedBytes: w.reachedBytes, chunks: w.chunks.size };
   }
-  sections(w, [], root.node, kids.nodes, kids.from);
+  sections(w, [], root.node, kids.nodes, kids.from, null, kids.waitsTo !== undefined);
   return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes, chunks: w.chunks.size };
 }
 
@@ -647,8 +674,10 @@ function titleOf(node: TemplateNode, list: string | null): string {
 }
 
 /** The top-level parts of the file, and what is in each. `list` is the name
- *  of the list these are the elements of, when they are. */
-function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0, list: string | null = null): void {
+ *  of the list these are the elements of, when they are. `waits` says the
+ *  parts after `kids` have not arrived: a pending item stands for them after
+ *  the last one, over the rest of the parent. */
+function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0, list: string | null = null, waits = false): void {
   const breaks = sectionBreaks(kids);
   // What each part of the file actually covers, worked out before any of them
   // is drawn. Template order is not file order: a PDF declares the offset of
@@ -706,7 +735,9 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   const spans = parts.map((p) => p.extent).filter((e): e is Span => e !== null);
   const framed = parent.framed && spans.length > 0;
   const from = framed ? Math.min(...spans.map((s) => s.start)) : parent.offset_bits;
-  const to = framed ? Math.max(...spans.map((s) => s.end)) : end;
+  // Past the last part that arrived, nothing is known yet: the parts still
+  // to come cover it, so it is not a hole.
+  const to = framed || waits ? Math.max(from, ...spans.map((s) => s.end)) : end;
   const holes = uncovered(from, to, parts.map((p) => p.extent));
   // Every hole starts either where the parent does or where some part ends,
   // so each one has a place in the list without the parts being reordered.
@@ -740,6 +771,7 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
     }
     if (part.extent !== null) at(part.extent.end);
   }
+  if (waits) w.waiting(path, 0, { offset_bits: to, size_bits: Math.max(0, end - to) });
 }
 
 /** A stretch of bits. */
@@ -1064,7 +1096,7 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // whose own extent says nothing about them, so those ends stand for no
   // bytes rather than for the wrong ones.
   const outer = hollow ? { start, end } : { start: node.offset_bits, end: endBits(node) };
-  const to = slice.from + slice.nodes.length;
+  const to = slice.waitsTo ?? slice.from + slice.nodes.length;
   if (before > 0 && !elsewhere) {
     edge(w, "earlier", path, depth, before, slice.from, to, { start: outer.start, end: start });
   }
@@ -1077,7 +1109,14 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // down rather than a band here and a row there.
   const how = w.opts.density?.(node, slice.nodes) ?? densityOf(slice.nodes);
   rows(w, path, slice.nodes, slice.from, depth, bounds, node.child_count, slice.nodes, slice.from, how);
-  if (after > 0 && !elsewhere) {
+  if (slice.waitsTo !== undefined) {
+    // The children still to come go after the ones drawn, over the rest of
+    // the structure. How much of it they cover is not known until they
+    // arrive, so nothing there is a gap yet, and the list's end is not
+    // counted. Children in a space of their own say nothing about where the
+    // rest are, so the pending item stands over the whole structure.
+    w.waiting(path, depth, elsewhere ? node : { offset_bits: end, size_bits: Math.max(0, outer.end - end) });
+  } else if (after > 0 && !elsewhere) {
     edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
 }

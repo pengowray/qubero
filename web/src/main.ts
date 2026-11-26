@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode, type Unpacking } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -796,9 +796,16 @@ function buildDocument(tab: Tab): Page {
     }
     const wait = { key };
     waiting = wait;
+    // A go that ran out before it reached the stream's pass has no progress
+    // to give, so the status bar keeps the progress it showed last rather
+    // than going back to 0%.
+    let shown: Unpacking | null = null;
     waitToOpen(first, () => askOpen(path), (chunks) => doc.fileChunks(chunks), {
       live: () => waiting === wait,
-      working: (u) => waitSays(UNPACKED.unpacking(node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0))),
+      working: (u) => {
+        shown = u ?? shown;
+        waitSays(UNPACKED.unpacking(node.name, percentText(shown?.read_bits ?? 0, shown?.run_bits ?? 0), formatBytes(shown?.unpacked_bytes ?? 0)));
+      },
       loading: () => waitSays(UNPACKED.loading(node.name)),
       done: (value) => {
         waiting = null;

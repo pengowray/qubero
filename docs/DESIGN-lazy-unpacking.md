@@ -233,8 +233,9 @@ that runs out hands back `Busy` with the pass put back in `Spaces`'
 passes are kept, since one in its traced phase holds up to 64 MiB. A finished
 index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
 tab's source reads an index with no evaluator behind it. `Spaces::forget`
-drops both. `Evaluator::unpacking` reports the pass stepped most recently.
-A zstd run is stepped there the same way. An xz run comes through
+drops both. `Evaluator::unpacking` reports the pass the current go ran out
+of allowance in, which is the pass the call that answered `Busy` waits on
+(see "Which pass a call waits on"). A zstd run is stepped there the same way. An xz run comes through
 `index_run` too, and is handed to `decode_or_index` there, which lays it out
 in one go with nothing charged.
 
@@ -309,7 +310,7 @@ the same fallback past 64 MiB.
 - **Progress.** `Evaluator::unpacking` reports a walk in the same way as an
   index pass: the bits of the measured bytes read so far, and the bytes of
   output counted. If a walk and an index pass are both under way, it reports
-  whichever was stepped most recently (`Spaces::stamp`). The percentage is of
+  the one the current go ran out in. The percentage is of
   the bytes the walk measures, which run from the start of the member to the
   end of the file, at most 64 MiB of them. So in a file of several members,
   each walk ends short of 100% and the next one starts at 0. For a member
@@ -607,8 +608,9 @@ whatever reaches the stream first carries it on, a go at a time: the listing
 reading the stream's first bytes, or Open unpacked. `open_in` in the wasm
 crate runs with the usual `WORK_SLICE` now, and `open_space` answers
 "working" until the pass is done. `Editor::unpacking(space)` says how far the
-pass has got in the reading the tab's next call works in
-(`Editor::working_reading`): the tab's own reading, or its home's for a
+pass that the last call ran out in has got, in the reading the tab's next
+call works in (`Editor::working_reading`): the tab's own reading, or its
+home's for a
 stream read where it was declared, except while the tab's stream, or one it
 was opened from, is being opened again after an edit. `ensure_open` opens
 those first, from the file down, each in its home's reading, so the pass is
@@ -640,9 +642,71 @@ backstop. `fileChunks` waits on the reads `handleReply` already started
 (`has_chunk(0, c)`), since a pending reply's chunks are the file's whichever
 tab asked. A press while a wait is under way puts a new wait in its place.
 The listing's placeholder row for fields it cannot show yet says how far the
-unpacking has got while one is under way (`pendingText` in `listingdraw.ts`),
-and is updated on each redraw. The report's streams section waits for it as
-it waits for bytes, and waits the same way while the bytes load.
+unpacking of the stream they wait on has got (`pendingText` in
+`listingdraw.ts`), and is updated on each redraw. The report's streams
+section waits for it as it waits for bytes, and waits the same way while the
+bytes load.
+
+### Which pass a call waits on
+
+Until 2026-11-26 `Evaluator::unpacking` reported the pass stepped most
+recently, by the stamp each pass was put back with. The listing and Open
+unpacked work in the same reading, so while the listing carried on one stream
+and Open unpacked another, each could show the other's progress. The listing
+asked at draw time, after every call the walk made and any Open unpacked made
+between frames. Open unpacked asked right after its own call, but a go that
+ran out before it reached its stream's pass reported the other stream's.
+
+Now the go keeps the pass it ran out in (`Go::ran_out_in`): `index_pass` and
+`stream_end` note it, with how far the pass has got, as they put the pass
+back and hand back `Busy`. `begin_slice` clears it, so `Evaluator::unpacking`
+says nothing until the go runs out in a pass, and a go that runs out anywhere
+else waits on no pass. Only the first pass a go runs out in is kept. A pass
+reached after the allowance has gone is put back without having moved, and
+it is not what the go spent its allowance on.
+
+So `unpacking` asked right after a call is that call's stream. `Doc.openSpace`
+asks right after `open_space`, as before. The listing cannot, since it draws
+after its walk, so `template_children` puts it on its "working" reply as
+`unpacking`, and the walk keeps it on the pending item it puts where those
+children go. Each placeholder then shows the stream its own fields wait on. A
+"working" reply with no `unpacking` leaves the text a placeholder already
+shows, and Open unpacked keeps the last progress it was told, rather than
+going back to 0% for a go.
+
+The stamps stay, to choose which pass to let go of when `Unfinished` or
+`Measures` is full.
+
+### Children that are ready
+
+A slice of children used to be answered whole: `Evaluator::children` answered
+`Busy` or `Pending` as soon as one child did, and the listing drew one
+placeholder for the whole structure. While a gzip member's stream was
+unpacked, the member's ten header fields waited with it.
+
+`Evaluator::children_ready` gives the children before the first one that
+waits, and what the rest wait on. A child that answers `Busy` ends the slice,
+since the go has no allowance left to read the others. A child that answers
+`Pending` does not: the children after it are still read for the chunks they
+need, as before, so that children placed by offsets are one wait and not one
+each. `Evaluator::children` is the same answered whole.
+
+`template_children` puts the ready children on its "pending" or "working"
+reply as `ready`, with the chunks their previews want as `wanted`. They are
+never sent under "ok", because a short array there reads as a page of a
+list: `drawn` would add an edge counting the rest, and the other callers of
+`templateChildren` would take it as the whole answer. The web's
+`TemplateReply` carries `ready` as children whatever its type, so that a reply
+that is not "ok" can still be handed on as the reply to another question.
+Only the listing's walk uses it (`Walk.kids`, which marks the slice with
+`waitsTo`). `drawn` puts the pending item after the ready rows, over the rest
+of the structure, with no gap and no edge for the children still to come;
+`sections` does the same for the root, where the parts still to come would
+otherwise be a gap of bytes nothing describes. A slice with none ready is a
+placeholder for the whole structure, as before.
+
+While the member's stream is measured, this does not help: the listing has
+no rows at all (see "Still to do").
 
 Measured on 2026-10-26 in Chromium, with a generated gzip of 500,007,092
 bytes of CSV-like text packed to 20,306,027 (`make_gz.py` in that session's
@@ -932,10 +996,28 @@ The `hash` feature makes that module 2.3 KB larger.
 
 ## Still to do
 
-- `Evaluator::unpacking` reports the pass stepped most recently, which while
-  the listing carries on one stream and Open unpacked another may be the
-  listing's, so the status bar can show the other stream's progress for a
-  go.
+- While a gzip member's stream is measured, the listing has no rows at all,
+  not even a placeholder. The root's node waits on the walk: `members` is a
+  list read to the end of the file, so its count and the root's extent need
+  every member's length. The header fields themselves are ready
+  (`node` answers them), but nothing above them is. Only once the index pass
+  starts does the listing show the member's header above a placeholder. For
+  the CSV-like text in "Measuring a member's stream in steps", measuring was
+  about 35 of the 82 goes it took to open. Answering a list's node before its
+  count is known would need the listing to cope with a count that grows.
+- `Walk.kids` gives a structure's ready children when the rest wait on bytes
+  as well as on work, so while a file loads, rows can arrive a few at a time
+  rather than a structure at a time. The rows drawn are a prefix in template
+  order. A structure whose children are placed by offsets, out of file order,
+  can then show a gap between two ready children where a child still to come
+  will go, until it arrives. The listing's pages of a long list have the same
+  problem today.
+- Only two unfinished passes are kept (`UNFINISHED_PASSES`). Read from the
+  code, not yet tried: a ZIP with three large entries arrives with all three
+  open, so each frame of the listing steps three passes, and each one put back
+  pushes out the one stepped longest ago, which starts again from the front
+  the next frame. None of them would finish while the listing alone carries
+  them on.
 - A stream opened through the core's own reading of a recognised space
   (`Evaluator::open_space` given that space, or `tab_node`) is unpacked in
   one go, since that reading has no allowance. The wasm crate does not go
@@ -956,9 +1038,6 @@ The `hash` feature makes that module 2.3 KB larger.
   a step. `inflate::run` builds the fixed tables again for every fixed block
   (`fixed_codes`), which is probably most of that; building them once would
   help every decode.
-- While the pass runs, the listing shows no rows for a structure whose
-  children wait on it, even the ones before the stream (a gzip member's
-  header fields), since a slice of children is answered whole.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
 - A read of an xz span decodes to the end of the LZMA2 chunk that holds its
   last byte, up to 2 MiB past the read. Stopping at the read's last byte
@@ -1060,8 +1139,27 @@ The `hash` feature makes that module 2.3 KB larger.
   zlib, opened as a recognised tab and then opened again after an edit, says
   how far that unpacking has got on every "working" reply about the tab. The
   same tar packed as a gzip inside a gzip, opened from the tab of the inner
-  gzip, says how far it has got in that tab's own reading.
+  gzip, says how far it has got in that tab's own reading. The tar packed as
+  a gzip of one member: the member's children come back "working" with the
+  ten header fields as `ready` and the member's run as `unpacking`, and then
+  whole. Two such tars as the entries of a ZIP: a listing of the first
+  entry's fields and Open unpacked on the second, by turns, each say how far
+  their own entry's pass has got, on every "working" reply.
+- Which pass a call waits on, and the children that are ready, in
+  `eval::space` with the limits made small. A gzip member's children, read in
+  goes of 600 elements, come back with the header ready and the rest waiting
+  in at least three goes of the index pass, and then whole. Two members'
+  streams carried on by turns, a listing read of one and an open of the
+  other, each report their own run; a go reports nothing until it runs out
+  in a pass; and a go that runs out in one pass and then reaches the other
+  reports the first.
 - `web/test/openwait.test.ts`: `waitToOpen` loads and asks again through
   "pending" and "working" to the tab, and stops on the same chunks twice, on
   chunks pushed out by their own load, on a read that fails, after
   `MAX_ROUNDS`, and with nothing more said once the wait is no longer wanted.
+- `web/test/flatten.test.ts`: a member whose children come back "working"
+  with six ready is six rows and one pending item over the rest of the
+  member, with no gap and no edge; with none ready, one pending item over the
+  member; two members waiting on two passes each keep their own progress; a
+  root whose second part waits has no gap after the first; a page of a list
+  that stops at a child that waits has no edge counting the rest.
