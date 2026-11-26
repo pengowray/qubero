@@ -75,7 +75,7 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
 | `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one deflate block's trace, and in all the block traces a run keeps. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
 | `MAX_BLOCK_MARKS` | 65,536 | Deflate block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
-| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded whole, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
+| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded from their start, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
 a time limit makes the same file open on one computer and not on another, and
@@ -498,8 +498,9 @@ offset in the output, and what a decoder needs to start there: for deflate,
 the block header and the 32 KiB window, and how many deflate blocks start
 before it; for xz, the number of the xz block.
 `Seekable` also keeps the same span cache (decoded spans) and span trace cache
-(the trace of the span asked about most recently) for all three. Each codec
-has its own decoder for spans.
+(the trace of the span asked about most recently) for all three, except that
+an xz run keeps its spans part decoded in a cache of their own: see "Reading
+an xz span". Each codec has its own decoder for spans.
 
 Spans are built from these checkpoints with the same rules as deflate's. A
 frame start or an xz block start becomes a checkpoint when the output since
@@ -643,7 +644,7 @@ and peak RSS are in MB (10^6 bytes); span sizes are output in MiB.
 |---|---|---|---|---|---|---|
 | `pzstd -1` | 37.5 MB | 239 spans of 2 MiB | 1.59 s | 0.36 s (7 ms each) | 1.76 s | 106 MB |
 | `pzstd -3` | 43.4 MB | 60 spans of 8 MiB | 1.63 s | 1.55 s (31 ms each) | 2.01 s | 117 MB |
-| `xz -6 -T0` | 21.3 MB | 20 spans of 24 MiB | 20 µs (no pass) | 4.07 s (81 ms each) | 3.55 s | 103 MB |
+| `xz -6 -T0` | 21.3 MB | 20 spans of 24 MiB | 35 µs (no pass) | 4.07 s (81 ms each) | 3.55 s | 103 MB |
 | `zstd -3 -T6` (one frame) | 43.1 MB | refused as too large, 0.31 s after the pass started | | | | 116 MB |
 
 The peak RSS of the zstd files comes from the first part of the index pass,
@@ -695,6 +696,10 @@ time decodes each block once, a chunk or two per read.
   `-1`) with no progress shown. It could stop at frame starts, as deflate's
   pass stops between codes.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
+- A read of an xz span decodes to the end of the LZMA2 chunk that holds its
+  last byte, up to 2 MiB past the read. Stopping at the read's last byte
+  would need the range coder's state kept between reads, and a stop between
+  two symbols in `decoder::run`.
 - zstd frame checksums (XXH64) are not checked: `ruzstd` is built without its
   `hash` feature.
 - A run refused because one frame or block is past 64 MiB says "over 64 MiB"
