@@ -121,10 +121,10 @@ type Chunk (named by id, contents body) {
       tag: u16le enum WamdTag {
         0 = metadata version, 1 = model, 2 = serial, 3 = firmware, 4 = file name prefix,
         5 = timestamp, 6 = position, 7 = GPS track, 8 = software, 9 = Kaleidoscope licence key,
-        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note,
+        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note (WAV file),
         14 = species auto ID statistics, 15 = time expansion, 16 = recorder program,
         17 = recorder run state, 18 = microphone, 19 = sensitivity,
-        20 = position, SM4BAT firmware 2, 21 = temperature
+        20 = position, SM4BAT firmware 2, 21 = temperature, 65535 = alignment padding
       }
       length: u32le
       value: sized(length) switch tag {
@@ -1134,10 +1134,10 @@ type ChunkBE = Chunk (named by id, contents body) {
       tag: u16be enum WamdTag {
         0 = metadata version, 1 = model, 2 = serial, 3 = firmware, 4 = file name prefix,
         5 = timestamp, 6 = position, 7 = GPS track, 8 = software, 9 = Kaleidoscope licence key,
-        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note,
+        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note (WAV file),
         14 = species auto ID statistics, 15 = time expansion, 16 = recorder program,
         17 = recorder run state, 18 = microphone, 19 = sensitivity,
-        20 = position, SM4BAT firmware 2, 21 = temperature
+        20 = position, SM4BAT firmware 2, 21 = temperature, 65535 = alignment padding
       }
       length: u32be
       value: sized(length) switch tag {

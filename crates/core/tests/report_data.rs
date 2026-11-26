@@ -203,7 +203,14 @@ fn a_riff_size_short_of_its_last_chunk_is_stretched_and_the_chunk_read() {
     assert_eq!(riff.verdict, "stretched");
     assert_eq!(riff.read.unwrap() - riff.stated.unwrap(), 40 * 8);
     let l = w.ledger();
-    assert_eq!(bits(&l, "guan", "content"), 160 * 8, "the GUANO text is read, not left a gap");
+    // Each GUANO line is a record of its own, so the lines are counted under
+    // their own group and the zero bytes after them under the chunk.
+    assert_eq!(
+        bits(&l, "GuanoField", "content") + bits(&l, "guan", "content"),
+        160 * 8,
+        "the GUANO text is read, not left a gap"
+    );
+    assert_eq!(bits(&l, "guan", "content"), 48 * 8, "the zero bytes after the last line");
     assert_eq!(l.rows.iter().filter(|r| r.role == "gap").count(), 0);
     // The kind totals take the chunk in too, as the listing does.
     let mut ev = Evaluator::new(formats::template("wav").unwrap());

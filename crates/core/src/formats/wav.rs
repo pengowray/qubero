@@ -65,9 +65,9 @@ const LOOP_TYPE: &[(i128, &str)] = &[(0, "forward"), (1, "alternating"), (2, "ba
 const SMPTE_FORMAT: &[(i128, &str)] =
     &[(0, "none"), (24, "24 fps"), (25, "25 fps"), (29, "30 fps drop"), (30, "30 fps")];
 
-/// `wamd` tag numbers. 0x00 to 0x13 are the ones guano-py's `wamd2guano.py`
-/// names; SM4BAT firmware 2 also writes 0x14, the position in place of 0x06,
-/// and 0x15, the temperature as text such as `16.25C`.
+/// `wamd` tag numbers. 0x00 to 0x13 and 0xffff are the ones guano-py's
+/// `wamd2guano.py` names; SM4BAT firmware 2 also writes 0x14, the position in
+/// place of 0x06, and 0x15, the temperature as text such as `16.25C`.
 const WAMD_TAG: &[(i128, &str)] = &[
     (0x00, "metadata version"),
     (0x01, "model"),
@@ -82,7 +82,7 @@ const WAMD_TAG: &[(i128, &str)] = &[
     (0x0a, "notes"),
     (0x0b, "species auto ID"),
     (0x0c, "species manual ID"),
-    (0x0d, "voice note"),
+    (0x0d, "voice note (WAV file)"),
     (0x0e, "species auto ID statistics"),
     (0x0f, "time expansion"),
     (0x10, "recorder program"),
@@ -91,11 +91,13 @@ const WAMD_TAG: &[(i128, &str)] = &[
     (0x13, "sensitivity"),
     (0x14, "position, SM4BAT firmware 2"),
     (0x15, "temperature"),
+    (0xffff, "alignment padding"),
 ];
 
 /// The `wamd` tags whose value is text. The version and the time expansion
-/// factor are 16-bit numbers; the voice note is audio, and the program and
-/// run state are settings in a binary layout nobody has published.
+/// factor are 16-bit numbers; the voice note is a whole WAV file, the program
+/// and run state are settings in a binary layout nobody has published, and
+/// 0xffff pads the chunk to an even length.
 const WAMD_TEXT: &[i128] = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0e, 0x12, 0x13, 0x14, 0x15];
 
 pub fn wav() -> Template {

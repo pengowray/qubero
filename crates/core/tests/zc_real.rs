@@ -5,8 +5,9 @@
 //! a decoder written here in plain Rust, the way Oversample decodes type 131
 //! and 132 files: a one-byte change from the interval before, a 13, 21 or 29
 //! bit interval given outright, or a two-byte status code that gives none.
-//! `zcjs-demo.zc` is a real recording of 2,219 codes; the others are built by
-//! `tools/make_zc_wav_samples.py` in the collection.
+//! `zcjs-demo.zc`, when the collection has it, is a real recording of 2,219
+//! codes; the others are built by `tools/make_zc_wav_samples.py` in the
+//! collection.
 //!
 //! Point `QUBERO_SAMPLES` at the collection, or keep it beside the repository
 //! as `qubero-samples`. With neither, the test says so and passes.
@@ -65,7 +66,6 @@ fn every_anabat_sample_reads_whole_and_its_intervals_add_up() {
     };
     let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
-    assert!(files.iter().any(|f| f.ends_with("zcjs-demo.zc")), "zcjs-demo.zc is in {dir:?}");
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let bytes = std::fs::read(&path).unwrap();
