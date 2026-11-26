@@ -84,6 +84,17 @@ const CHUNK_NAMES: ReadonlyMap<string, string> = new Map([
   ["fdAT", "Frame data"],
   ["IDAT", "Pixels, compressed"],
   ["eXIf", "Exif"],
+  ["cICP", "Colour coding (H.273)"],
+  ["mDCV", "Mastering display"],
+  ["cLLI", "Light levels"],
+  ["oFFs", "Image offset"],
+  ["pCAL", "Pixel calibration"],
+  ["sCAL", "Physical scale"],
+  ["sTER", "Stereo layout"],
+  ["gIFg", "GIF frame control"],
+  ["gIFx", "GIF extension"],
+  ["gIFt", "GIF text"],
+  ["dSIG", "Digital signature"],
 ]);
 
 /** The colour types in words a reader uses. */
