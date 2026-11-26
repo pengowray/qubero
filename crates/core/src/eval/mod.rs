@@ -143,6 +143,11 @@ pub type R<T> = Result<T, EvalError>;
 /// stream large enough that the pass takes more than one go. The pass reads
 /// the compressed run once from front to back, so `read_bits` of `run_bits`
 /// is how much of it is done.
+///
+/// The walk that finds where a gzip member's deflate stream ends is reported
+/// the same way while it is under way. Its `run_bits` are the bytes it
+/// measures, from the start of the run to the end of the file or 64 MiB on,
+/// and `unpacked_bytes` the output it has counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unpacking {
     /// Where the compressed run is: the space it is a field of, 0 for the
@@ -2858,8 +2863,9 @@ impl Evaluator {
 
     /// How far the pass unpacking a large compressed stream has got, while one
     /// is under way: the stream asked for most recently, whose pass a go ran
-    /// out in the middle of. Nothing when no pass is unfinished. See
-    /// [`Unpacking`].
+    /// out in the middle of. That pass is an index pass or the walk measuring
+    /// where a gzip member's stream ends. Nothing when no pass is unfinished.
+    /// See [`Unpacking`].
     pub fn unpacking(&self) -> Option<Unpacking> {
         let ((run_space, run_offset_bits, _), p) = self.spaces.unpacking()?;
         Some(Unpacking { run_space, run_offset_bits, read_bits: p.read_bits, run_bits: p.run_bits, unpacked_bytes: p.unpacked })

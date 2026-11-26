@@ -138,6 +138,12 @@ pub struct Limits {
     /// size: `pzstd` writes frames four windows long, and `xz -T0` writes
     /// blocks three dictionaries long, megabytes at the smallest.
     pub span: usize,
+    /// The most output a deflate stream is counted to when it is only being
+    /// measured, to find where it ends ([`crate::template::Expr::StreamLen`]):
+    /// [`CAP_BYTES`]. A limit of its own and not [`Limits::whole`], so that a
+    /// test can make the runs held whole small and still measure a gzip
+    /// member past them, and can reach this one without 64 MiB of output.
+    pub measure: u64,
 }
 
 impl Default for Limits {
@@ -152,6 +158,7 @@ impl Default for Limits {
             whole_steps: crate::codec::MAX_STEPS,
             block_marks: MAX_BLOCK_MARKS,
             span: CAP_BYTES,
+            measure: CAP_BYTES as u64,
         }
     }
 }

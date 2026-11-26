@@ -33,6 +33,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::codec::lazy::{self, Decoded, Limits, Seekable, Stepped};
+use crate::codec::inflate;
 use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
 use crate::source::{Missing, Source};
@@ -650,8 +651,8 @@ const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 /// first. A reading stepping two runs by turns keeps both.
 #[derive(Default)]
 pub(super) struct Unfinished {
+    /// Each pass with the stamp it was put back with (see [`Spaces::stamp`]).
     entries: Vec<(RunKey, Codec, lazy::Indexing, u64)>,
-    clock: u64,
 }
 
 /// How many unfinished passes are kept at once.
@@ -665,18 +666,90 @@ impl Unfinished {
     }
 
     /// Put a pass back to be carried on next go.
-    fn put(&mut self, key: RunKey, codec: Codec, pass: lazy::Indexing) {
+    fn put(&mut self, key: RunKey, codec: Codec, pass: lazy::Indexing, stamp: u64) {
         while self.entries.len() >= UNFINISHED_PASSES {
             let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
             self.entries.swap_remove(oldest);
         }
-        self.clock += 1;
-        self.entries.push((key, codec, pass, self.clock));
+        self.entries.push((key, codec, pass, stamp));
     }
 
-    /// How far the pass stepped most recently has got.
-    fn latest(&self) -> Option<(RunKey, lazy::Progress)> {
-        self.entries.iter().max_by_key(|e| e.3).map(|e| (e.0, e.2.progress()))
+    /// How far the pass stepped most recently has got, and its stamp.
+    fn latest(&self) -> Option<(RunKey, lazy::Progress, u64)> {
+        self.entries.iter().max_by_key(|e| e.3).map(|e| (e.0, e.2.progress(), e.3))
+    }
+}
+
+/// Deflate streams being measured to find where they end, for
+/// [`Expr::StreamLen`](crate::template::Expr::StreamLen): the walks started
+/// and not finished, carried on a step at a time on each go, and the ends
+/// found. Each is kept by where the bytes measured are: the space, the bit
+/// the stream starts at, and how many bits there are from there to the end
+/// of the container or to the cap on a run's size, whichever is nearer.
+///
+/// Kept apart from [`Unfinished`], so that measuring one gzip member never
+/// puts back the indexing pass of another, or the other way round.
+///
+/// The ends are kept as well as the walks, as a guard. If a go ran out after a
+/// walk had finished and before the field it sizes was placed, the next go
+/// would ask again, and without the end kept it would start the walk again
+/// from the front: for a stream that takes more than one go to measure, every
+/// go could then run out before the walk finished. The gzip template places
+/// the field as soon as the walk finishes, but a template that puts
+/// `StreamLen` inside a larger expression might not.
+#[derive(Default)]
+pub(super) struct Measures {
+    /// Each walk with the bytes it walks and the stamp it was put back with.
+    walking: Vec<(RunKey, Codec, Vec<u8>, inflate::Measuring, u64)>,
+    /// Where each stream ended, in bytes from its start, or why it has no end
+    /// to give. Oldest first.
+    ended: std::collections::VecDeque<(RunKey, Codec, Result<u64, Refusal>)>,
+}
+
+/// How many unfinished measuring walks are kept at once. Each holds the bytes
+/// it walks, up to 64 MiB.
+const MEASURING_WALKS: usize = 2;
+
+/// How many ends found are kept, the oldest going first. A few bytes each.
+const ENDS_KEPT: usize = 64;
+
+impl Measures {
+    fn ended(&self, key: RunKey, codec: Codec) -> Option<Result<u64, Refusal>> {
+        self.ended.iter().find(|e| e.0 == key && e.1 == codec).map(|e| e.2)
+    }
+
+    fn end(&mut self, key: RunKey, codec: Codec, found: Result<u64, Refusal>) {
+        if self.ended.len() >= ENDS_KEPT {
+            self.ended.pop_front();
+        }
+        self.ended.push_back((key, codec, found));
+    }
+
+    /// The walk over the stream at `key`, taken out to be stepped.
+    fn take(&mut self, key: RunKey, codec: Codec) -> Option<(Vec<u8>, inflate::Measuring)> {
+        let i = self.walking.iter().position(|e| e.0 == key && e.1 == codec)?;
+        let (_, _, data, walk, _) = self.walking.swap_remove(i);
+        Some((data, walk))
+    }
+
+    /// Put a walk back to be carried on next go.
+    fn put(&mut self, key: RunKey, codec: Codec, data: Vec<u8>, walk: inflate::Measuring, stamp: u64) {
+        while self.walking.len() >= MEASURING_WALKS {
+            let oldest = (0..self.walking.len()).min_by_key(|&i| self.walking[i].4).expect("not empty");
+            self.walking.swap_remove(oldest);
+        }
+        self.walking.push((key, codec, data, walk, stamp));
+    }
+
+    /// How far the walk stepped most recently has got, and its stamp.
+    fn latest(&self) -> Option<(RunKey, lazy::Progress, u64)> {
+        let e = self.walking.iter().max_by_key(|e| e.4)?;
+        let progress = lazy::Progress { read_bits: e.3.read_bits(), run_bits: e.2.len() as u64 * 8, unpacked: e.3.unpacked() };
+        Some((e.0, progress, e.4))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.walking.is_empty() && self.ended.is_empty()
     }
 }
 
@@ -689,6 +762,21 @@ impl Unfinished {
 /// same pass on.
 const INDEX_STEP_BYTES: u64 = 256 << 10;
 const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 512;
+
+/// How many bits of a deflate stream one step of measuring it reads, and how
+/// many bits are charged as one element of a go's allowance.
+///
+/// Counted in bits read, where the indexing pass counts output, because a
+/// decoder that only counts the output does about the same work for each code
+/// it reads, whether the code is a literal or a match copying 258 bytes. So
+/// 64 MiB of the Rubin raw's long matches count in 5 ms native, and 64 MiB of
+/// CSV-like text in about 500 ms. A code is at least one bit long, so a step of
+/// 1 Mibit reads at most about a million codes: 3.5 ms native on CSV-like
+/// text, 8 ms on literals of one or two bits each. A step is charged after it
+/// is done, for the bits it read, so that measuring a short stream costs a go
+/// next to nothing.
+const MEASURE_STEP_BITS: u64 = 1 << 20;
+const MEASURE_BITS_PER_ELEMENT: u64 = 1024;
 
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
@@ -849,6 +937,12 @@ pub(super) struct Spaces {
     /// a pass is not made twice.
     #[cfg(test)]
     pub(super) passes: std::cell::Cell<u32>,
+    /// Deflate streams being measured to find where they end, and the ends
+    /// found.
+    measures: Measures,
+    /// A count of passes stepped, indexing and measuring both, so that
+    /// `unpacking` can say which was stepped most recently.
+    stamps: std::cell::Cell<u64>,
 }
 
 impl Default for Spaces {
@@ -865,6 +959,8 @@ impl Default for Spaces {
             refused_runs: Default::default(),
             #[cfg(test)]
             passes: Default::default(),
+            measures: Default::default(),
+            stamps: Default::default(),
         }
     }
 }
@@ -1010,10 +1106,13 @@ impl Spaces {
         }
     }
 
-    /// Whether any stream has been opened at all. Most files hold none, and
-    /// the sweep that drops decoded nodes should cost them nothing.
+    /// Whether any stream has been opened, indexed or measured at all. Most
+    /// files hold none, and the sweep that drops decoded nodes should cost them
+    /// nothing. A gzip member is measured before anything opens it, and an
+    /// index pass can be under way before its stream has opened, so those
+    /// count too: an edit has to drop them.
     pub(super) fn any(&self) -> bool {
-        !self.opened.is_empty()
+        !self.opened.is_empty() || !self.measures.is_empty() || !self.unfinished.borrow().entries.is_empty() || !self.indexes.borrow().entries.is_empty() || !self.refused_runs.borrow().is_empty()
     }
 
     /// Start again from nothing. A decoded buffer is worked out from bytes of
@@ -1027,12 +1126,24 @@ impl Spaces {
         self.indexes.borrow_mut().entries.clear();
         self.unfinished.borrow_mut().entries.clear();
         self.refused_runs.borrow_mut().clear();
+        self.measures = Measures::default();
     }
 
-    /// The run being indexed most recently, and how far its pass has got,
-    /// while it has not finished.
+    /// The run being indexed or measured most recently, and how far its pass
+    /// has got, while it has not finished. A measuring walk's key is the bytes
+    /// it walks, which start where the run does.
     pub(super) fn unpacking(&self) -> Option<(RunKey, lazy::Progress)> {
-        self.unfinished.borrow().latest()
+        let indexing = self.unfinished.borrow().latest();
+        let measuring = self.measures.latest();
+        indexing.into_iter().chain(measuring).max_by_key(|e| e.2).map(|(key, progress, _)| (key, progress))
+    }
+
+    /// A number larger than any handed out before, for the pass being put
+    /// back now.
+    fn stamp(&self) -> u64 {
+        let stamp = self.stamps.get() + 1;
+        self.stamps.set(stamp);
+        stamp
     }
 }
 
@@ -1090,7 +1201,8 @@ impl super::Evaluator {
         };
         loop {
             if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
-                self.spaces.unfinished.borrow_mut().put(key, codec, pass);
+                let stamp = self.spaces.stamp();
+                self.spaces.unfinished.borrow_mut().put(key, codec, pass, stamp);
                 return Err(busy);
             }
             match pass.step(INDEX_STEP_BYTES) {
@@ -1098,6 +1210,57 @@ impl super::Evaluator {
                 Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
                 Err(why) => return Ok(Err(why)),
             }
+        }
+    }
+
+    /// How many bytes the stream packed with `codec` at the front of the
+    /// `key.2` bits at bit `key.1` of space `key.0` takes, which is what
+    /// [`crate::codec::stream_len`] says of those bytes. `Ok(Err)` is the
+    /// refusal it gives.
+    ///
+    /// A deflate stream is measured a step at a time ([`inflate::Measuring`]),
+    /// each step charged to this go's allowance, and a go that runs out hands
+    /// back `Busy` with the walk kept, to be carried on from where it stopped
+    /// the next time the same stream is measured. What it finds is kept as
+    /// well. Any other codec is answered in one go, as before.
+    pub(super) fn stream_end<S: Source>(&mut self, doc: &Document<S>, key: RunKey, codec: Codec) -> super::R<Result<u64, Refusal>> {
+        if let Some(found) = self.spaces.measures.ended(key, codec) {
+            return Ok(found);
+        }
+        let started = self.spaces.measures.take(key, codec);
+        let (data, mut walk) = match started {
+            Some(walk) => walk,
+            None => {
+                let data = self.read_in(doc, key.0, key.1, key.2)?;
+                if codec != Codec::Deflate {
+                    return Ok(crate::codec::stream_len(codec, &data));
+                }
+                (data, inflate::Measuring::new(self.spaces.lazy_limits.measure))
+            }
+        };
+        loop {
+            if let Err(busy) = self.go.charge(0) {
+                let stamp = self.spaces.stamp();
+                self.spaces.measures.put(key, codec, data, walk, stamp);
+                return Err(busy);
+            }
+            let from = walk.read_bits();
+            let stepped = walk.step(&data, MEASURE_STEP_BITS);
+            let to = match stepped {
+                Ok(inflate::Measured::Ends(len)) => len * 8,
+                Ok(inflate::Measured::Working) => walk.read_bits(),
+                // A refused step does not say how far it read, so it is
+                // charged in full.
+                Err(_) => from + MEASURE_STEP_BITS,
+            };
+            self.go.spent(to.saturating_sub(from) / MEASURE_BITS_PER_ELEMENT);
+            let found = match stepped {
+                Ok(inflate::Measured::Working) => continue,
+                Ok(inflate::Measured::Ends(len)) => Ok(len),
+                Err(why) => Err(why),
+            };
+            self.spaces.measures.end(key, codec, found);
+            return Ok(found);
         }
     }
 }
@@ -1419,11 +1582,7 @@ mod tests {
     fn a_gzip_past_the_cap_reads_a_go_at_a_time() {
         use crate::eval::EvalError;
         let text = many_lines();
-        let mut gzip = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
-        gzip.extend(miniz_oxide::deflate::compress_to_vec(&text, 6));
-        gzip.extend(crate::checksum::crc32(&text).to_le_bytes());
-        gzip.extend((text.len() as u32).to_le_bytes());
-        let d = Document::new(MemSource(gzip));
+        let d = Document::new(MemSource(gzip_member(&text)));
         let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
         e.spaces.set_lazy_limits(small_limits());
         e.set_slice(Some(600));
@@ -1447,6 +1606,137 @@ mod tests {
         for at in [0usize, 777_777, text.len() - 100] {
             assert_eq!(e.read_in(&d, id, at as u64 * 8, 800).unwrap(), &text[at..at + 100], "100 bytes at {at}");
         }
+    }
+
+    /// Lines of a count and a number that looks random, which pack to about
+    /// half their size, so that a stream of a megabyte or two takes several
+    /// steps to measure.
+    fn numbered_lines(lines: u64, salt: u64) -> Vec<u8> {
+        (0..lines).flat_map(|i| format!("{i} {}\n", i.wrapping_mul(0x9e37_79b9_7f4a_7c15 ^ salt) >> 40).into_bytes()).collect()
+    }
+
+    /// One gzip member holding `text`, packed at level 6, with no name.
+    fn gzip_member(text: &[u8]) -> Vec<u8> {
+        let mut gzip = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        gzip.extend(miniz_oxide::deflate::compress_to_vec(text, 6));
+        gzip.extend(crate::checksum::crc32(text).to_le_bytes());
+        gzip.extend((text.len() as u32).to_le_bytes());
+        gzip
+    }
+
+    /// Every gzip member's fields, as a name, where the field starts and how
+    /// long it is, read in goes of `slice` elements under `limits`; the
+    /// evaluator that read them; and how many goes handed back while a
+    /// member's stream was being measured.
+    fn gzip_members_in_goes(d: &Document<MemSource>, limits: crate::codec::lazy::Limits, slice: Option<u64>) -> (Vec<(String, u64, u64)>, Evaluator, usize) {
+        use crate::eval::EvalError;
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(limits);
+        e.set_slice(slice);
+        let (mut goes, mut measuring, mut at) = (0, 0, (0, 0));
+        let fields = loop {
+            e.begin_slice();
+            let read = (|| {
+                let members = e.node(d, &[0])?.child_count as usize;
+                let mut fields = Vec::new();
+                for m in 0..members {
+                    for f in e.children(d, &[0, m], 0, 20)? {
+                        fields.push((f.name, f.offset_bits, f.size_bits));
+                    }
+                }
+                Ok(fields)
+            })();
+            match read {
+                Ok(fields) => break fields,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    assert!(goes < 2000, "no end to the goes");
+                    if !e.spaces.measures.walking.is_empty() {
+                        measuring += 1;
+                        // The walk stepped last is the one reported, and it
+                        // only moves forward.
+                        let p = e.unpacking().expect("a walk is under way");
+                        let walk = (p.run_offset_bits, p.read_bits);
+                        assert!(walk.0 != at.0 || walk.1 > at.1, "{at:?} then {walk:?}");
+                        assert!(p.read_bits <= p.run_bits);
+                        at = walk;
+                    }
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        };
+        e.set_slice(None);
+        (fields, e, measuring)
+    }
+
+    /// Measuring where a gzip member's stream ends is charged to the work
+    /// allowed for a go, and a go that runs out part-way carries on next time
+    /// from where it stopped. Two members, both past the cap on a run held
+    /// whole, come to the same fields in goes as in one go, each run as long
+    /// as its deflate stream, and the joined stream reads across the join.
+    #[test]
+    fn gzip_members_are_measured_a_go_at_a_time() {
+        let (first, second) = (numbered_lines(140_000, 1), numbered_lines(90_000, 2));
+        let d = Document::new(MemSource([gzip_member(&first), gzip_member(&second)].concat()));
+        let (one, _, measured) = gzip_members_in_goes(&d, small_limits(), None);
+        assert_eq!(measured, 0);
+        let (stepped, mut e, measured) = gzip_members_in_goes(&d, small_limits(), Some(600));
+        assert_eq!(stepped, one);
+        // Each member's stream takes several steps to measure.
+        assert!(measured >= 8, "{measured} goes measuring");
+        let runs: Vec<u64> = stepped.iter().filter(|f| f.0 == "compressed").map(|f| f.2).collect();
+        let deflate = |text: &[u8]| miniz_oxide::deflate::compress_to_vec(text, 6).len() as u64 * 8;
+        assert_eq!(runs, [deflate(&first), deflate(&second)]);
+        assert!(runs.iter().all(|&bits| bits > 4 * super::MEASURE_STEP_BITS), "each run is several steps long: {runs:?}");
+
+        let joined = [&first[..], &second[..]].concat();
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().size_bits, joined.len() as u64 * 8);
+        let Some(Opened::Space(id)) = e.spaces.get(&[1]) else { panic!("the joined stream did not open") };
+        let at = first.len() - 50;
+        assert_eq!(e.read_in(&d, id, at as u64 * 8, 800).unwrap(), &joined[at..at + 100]);
+    }
+
+    /// A member whose stream comes to more than the measuring cap has no end
+    /// to give, and its run falls back to everything before the last trailer,
+    /// in goes as in one go. That is right for a file of one member, and for
+    /// a file of two it takes in the second, as it did before measuring went
+    /// in goes.
+    #[test]
+    fn a_gzip_member_past_the_measuring_cap_falls_back_in_goes_as_in_one() {
+        let limits = crate::codec::lazy::Limits { measure: 1 << 20, ..small_limits() };
+        let text = numbered_lines(140_000, 3);
+        for members in [1, 2] {
+            let file: Vec<u8> = (0..members).flat_map(|_| gzip_member(&text)).collect();
+            let d = Document::new(MemSource(file.clone()));
+            let (one, _, _) = gzip_members_in_goes(&d, limits, None);
+            let (stepped, e, measured) = gzip_members_in_goes(&d, limits, Some(600));
+            assert_eq!(stepped, one, "{members} members");
+            assert!(measured >= 2, "{members} members: {measured} goes measuring");
+            let runs: Vec<u64> = stepped.iter().filter(|f| f.0 == "compressed").map(|f| f.2).collect();
+            assert_eq!(runs, [(file.len() as u64 - 10 - 8) * 8], "{members} members");
+            let key = (0, 80, (file.len() as u64 - 10) * 8);
+            assert_eq!(e.spaces.measures.ended(key, crate::codec::Codec::Deflate), Some(Err(crate::codec::Refusal::TooLarge)));
+        }
+    }
+
+    /// An edit drops the ends measured, even when no stream has been opened:
+    /// a member measured before the edit is measured again after it, and
+    /// reads as a fresh reading of the edited file does.
+    #[test]
+    fn an_edit_drops_the_ends_measured() {
+        let mut file = [gzip_member(b"the first member, which an edit breaks"), gzip_member(b"and a second one")].concat();
+        let d = Document::new(MemSource(file.clone()));
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 2);
+        assert!(e.spaces.get(&[0, 0, 10]).is_none(), "nothing has been opened");
+        // The first byte of the first member's deflate, now a block of type
+        // 3, which no stream has.
+        file[10] = 0xff;
+        let d = Document::new(MemSource(file));
+        e.invalidate_from(80);
+        let fresh = Evaluator::new(formats::builtin("gzip").unwrap()).node(&d, &[0]).unwrap().child_count;
+        assert_eq!(fresh, 1, "the broken member's run takes in the second");
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, fresh);
     }
 
     /// An xz stream of several blocks and a zstd run of several frames, past
