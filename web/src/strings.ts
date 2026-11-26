@@ -644,14 +644,27 @@ export const JOINED = {
    */
   tooLarge: (tab: string): string => `Couldn't open ${tab}: its parts take up over 64 MiB in the file.`,
   /**
+   * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part unpacks to more than 1 GiB
+   * (`too-large-lazy`), the limit for a compressed stream read a piece at a
+   * time. `unpacks to` says the 1 GiB is unpacked size, not size in the file,
+   * which is what `tooLarge` above is about. The core does not say which
+   * part; a read of that part in the listing names it.
+   */
+  partTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts unpacks to over 1 GiB.`,
+  /**
    * In the status bar, when Open joined stream was pressed and joining the
    * whole stream failed: a part would not read, would not unpack, or unpacked
    * to another length than its block said. The core does not say which part,
    * so neither does this, and `read or unpacked` is true of a stored run and
    * a packed one alike. `tab` is the title the tab would have had, which names
-   * what was pressed.
+   * what was pressed. Also said for any refusal this build has no words for.
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
+  /** Which of the three a refusal of Open joined stream is, by the core's
+   *  refusal word. */
+  refused: (refused: string, tab: string): string =>
+    refused === "too-large" ? JOINED.tooLarge(tab) : refused === "too-large-lazy" ? JOINED.partTooLarge(tab) : JOINED.failed(tab),
   /** Names the tab a joined stream opens in. The same shape as
    *  `UNPACKED.tabTitle`. */
   tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
