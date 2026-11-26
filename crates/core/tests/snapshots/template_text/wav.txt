@@ -915,109 +915,1232 @@ type Chunk (named by id, contents body) {
         }
       }
     }
-    'data' => switch 468 <= remaining and peek(u40be at 1568 bits) == 'D500X' and 468 <=
-        peek(u32le) and peek(u32le) <= remaining and peek(u32le) % 2 == 0 {
-      1 => D500XData {
-        // Metadata from a Pettersson D500X bat recorder. It sits at the start of the data
-            chunk, but the chunk size does not include it: the size counts only the samples
-            after it.
-        d500x_metadata: sized(peek(u32le)) D500XMetadata {
-          // Length of this block in bytes, including these 4.
-          length: u32le
-          unused_after_length: bytes[160]
-          file_name: text[16] padded with 0x00 ascii
-          // Recording date and time, as YYMMDD hh:mm:ss.
-          file_time: text[16] padded with 0x00 ascii
-          // Recorder model and firmware version, then the firmware's build date (YYMMDD) and
-              time.
-          firmware: text[48] padded with 0x00 ascii
-          // Sample rate in kHz (f), pre-trigger (PRE), and recording length in seconds (LEN).
-          profile_line_1: text[24] padded with 0x00 ascii
-          // High-pass filter (HP), automatic recording (A), and trigger sensitivity (TS).
-          profile_line_2: text[24] padded with 0x00 ascii
-          // Not documented. In the one file examined, these match the profile settings as
-              positions in the recorder's option lists, for example 2 for 500 kHz.
-          settings: u8be[8]
-          profile_name: text[168] padded with 0x00 ascii
-          // Lines of text, each ending in CR LF. LAT and LON are the position entered for the
-              recorder's sunrise and sunset timer, not where it recorded.
-          text_lines: sized(find(00)) repeat(until end) text until 0x0a or end latin1
-          unused_after_text: bytes[remaining]
+    'data' => switch earlier(body.format) == 85 or earlier(body.format) == 80 {
+      1 => MpegAudioData {
+        audio: MpegAudio {
+          // The MPEG audio frames, one after another. The list can also contain runs of zero
+              bytes between frames, and another ID3v2 tag where several files were joined into
+              one.
+          frames: repeat(while (remaining >= 4 and (peek(u32be) >> 21 & 0x07ff == 2047 and
+              peek(u32be) >> 19 & 3 != 1 and peek(u32be) >> 17 & 3 != 0 and peek(u32be) >> 12 &
+              0x0f != 0 and peek(u32be) >> 12 & 0x0f != 15 and peek(u32be) >> 10 & 3 != 3) and
+              (peek(u32be) >> 17 & 3 == 3 ? (12000 * ((((peek(u32be) >> 19 & 3 == 3 ? 3 -
+              (peek(u32be) >> 17 & 3) : (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+              (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+              (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+              (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+              ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+              (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+              (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2))) +
+              (peek(u32be) >> 9 & 1)) * 4 : 144000 *
+              ((((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+              (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+              (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+              (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+              ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+              (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+              (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2)) <<
+              (peek(u32be) >> 17 & 3 == 1 and peek(u32be) >> 19 & 3 != 3)) +
+              (peek(u32be) >> 9 & 1)) <= remaining ? 1 :
+              (remaining >= 10 and peek(u24be) == 'ID3' ? 2 :
+              (remaining >= 1 and peek(u8be) == 0 ? 3 : 0))) > 0) switch remaining >= 4 and
+              (peek(u32be) >> 21 & 0x07ff == 2047 and peek(u32be) >> 19 & 3 != 1 and peek(u32be)
+              >> 17 & 3 != 0 and peek(u32be) >> 12 & 0x0f != 0 and peek(u32be) >> 12 & 0x0f !=
+              15 and peek(u32be) >> 10 & 3 != 3) and
+              (peek(u32be) >> 17 & 3 == 3 ? (12000 * ((((peek(u32be) >> 19 & 3 == 3 ? 3 -
+              (peek(u32be) >> 17 & 3) : (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+              (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+              (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+              (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+              ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+              (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+              (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2))) +
+              (peek(u32be) >> 9 & 1)) * 4 : 144000 *
+              ((((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+              ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+              (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+              (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+              (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+              (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+              (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+              ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+              (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+              (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2)) <<
+              (peek(u32be) >> 17 & 3 == 1 and peek(u32be) >> 19 & 3 != 3)) +
+              (peek(u32be) >> 9 & 1)) <= remaining ? 1 :
+              (remaining >= 10 and peek(u24be) == 'ID3' ? 2 :
+              (remaining >= 1 and peek(u8be) == 0 ? 3 : 0)) {
+            1 => sized(peek(u32be) >> 17 & 3 == 3 ? (12000 * ((((peek(u32be) >> 19 & 3 == 3 ? 3
+                - (peek(u32be) >> 17 & 3) : (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+                (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+                (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+                (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+                ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+                (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+                (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2))) +
+                (peek(u32be) >> 9 & 1)) * 4 : 144000 *
+                ((((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 0 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 657650361912295680 : 953355048) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 1 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 364853977975382272 : 815925016) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 2 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 292224498287530240 : 679593492) :
+                ((peek(u32be) >> 19 & 3 == 3 ? 3 - (peek(u32be) >> 17 & 3) :
+                (peek(u32be) >> 17 & 3 == 3 ? 3 : 4)) == 3 ?
+                (peek(u32be) >> 12 & 0x0f < 10 ? 328825180956418304 : 544310676) :
+                (peek(u32be) >> 12 & 0x0f < 10 ? 182426988987555904 : 340329356))))) >>
+                (peek(u32be) >> 12 & 0x0f < 10 ? peek(u32be) >> 12 & 0x0f :
+                (peek(u32be) >> 12 & 0x0f) - 10) * 6 & 0x3f) * 8) /
+                ((peek(u32be) >> 10 & 3 == 0 ? 44100 :
+                (peek(u32be) >> 10 & 3 == 1 ? 48000 : 32000)) >>
+                (peek(u32be) >> 19 & 3 == 3 ? 0 : (peek(u32be) >> 19 & 3 == 2 ? 1 : 2)) <<
+                (peek(u32be) >> 17 & 3 == 1 and peek(u32be) >> 19 & 3 != 3)) +
+                (peek(u32be) >> 9 & 1)) Frame {
+              // 11 bits, all set to 1, at the start of every frame header.
+              sync: u11be  valid 2047
+              // MPEG version: MPEG-1, MPEG-2 or MPEG-2.5; value 1 is reserved. MPEG-2 uses half
+                  the sample rates of MPEG-1, and MPEG-2.5 (an unofficial extension) uses a
+                  quarter of them.
+              version: u2be enum MpegVersion {
+                0 = MPEG-2.5, 1 = reserved, 2 = MPEG-2, 3 = MPEG-1
+              }
+              // MPEG audio layer: Layer I, II or III. Value 0 is reserved.
+              layer: u2be enum Layer {0 = reserved, 1 = Layer III, 2 = Layer II, 3 = Layer I}
+              // 0 means a 16-bit CRC follows the frame header, and 1 means there is no CRC.
+              protection_bit: u1be enum Protection {0 = CRC follows, 1 = no CRC}
+              // Index into the bitrate table for this frame's MPEG version and layer, shown as
+                  the bitrate in kbit/s. 0 means free format (the bitrate is not in the header),
+                  and 15 is not allowed.
+              bitrate_index: switch version == 3 ? 3 - layer : (layer == 3 ? 3 : 4) {
+                0 => u4be enum Bitrate {
+                  0 = free format, 1 = 32 kbit/s, 2 = 64 kbit/s, 3 = 96 kbit/s, 4 = 128 kbit/s,
+                  5 = 160 kbit/s, 6 = 192 kbit/s, 7 = 224 kbit/s, 8 = 256 kbit/s,
+                  9 = 288 kbit/s, 10 = 320 kbit/s, 11 = 352 kbit/s, 12 = 384 kbit/s,
+                  13 = 416 kbit/s, 14 = 448 kbit/s, 15 = not allowed
+                }
+                1 => u4be enum Bitrate {
+                  0 = free format, 1 = 32 kbit/s, 2 = 48 kbit/s, 3 = 56 kbit/s, 4 = 64 kbit/s,
+                  5 = 80 kbit/s, 6 = 96 kbit/s, 7 = 112 kbit/s, 8 = 128 kbit/s, 9 = 160 kbit/s,
+                  10 = 192 kbit/s, 11 = 224 kbit/s, 12 = 256 kbit/s, 13 = 320 kbit/s,
+                  14 = 384 kbit/s, 15 = not allowed
+                }
+                2 => u4be enum Bitrate {
+                  0 = free format, 1 = 32 kbit/s, 2 = 40 kbit/s, 3 = 48 kbit/s, 4 = 56 kbit/s,
+                  5 = 64 kbit/s, 6 = 80 kbit/s, 7 = 96 kbit/s, 8 = 112 kbit/s, 9 = 128 kbit/s,
+                  10 = 160 kbit/s, 11 = 192 kbit/s, 12 = 224 kbit/s, 13 = 256 kbit/s,
+                  14 = 320 kbit/s, 15 = not allowed
+                }
+                3 => u4be enum Bitrate {
+                  0 = free format, 1 = 32 kbit/s, 2 = 48 kbit/s, 3 = 56 kbit/s, 4 = 64 kbit/s,
+                  5 = 80 kbit/s, 6 = 96 kbit/s, 7 = 112 kbit/s, 8 = 128 kbit/s, 9 = 144 kbit/s,
+                  10 = 160 kbit/s, 11 = 176 kbit/s, 12 = 192 kbit/s, 13 = 224 kbit/s,
+                  14 = 256 kbit/s, 15 = not allowed
+                }
+                4 => u4be enum Bitrate {
+                  0 = free format, 1 = 8 kbit/s, 2 = 16 kbit/s, 3 = 24 kbit/s, 4 = 32 kbit/s,
+                  5 = 40 kbit/s, 6 = 48 kbit/s, 7 = 56 kbit/s, 8 = 64 kbit/s, 9 = 80 kbit/s,
+                  10 = 96 kbit/s, 11 = 112 kbit/s, 12 = 128 kbit/s, 13 = 144 kbit/s,
+                  14 = 160 kbit/s, 15 = not allowed
+                }
+                _ => u4be
+              }
+              // Index into the sample rate table for this frame's MPEG version, shown as the
+                  sample rate in Hz.
+              sample_rate_index: switch version {
+                3 => u2be enum SampleRate {
+                  0 = 44100 Hz, 1 = 48000 Hz, 2 = 32000 Hz, 3 = reserved
+                }
+                2 => u2be enum SampleRate {
+                  0 = 22050 Hz, 1 = 24000 Hz, 2 = 16000 Hz, 3 = reserved
+                }
+                0 => u2be enum SampleRate {
+                  0 = 11025 Hz, 1 = 12000 Hz, 2 = 8000 Hz, 3 = reserved
+                }
+                _ => u2be
+              }
+              // 1 means the frame has one extra slot: 4 bytes in Layer I, 1 byte in Layers II
+                  and III. Encoders set it on some frames so that the stream matches the bitrate
+                  exactly.
+              padding_bit: u1be
+              // A bit for applications to use; decoders ignore it.
+              private_bit: u1be
+              // Stereo, joint stereo, dual channel or single channel. Dual channel is two
+                  independent mono channels.
+              channel_mode: u2be enum ChannelMode {
+                0 = stereo, 1 = joint stereo, 2 = dual channel, 3 = single channel
+              }
+              // Joint stereo settings, used only when channel_mode is joint stereo. In Layer
+                  III they say whether intensity stereo and M/S stereo are on; in Layers I and
+                  II they say which subbands use intensity stereo.
+              mode_extension: switch layer == 1 {
+                1 => u2be enum ModeExtension {
+                  0 = intensity stereo off, M/S stereo off,
+                  1 = intensity stereo on, M/S stereo off,
+                  2 = intensity stereo off, M/S stereo on,
+                  3 = intensity stereo on, M/S stereo on
+                }
+                _ => u2be enum ModeExtension {
+                  0 = intensity stereo in subbands 4 to 31,
+                  1 = intensity stereo in subbands 8 to 31,
+                  2 = intensity stereo in subbands 12 to 31,
+                  3 = intensity stereo in subbands 16 to 31
+                }
+              }
+              // 1 means the audio is copyrighted.
+              copyright: u1be
+              // 1 means original media, 0 means a copy.
+              original: u1be
+              // Type of de-emphasis the decoder must apply to the audio. Most files have none.
+              emphasis: u2be enum Emphasis {
+                0 = none, 1 = 50/15 µs, 2 = reserved, 3 = CCITT J.17
+              }
+              // Length of the frame in bytes, including the header. Qubero computes it from the
+                  bitrate, sample rate and padding bit; it is not stored in the file.
+              frame_length: computed layer == 3 ?
+                  (12000 * ((((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 0 ?
+                  (bitrate_index < 10 ? 657650361912295680 : 953355048) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 1 ?
+                  (bitrate_index < 10 ? 364853977975382272 : 815925016) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 2 ?
+                  (bitrate_index < 10 ? 292224498287530240 : 679593492) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 3 ?
+                  (bitrate_index < 10 ? 328825180956418304 : 544310676) :
+                  (bitrate_index < 10 ? 182426988987555904 : 340329356))))) >>
+                  (bitrate_index < 10 ? bitrate_index : bitrate_index - 10) * 6 & 0x3f) * 8) /
+                  ((sample_rate_index == 0 ? 44100 : (sample_rate_index == 1 ? 48000 : 32000))
+                  >> (version == 3 ? 0 : (version == 2 ? 1 : 2))) + padding_bit) * 4 : 144000 *
+                  ((((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 0 ?
+                  (bitrate_index < 10 ? 657650361912295680 : 953355048) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 1 ?
+                  (bitrate_index < 10 ? 364853977975382272 : 815925016) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 2 ?
+                  (bitrate_index < 10 ? 292224498287530240 : 679593492) :
+                  ((version == 3 ? 3 - layer : (layer == 3 ? 3 : 4)) == 3 ?
+                  (bitrate_index < 10 ? 328825180956418304 : 544310676) :
+                  (bitrate_index < 10 ? 182426988987555904 : 340329356))))) >>
+                  (bitrate_index < 10 ? bitrate_index : bitrate_index - 10) * 6 & 0x3f) * 8) /
+                  ((sample_rate_index == 0 ? 44100 : (sample_rate_index == 1 ? 48000 : 32000))
+                  >> (version == 3 ? 0 : (version == 2 ? 1 : 2)) <<
+                  (layer == 1 and version != 3)) + padding_bit
+              // 16-bit CRC that a decoder can use to check the frame. Present only when
+                  protection_bit is 0.
+              crc: optional(when protection_bit == 0) u16be
+              // Layer III side information: where this frame's main data starts, and how the
+                  main data for each granule and channel is coded.
+              side_info: optional(when layer == 1) switch version {
+                3 => SideInfo {
+                  // Number of bytes of this frame's main data that are in earlier frames, not
+                      counting the headers and side information of those frames. 0 means the
+                      main data starts in this frame.
+                  main_data_begin: u9be
+                  // Bits for applications to use.
+                  private_bits: switch channel_mode == 3 {1 => u5be, _ => u3be}
+                  // MPEG-1 only: 4 bits for each channel, one for each of 4 groups of scale
+                      factor bands. A bit set to 1 means granule 1 reuses the scale factors of
+                      granule 0 for that group.
+                  scfsi: u4be[2 - (channel_mode == 3)]
+                  // Coding settings for each granule and channel: 2 granules in MPEG-1, 1
+                      granule in MPEG-2 and 2.5.
+                  granules: Granule {
+                    // Number of bits of scale factors and Huffman-coded data for this granule
+                        and channel.
+                    part2_3_length: u12be
+                    // Number of pairs of Huffman-coded values in the big-values region of this
+                        granule and channel.
+                    big_values: u9be
+                    // Quantizer step size for this granule and channel.
+                    global_gain: u8be
+                    // Code for the number of bits the scale factors use.
+                    scalefac_compress: u4be
+                    // 1 means this granule and channel use a block type other than normal, and
+                        block_type and mixed_block_flag follow.
+                    window_switching_flag: u1be
+                    // Block type for this granule and channel: start, short (3 short windows)
+                        or end. Value 0 is reserved.
+                    block_type: optional(when window_switching_flag) u2be enum BlockType {
+                      0 = reserved, 1 = start, 2 = short, 3 = end
+                    }
+                    // 1 means the lowest bands use long blocks and the rest use short blocks.
+                    mixed_block_flag: optional(when window_switching_flag) u1be
+                    // Which Huffman table each region of the big-values region uses: 2 regions
+                        when window_switching_flag is 1, otherwise 3.
+                    table_select: u5be[window_switching_flag ? 2 : 3]
+                    // Gain offset for each of the 3 short windows.
+                    subblock_gain: optional(when window_switching_flag) u3be[3]
+                    // Boundary between region 0 and region 1 of the big-values region, in scale
+                        factor bands.
+                    region0_count: optional(when window_switching_flag == 0) u4be
+                    // Boundary between region 1 and region 2 of the big-values region, in scale
+                        factor bands.
+                    region1_count: optional(when window_switching_flag == 0) u3be
+                    // MPEG-1 only: 1 adds a preset amount to the scale factors of the
+                        high-frequency bands.
+                    preflag: u1be
+                    // Step size of the scale factors: 0 means √2 and 1 means 2.
+                    scalefac_scale: u1be
+                    // Which of two Huffman tables codes the count1 region, where each value is
+                        -1, 0 or 1.
+                    count1table_select: u1be
+                  }[2 - (channel_mode == 3)][2]
+                }
+                _ => SideInfo {
+                  // Number of bytes of this frame's main data that are in earlier frames, not
+                      counting the headers and side information of those frames. 0 means the
+                      main data starts in this frame.
+                  main_data_begin: u8be
+                  // Bits for applications to use.
+                  private_bits: switch channel_mode == 3 {1 => u1be, _ => u2be}
+                  // Coding settings for each granule and channel: 2 granules in MPEG-1, 1
+                      granule in MPEG-2 and 2.5.
+                  granules: Granule {
+                    // Number of bits of scale factors and Huffman-coded data for this granule
+                        and channel.
+                    part2_3_length: u12be
+                    // Number of pairs of Huffman-coded values in the big-values region of this
+                        granule and channel.
+                    big_values: u9be
+                    // Quantizer step size for this granule and channel.
+                    global_gain: u8be
+                    // Code for the number of bits the scale factors use.
+                    scalefac_compress: u9be
+                    // 1 means this granule and channel use a block type other than normal, and
+                        block_type and mixed_block_flag follow.
+                    window_switching_flag: u1be
+                    // Block type for this granule and channel: start, short (3 short windows)
+                        or end. Value 0 is reserved.
+                    block_type: optional(when window_switching_flag) u2be enum BlockType {
+                      0 = reserved, 1 = start, 2 = short, 3 = end
+                    }
+                    // 1 means the lowest bands use long blocks and the rest use short blocks.
+                    mixed_block_flag: optional(when window_switching_flag) u1be
+                    // Which Huffman table each region of the big-values region uses: 2 regions
+                        when window_switching_flag is 1, otherwise 3.
+                    table_select: u5be[window_switching_flag ? 2 : 3]
+                    // Gain offset for each of the 3 short windows.
+                    subblock_gain: optional(when window_switching_flag) u3be[3]
+                    // Boundary between region 0 and region 1 of the big-values region, in scale
+                        factor bands.
+                    region0_count: optional(when window_switching_flag == 0) u4be
+                    // Boundary between region 1 and region 2 of the big-values region, in scale
+                        factor bands.
+                    region1_count: optional(when window_switching_flag == 0) u3be
+                    // Step size of the scale factors: 0 means √2 and 1 means 2.
+                    scalefac_scale: u1be
+                    // Which of two Huffman tables codes the count1 region, where each value is
+                        -1, 0 or 1.
+                    count1table_select: u1be
+                  }[2 - (channel_mode == 3)][1]
+                }
+              }
+              // Xing header in a frame that contains no audio, written by LAME and FFmpeg so
+                  that players know the playing time and can seek. In constant bitrate files its
+                  ID is "Info" instead of "Xing".
+              xing: optional(when remaining >= 8 and (peek(u32be) == 'Xing' or peek(u32be) ==
+                  'Info')) XingHeader {
+                // "Xing" in variable bitrate files, "Info" in constant bitrate files.
+                id: text[4] ascii
+                // Which of frame_count, byte_count, toc and quality are present.
+                flags: u32be flags XingFlags {
+                  bit 0 = frame count, bit 1 = byte count, bit 2 = TOC, bit 3 = quality
+                }
+                // Number of audio frames.
+                frame_count: optional(when bit(flags, 0)) u32be
+                // Number of bytes of audio frames, including this frame.
+                byte_count: optional(when bit(flags, 1)) u32be
+                // Seek table of 100 entries. Entry i is the offset into the audio at which i%
+                    of the playing time has passed, in units of byte_count / 256.
+                toc: optional(when bit(flags, 2)) u8be[100]
+                // Quality number: Xing defined 0 as best and 100 as worst. LAME writes 100 − 10
+                    × V − q, where V and q are its -V and -q settings.
+                quality: optional(when bit(flags, 3)) u32be
+                // LAME tag: 36 bytes of encoder settings, ReplayGain values, and the encoder
+                    delay and end padding.
+                lame: optional(when remaining >= 36 and peek(u8be) >= 65 and peek(u8be) <= 122)
+                    LameTag {
+                  // Encoder name and version in 9 characters, such as "LAME3.100". FFmpeg
+                      writes "Lavc" or "Lavf" followed by its version.
+                  encoder: text[9] padded with 0x00 ascii
+                  // Revision number of the LAME tag.
+                  revision: u4be
+                  // Bitrate mode the encoder used, such as constant bitrate, average bitrate
+                      (ABR) or one of the VBR methods.
+                  vbr_method: u4be enum VbrMethod {
+                    0 = unknown, 1 = constant bitrate, 2 = average bitrate, 3 = VBR method 1,
+                    4 = VBR method 2, 5 = VBR method 3, 6 = VBR method 4,
+                    8 = constant bitrate, 2 passes, 9 = average bitrate, 2 passes, 15 = reserved
+                  }
+                  // Frequency of the encoder's lowpass filter, in units of 100 Hz. 0 means
+                      unknown.
+                  lowpass: u8be
+                  // Peak signal amplitude, where 1.0 is the largest amplitude the decoded
+                      format can store. 0 means unknown.
+                  peak: f32be
+                  // ReplayGain track gain (radio gain).
+                  radio_gain: ReplayGain {
+                    // Which gain this is: radio (track gain), audiophile (album gain) or not
+                        set.
+                    name: u3be enum GainName {
+                      0 = not set, 1 = radio (track gain), 2 = audiophile (album gain)
+                    }
+                    // Who or what set this gain.
+                    originator: u3be enum GainOriginator {
+                      0 = not set, 1 = set by artist, 2 = set by user, 3 = set automatically,
+                      4 = set from an RMS average
+                    }
+                    // Sign bit of the gain: 1 means the gain is negative.
+                    negative: u1be
+                    // Size of the gain adjustment in tenths of a dB. The negative bit gives the
+                        sign.
+                    gain_tenths_db: u9be
+                  }
+                  // ReplayGain album gain (audiophile gain).
+                  audiophile_gain: ReplayGain {
+                    // Which gain this is: radio (track gain), audiophile (album gain) or not
+                        set.
+                    name: u3be enum GainName {
+                      0 = not set, 1 = radio (track gain), 2 = audiophile (album gain)
+                    }
+                    // Who or what set this gain.
+                    originator: u3be enum GainOriginator {
+                      0 = not set, 1 = set by artist, 2 = set by user, 3 = set automatically,
+                      4 = set from an RMS average
+                    }
+                    // Sign bit of the gain: 1 means the gain is negative.
+                    negative: u1be
+                    // Size of the gain adjustment in tenths of a dB. The negative bit gives the
+                        sign.
+                    gain_tenths_db: u9be
+                  }
+                  // Flags for the LAME options --nspsytune and --nssafejoint, and for gapless
+                      encoding (--nogap) that continues into the next track or from the previous
+                      track.
+                  encoding_flags: u4be flags LameFlags {
+                    bit 0 = --nspsytune, bit 1 = --nssafejoint,
+                    bit 2 = continues into the next track,
+                    bit 3 = continues from the previous track
+                  }
+                  // Type of LAME's absolute threshold of hearing model.
+                  ath_type: u4be
+                  // Bitrate in kbit/s: the target bitrate for ABR, the bitrate for CBR, and the
+                      minimum bitrate for VBR. 255 means 255 kbit/s or more.
+                  bitrate: u8be
+                  // Number of samples the encoder added at the start of the audio. A player
+                      drops these samples to get back the original audio.
+                  encoder_delay: u12be
+                  // Number of zero samples the encoder added at the end to complete the last
+                      frame. A player drops these samples to get back the original audio.
+                  end_padding: u12be
+                  // Sample rate of the audio before it was encoded.
+                  source_sample_rate: u2be enum SourceRate {
+                    0 = 32000 Hz or lower, 1 = 44100 Hz, 2 = 48000 Hz, 3 = higher than 48000 Hz
+                  }
+                  // 1 means the encoder was run with settings that are likely to lower the
+                      audio quality.
+                  unwise_settings: u1be
+                  // Stereo mode the encoder used.
+                  stereo_mode: u3be enum StereoMode {
+                    0 = mono, 1 = stereo, 2 = dual channel, 3 = joint stereo,
+                    4 = forced joint stereo, 5 = auto, 6 = intensity stereo, 7 = undefined
+                  }
+                  // LAME noise shaping type, 0 to 3.
+                  noise_shaping: u2be
+                  // Gain applied losslessly by a tool such as mp3gain, in steps of 1.5 dB. The
+                      value is a sign bit and a magnitude.
+                  mp3_gain: signmag8be
+                  unused: u2be
+                  // Surround sound format of the audio.
+                  surround: u3be enum Surround {
+                    0 = none, 1 = Dolby Pro Logic, 2 = Dolby Pro Logic II, 3 = Ambisonic
+                  }
+                  // LAME preset number used for encoding. 0 means no preset.
+                  preset: u11be
+                  // Number of bytes from the start of this frame to the end of the last audio
+                      frame, when LAME wrote the file. Tags at the end of the file are not
+                      counted.
+                  music_length: u32be
+                  // CRC-16 of the audio frames after this frame, computed when LAME wrote them.
+                  music_crc: u16be
+                  // CRC-16 that protects the LAME tag. The LAME tag specification says it
+                      covers the first 190 bytes of this frame.
+                  tag_crc: u16be
+                }
+              }
+              // VBRI header, written by Fraunhofer encoders in a frame that contains no audio.
+                  It always starts 36 bytes after the start of the frame.
+              vbri: optional(when pos <= 36 and remaining >= 36 - pos + 26 and peek(u32be at (36
+                  - pos) * 8 bits) == 'VBRI') VbriHeader {
+                // Bytes between the side information and the VBRI header.
+                before: bytes[36 - pos]
+                id: magic "VBRI"
+                // Version of the VBRI header.
+                version: u16be
+                delay: u16be
+                quality: u16be
+                byte_count: u32be
+                frame_count: u32be
+                // Number of entries in toc, the seek table.
+                toc_entries: u16be
+                // Scale factor for the entries in toc.
+                toc_scale: u16be
+                // Size of each entry in toc, in bytes.
+                toc_entry_size: u16be
+                frames_per_toc_entry: u16be
+                // Seek table: toc_entries entries, each toc_entry_size bytes long.
+                toc: (u(toc_entry_size * 8)be)[toc_entries]
+              }
+              // The part of this frame's main data (scale factors and Huffman-coded samples)
+                  that is stored in this frame. The first main_data_begin bytes of the main data
+                  are at the end of earlier frames, in the bit reservoir.
+              main_data: optional(when layer == 1 and min(max(ceil((version == 3 ?
+                  side_info.granules.0.0.part2_3_length + side_info.granules.1.0.part2_3_length
+                  + (channel_mode == 3 ? 0 : side_info.granules.0.1.part2_3_length +
+                  side_info.granules.1.1.part2_3_length) : side_info.granules.0.0.part2_3_length
+                  + (channel_mode == 3 ? 0 : side_info.granules.0.1.part2_3_length)) / 8) -
+                  side_info.main_data_begin, 0), remaining) > 0)
+                  bytes[min(max(ceil((version == 3 ? side_info.granules.0.0.part2_3_length +
+                  side_info.granules.1.0.part2_3_length +
+                  (channel_mode == 3 ? 0 : side_info.granules.0.1.part2_3_length +
+                  side_info.granules.1.1.part2_3_length) : side_info.granules.0.0.part2_3_length
+                  + (channel_mode == 3 ? 0 : side_info.granules.0.1.part2_3_length)) / 8) -
+                  side_info.main_data_begin, 0), remaining)]
+              // Bytes after this frame's main data that are not main data for any frame:
+                  ancillary data or encoder padding. LAME writes its version string here, for
+                  example "LAME3.100".
+              ancillary_data: optional(when layer == 1 and remaining > min(size of space >=
+                  start of sync + frame_length + 8 and
+                  (peek(u11be at (start of sync + frame_length) * 8 + 0 bits in space) == 2047
+                  and peek(u2be at (start of sync + frame_length) * 8 + 11 bits in space) != 1
+                  and peek(u2be at (start of sync + frame_length) * 8 + 13 bits in space) != 0
+                  and peek(u4be at (start of sync + frame_length) * 8 + 16 bits in space) != 0
+                  and peek(u4be at (start of sync + frame_length) * 8 + 16 bits in space) != 15
+                  and peek(u2be at (start of sync + frame_length) * 8 + 20 bits in space) != 3)
+                  and peek(u2be at (start of sync + frame_length) * 8 + 13 bits in space) == 1
+                  and peek(u2be at (start of sync + frame_length) * 8 + 11 bits in space) ==
+                  version ? (version == 3 ? peek(u9be at (start of sync + frame_length) * 8 + 32
+                  + (peek(u1be at (start of sync + frame_length) * 8 + 15 bits in space) == 0) *
+                  16 bits in space) : peek(u8be at (start of sync + frame_length) * 8 + 32 +
+                  (peek(u1be at (start of sync + frame_length) * 8 + 15 bits in space) == 0) *
+                  16 bits in space)) : 0, remaining))
+                  bytes[remaining - min(size of space >= start of sync + frame_length + 8 and
+                  (peek(u11be at (start of sync + frame_length) * 8 + 0 bits in space) == 2047
+                  and peek(u2be at (start of sync + frame_length) * 8 + 11 bits in space) != 1
+                  and peek(u2be at (start of sync + frame_length) * 8 + 13 bits in space) != 0
+                  and peek(u4be at (start of sync + frame_length) * 8 + 16 bits in space) != 0
+                  and peek(u4be at (start of sync + frame_length) * 8 + 16 bits in space) != 15
+                  and peek(u2be at (start of sync + frame_length) * 8 + 20 bits in space) != 3)
+                  and peek(u2be at (start of sync + frame_length) * 8 + 13 bits in space) == 1
+                  and peek(u2be at (start of sync + frame_length) * 8 + 11 bits in space) ==
+                  version ? (version == 3 ? peek(u9be at (start of sync + frame_length) * 8 + 32
+                  + (peek(u1be at (start of sync + frame_length) * 8 + 15 bits in space) == 0) *
+                  16 bits in space) : peek(u8be at (start of sync + frame_length) * 8 + 32 +
+                  (peek(u1be at (start of sync + frame_length) * 8 + 15 bits in space) == 0) *
+                  16 bits in space)) : 0, remaining)]
+              // Main data for the next frame or frames, which the encoder stored in spare bytes
+                  of this frame (the bit reservoir).
+              later_main_data: optional(when layer == 1 and remaining > 0) bytes[remaining]
+              // Layers I and II: bit allocation, scale factors and samples for this frame.
+              audio_data: optional(when layer == 1 == 0) bytes[remaining]
+            }
+            2 => sized(min(10 + ((((0 * 128 + (peek(u8be at 48 bits) & 0x7f)) * 128 + (peek(u8be
+                at 56 bits) & 0x7f)) * 128 + (peek(u8be at 64 bits) & 0x7f)) * 128 +
+                (peek(u8be at 72 bits) & 0x7f)) +
+                (peek(u8be at 24 bits) == 4 and bit(peek(u8be at 40 bits), 4)) * 10, remaining))
+                ID3 {
+              magic: magic "ID3"
+              version: u8be
+              revision: u8be
+              flags: u8be flags ID3Flags {
+                bit 7 = unsynchronisation, bit 6 = extended header, bit 5 = experimental,
+                bit 4 = footer present
+              }
+              size_0: u8be
+              size_1: u8be
+              size_2: u8be
+              size_3: u8be
+              extended_header: optional(when version >= 3 and bit(flags, 6)) ExtendedHeader {
+                size: u32be
+                // Extended header flags and the data they describe, such as a CRC-32 of the
+                    frames and padding size.
+                data: bytes[min(max(version == 4 ? size / 16777216 * 2097152 + (size / 65536 -
+                    size / 16777216 * 256) * 16384 + (size / 256 - size / 65536 * 256) * 128 +
+                    (size - size / 256 * 256) - 4 : size, 0), remaining)]
+              }
+              frames: switch version {
+                2 => repeat(while pos in space - start of magic + 6 <= 10 + (size_0 * 2097152 +
+                    size_1 * 16384 + size_2 * 128 + size_3) and peek(u8be) != 0) Frame
+                    (named by id, contents body) {
+                  id: text[3] ascii
+                  size: u24be
+                  body: sized(min(size, remaining)) switch id {
+                    'TT2' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TP1' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TP2' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TAL' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TCO' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TRK' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TYE' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TCM' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TEN' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TSS' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'TPA' => TextFrame {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    'COM' => Comment {
+                      encoding: u8be enum TextEncoding {
+                        0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                      }
+                      language: text[3] ascii
+                      text: switch encoding {
+                        0 => text[remaining] latin1
+                        1 => text[remaining] bom(utf16be)
+                        2 => text[remaining] utf16be
+                        3 => text[remaining] utf8
+                        _ => text[remaining] encoding unknown
+                      }
+                    }
+                    _ => bytes[remaining]
+                  }
+                }
+                _ => repeat(while pos in space - start of magic + 10 <= 10 + (size_0 * 2097152 +
+                    size_1 * 16384 + size_2 * 128 + size_3) and peek(u8be) != 0) Frame
+                    (named by id, contents body) {
+                  id: text[4] ascii
+                  size: u32be
+                  flags: u16be
+                  body: switch version {
+                    4 => sized(min(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 *
+                        256) * 16384 + (size / 256 - size / 65536 * 256) * 128 +
+                        (size - size / 256 * 256), remaining)) switch id {
+                      'TIT2' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPE1' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPE2' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TALB' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TCON' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TRCK' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TYER' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TDRC' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TCOM' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TENC' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TSSE' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPOS' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'COMM' => Comment {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        language: text[3] ascii
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      _ => bytes[remaining]
+                    }
+                    _ => sized(min(size, remaining)) switch id {
+                      'TIT2' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPE1' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPE2' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TALB' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TCON' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TRCK' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TYER' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TDRC' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TCOM' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TENC' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TSSE' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'TPOS' => TextFrame {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      'COMM' => Comment {
+                        encoding: u8be enum TextEncoding {
+                          0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+                        }
+                        language: text[3] ascii
+                        text: switch encoding {
+                          0 => text[remaining] latin1
+                          1 => text[remaining] bom(utf16be)
+                          2 => text[remaining] utf16be
+                          3 => text[remaining] utf8
+                          _ => text[remaining] encoding unknown
+                        }
+                      }
+                      _ => bytes[remaining]
+                    }
+                  }
+                }
+              }
+              // Zero bytes after the last ID3v2 frame, so a tagger can add to the tag without
+                  moving the audio.
+              padding: optional(when 10 + (size_0 * 2097152 + size_1 * 16384 + size_2 * 128 +
+                  size_3) > pos in space - start of magic)
+                  bytes[10 + (size_0 * 2097152 + size_1 * 16384 + size_2 * 128 + size_3) -
+                  (pos in space - start of magic)]
+              // 10-byte copy of the tag header with the ID "3DI", so that a program can find
+                  the tag by searching back from its end. Only in ID3v2.4.
+              footer: optional(when version == 4 and bit(flags, 4)) ID3Footer {
+                magic: magic "3DI"
+                version: u8be
+                revision: u8be
+                flags: u8be flags ID3Flags {
+                  bit 7 = unsynchronisation, bit 6 = extended header, bit 5 = experimental,
+                  bit 4 = footer present
+                }
+                size: u8be[4]
+              }
+            }
+            3 => Padding {
+              // Zero bytes between frames. Some taggers leave a run of zero bytes after the
+                  ID3v2 tag.
+              zeros: bytes[run(00)]
+            }
+            _ => bytes[remaining]
+          }
+          // Bytes after the last frame that Qubero cannot read as a frame or as one of the tags
+              at the end. For example, a frame cut off by the end of the file, free-format
+              frames, whose length is not in the header, or a tag in a format Qubero does not
+              read.
+          not_frames: optional(when remaining > 0) bytes[remaining]
         }
-        samples: switch earlier(body.format) {
-          0xfffe => switch earlier(body.extra.sub_format.format) {
-            1 => switch earlier(body.bits_per_sample) {
-              8 => u8be[remaining / 1]
-              16 => i16le[remaining / 2]
-              24 => i24le[remaining / 3]
-              32 => i32le[remaining / 4]
-              _ => bytes[remaining]
-            }
-            3 => switch earlier(body.bits_per_sample) {
-              32 => f32le[remaining / 4]
-              64 => f64le[remaining / 8]
-              _ => bytes[remaining]
-            }
-            _ => bytes[remaining]
-          }
-          _ => switch earlier(body.format) {
-            1 => switch earlier(body.bits_per_sample) {
-              8 => u8be[remaining / 1]
-              16 => i16le[remaining / 2]
-              24 => i24le[remaining / 3]
-              32 => i32le[remaining / 4]
-              _ => bytes[remaining]
-            }
-            3 => switch earlier(body.bits_per_sample) {
-              32 => f32le[remaining / 4]
-              64 => f64le[remaining / 8]
-              _ => bytes[remaining]
-            }
-            _ => bytes[remaining]
-          }
-        }  valid finite
-            table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
-                column word channel, named [left, right], describes
-                [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
-                earlier(body.bits_per_sample)]
       }
-      _ => Samples {
-        samples: switch earlier(body.format) {
-          0xfffe => switch earlier(body.extra.sub_format.format) {
-            1 => switch earlier(body.bits_per_sample) {
-              8 => u8be[remaining / 1]
-              16 => i16le[remaining / 2]
-              24 => i24le[remaining / 3]
-              32 => i32le[remaining / 4]
-              _ => bytes[remaining]
-            }
-            3 => switch earlier(body.bits_per_sample) {
-              32 => f32le[remaining / 4]
-              64 => f64le[remaining / 8]
-              _ => bytes[remaining]
-            }
-            _ => bytes[remaining]
+      _ => switch 468 <= remaining and peek(u40be at 1568 bits) == 'D500X' and 468 <=
+          peek(u32le) and peek(u32le) <= remaining and peek(u32le) % 2 == 0 {
+        1 => D500XData {
+          // Metadata from a Pettersson D500X bat recorder. It sits at the start of the data
+              chunk, but the chunk size does not include it: the size counts only the samples
+              after it.
+          d500x_metadata: sized(peek(u32le)) D500XMetadata {
+            // Length of this block in bytes, including these 4.
+            length: u32le
+            unused_after_length: bytes[160]
+            file_name: text[16] padded with 0x00 ascii
+            // Recording date and time, as YYMMDD hh:mm:ss.
+            file_time: text[16] padded with 0x00 ascii
+            // Recorder model and firmware version, then the firmware's build date (YYMMDD) and
+                time.
+            firmware: text[48] padded with 0x00 ascii
+            // Sample rate in kHz (f), pre-trigger (PRE), and recording length in seconds (LEN).
+            profile_line_1: text[24] padded with 0x00 ascii
+            // High-pass filter (HP), automatic recording (A), and trigger sensitivity (TS).
+            profile_line_2: text[24] padded with 0x00 ascii
+            // Not documented. In the one file examined, these match the profile settings as
+                positions in the recorder's option lists, for example 2 for 500 kHz.
+            settings: u8be[8]
+            profile_name: text[168] padded with 0x00 ascii
+            // Lines of text, each ending in CR LF. LAT and LON are the position entered for the
+                recorder's sunrise and sunset timer, not where it recorded.
+            text_lines: sized(find(00)) repeat(until end) text until 0x0a or end latin1
+            unused_after_text: bytes[remaining]
           }
-          _ => switch earlier(body.format) {
-            1 => switch earlier(body.bits_per_sample) {
-              8 => u8be[remaining / 1]
-              16 => i16le[remaining / 2]
-              24 => i24le[remaining / 3]
-              32 => i32le[remaining / 4]
+          samples: switch earlier(body.format) {
+            0xfffe => switch earlier(body.extra.sub_format.format) {
+              1 => switch earlier(body.bits_per_sample) {
+                8 => u8be[remaining / 1]
+                16 => i16le[remaining / 2]
+                24 => i24le[remaining / 3]
+                32 => i32le[remaining / 4]
+                _ => bytes[remaining]
+              }
+              3 => switch earlier(body.bits_per_sample) {
+                32 => f32le[remaining / 4]
+                64 => f64le[remaining / 8]
+                _ => bytes[remaining]
+              }
               _ => bytes[remaining]
             }
-            3 => switch earlier(body.bits_per_sample) {
-              32 => f32le[remaining / 4]
-              64 => f64le[remaining / 8]
+            _ => switch earlier(body.format) {
+              1 => switch earlier(body.bits_per_sample) {
+                8 => u8be[remaining / 1]
+                16 => i16le[remaining / 2]
+                24 => i24le[remaining / 3]
+                32 => i32le[remaining / 4]
+                _ => bytes[remaining]
+              }
+              3 => switch earlier(body.bits_per_sample) {
+                32 => f32le[remaining / 4]
+                64 => f64le[remaining / 8]
+                _ => bytes[remaining]
+              }
               _ => bytes[remaining]
             }
-            _ => bytes[remaining]
-          }
-        }  valid finite
-            table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
-                column word channel, named [left, right], describes
-                [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
-                earlier(body.bits_per_sample)]
+          }  valid finite
+              table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+                  column word channel, named [left, right], describes
+                  [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+                  earlier(body.bits_per_sample)]
+        }
+        _ => Samples {
+          samples: switch earlier(body.format) {
+            0xfffe => switch earlier(body.extra.sub_format.format) {
+              1 => switch earlier(body.bits_per_sample) {
+                8 => u8be[remaining / 1]
+                16 => i16le[remaining / 2]
+                24 => i24le[remaining / 3]
+                32 => i32le[remaining / 4]
+                _ => bytes[remaining]
+              }
+              3 => switch earlier(body.bits_per_sample) {
+                32 => f32le[remaining / 4]
+                64 => f64le[remaining / 8]
+                _ => bytes[remaining]
+              }
+              _ => bytes[remaining]
+            }
+            _ => switch earlier(body.format) {
+              1 => switch earlier(body.bits_per_sample) {
+                8 => u8be[remaining / 1]
+                16 => i16le[remaining / 2]
+                24 => i24le[remaining / 3]
+                32 => i32le[remaining / 4]
+                _ => bytes[remaining]
+              }
+              3 => switch earlier(body.bits_per_sample) {
+                32 => f32le[remaining / 4]
+                64 => f64le[remaining / 8]
+                _ => bytes[remaining]
+              }
+              _ => bytes[remaining]
+            }
+          }  valid finite
+              table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+                  column word channel, named [left, right], describes
+                  [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+                  earlier(body.bits_per_sample)]
+        }
       }
     }
     _ => bytes[remaining]

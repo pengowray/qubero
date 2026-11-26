@@ -399,7 +399,12 @@ fn data_body() -> T {
         "Metadata from a Pettersson D500X bat recorder. It sits at the start of the data chunk, \
          but the chunk size does not include it: the size counts only the samples after it.",
     );
-    T::switch(d500x_block_here(), vec![(1, with_block)], sample_table(Little))
+    // MPEG audio in a WAV (format 0x0050 for Layers I and II, 0x0055 for
+    // Layer III) is a run of MPEG frames, read as the MP3 template reads them.
+    let format = E::sibling(&["body", "format"]);
+    let mpeg = format.clone().equal_to(E::lit(0x0055)).either(format.equal_to(E::lit(0x0050)));
+    let frames = T::structure("MpegAudioData", vec![("audio", super::mp3::audio())]);
+    T::switch(mpeg, vec![(1, frames)], T::switch(d500x_block_here(), vec![(1, with_block)], sample_table(Little)))
 }
 
 /// What a D500X writes before its samples. Text fields at fixed places,
