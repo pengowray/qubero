@@ -43,7 +43,7 @@
 //! a field nothing bounds.
 
 use super::tiff::tiff_part;
-use crate::template::{Colour, Encoding, Endian::*, Expr as E, Packing, StrLen, Template, Ty as T, Until};
+use crate::template::{Colour, Encoding, Endian::*, Expr as E, Packing, Step, StrLen, Template, Ty as T, Until};
 
 /// Every marker worth naming, by the whole two bytes rather than the second
 /// one, since that is what is read. The names are the abbreviations the
@@ -141,6 +141,26 @@ pub fn jpeg() -> Template {
                 // file was before it was overwritten. Named as what it is
                 // rather than read as segments that are not there.
                 ("trailer", T::bytes(E::Remaining)),
+                // The ICC profile, which a long one is cut into APP2 pieces
+                // for, joined back together in the order the segments are
+                // in. The walk lands on `profile`, which only an APP2 piece
+                // has, so every other segment is passed over.
+                (
+                    "icc_profile",
+                    T::stitched(
+                        vec![
+                            Step::field("segments"),
+                            Step::each(),
+                            Step::field("body"),
+                            Step::field("contents"),
+                            Step::field("data"),
+                            Step::field("profile"),
+                        ],
+                        None,
+                        None,
+                        super::decoded_object(),
+                    ),
+                ),
             ],
         ),
     )
@@ -988,5 +1008,25 @@ mod tests {
         assert_eq!(ev.node(&d, &tables).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[tables.as_slice(), &[0, 2, 0]].concat()).unwrap().value, Value::UInt(1));
         assert_eq!(ev.node(&d, &[tables.as_slice(), &[1, 2, 0]].concat()).unwrap().value, Value::UInt(5));
+    }
+
+    #[test]
+    fn icc_pieces_are_joined_into_one_profile() {
+        let piece = |n: u8, bytes: &[u8]| {
+            let mut body = b"ICC_PROFILE\0".to_vec();
+            body.extend_from_slice(&[n, 2]);
+            body.extend_from_slice(bytes);
+            seg(0xffe2, &body)
+        };
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&piece(1, b"abc"));
+        v.extend_from_slice(&seg(0xfffe, b"between"));
+        v.extend_from_slice(&piece(2, b"defg"));
+        v.extend_from_slice(&[0xff, 0xd9]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(jpeg());
+        let object = ev.node(&d, &[3, 0, 0]).unwrap();
+        assert_eq!(object.size_bits, 7 * 8);
+        assert_eq!(object.value, Value::Bytes { len: 7, preview: b"abcdefg".to_vec() });
     }
 }
