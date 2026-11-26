@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, ReportWalk, SpaceId, Tab, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, ReportWalk, SpaceId, Tab, TimeNote, Unpacking, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::hexpat::Includes as _;
@@ -681,24 +681,23 @@ impl Editor {
     /// How far the pass unpacking a large compressed stream has got, in the
     /// reading the tab over `space` is working in now (see `working_reading`):
     /// {status:"ok",node:{run_space,run_offset_bits,read_bits,run_bits,unpacked_bytes}},
-    /// or a null node when no pass is under way.
+    /// or a null node when the last call there did not run out in a pass.
     ///
-    /// Asked after any reply that said "working": the pass is charged to the
-    /// same allowance as the rest of the reading, so a listing that reaches a
-    /// stream's bytes, and Open unpacked, both carry it on. The bits count
-    /// from the start of the compressed run, and `run_offset_bits` is where
-    /// that is in `run_space`, which is numbered by that reading: 0 is the
-    /// file in the file's reading, and the stream's own bytes in the reading
-    /// of a stream whose bytes were recognised.
+    /// Asked right after a reply that said "working", it is the pass that call
+    /// waits on: the stream Open unpacked is opening, say, and not another
+    /// stream a listing in the same reading carried on between two presses.
+    /// The pass is charged to the same allowance as the rest of the reading,
+    /// so a listing that reaches a stream's bytes, and Open unpacked, both
+    /// carry it on. The bits count from the start of the compressed run, and
+    /// `run_offset_bits` is where that is in `run_space`, which is numbered by
+    /// that reading: 0 is the file in the file's reading, and the stream's own
+    /// bytes in the reading of a stream whose bytes were recognised.
+    ///
+    /// `template_children` carries the same on its own "working" reply, since
+    /// a listing draws its rows after all the calls a walk makes.
     pub fn unpacking(&self, space: u32) -> String {
         let progress = self.sheets.get(self.working_reading(space)).and_then(|sh| sh.eval.as_ref()).and_then(|e| e.unpacking());
-        reply(Ok(progress.map(|p| UnpackingDto {
-            run_space: p.run_space,
-            run_offset_bits: p.run_offset_bits as f64,
-            read_bits: p.read_bits as f64,
-            run_bits: p.run_bits as f64,
-            unpacked_bytes: p.unpacked_bytes as f64,
-        })))
+        reply(Ok(progress.map(unpacking_dto)))
     }
 
     /// Whether one of this editor's spaces is a stream joined from several
@@ -2023,6 +2022,10 @@ impl Editor {
     }
 
     /// Same envelope as `template_node`, with `node` being an array of children.
+    /// A "pending" or "working" reply carries the children before the first
+    /// one that waits as `ready`, with the chunks their previews want as
+    /// `wanted`, and a "working" one says how far the pass the rest wait on
+    /// has got as `unpacking`. See `slice_reply`.
     pub fn template_children(&mut self, space: u32, path: &[u32], from: f64, to: f64) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let mut tab = match self.tab(space) {
@@ -2030,8 +2033,8 @@ impl Editor {
             Err(why) => return why,
         };
         tab.ev.begin_slice();
-        let r = tab.children(&p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
-        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
+        let (ready, rest) = tab.children_ready(&p, from as u64, to as u64);
+        slice_reply(ready.into_iter().map(dto).collect::<Vec<NodeDto>>(), rest, tab.ev)
     }
 
     /// Where the bits of the JPEG scan at `path` went, for the report's map of
