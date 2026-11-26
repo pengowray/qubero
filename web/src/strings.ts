@@ -2407,6 +2407,12 @@ export const REPORT = {
    *  measure of progress there is. The size unpacked so far is left out: it
    *  changes on every redraw, and beside a percentage it reads as a total. */
   unpacking: (percent: string): string => `Unpacking the compressed data to read these fields… ${percent}`,
+  /** The same stretch while the core works these fields out a go at a time
+   *  and has no progress to give: many fields come before them, a go ran out
+   *  before it reached the stream they are in, or that stream waits for
+   *  others to finish unpacking first. Which one is not known here, so the
+   *  words claim none of them. */
+  working: "Reading these fields…",
   /** The control on a heading or a row that shows the bytes behind it, and
    *  the one that puts them away again. Both are the mockup's own. */
   showBytes: "bytes",
