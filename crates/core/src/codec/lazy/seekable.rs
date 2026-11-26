@@ -312,7 +312,7 @@ impl Seekable {
         if k == 0 && wrapped {
             b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
-        let mut sink = CountSink { len: c.out, cap: u64::MAX, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit), starts: None };
+        let mut sink = CountSink { len: c.out, cap: u64::MAX, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit), starts: None, stopped: None };
         let ended = inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(c.resume()))?;
         if matches!(ended, Ended::Stream(_)) && wrapped {
             b.push(f.end, sink.len, StepKind::Header(StepField::Wrapper, 0));
@@ -419,7 +419,7 @@ impl Seekable {
             return Ok(starts);
         }
         let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
-        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()) };
+        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()), stopped: None };
         let f = self.framing()?;
         inflate::run(&self.packed, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
         let starts: Arc<[(u64, u64)]> = sink.starts.take().unwrap_or_default().into();
@@ -449,7 +449,7 @@ impl Seekable {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
         let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
-        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: next, starts: None };
+        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: next, starts: None, stopped: None };
         let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(in_bit, out);
         let f = self.framing()?;
         inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;

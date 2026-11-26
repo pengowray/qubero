@@ -161,12 +161,79 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// Neither the output nor a trace is kept, since only the end is wanted: the
 /// output is counted, which is enough to refuse a match reaching back before
 /// the start and a stream past the cap.
+///
+/// [`Measuring`] is the same walk done a step at a time.
 pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
-    let mut sink = CountSink { len: 0, cap: CAP_BYTES as u64, stop_at: None, starts: None };
-    match run(data, 0, data.len() as u64 * 8, &mut sink, &mut TraceBuilder::off(), None)? {
-        // The padding after the last block runs to the next byte.
-        Ended::Stream(blocks_end) => Ok(blocks_end.div_ceil(8)),
-        Ended::Stopped(_) => Err(Refusal::Failed),
+    let mut walk = Measuring::new(CAP_BYTES as u64);
+    loop {
+        if let Measured::Ends(len) = walk.step(data, u64::MAX)? {
+            return Ok(len);
+        }
+    }
+}
+
+/// [`inflate_len`] done a step at a time, for a caller that has to hand back
+/// between steps. Each [`Measuring::step`] reads about as many bits of the
+/// stream as it is told to, stops before the next code or block, and the next
+/// step carries on from there.
+///
+/// Since the output is counted and not kept, carrying on needs only where the
+/// step stopped (a bit, and the header of the block it is inside) and the
+/// count so far. A step that stopped inside a block reads the block's header
+/// and tables again, which is a few hundred bytes at most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Measuring {
+    from: Option<Resume>,
+    len: u64,
+    cap: u64,
+}
+
+/// What one [`Measuring::step`] came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Measured {
+    /// Not at the end yet. Step again to carry on.
+    Working,
+    /// The stream takes this many bytes of the data, as [`inflate_len`] says.
+    Ends(u64),
+}
+
+impl Measuring {
+    /// Start at the front of the data, refusing a stream whose output comes
+    /// to more than `cap` bytes, as [`inflate_len`] does at [`CAP_BYTES`].
+    pub fn new(cap: u64) -> Measuring {
+        Measuring { from: None, len: 0, cap }
+    }
+
+    /// Read about `bits` more bits of `data` and stop at the next place a
+    /// decode can carry on from, or reach the end of the stream. A stored
+    /// block is not stopped in, so a step can overrun by up to one stored
+    /// block, 64 KiB. `data` is the same bytes on every step.
+    ///
+    /// A refusal is the one [`inflate_len`] gives, from whichever step meets
+    /// it.
+    pub fn step(&mut self, data: &[u8], bits: u64) -> Result<Measured, Refusal> {
+        let stop_at = self.read_bits().saturating_add(bits.max(1));
+        let mut sink = CountSink { len: self.len, cap: self.cap, stop_at: Some(stop_at), starts: None, stopped: None };
+        let ended = run(data, 0, data.len() as u64 * 8, &mut sink, &mut TraceBuilder::off(), self.from);
+        self.len = sink.len;
+        match ended? {
+            // The padding after the last block runs to the next byte.
+            Ended::Stream(blocks_end) => Ok(Measured::Ends(blocks_end.div_ceil(8))),
+            Ended::Stopped(_) => {
+                self.from = Some(sink.stopped.ok_or(Refusal::Failed)?);
+                Ok(Measured::Working)
+            }
+        }
+    }
+
+    /// The bit of the data the next step starts at.
+    pub fn read_bits(&self) -> u64 {
+        self.from.map_or(0, |r| r.in_bit)
+    }
+
+    /// How many bytes of output the stream has come to so far.
+    pub fn unpacked(&self) -> u64 {
+        self.len
     }
 }
 
@@ -469,7 +536,7 @@ impl Sink for VecSink<'_> {
 /// what it came to. A deflate step says what it copied and from how far back,
 /// not what the bytes were, so none of those needs the output. `len` starts at
 /// the output before where the decode starts, and `stop_at` stops it at the
-/// first boundary at or past that bit.
+/// first boundary at or past that bit, which it gives in `stopped`.
 pub(crate) struct CountSink {
     pub(crate) len: u64,
     pub(crate) cap: u64,
@@ -477,6 +544,7 @@ pub(crate) struct CountSink {
     /// Where each block starts, as the bit of the run and the byte of the
     /// output, when asked for.
     pub(crate) starts: Option<Vec<(u64, u64)>>,
+    pub(crate) stopped: Option<Resume>,
 }
 
 impl Sink for CountSink {
@@ -517,6 +585,7 @@ impl Sink for CountSink {
     #[inline]
     fn boundary(&mut self, in_bit: u64, block: Option<u64>) -> ControlFlow<()> {
         if self.stop_at.is_some_and(|stop| in_bit >= stop) {
+            self.stopped = Some(Resume { in_bit, block });
             return ControlFlow::Break(());
         }
         if let (None, Some(starts)) = (block, &mut self.starts) {
@@ -1196,6 +1265,49 @@ mod tests {
             assert_eq!(inflate_len(&raw), Ok(n), "level {level}");
             assert_eq!(inflate_len(&[&raw[..], b"a trailer after it"].concat()), Ok(n), "level {level}, with more after");
             assert!(inflate_len(&raw[..raw.len() / 2]).is_err(), "level {level}, cut short");
+        }
+    }
+
+    /// Measured a step at a time, a stream ends where it ends measured in one
+    /// go, or is refused the same way, however small the steps: stored blocks,
+    /// Huffman blocks stopped in part-way, bytes after the stream, a stream cut
+    /// short or damaged, and one past the cap.
+    #[test]
+    fn a_stream_measured_in_steps_ends_where_one_go_ends() {
+        let text: Vec<u8> = (0..6_000u32).flat_map(|i| format!("{i} {} ", i.wrapping_mul(2_654_435_761) % 977).into_bytes()).collect();
+        let mut runs: Vec<Vec<u8>> = [0u8, 1, 6, 9].iter().map(|&level| miniz_oxide::deflate::compress_to_vec(&text, level)).collect();
+        let raw = runs[2].clone();
+        runs.push([&raw[..], b"a trailer after it"].concat());
+        runs.push(raw[..raw.len() / 2].to_vec());
+        let mut damaged = raw.clone();
+        damaged[raw.len() / 3] ^= 0x5a;
+        runs.push(damaged);
+        for (i, run) in runs.iter().enumerate() {
+            for cap in [CAP_BYTES as u64, text.len() as u64 / 3] {
+                let one = Measuring::new(cap).step(run, u64::MAX);
+                if cap == CAP_BYTES as u64 {
+                    assert_eq!(one.map(|m| match m { Measured::Ends(n) => n, Measured::Working => u64::MAX }), inflate_len(run), "run {i}");
+                } else if i < 4 {
+                    assert_eq!(one, Err(Refusal::TooLarge), "run {i}, a third of the output");
+                }
+                for bits in [1u64, 97, 4_000, 1 << 20] {
+                    let mut walk = Measuring::new(cap);
+                    let mut steps = 0;
+                    let got = loop {
+                        steps += 1;
+                        let at = walk.read_bits();
+                        match walk.step(run, bits) {
+                            Ok(Measured::Working) => assert!(walk.read_bits() > at, "run {i}: a step that went nowhere"),
+                            other => break other,
+                        }
+                    };
+                    assert_eq!(got, one, "run {i}, cap {cap}, steps of {bits} bits");
+                    // Stored blocks are stopped only at their starts.
+                    if bits == 1 && one.is_ok() && i > 0 {
+                        assert!(steps > 1000, "run {i}: {steps} steps of a bit");
+                    }
+                }
+            }
         }
     }
 
