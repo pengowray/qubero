@@ -763,7 +763,7 @@ fn gzip_step(tile: &mut Tile, data: &[u8], pixels: usize, shuffled: bool, quanti
         Ok(b) => b,
         Err(why) => {
             stopped(tile, "gzip", data.len());
-            tile.problem = Some(format!("Stopped at gzip: {}.", refusal(why)));
+            tile.problem = Some(format!("Stopped at gzip: {}.", why.message()));
             return None;
         }
     };
@@ -865,18 +865,6 @@ fn read_numbers(tile: &mut Tile, bytes: &[u8], width: usize, quantized: bool) ->
             4 => chunks.map(|c| i64::from(be_u32(c) as i32)).collect(),
             _ => chunks.map(|c| be_u64(c) as i64).collect(),
         })
-    }
-}
-
-/// Why the codec would not open the bytes, in words.
-fn refusal(why: codec::Refusal) -> &'static str {
-    match why {
-        codec::Refusal::TooLarge => "too large to unpack (over 64 MiB)",
-        codec::Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
-        codec::Refusal::Failed => "unpacking failed",
-        codec::Refusal::Unaligned => "not on a byte boundary",
-        codec::Refusal::Settings => "the file doesn't say how this was packed",
-        codec::Refusal::Unsupported(u) => u.message(),
     }
 }
 

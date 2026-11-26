@@ -487,6 +487,23 @@ impl Refusal {
             Refusal::Unsupported(Unsupported::Precision12) => "12-bit",
         }
     }
+
+    /// Why the run was left as bytes, in lower-case words that finish a
+    /// sentence, for the few places in the core that write a refusal out
+    /// rather than handing the interface [`Refusal::as_str`]. The same words
+    /// as `DECODED_REFUSED` in the web's `strings.ts`, apart from the JPEG
+    /// kinds, which say "which Qubero doesn't decode": see
+    /// [`Unsupported::message`].
+    pub fn message(self) -> &'static str {
+        match self {
+            Refusal::TooLarge => "too large to unpack (over 64 MiB)",
+            Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
+            Refusal::Failed => "unpacking failed",
+            Refusal::Unaligned => "not on a byte boundary",
+            Refusal::Settings => "the file doesn't say how this was packed",
+            Refusal::Unsupported(u) => u.message(),
+        }
+    }
 }
 
 /// How many steps a trace may hold before it stops recording one per symbol.

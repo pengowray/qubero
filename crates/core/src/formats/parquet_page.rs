@@ -332,7 +332,7 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                     note: String::new(),
                     skipped: false,
                 });
-                page.problem = Some(format!("Stopped at {name}: {}.", refusal(why)));
+                page.problem = Some(format!("Stopped at {name}: {}.", why.message()));
                 return page;
             }
         }
@@ -375,18 +375,6 @@ fn level_note(count: usize, width: u32, max: u32, encoding: i64) -> String {
         return format!("{count} levels, {}, max level {max}, {how}, counted from the header, not read", bits(width));
     }
     format!("{count} levels, {}, max level {max}, {how}", bits(width))
-}
-
-/// The word a refusal goes by, in a sentence rather than as a tag.
-fn refusal(why: codec::Refusal) -> &'static str {
-    match why {
-        codec::Refusal::TooLarge => "too large to unpack (over 64 MiB)",
-        codec::Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
-        codec::Refusal::Failed => "unpacking failed",
-        codec::Refusal::Unaligned => "not on a byte boundary",
-        codec::Refusal::Settings => "the file doesn't say how this was packed",
-        codec::Refusal::Unsupported(u) => u.message(),
-    }
 }
 
 /// A v2 page's levels and the packed run behind them; for any other page the

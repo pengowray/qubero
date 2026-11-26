@@ -400,7 +400,10 @@ from a part's index pass refuses the stream as `Failed`. That includes a
 part's `TooLarge` (one zstd frame or xz block past 64 MiB), because the
 stream's own `TooLarge` means its parts take up too much of the file. A read
 of such a part says `is too large to unpack (over 64 MiB)`, and a read of a
-part that will not decode says `could not be unpacked`.
+part that will not decode says `could not be unpacked`. A part of a codec with
+no index (bzip2, LZMA and the rest) is decoded whole, and a read of one past
+64 MiB says `is too large to unpack (over 64 MiB)` as well. The words after
+"is" are `Refusal::message`, which FITS tiles and Parquet pages use too.
 
 **`Space` (the document of its own).** Its document becomes
 `Document<SpaceSource>`, where `SpaceSource` is an enum of `Whole(Arc<Vec<u8>>)`,
