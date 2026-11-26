@@ -158,7 +158,9 @@ pub fn jpeg() -> Template {
                         ],
                         None,
                         None,
-                        super::icc::icc_part().root,
+                        // Most JPEGs have no profile, and an empty stream
+                        // is not a profile with nothing in it.
+                        T::when(E::lit(0).less_than(E::Remaining), super::icc::icc_part().root),
                     ),
                 ),
             ],
