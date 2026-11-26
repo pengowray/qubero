@@ -8,7 +8,7 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatAddress, formatBytes, formatOffset, percentText } from "./doc.ts";
+import { formatAddress, formatBytes, formatLimit, formatOffset, percentText, RESIDENT_BYTES } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { CodecKind, Doc, TemplateNode } from "./doc.ts";
 import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
@@ -30,7 +30,7 @@ import { rowGlyphsFor } from "./viz/rowglyphs.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -322,6 +322,10 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
             ? countText(item.shownChildren ?? n.child_count, childWord(n))
             : n.value;
   const value = el("span", "rp-value", said);
+  // The limit a reason leaves out, such as how much of the file the editor
+  // keeps in memory, on hover.
+  const limit = n.refused === null ? undefined : DECODED_REFUSED_TITLE[n.refused];
+  if (limit !== undefined) value.title = limit(formatLimit(RESIDENT_BYTES));
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
   // square says what it is. Only where the template called the field or the
   // structure a colour, so nothing guesses at text that happens to look like

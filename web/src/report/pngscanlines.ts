@@ -13,6 +13,7 @@
 
 import type { Doc, TemplateNode } from "../doc.ts";
 import { cardState, watchCard } from "../contentcard.ts";
+import { formatLimit } from "../format.ts";
 import { VIZ } from "../strings.ts";
 import { drawPixelGrid, gridState, pngLayer, stripWidth, type Layers, type PixelGrid, type PixelGridState } from "../viz/pixelgrid.ts";
 import { viewSize } from "../viz/pixelgridmath.ts";
@@ -68,7 +69,7 @@ export const pngScanlinesSection: Section = {
     if (found.kind === "refused") {
       h.textContent = RV.pngScanlinesUnread;
       const p = document.createElement("p");
-      p.textContent = found.stage === "inflate" ? RV.pngNotInflated(found.why) : RV.pngNotUnfiltered(found.why);
+      p.textContent = found.stage === "inflate" ? RV.pngNotInflated(found.why, formatLimit(ctx.doc.residentBytes)) : RV.pngNotUnfiltered(found.why);
       sec.append(p);
       return sec;
     }

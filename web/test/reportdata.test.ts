@@ -13,7 +13,8 @@ import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
 import { runPosition } from "../src/report/partrules.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { RV } from "../src/report/text.ts";
-import { codecWords, REPORT } from "../src/strings.ts";
+import { codecWords, DECODED_REFUSED, DECODED_REFUSED_TITLE, REPORT } from "../src/strings.ts";
+import { formatLimit } from "../src/format.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
 test("text inside a list of numbers is counted with its nouns, one and many", () => {
@@ -372,10 +373,24 @@ test("a stream that would not decode says why, with its codec's verb", () => {
 });
 
 test("a finding for a stream left as bytes says it is too large past either limit", () => {
-  assert.equal(RV.refused("too-large"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-lazy"), "Too large to unpack here");
-  assert.equal(RV.refused("unaligned"), "Does not start on a byte boundary, so it was not unpacked");
-  assert.equal(RV.refused("failed"), "Did not unpack");
+  assert.equal(RV.refused("too-large", "32 MiB"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-lazy", "32 MiB"), "Too large to unpack here");
+  assert.equal(
+    RV.refused("too-much-at-once", "32 MiB"),
+    "Takes up over 32 MiB of the file, more than the editor keeps in memory at once, so it was not unpacked",
+  );
+  assert.equal(RV.refused("unaligned", "32 MiB"), "Does not start on a byte boundary, so it was not unpacked");
+  assert.equal(RV.refused("failed", "32 MiB"), "Did not unpack");
+});
+
+test("a limit is written as a whole number of its unit, and a refusal that leaves it out says it on hover", () => {
+  assert.equal(formatLimit(32 * 2 ** 20), "32 MiB");
+  assert.equal(formatLimit(192 * 2 ** 10), "192 KiB");
+  assert.equal(formatLimit(2 ** 30), "1 GiB");
+  assert.equal(formatLimit(1536 * 2 ** 10), "1.50 MiB");
+  assert.equal(DECODED_REFUSED["too-much-at-once"], "too large for the editor to keep in memory at once");
+  assert.equal(DECODED_REFUSED_TITLE["too-much-at-once"]?.("32 MiB"), "The editor keeps at most 32 MiB of the file in memory.");
+  assert.equal(DECODED_REFUSED_TITLE["too-large"], undefined);
 });
 
 test("the ribbon's sentences count no codes where there is not one, and say what writes no bytes", () => {
