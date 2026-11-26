@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -18,6 +18,7 @@ import { ListPane } from "./listpane.ts";
 import { TextView } from "./textview.ts";
 import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY, HIDE_INSIDE_KEY } from "./stringsview.ts";
 import { Crystal } from "./crystal.ts";
+import { waitToOpen, type OpenStep } from "./openwait.ts";
 import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { isTable, tablePlan } from "./tableplan.ts";
@@ -742,43 +743,82 @@ function buildDocument(tab: Tab): Page {
     });
   };
   inspector.onOpenTab = openEmbedded;
-  /** The stream Open unpacked is waiting on while a large one is unpacked
-   *  over several goes. Pressing it on another stream moves the wait there,
-   *  and closing the tab ends it. */
-  let unpackingAt: string | null = null;
-  tab.release.push(() => (unpackingAt = null));
+  /** The press Open unpacked is waiting on, while the stream's bytes load
+   *  from the file or a large one is unpacked over several goes. Pressing it
+   *  again, or on another stream, puts a new wait in its place, and closing
+   *  the tab ends it. */
+  let waiting: { readonly key: string } | null = null;
+  tab.release.push(() => (waiting = null));
+  /** One ask of the core for the stream at `path`, as `waitToOpen` takes it. */
+  const askOpen = (path: readonly number[]): OpenStep<Doc | { readonly refused: string } | null> => {
+    const r = doc.openSpace(path);
+    if (r !== null && "working" in r) return { kind: "working", unpacking: r.unpacking };
+    if (r !== null && "pending" in r) return { kind: "pending", chunks: r.pending };
+    return { kind: "done", value: r };
+  };
+  /** Whether the stream at `path` is joined from several runs, which the
+   *  first node under it says, rather than unpacked from one. */
+  const joinedAt = (path: readonly number[]): boolean => {
+    const first = doc.templateNode([...path, 0]);
+    return first.status === "ok" && first.node.joined && first.node.space_root;
+  };
+  /** The title the tab over the stream at `path` would have, for a status
+   *  line saying why it did not open. */
+  const wouldBeTitle = (path: readonly number[], node: TemplateNode): string =>
+    joinedAt(path) ? JOINED.tabTitle(node.name, doc.name) : UNPACKED.tabTitle(node.name, doc.name, node.codec_kind);
   /**
    * Open a compressed run as a document of its own, or bring its tab to the
    * front if it is already open. The run is unpacked once and kept, so a second
    * ask costs nothing.
    *
-   * A deflate stream too large to unpack in one go is unpacked a go at a time
-   * between frames. Until it is done the status bar says how far it has got,
-   * and this asks again once the page has drawn; the tab opens at the end.
+   * One press carries the stream through to its tab. A stream whose bytes
+   * have not been read from the file yet waits for them, and a deflate stream
+   * too large to unpack in one go is unpacked a go at a time between frames;
+   * meanwhile the status bar says which, and how far it has got. See
+   * `waitToOpen` for when it gives up.
    *
    * Returns the document the tab shows, for the lineage breadcrumb to go to
-   * bytes in, or null while the stream is still being unpacked or when it
-   * will not open.
+   * bytes in, or null while the stream is still on its way or when it will
+   * not open.
    */
   const openUnpacked = (path: readonly number[]): Doc | null => {
     const n = doc.templateNode(path);
     if (n.status !== "ok") return null;
-    const unpacked = doc.openSpace(path);
+    const node = n.node;
     const key = path.join(".");
-    if (unpacked !== null && "working" in unpacked) {
-      unpackingAt = key;
-      const u = unpacked.unpacking;
-      saveMsg.classList.remove("warn");
-      saveMsg.textContent = UNPACKED.unpacking(n.node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0));
-      setTimeout(() => {
-        if (unpackingAt === key) openUnpacked(path);
-      }, 0);
-      return null;
+    const first = askOpen(path);
+    if (first.kind === "done") {
+      if (waiting?.key === key) {
+        waiting = null;
+        say("");
+      }
+      return showOpened(path, node, first.value);
     }
-    if (unpackingAt === key) {
-      unpackingAt = null;
-      saveMsg.textContent = "";
-    }
+    const wait = { key };
+    waiting = wait;
+    waitToOpen(first, () => askOpen(path), (chunks) => doc.fileChunks(chunks), {
+      live: () => waiting === wait,
+      working: (u) => say(UNPACKED.unpacking(node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0))),
+      loading: () => say(UNPACKED.loading(node.name)),
+      done: (value) => {
+        waiting = null;
+        say("");
+        showOpened(path, node, value);
+      },
+      lost: () => {
+        waiting = null;
+        say(UNPACKED.tooMuchAtOnce(wouldBeTitle(path, node)), true);
+      },
+      failed: (error) => {
+        waiting = null;
+        say(UNPACKED.readFailed(wouldBeTitle(path, node), error instanceof Error ? error.message : String(error)), true);
+      },
+    });
+    return null;
+  };
+  /** The tab for what Open unpacked came to: focused if it was open already,
+   *  added if not, and nothing for a stream that would not open. */
+  const showOpened = (path: readonly number[], node: TemplateNode, unpacked: Doc | { readonly refused: string } | null): Doc | null => {
     if (unpacked === null) return null;
     // A compressed run that will not open says why on its own row and is not
     // offered. A joined stream is offered whatever its length, and one whose
@@ -786,10 +826,8 @@ function buildDocument(tab: Tab): Page {
     // found out only now, so this is where it is said, for the listing's
     // button and the inspector's alike.
     if ("refused" in unpacked) {
-      const first = doc.templateNode([...path, 0]);
-      const joined = first.status === "ok" && first.node.joined && first.node.space_root;
-      const tab = JOINED.tabTitle(n.node.name, doc.name);
-      if (joined) say(unpacked.refused === "too-large" ? JOINED.tooLarge(tab) : JOINED.failed(tab), true);
+      const tab = JOINED.tabTitle(node.name, doc.name);
+      if (joinedAt(path)) say(unpacked.refused === "too-large" ? JOINED.tooLarge(tab) : JOINED.failed(tab), true);
       return null;
     }
     const already = tabs.forSpace(unpacked.space);
@@ -807,8 +845,8 @@ function buildDocument(tab: Tab): Page {
     tabs.add({
       doc: unpacked,
       title:
-        crumbs !== null ? tabTitleText(crumbs) : unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name, n.node.codec_kind),
-      origin: UNPACKED.openTitle(n.node.name),
+        crumbs !== null ? tabTitleText(crumbs) : unpacked.joined ? JOINED.tabTitle(node.name, doc.name) : UNPACKED.tabTitle(node.name, doc.name, node.codec_kind),
+      origin: UNPACKED.openTitle(node.name),
       label: crumbs === null ? null : () => tabTitleLabel(titleCrumbs(crumbs, fileTab()?.doc ?? null)),
       tip: crumbs === null ? null : () => lineageCard(crumbs),
     });

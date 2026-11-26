@@ -2446,7 +2446,8 @@ export function glyphColumn(name: string): GlyphSet | null {
 }
 
 export class Doc {
-  private readonly inflight = new Set<number>();
+  /** Chunks of the file being read, each with the read that feeds it in. */
+  private readonly inflight = new Map<number, Promise<void>>();
   private readonly listeners = new Set<() => void>();
   /** A go at unfinished work is already queued. */
   private workScheduled = false;
@@ -2533,14 +2534,28 @@ export class Doc {
    *
    * A large deflate stream is unpacked over several calls, a go at a time, so
    * that the page keeps drawing. Until it is done this comes back as how far
-   * it has got, and the caller asks again. Null when there was no answer.
+   * it has got, and the caller asks again. A stream whose compressed bytes
+   * are not all loaded yet comes back as the chunks of the file it waits on,
+   * which are already being read: see `fileChunks`. Null when there was no
+   * answer.
    */
   openSpace(
     path: readonly number[],
-  ): Doc | { readonly refused: string } | { readonly working: true; readonly unpacking: Unpacking | null } | null {
-    const r = this.handleReply<{ space: number; template: string; refused?: string; joined: boolean; stored: boolean }>(
-      this.editor.open_space(this.space, Uint32Array.from(path)),
-    );
+  ):
+    | Doc
+    | { readonly refused: string }
+    | { readonly working: true; readonly unpacking: Unpacking | null }
+    | { readonly pending: readonly number[] }
+    | null {
+    const raw = JSON.parse(this.editor.open_space(this.space, Uint32Array.from(path))) as RawReply<{
+      space: number;
+      template: string;
+      refused?: string;
+      joined: boolean;
+      stored: boolean;
+    }>;
+    const r = this.settle(raw);
+    if (raw.status === "pending") return { pending: raw.chunks };
     if (r.status === "working") return { working: true, unpacking: this.unpacking() };
     if (r.status !== "ok") return null;
     if (r.node.space === 0) return r.node.refused === undefined ? null : { refused: r.node.refused };
@@ -2977,7 +2992,12 @@ export class Doc {
   }
 
   private handleReply<T>(json: string): TemplateReply<T> {
-    const r: RawReply<T> = JSON.parse(json);
+    return this.settle(JSON.parse(json) as RawReply<T>);
+  }
+
+  /** `handleReply` for a reply already parsed, by a caller that needs a part
+   *  of it the settled reply leaves out. */
+  private settle<T>(r: RawReply<T>): TemplateReply<T> {
     if (r.status === "pending") {
       for (const c of r.chunks) this.fetchChunk(c);
       // A contiguous run of missing chunks means something is being read
@@ -3528,23 +3548,20 @@ export class Doc {
       end += 1;
     }
     if (end <= start) return;
-    for (let c = start; c < end; c++) this.inflight.add(c);
     const at = start * CHUNK_SIZE;
-    void this.blob
-      .slice(at, Math.min(end * CHUNK_SIZE, this.blob.size))
-      .arrayBuffer()
-      .then((buf) => {
-        const bytes = new Uint8Array(buf);
-        for (let c = start; c < end; c++) {
-          const off = (c - start) * CHUNK_SIZE;
-          if (off >= bytes.length) break;
-          this.editor.feed_chunk(c, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.length)));
-        }
-      })
-      .finally(() => {
-        for (let c = start; c < end; c++) this.inflight.delete(c);
-        this.notify();
-      });
+    const read = Promise.resolve(this.blob.slice(at, Math.min(end * CHUNK_SIZE, this.blob.size)).arrayBuffer()).then((buf) => {
+      const bytes = new Uint8Array(buf);
+      for (let c = start; c < end; c++) {
+        const off = (c - start) * CHUNK_SIZE;
+        if (off >= bytes.length) break;
+        this.editor.feed_chunk(c, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.length)));
+      }
+    });
+    for (let c = start; c < end; c++) this.inflight.set(c, read);
+    void read.finally(() => {
+      for (let c = start; c < end; c++) this.inflight.delete(c);
+      this.notify();
+    });
   }
 
   private fetchChunk(chunk: number): void {
@@ -3557,18 +3574,41 @@ export class Doc {
     // chunk: feeding an empty one would look like bytes that are all zero.
     if (chunk * CHUNK_SIZE >= this.blob.size) return;
     if (this.inflight.has(chunk)) return;
-    this.inflight.add(chunk);
     const start = chunk * CHUNK_SIZE;
-    void this.blob
-      .slice(start, Math.min(start + CHUNK_SIZE, this.blob.size))
-      .arrayBuffer()
-      .then((buf) => {
-        this.editor.feed_chunk(chunk, new Uint8Array(buf));
-      })
-      .finally(() => {
-        this.inflight.delete(chunk);
-        this.notify();
-      });
+    const read = Promise.resolve(this.blob.slice(start, Math.min(start + CHUNK_SIZE, this.blob.size)).arrayBuffer()).then((buf) => {
+      this.editor.feed_chunk(chunk, new Uint8Array(buf));
+    });
+    this.inflight.set(chunk, read);
+    void read.finally(() => {
+      this.inflight.delete(chunk);
+      this.notify();
+    });
+  }
+
+  /**
+   * Resolve once chunks `chunks` of the file are here, for a caller that asks
+   * again then rather than on the next change. The chunks a pending reply
+   * names are the file's whichever document asked, and `handleReply` has
+   * already started reading them, so this waits on those reads and starts
+   * only the ones that are not under way. Rejects with a `ReadFailure` when
+   * one cannot be read.
+   *
+   * Resolving does not promise the chunks are still here when the caller
+   * asks: the store keeps `CHUNK_CAPACITY` of them, and a stream that needs
+   * more than that at once pushes out its own first chunks.
+   */
+  async fileChunks(chunks: readonly number[]): Promise<void> {
+    await Promise.all(
+      chunks.map(async (c) => {
+        if (this.editor.has_chunk(0, c)) return;
+        this.fetchChunk(c);
+        try {
+          await this.inflight.get(c);
+        } catch (e: unknown) {
+          throw new ReadFailure(c * CHUNK_SIZE, Math.min(CHUNK_SIZE, this.blob.size - c * CHUNK_SIZE), e);
+        }
+      }),
+    );
   }
 
   /**

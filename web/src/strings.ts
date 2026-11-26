@@ -685,6 +685,22 @@ export const UNPACKED = {
    *  always the ones for compression. */
   unpacking: (field: string, percent: string, size: string): string =>
     `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
+  /** In the status bar after Open unpacked, or Open joined stream, was
+   *  pressed on a stream whose bytes have not been read from the file yet.
+   *  They are read and the tab opens without a second press; a large stream
+   *  then says `unpacking` instead. Any kind of stream, so no codec's verb. */
+  loading: (field: string): string => `Loading ${field} from the file… A new tab opens when it is ready.`,
+  /** In the status bar when the stream's bytes were read and dropped again
+   *  before it could be opened: the file's chunks are kept 512 of 64 KiB at
+   *  most (`CHUNK_CAPACITY` in `doc.ts`), and a stream that needs more of the
+   *  file than that at once never has all of it there. `tab` is the title the
+   *  tab would have had, as in `JOINED.failed`. */
+  tooMuchAtOnce: (tab: string): string =>
+    `Couldn't open ${tab}: it needs more than 32 MiB of the file in memory at once, and the editor keeps at most 32 MiB.`,
+  /** In the status bar when reading the stream's bytes from the file failed.
+   *  `reason` is the `ReadFailure` message, which names the bytes and says
+   *  why. */
+  readFailed: (tab: string, reason: string): string => `Couldn't open ${tab}: ${reason}`,
   openTitle: (field: string): string => `Open ${field} as a document of its own`,
   /** Typing, pasting or any other edit inside an unpacked stream. A byte of it
    *  is worked out from every compressed byte before it, so there is nowhere to
