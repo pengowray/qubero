@@ -7,6 +7,7 @@
 
 use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T, Until};
 
+
 const MODES: &[(i128, &str)] = &[
     (0, "bitmap"),
     (1, "grayscale"),
@@ -133,11 +134,131 @@ pub(crate) fn resource() -> T {
             ),
             ("name_pad", T::bytes(name_pad)),
             ("data_size", T::u32(Big)),
-            ("data", T::bytes(E::field("data_size"))),
+            (
+                "data",
+                T::sized(
+                    E::field("data_size"),
+                    T::switch(
+                        E::field("resource_id"),
+                        vec![
+                            (1005, resolution_info()),
+                            (1028, T::repeat(iptc_dataset(), Until::End)),
+                            (1060, T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+                        ],
+                        T::bytes(E::Remaining),
+                    ),
+                ),
+            ),
             ("data_pad", T::bytes(data_pad)),
         ],
     )
     .counted_as("resource")
+}
+
+/// Resource 1005: the image's resolution as Photoshop's Image Size dialog
+/// shows it. Each resolution is a 16.16 fixed-point number of pixels per
+/// inch, whatever unit the dialog displays it in.
+fn resolution_info() -> T {
+    let fixed = |stored: &str| T::computed_real(E::field(stored).div(E::real(65536.0)));
+    let res_unit = || T::enumeration("ResolutionUnit", T::u16(Big), &[(1, "pixels per inch"), (2, "pixels per cm")]);
+    let size_unit = || {
+        T::enumeration(
+            "SizeUnit",
+            T::u16(Big),
+            &[(1, "inches"), (2, "cm"), (3, "points"), (4, "picas"), (5, "columns")],
+        )
+    };
+    T::structure(
+        "ResolutionInfo",
+        vec![
+            ("h_res_fixed", T::u32(Big)),
+            ("h_res", fixed("h_res_fixed")),
+            ("h_res_unit", res_unit()),
+            ("width_unit", size_unit()),
+            ("v_res_fixed", T::u32(Big)),
+            ("v_res", fixed("v_res_fixed")),
+            ("v_res_unit", res_unit()),
+            ("height_unit", size_unit()),
+        ],
+    )
+    .field_doc("h_res", "Horizontal resolution in pixels per inch: h_res_fixed divided by 65,536.")
+    .field_doc("v_res", "Vertical resolution in pixels per inch: v_res_fixed divided by 65,536.")
+    .field_doc("h_res_unit", "The unit Photoshop shows the horizontal resolution in. The stored value is pixels per inch either way.")
+    .field_doc("v_res_unit", "The unit Photoshop shows the vertical resolution in. The stored value is pixels per inch either way.")
+}
+
+/// The IPTC Application Record (record 2) datasets that photo software writes,
+/// by dataset number.
+const IPTC_APPLICATION: &[(i128, &str)] = &[
+    (0, "record version"),
+    (5, "object name"),
+    (7, "edit status"),
+    (10, "urgency"),
+    (15, "category"),
+    (20, "supplemental category"),
+    (25, "keywords"),
+    (40, "special instructions"),
+    (55, "date created"),
+    (60, "time created"),
+    (62, "digital creation date"),
+    (63, "digital creation time"),
+    (65, "originating program"),
+    (70, "program version"),
+    (80, "by-line"),
+    (85, "by-line title"),
+    (90, "city"),
+    (92, "sub-location"),
+    (95, "province or state"),
+    (100, "country code"),
+    (101, "country name"),
+    (103, "original transmission reference"),
+    (105, "headline"),
+    (110, "credit"),
+    (115, "source"),
+    (116, "copyright notice"),
+    (118, "contact"),
+    (120, "caption"),
+    (122, "caption writer"),
+];
+
+/// The IPTC Envelope Record (record 1) datasets that photo software writes.
+const IPTC_ENVELOPE: &[(i128, &str)] = &[
+    (0, "record version"),
+    (90, "coded character set"),
+];
+
+/// One IPTC-IIM dataset, which is how Photoshop stores captions, keywords and
+/// credits: a 0x1c marker, the record and dataset numbers, a two-byte length,
+/// and the data. Text datasets are read as UTF-8, which is what current
+/// software writes and declares in dataset 1:90; older files may use another
+/// character set.
+fn iptc_dataset() -> T {
+    let record_2 = T::enumeration("IptcApplicationDataset", T::u8(), IPTC_APPLICATION);
+    let record_1 = T::enumeration("IptcEnvelopeDataset", T::u8(), IPTC_ENVELOPE);
+    let text = || T::text(StrLen::Fixed(E::field("size")), Encoding::Utf8);
+    T::structure_named(
+        "IptcDataset",
+        "dataset",
+        "",
+        vec![
+            ("marker", T::magic(&[0x1c])),
+            ("record", T::u8()),
+            ("dataset", T::switch(E::field("record"), vec![(1, record_1), (2, record_2)], T::u8())),
+            ("size", T::u16(Big)),
+            (
+                "data",
+                // Record 2's version is a number; every other dataset of that
+                // record is text.
+                T::switch(
+                    E::field("record").mul(E::lit(256)).add(E::field("dataset")),
+                    vec![(0x200, T::u16(Big)), (0x100, T::u16(Big))],
+                    T::switch(E::field("record"), vec![(2, text())], T::bytes(E::field("size"))),
+                ),
+            ),
+        ],
+    )
+    .counted_as("dataset")
+    .field_doc("record", "Which IPTC record the dataset belongs to: 1 is the envelope, 2 the application record that holds captions, keywords and credits.")
 }
 
 fn layer_and_mask(large: bool) -> T {
