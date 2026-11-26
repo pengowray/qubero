@@ -43,30 +43,110 @@ type Chunk (named by id, contents body) {
               0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
               0xfffe = extensible
             }
-            guid: bytes[14]
+            // The rest of the sub-format GUID. Every format that has a format tag uses
+                0000-0010-8000-00aa00389b71 here.
+            guid: switch 14 <= remaining and peek(u112be) == 75567087098681326345073 {
+              1 => magic 00 00 00 00 10 00 80 00 00 AA 00 38 9B 71
+              _ => bytes[14]
+            }
           }
         }
-        _ => bytes[remaining]
+        _ => switch 2 <= remaining {
+          1 => Extension {
+            // How many bytes of format-specific fields follow.
+            extension_size: u16le
+            fields: sized(min(extension_size, remaining)) switch format {
+              2 => MsAdpcm {
+                samples_per_block: u16le
+                coefficient_count: u16le
+                // Predictor coefficient pairs, in units of 1/256. Each block's header selects
+                    one of these pairs.
+                coefficients: Coefficient {
+                  coefficient_1: i16le
+                  coefficient_2: i16le
+                }[coefficient_count]
+              }
+              17 => ImaAdpcm {
+                samples_per_block: u16le
+              }
+              49 => Gsm610 {
+                samples_per_block: u16le
+              }
+              85 => MpegLayer3 {
+                // 1 for MPEG audio.
+                id: u16le
+                // How the encoder pads frames.
+                flags: u32le enum Mp3Padding {
+                  0 = padded as ISO 11172-3 says, 1 = always padded, 2 = never padded
+                }
+                // Bytes in a block of frames.
+                block_size: u16le
+                frames_per_block: u16le
+                // Samples of delay the encoder added at the start.
+                codec_delay: u16le
+              }
+              _ => bytes[remaining]
+            }
+            // Bytes in the chunk after the end of the format-specific fields.
+            after_extension: optional(when 0 < remaining) bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
       }
     }
     'fact' => Fact {
       sample_count: u32le
     }
-    'guan' => repeat(until end) text until 0x0a or end utf8
+    'guan' => Guano {
+      fields: sized(run(not 00)) repeat(until end) sized(min(run(not 0A) + 1, remaining)) switch
+          run(not 3A 0A) < remaining and peek(u8be at run(not 3A 0A) * 8 bits) == 58 {
+        1 => GuanoField (named by key) {
+          // Who defined the key: GUANO for GUANO|Version, the line every GUANO block starts
+              with, or a vendor's prefix, such as WA for Wildlife Acoustics. The other keys the
+              GUANO standard defines have no namespace.
+          namespace: optional(when run(not 7C 3A 0A) < remaining and peek(u8be at run(not 7C 3A
+              0A) * 8 bits) == 124) text until 0x7c utf8
+          key: text until 0x3a utf8
+          value: switch 0 < remaining and peek(u8be at (remaining - 1) * 8 bits) == 10 {
+            1 => text token skipping 20 09 ending at 0A utf8
+            _ => text until 0x0a or end utf8
+          }
+        }
+        _ => text until 0x0a or end utf8
+      }
+      // 0x00 bytes after the last line.
+      padding: optional(when 0 < remaining) bytes[remaining]
+    }
     'wamd' => repeat(until end) Item (named by tag) {
       tag: u16le enum WamdTag {
-        0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
-        6 = position, 7 = temperature
+        0 = metadata version, 1 = model, 2 = serial, 3 = firmware, 4 = file name prefix,
+        5 = timestamp, 6 = position, 7 = GPS track, 8 = software, 9 = Kaleidoscope licence key,
+        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note,
+        14 = species auto ID statistics, 15 = time expansion, 16 = recorder program,
+        17 = recorder run state, 18 = microphone, 19 = sensitivity,
+        20 = position, SM4BAT firmware 2, 21 = temperature
       }
       length: u32le
       value: sized(length) switch tag {
-        1 => text[remaining] latin1
-        2 => text[remaining] latin1
-        3 => text[remaining] latin1
-        4 => text[remaining] latin1
-        5 => text[remaining] latin1
-        6 => text[remaining] latin1
-        7 => text[remaining] latin1
+        1 => text[remaining] padded with 0x00 latin1
+        2 => text[remaining] padded with 0x00 latin1
+        3 => text[remaining] padded with 0x00 latin1
+        4 => text[remaining] padded with 0x00 latin1
+        5 => text[remaining] padded with 0x00 latin1
+        6 => text[remaining] padded with 0x00 latin1
+        7 => text[remaining] padded with 0x00 latin1
+        8 => text[remaining] padded with 0x00 latin1
+        9 => text[remaining] padded with 0x00 latin1
+        10 => text[remaining] padded with 0x00 latin1
+        11 => text[remaining] padded with 0x00 latin1
+        12 => text[remaining] padded with 0x00 latin1
+        14 => text[remaining] padded with 0x00 latin1
+        18 => text[remaining] padded with 0x00 latin1
+        19 => text[remaining] padded with 0x00 latin1
+        20 => text[remaining] padded with 0x00 latin1
+        21 => text[remaining] padded with 0x00 latin1
+        0 => switch remaining == 2 {1 => u16le, _ => bytes[remaining]}
+        15 => switch remaining == 2 {1 => u16le, _ => bytes[remaining]}
         _ => bytes[remaining]
       }
     }
@@ -976,30 +1056,110 @@ type ChunkBE = Chunk (named by id, contents body) {
               0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
               0xfffe = extensible
             }
-            guid: bytes[14]
+            // The rest of the sub-format GUID. Every format that has a format tag uses
+                0000-0010-8000-00aa00389b71 here.
+            guid: switch 14 <= remaining and peek(u112be) == 75567087098681326345073 {
+              1 => magic 00 00 00 00 10 00 80 00 00 AA 00 38 9B 71
+              _ => bytes[14]
+            }
           }
         }
-        _ => bytes[remaining]
+        _ => switch 2 <= remaining {
+          1 => Extension {
+            // How many bytes of format-specific fields follow.
+            extension_size: u16be
+            fields: sized(min(extension_size, remaining)) switch format {
+              2 => MsAdpcm {
+                samples_per_block: u16be
+                coefficient_count: u16be
+                // Predictor coefficient pairs, in units of 1/256. Each block's header selects
+                    one of these pairs.
+                coefficients: Coefficient {
+                  coefficient_1: i16be
+                  coefficient_2: i16be
+                }[coefficient_count]
+              }
+              17 => ImaAdpcm {
+                samples_per_block: u16be
+              }
+              49 => Gsm610 {
+                samples_per_block: u16be
+              }
+              85 => MpegLayer3 {
+                // 1 for MPEG audio.
+                id: u16be
+                // How the encoder pads frames.
+                flags: u32be enum Mp3Padding {
+                  0 = padded as ISO 11172-3 says, 1 = always padded, 2 = never padded
+                }
+                // Bytes in a block of frames.
+                block_size: u16be
+                frames_per_block: u16be
+                // Samples of delay the encoder added at the start.
+                codec_delay: u16be
+              }
+              _ => bytes[remaining]
+            }
+            // Bytes in the chunk after the end of the format-specific fields.
+            after_extension: optional(when 0 < remaining) bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
       }
     }
     'fact' => Fact {
       sample_count: u32be
     }
-    'guan' => repeat(until end) text until 0x0a or end utf8
+    'guan' => Guano {
+      fields: sized(run(not 00)) repeat(until end) sized(min(run(not 0A) + 1, remaining)) switch
+          run(not 3A 0A) < remaining and peek(u8be at run(not 3A 0A) * 8 bits) == 58 {
+        1 => GuanoField (named by key) {
+          // Who defined the key: GUANO for GUANO|Version, the line every GUANO block starts
+              with, or a vendor's prefix, such as WA for Wildlife Acoustics. The other keys the
+              GUANO standard defines have no namespace.
+          namespace: optional(when run(not 7C 3A 0A) < remaining and peek(u8be at run(not 7C 3A
+              0A) * 8 bits) == 124) text until 0x7c utf8
+          key: text until 0x3a utf8
+          value: switch 0 < remaining and peek(u8be at (remaining - 1) * 8 bits) == 10 {
+            1 => text token skipping 20 09 ending at 0A utf8
+            _ => text until 0x0a or end utf8
+          }
+        }
+        _ => text until 0x0a or end utf8
+      }
+      // 0x00 bytes after the last line.
+      padding: optional(when 0 < remaining) bytes[remaining]
+    }
     'wamd' => repeat(until end) Item (named by tag) {
       tag: u16be enum WamdTag {
-        0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
-        6 = position, 7 = temperature
+        0 = metadata version, 1 = model, 2 = serial, 3 = firmware, 4 = file name prefix,
+        5 = timestamp, 6 = position, 7 = GPS track, 8 = software, 9 = Kaleidoscope licence key,
+        10 = notes, 11 = species auto ID, 12 = species manual ID, 13 = voice note,
+        14 = species auto ID statistics, 15 = time expansion, 16 = recorder program,
+        17 = recorder run state, 18 = microphone, 19 = sensitivity,
+        20 = position, SM4BAT firmware 2, 21 = temperature
       }
       length: u32be
       value: sized(length) switch tag {
-        1 => text[remaining] latin1
-        2 => text[remaining] latin1
-        3 => text[remaining] latin1
-        4 => text[remaining] latin1
-        5 => text[remaining] latin1
-        6 => text[remaining] latin1
-        7 => text[remaining] latin1
+        1 => text[remaining] padded with 0x00 latin1
+        2 => text[remaining] padded with 0x00 latin1
+        3 => text[remaining] padded with 0x00 latin1
+        4 => text[remaining] padded with 0x00 latin1
+        5 => text[remaining] padded with 0x00 latin1
+        6 => text[remaining] padded with 0x00 latin1
+        7 => text[remaining] padded with 0x00 latin1
+        8 => text[remaining] padded with 0x00 latin1
+        9 => text[remaining] padded with 0x00 latin1
+        10 => text[remaining] padded with 0x00 latin1
+        11 => text[remaining] padded with 0x00 latin1
+        12 => text[remaining] padded with 0x00 latin1
+        14 => text[remaining] padded with 0x00 latin1
+        18 => text[remaining] padded with 0x00 latin1
+        19 => text[remaining] padded with 0x00 latin1
+        20 => text[remaining] padded with 0x00 latin1
+        21 => text[remaining] padded with 0x00 latin1
+        0 => switch remaining == 2 {1 => u16be, _ => bytes[remaining]}
+        15 => switch remaining == 2 {1 => u16be, _ => bytes[remaining]}
         _ => bytes[remaining]
       }
     }
@@ -1835,6 +1995,48 @@ type ListItem = Chunk {
       code_page: u16le
       text: text[remaining] padded with 0x00 latin1
     }
+    'data' => Samples {
+      samples: switch earlier(body.format) {
+        0xfffe => switch earlier(body.extra.sub_format.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16le[remaining / 2]
+            24 => i24le[remaining / 3]
+            32 => i32le[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32le[remaining / 4]
+            64 => f64le[remaining / 8]
+            _ => bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
+        _ => switch earlier(body.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16le[remaining / 2]
+            24 => i24le[remaining / 3]
+            32 => i32le[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32le[remaining / 4]
+            64 => f64le[remaining / 8]
+            _ => bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
+      }  valid finite
+          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+              column word channel, named [left, right], describes
+              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+              earlier(body.bits_per_sample)]
+    }
+    'slnt' => Silence {
+      // How long the silence is, in samples per channel.
+      sample_count: u32le
+    }
     _ => text until 0x00 or end latin1
   }
   pad: bytes[(size - size / 2 * 2) * (0 < remaining)]
@@ -1861,6 +2063,48 @@ type ListItemBE = Chunk {
       dialect: u16be
       code_page: u16be
       text: text[remaining] padded with 0x00 latin1
+    }
+    'data' => Samples {
+      samples: switch earlier(body.format) {
+        0xfffe => switch earlier(body.extra.sub_format.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16be[remaining / 2]
+            24 => i24be[remaining / 3]
+            32 => i32be[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32be[remaining / 4]
+            64 => f64be[remaining / 8]
+            _ => bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
+        _ => switch earlier(body.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16be[remaining / 2]
+            24 => i24be[remaining / 3]
+            32 => i32be[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32be[remaining / 4]
+            64 => f64be[remaining / 8]
+            _ => bytes[remaining]
+          }
+          _ => bytes[remaining]
+        }
+      }  valid finite
+          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+              column word channel, named [left, right], describes
+              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+              earlier(body.bits_per_sample)]
+    }
+    'slnt' => Silence {
+      // How long the silence is, in samples per channel.
+      sample_count: u32be
     }
     _ => text until 0x00 or end latin1
   }

@@ -560,7 +560,7 @@ fn chapter_list() -> T {
         ],
     )
     .named_by("title")
-    .field_doc("start", "When the chapter starts, in units of 100 nanoseconds from the start of the file.");
+    .field_doc("start", "When the chapter starts, in units of 100 nanoseconds from the start of playback.");
     let mut fields = full_box();
     fields.extend(vec![
         ("reserved", by_version(T::bytes(E::lit(0)), u32be())),

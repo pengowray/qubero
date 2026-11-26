@@ -69,27 +69,27 @@ const SMPTE_FORMAT: &[(i128, &str)] =
 /// names; SM4BAT firmware 2 also writes 0x14, the position in place of 0x06,
 /// and 0x15, the temperature as text such as `16.25C`.
 const WAMD_TAG: &[(i128, &str)] = &[
-    (0x00, "version"),
+    (0x00, "metadata version"),
     (0x01, "model"),
     (0x02, "serial"),
     (0x03, "firmware"),
-    (0x04, "prefix"),
+    (0x04, "file name prefix"),
     (0x05, "timestamp"),
     (0x06, "position"),
     (0x07, "GPS track"),
     (0x08, "software"),
-    (0x09, "software licence"),
+    (0x09, "Kaleidoscope licence key"),
     (0x0a, "notes"),
-    (0x0b, "auto ID"),
-    (0x0c, "manual ID"),
+    (0x0b, "species auto ID"),
+    (0x0c, "species manual ID"),
     (0x0d, "voice note"),
-    (0x0e, "auto ID statistics"),
+    (0x0e, "species auto ID statistics"),
     (0x0f, "time expansion"),
-    (0x10, "program"),
-    (0x11, "run state"),
+    (0x10, "recorder program"),
+    (0x11, "recorder run state"),
     (0x12, "microphone"),
     (0x13, "sensitivity"),
-    (0x14, "position (firmware 2)"),
+    (0x14, "position, SM4BAT firmware 2"),
     (0x15, "temperature"),
 ];
 
@@ -524,7 +524,7 @@ fn extension(endian: Endian) -> T {
                         ("coefficients", T::array(coefficient, E::field("coefficient_count"))),
                     ],
                 )
-                .field_doc("coefficients", "The predictor coefficient pairs a block's header picks from, in units of 1/256."),
+                .field_doc("coefficients", "Predictor coefficient pairs, in units of 1/256. Each block's header selects one of these pairs."),
             ),
             (0x0011, T::structure("ImaAdpcm", vec![samples_per_block()])),
             (0x0031, T::structure("Gsm610", vec![samples_per_block()])),
@@ -534,13 +534,14 @@ fn extension(endian: Endian) -> T {
                     "MpegLayer3",
                     vec![
                         ("id", T::u16(endian)),
-                        ("flags", T::enumeration("Mp3Padding", T::u32(endian), &[(0, "ISO padding"), (1, "always padded"), (2, "never padded")])),
+                        ("flags", T::enumeration("Mp3Padding", T::u32(endian), &[(0, "padded as ISO 11172-3 says"), (1, "always padded"), (2, "never padded")])),
                         ("block_size", T::u16(endian)),
                         ("frames_per_block", T::u16(endian)),
                         ("codec_delay", T::u16(endian)),
                     ],
                 )
                 .field_doc("id", "1 for MPEG audio.")
+                .field_doc("flags", "How the encoder pads frames.")
                 .field_doc("block_size", "Bytes in a block of frames.")
                 .field_doc("codec_delay", "Samples of delay the encoder added at the start."),
             ),
@@ -556,7 +557,7 @@ fn extension(endian: Endian) -> T {
         ],
     )
     .field_doc("extension_size", "How many bytes of format-specific fields follow.")
-    .field_doc("after_extension", "Bytes in the chunk after the extension_size bytes of fields.");
+    .field_doc("after_extension", "Bytes in the chunk after the end of the format-specific fields.");
     T::switch(E::lit(2).less_or_equal(E::Remaining), vec![(1, fields)], T::bytes(E::Remaining))
 }
 
@@ -577,7 +578,7 @@ fn extensible(endian: Endian) -> T {
             ("guid", T::switch(rest_is_standard, vec![(1, T::magic(&SUBTYPE_GUID_REST))], T::bytes(E::lit(14)))),
         ],
     )
-    .field_doc("guid", "The rest of the sub-format GUID. For a format with a format tag it is the same for every format: 0000-0010-8000-00aa00389b71.");
+    .field_doc("guid", "The rest of the sub-format GUID. Every format that has a format tag uses 0000-0010-8000-00aa00389b71 here.");
     T::structure(
         "Extensible",
         vec![
@@ -606,7 +607,7 @@ pub(super) fn guano() -> T {
             ("padding", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
         ],
     )
-    .field_doc("padding", "Zero bytes after the last line.")
+    .field_doc("padding", "0x00 bytes after the last line.")
 }
 
 /// One line of GUANO, with its newline. Measured first, so that a line with
@@ -638,7 +639,11 @@ fn guano_line() -> T {
         ],
     )
     .named_by("key")
-    .field_doc("namespace", "Who defined the key: GUANO for the format's own keys, or a vendor's prefix such as WA for Wildlife Acoustics. Keys in the GUANO standard have none.");
+    .field_doc(
+        "namespace",
+        "Who defined the key: GUANO for GUANO|Version, the line every GUANO block starts with, or a vendor's prefix, such as WA \
+         for Wildlife Acoustics. The other keys the GUANO standard defines have no namespace.",
+    );
     let line = T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Utf8);
     T::sized(
         E::run_except(b"\n").add(E::lit(1)).at_most(E::Remaining),

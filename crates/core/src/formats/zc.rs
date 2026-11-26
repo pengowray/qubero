@@ -69,9 +69,9 @@ pub fn zc() -> Template {
             "Anabat",
             vec![
                 ("data_info_pointer", T::u16(Little)),
-                ("zero", T::u8()),
+                ("padding", T::u8()),
                 ("file_type", T::u8()),
-                ("zero_2", T::u16(Little)),
+                ("padding_2", T::u16(Little)),
                 ("text", text_header()),
                 (
                     "unused",
@@ -82,7 +82,7 @@ pub fn zc() -> Template {
                     ),
                 ),
                 ("data_info", data_info()),
-                ("recording", T::when(file_type().equal_to(E::lit(132)), recording())),
+                ("recording_info", T::when(file_type().equal_to(E::lit(132)), recording_info())),
                 (
                     "before_intervals",
                     T::when(
@@ -102,22 +102,27 @@ pub fn zc() -> Template {
         )
         .field_valid("data_info_pointer", Valid::Eq(E::lit(DATA_INFO_AT)))
         .field_valid("file_type", Valid::Range { min: E::lit(129), max: E::lit(132) })
-        .field_valid("zero", Valid::Eq(E::lit(0)))
-        .field_valid("zero_2", Valid::Eq(E::lit(0)))
+        .field_valid("padding", Valid::Eq(E::lit(0)))
+        .field_valid("padding_2", Valid::Eq(E::lit(0)))
         .field_doc("data_info_pointer", "Offset of the data information table. Always 0x011a.")
         .field_doc(
             "file_type",
-            "Which version of the layout the file uses, 129 to 132. Type 132 adds the date, time and GPS position at 0x120. \
-             The interval codes differ between types.",
+            "Which of the four layouts the file uses, types 129 to 132. Type 132 adds the recording's start time and GPS position \
+             at 0x0120. The interval codes differ between types.",
         )
-        .field_doc("zero", "Always 0.")
-        .field_doc("zero_2", "Always 0.")
+        .field_doc("padding", "Always 0.")
+        .field_doc("padding_2", "Always 0.")
         .field_doc("unused", "Not defined by the format.")
         .field_doc(
             "before_intervals",
-            "Between the header and the intervals. GUANO metadata when it starts with GUANO, as ZCANT writes it.",
+            "Bytes between the last header field and the first interval code. When they start with GUANO, they are GUANO \
+             metadata, which ZCANT writes here.",
         )
-        .field_doc("intervals", "The time between each zero crossing and the next, in the order they happened."),
+        .field_doc(
+            "intervals",
+            "Interval codes of 1 to 4 bytes, in recording order. Each code gives the time from one zero crossing to the next, \
+             or sets the status of the dots after it. Anabat's software draws each zero crossing as a dot.",
+        ),
     )
 }
 
@@ -144,16 +149,14 @@ fn text_header() -> T {
             ("species", text(50)),
             ("spec", text(16)),
             ("note", text(73)),
-            ("note_line_2", text(80)),
+            ("note1", text(80)),
         ],
     )
-    .field_doc("tape", "TAPE: the tape or card the recording came from.")
-    .field_doc("date", "DATE, as the person who made the recording typed it.")
+    .doc("Anabat's text fields TAPE, DATE, LOC, SPECIES, SPEC, NOTE and NOTE1, each of a fixed size.")
+    .field_doc("date", "DATE, as text. A type 132 file also has the start time as numbers at 0x0120.")
     .field_doc("location", "LOC: where the recording was made.")
-    .field_doc("species", "SPECIES: the species identified in the recording.")
-    .field_doc("spec", "SPEC: who identified it, or anything else the recordist typed.")
-    .field_doc("note", "NOTE.")
-    .field_doc("note_line_2", "NOTE1, which Anabat's software shows as the second line of NOTE.")
+    .field_doc("species", "SPECIES: the species in the recording.")
+    .field_doc("note1", "NOTE1: Anabat's software shows it as the second line of NOTE.")
 }
 
 /// The data information table at 0x11a.
@@ -173,29 +176,36 @@ fn data_info() -> T {
                 "vres",
                 T::structure(
                     "Vres",
-                    vec![("undefined", T::UInt { bits: 1, endian: Big }), ("scale", scale), ("axis", T::UInt { bits: 4, endian: Big })],
+                    vec![("unused", T::UInt { bits: 1, endian: Big }), ("scale", scale), ("axis", T::UInt { bits: 4, endian: Big })],
                 )
-                .field_doc("undefined", "Bit 7. Not defined by the format.")
-                .field_doc("scale", "Bits 4 to 6: which SCALE Anabat's software draws the graph with.")
-                .field_doc("axis", "Bits 0 to 3: which of Anabat's three vertical axes the graph is drawn with."),
+                .field_doc("unused", "Bit 7. Not defined by the format.")
+                .field_doc(
+                    "scale",
+                    "Bits 4 to 6: which of Anabat's eight SCALE values its software draws the recording with. The format note \
+                     gives the values and not their unit.",
+                )
+                .field_doc("axis", "Bits 0 to 3: which of Anabat's three vertical axes its software draws the recording with."),
             ),
         ],
     )
     .field_valid("divratio", Valid::Min(E::lit(1)))
-    .field_doc("data_pointer", "Offset of the first interval: 0x0120 in types 129 to 131, 0x0150 or more in type 132.")
+    .field_doc("data_pointer", "Offset of the first interval code: 0x0120 in types 129 to 131, 0x0150 or more in type 132.")
     .field_doc(
         "res1",
-        "RES1: how many counts the detector makes in 25 ms. 25000, so one count is a microsecond, unless the detector was recalibrated.",
+        "RES1: the number of counts in 25 ms. It is 25000, one count per microsecond, unless the detector was recalibrated.",
     )
-    .field_doc("divratio", "The division ratio: the detector divided the signal's frequency by this before timing its zero crossings.")
-    .field_doc("vres", "VRES: how Anabat's software sets up the graph's vertical axis.")
+    .field_doc(
+        "divratio",
+        "DIVRATIO: the division ratio. The detector divided the signal's frequency by this before timing its zero crossings.",
+    )
+    .field_doc("vres", "VRES: which vertical axis and SCALE Anabat's software uses when it draws the recording.")
 }
 
 /// The block at 0x120 in a type 132 file: when the recording was made, an ID,
 /// and where.
-fn recording() -> T {
+fn recording_info() -> T {
     T::structure(
-        "Recording",
+        "RecordingInfo",
         vec![
             ("year", T::u16(Little)),
             ("month", T::u8()),
@@ -216,10 +226,13 @@ fn recording() -> T {
     .field_valid("second", Valid::Max(E::lit(59)))
     .field_valid("hundredths", Valid::Max(E::lit(99)))
     .field_valid("microseconds", Valid::Max(E::lit(9999)))
-    .doc("When the recording started, in the recorder's local time. All zeros when the recorder did not set it.")
+    .doc(
+        "Type 132 only: when the recording started, then an ID code and the GPS position. The time fields are all 0 when the \
+         detector did not record the time.",
+    )
     .field_doc("hundredths", "Hundredths of a second.")
     .field_doc("microseconds", "Microseconds after the hundredths, 0 to 9999.")
-    .field_doc("id_code", "ID code. The format does not say what it holds.")
+    .field_doc("id_code", "ID code. Its meaning is not defined by the format.")
 }
 
 /// The 32 bytes of GPS text at 0x130: a datum, a position in degrees or in UTM,
@@ -287,13 +300,27 @@ fn carried() -> Vec<(&'static str, T)> {
     vec![("interval", T::computed(E::prev("interval"))), ("time", T::computed(E::prev("time")))]
 }
 
-/// Doc text for the two worked-out fields, said once for every kind of code.
+/// Doc text for the two worked-out fields of a code that gives an interval.
 fn with_running_docs(t: T) -> T {
     t.field_doc(
         "interval",
-        "The interval, worked out from this code and the ones before it. In microseconds when res1 is 25000; otherwise in counts of 25 ms / res1.",
+        "The interval, worked out from this code and the codes before it. In microseconds when res1 is 25000; otherwise one \
+         unit is 25 ms / res1.",
     )
-    .field_doc("time", "Time from the start of the recording to the end of this interval: the sum of every interval so far, in the same units.")
+    .field_doc(
+        "time",
+        "Time from the start of the recording to the end of this interval: the sum of every interval so far, in the same units \
+         as interval.",
+    )
+}
+
+/// The same for a code that gives no interval.
+fn with_carried_docs(t: T) -> T {
+    t.field_doc(
+        "interval",
+        "This code gives no interval, so this is the interval before it, which the next change is added to.",
+    )
+    .field_doc("time", "This code gives no interval, so this is the time at the end of the interval before it.")
 }
 
 /// A one-byte change: bit 7 is 0, and the other seven bits are a signed number
@@ -318,7 +345,7 @@ fn whole(bits: u32) -> T {
     ];
     fields.extend(running(E::field("value")));
     with_running_docs(T::structure("Interval", fields))
-        .field_doc("kind", "Bits 7 to 5 say how many bytes follow: 100 for one, 101 for two, 110 for three.")
+        .field_doc("kind", "Bits 7 to 5: 4 (binary 100), 5 (101) or 6 (110) when one, two or three bytes follow this byte.")
         .field_doc("value", "The interval, high bits first: the low five bits of the first byte, then the bytes after it.")
 }
 
@@ -335,20 +362,24 @@ fn shifted() -> T {
     with_running_docs(T::structure("ShiftedInterval", fields))
         .field_doc("kind", "Bit 7 is 1: an interval given outright, in two bytes.")
         .field_doc("shift", "How many places the value is shifted left to give the interval.")
-        .field_doc("value", "Bits 0 to 2 of the first byte, then the second byte.")
+        .field_doc("value", "Bits 0 to 2 of the first byte, then the second byte, high bits first.")
 }
 
 /// A one-byte code that turns the next few dots off: the bits above `count`
 /// are all 1. Type 129 has 3 bits of count, type 130 has 5.
 fn turn_off(count_bits: u32) -> T {
     let mut fields: Vec<(&str, T)> = vec![
-        ("kind", T::enumeration("CodeKind", T::UInt { bits: 8 - count_bits, endian: Big }, &[((1 << (8 - count_bits)) - 1, "turn off")])),
+        ("kind", T::enumeration("CodeKind", T::UInt { bits: 8 - count_bits, endian: Big }, &[((1 << (8 - count_bits)) - 1, "turn-off code")])),
         ("count", T::UInt { bits: count_bits, endian: Big }),
     ];
     fields.extend(carried());
-    with_running_docs(T::structure("TurnOff", fields))
-        .field_doc("kind", "The top bits all 1: turn off the dots after this code.")
-        .field_doc("count", "How many of the dots after this code to turn off. They were edited out before the file was saved.")
+    with_carried_docs(T::structure("TurnOff", fields))
+        .field_doc("kind", "The top bits are all 1, five bits in type 129 and three in type 130: a turn-off code.")
+        .field_doc(
+            "count",
+            "How many dots after this code are turned off. Their intervals are still in the file; the dots were turned off by \
+             editing before the file was saved.",
+        )
 }
 
 /// The two-byte status code of types 131 and 132: bits 7 to 5 are all 1, the
@@ -356,7 +387,7 @@ fn turn_off(count_bits: u32) -> T {
 /// after it have that status.
 fn status() -> T {
     let mut fields: Vec<(&str, T)> = vec![
-        ("kind", T::enumeration("CodeKind", T::UInt { bits: 3, endian: Big }, &[(7, "status")])),
+        ("kind", T::enumeration("CodeKind", T::UInt { bits: 3, endian: Big }, &[(7, "status code")])),
         (
             "status",
             T::enumeration(
@@ -368,10 +399,10 @@ fn status() -> T {
         ("count", T::u8()),
     ];
     fields.extend(carried());
-    with_running_docs(T::structure("Status", fields))
+    with_carried_docs(T::structure("Status", fields))
         .field_valid("status", Valid::InEnum)
-        .field_doc("kind", "Bits 7 to 5 are all 1: a status for the dots after this code.")
-        .field_doc("status", "The status of the dots after this code. Files use 1 and 3.")
+        .field_doc("kind", "Bits 7 to 5 are all 1: a status code for the dots after it.")
+        .field_doc("status", "The status of the dots after this code. In practice only 1 and 3 are used.")
         .field_doc("count", "How many of the dots after this code have the status.")
 }
 
@@ -536,16 +567,16 @@ mod tests {
             Value::Enum { raw: 5, name: Some("500".into()), hex: false }
         );
         assert_eq!(at(&mut ev, &d, &["data_info", "vres", "axis"]), Value::UInt(2));
-        assert_eq!(at(&mut ev, &d, &["recording", "year"]), Value::UInt(2024));
-        assert_eq!(at(&mut ev, &d, &["recording", "second"]), Value::UInt(59));
-        assert_eq!(at(&mut ev, &d, &["recording", "hundredths"]), Value::UInt(42));
-        assert_eq!(at(&mut ev, &d, &["recording", "microseconds"]), Value::UInt(1234));
-        assert_eq!(at(&mut ev, &d, &["recording", "id_code"]), Value::Str("ABC123".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "datum"]), Value::Str("WGS84     ".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "latitude_hemisphere"]), Value::Str("S".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "latitude"]), Value::Str("33.7394".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "longitude"]), Value::Str("150.2539".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "altitude"]), Value::Str(" 120".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "year"]), Value::UInt(2024));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "second"]), Value::UInt(59));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "hundredths"]), Value::UInt(42));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "microseconds"]), Value::UInt(1234));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "id_code"]), Value::Str("ABC123".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "datum"]), Value::Str("WGS84     ".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "latitude_hemisphere"]), Value::Str("S".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "latitude"]), Value::Str("33.7394".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "longitude"]), Value::Str("150.2539".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "altitude"]), Value::Str(" 120".into()));
         // Every byte of the file is covered.
         let len = d.len_bits();
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, len);
@@ -558,9 +589,9 @@ mod tests {
         gps.resize(32, b' ');
         bytes[0x130..0x150].copy_from_slice(&gps);
         let (d, mut ev) = eval(bytes);
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "zone"]), Value::Str("10S".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "easting"]), Value::Str("551234".into()));
-        assert_eq!(at(&mut ev, &d, &["recording", "gps", "position", "northing"]), Value::Str("4181234".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "zone"]), Value::Str("10S".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "easting"]), Value::Str("551234".into()));
+        assert_eq!(at(&mut ev, &d, &["recording_info", "gps", "position", "northing"]), Value::Str("4181234".into()));
     }
 
     #[test]
