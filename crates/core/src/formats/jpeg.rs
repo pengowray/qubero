@@ -158,7 +158,7 @@ pub fn jpeg() -> Template {
                         ],
                         None,
                         None,
-                        super::decoded_object(),
+                        super::icc::icc_part().root,
                     ),
                 ),
             ],
@@ -539,7 +539,19 @@ fn app2() -> T {
                             vec![
                                 ("sequence_number", T::u8()),
                                 ("piece_count", T::u8()),
-                                ("profile", T::bytes(E::Remaining)),
+                                // A profile short enough for one segment, which
+                                // is most of them, is read where it is, so the
+                                // hex view names its fields. A piece of a longer
+                                // one is only bytes here and is read whole in
+                                // `icc_profile`, joined to the others.
+                                (
+                                    "profile",
+                                    T::switch(
+                                        E::field("piece_count"),
+                                        vec![(1, super::icc::icc_part().root)],
+                                        T::bytes(E::Remaining),
+                                    ),
+                                ),
                             ],
                         )
                         .field_doc("sequence_number", "Which piece of the profile this is, counting from 1.")
@@ -1026,6 +1038,9 @@ mod tests {
 
     #[test]
     fn icc_pieces_are_joined_into_one_profile() {
+        use crate::formats::icc::tests::{profile_bytes, tag};
+        let profile = profile_bytes(4, &[(b"wtpt", Some(tag(b"XYZ ", &[0; 12])))]);
+        let (first, second) = profile.split_at(100);
         let piece = |n: u8, bytes: &[u8]| {
             let mut body = b"ICC_PROFILE\0".to_vec();
             body.extend_from_slice(&[n, 2]);
@@ -1033,14 +1048,32 @@ mod tests {
             seg(0xffe2, &body)
         };
         let mut v = vec![0xff, 0xd8];
-        v.extend_from_slice(&piece(1, b"abc"));
+        v.extend_from_slice(&piece(1, first));
         v.extend_from_slice(&seg(0xfffe, b"between"));
-        v.extend_from_slice(&piece(2, b"defg"));
+        v.extend_from_slice(&piece(2, second));
         v.extend_from_slice(&[0xff, 0xd9]);
         let d = Document::new(MemSource(v));
         let mut ev = Evaluator::new(jpeg());
-        let object = ev.node(&d, &[3, 0, 0]).unwrap();
-        assert_eq!(object.size_bits, 7 * 8);
-        assert_eq!(object.value, Value::Bytes { len: 7, preview: b"abcdefg".to_vec() });
+        // The joined stream is the whole profile, read as one: its tag table
+        // reaches across the cut between the two pieces.
+        let joined = ev.node(&d, &[3, 0]).unwrap();
+        assert_eq!(joined.size_bits, profile.len() as u64 * 8);
+        assert_eq!(joined.type_name, "ICCProfile");
+    }
+
+    #[test]
+    fn a_profile_in_one_piece_is_read_where_it_is() {
+        use crate::formats::icc::tests::{profile_bytes, tag};
+        let profile = profile_bytes(4, &[(b"wtpt", Some(tag(b"XYZ ", &[0; 12])))]);
+        let mut body = b"ICC_PROFILE\0".to_vec();
+        body.extend_from_slice(&[1, 1]);
+        body.extend_from_slice(&profile);
+        let d = doc_of(0xffe2, &body);
+        let mut ev = Evaluator::new(jpeg());
+        let here = ev.node(&d, &[1, 0, 1, 1, 1, 2]).unwrap();
+        assert_eq!(here.type_name, "ICCProfile");
+        assert_eq!(here.size_bits, profile.len() as u64 * 8);
+        // The joined stream still reads it too, as the same profile.
+        assert_eq!(ev.node(&d, &[3, 0]).unwrap().size_bits, profile.len() as u64 * 8);
     }
 }

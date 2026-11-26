@@ -21,7 +21,7 @@
 //! bit first, and neither can be cut into fields without decoding it. So the
 //! headers are fields, bit by bit, and each coded stream is one named run of
 //! bytes with a doc saying what it holds. The same goes for the alpha plane in
-//! `ALPH`, and, until a shared ICC reader lands, for the ICC profile.
+//! `ALPH`. The ICC profile is read by the ICC template.
 //!
 //! The `EXIF` chunk is a TIFF file, read by the TIFF template the way a JPEG's
 //! `APP1` segment is, with offsets counted from the TIFF's own start. Some
@@ -368,10 +368,10 @@ fn anmf() -> T {
     .field_doc("frame_data", "The frame's own chunks: an optional ALPH chunk, then one VP8 or VP8L chunk, then any unknown chunks.")
 }
 
-/// `ICCP`: the image's ICC profile, as its bytes. A shared ICC reader is to
-/// take this one's place, which is why it has a function of its own.
+/// `ICCP`: the image's ICC profile, read by the ICC template, with its tag
+/// offsets counted from the profile's own first byte.
 fn icc_profile() -> T {
-    T::structure_named("ICCP", "", "profile", vec![("profile", T::bytes(E::Remaining))])
+    T::structure_named("ICCP", "", "profile", vec![("profile", super::icc::icc_part().root)])
         .doc("The ICC colour profile for the image.")
         .field_doc("profile", "The whole ICC colour profile. The ICCP chunk must come before the image data.")
 }
