@@ -105,8 +105,8 @@ root PNG {
               // The size of the whole profile in bytes, header, tag table and tag data
                   included.
               profile_size: u32be
-              // The colour management module the profile was made for, as a registered
-                  signature. Empty when none is named.
+              // The preferred colour management module (CMM), as a registered signature. Four
+                  zero bytes when no CMM is named.
               preferred_cmm: text[4] padded with 0x00 latin1
               version: Version (inline, line major worded "major" then minor worded "minor" then
                   bugfix worded "bug fix") {
@@ -121,7 +121,8 @@ root PNG {
                 0x73706163 = spac, colour space, 0x61627374 = abst, abstract,
                 0x6e6d636c = nmcl, named colour
               }
-              // The colour space of the device side of the profile's transforms.
+              // The data colour space, such as RGB or CMYK. In a device link, the first
+                  device's colour space.
               colour_space: u32be enum ColourSpace {
                 0x58595a20 = XYZ, 0x4c616220 = Lab, 0x4c757620 = Luv, 0x59436272 = YCbCr,
                 0x59787920 = Yxy, 0x52474220 = RGB, 0x47524159 = grey, 0x48535620 = HSV,
@@ -132,8 +133,8 @@ root PNG {
                 0x43434c52 = 12 colours, 0x44434c52 = 13 colours, 0x45434c52 = 14 colours,
                 0x46434c52 = 15 colours
               }
-              // The profile connection space: XYZ or Lab for every class but a device link,
-                  whose PCS field is its second device's colour space.
+              // The profile connection space, XYZ or Lab. In a device link, the second device's
+                  colour space.
               pcs: u32be enum ColourSpace {
                 0x58595a20 = XYZ, 0x4c616220 = Lab, 0x4c757620 = Luv, 0x59436272 = YCbCr,
                 0x59787920 = Yxy, 0x52474220 = RGB, 0x47524159 = grey, 0x48535620 = HSV,
@@ -166,8 +167,9 @@ root PNG {
               }
               manufacturer: text[4] padded with 0x00 latin1
               model: text[4] padded with 0x00 latin1
-              // Bits 0 to 3 describe the media. A clear bit means reflective, glossy, positive
-                  or colour media.
+              // Bits 0 to 3 describe the media, clear or set: bit 0 reflective or transparency,
+                  bit 1 glossy or matte, bit 2 positive or negative, bit 3 colour or black and
+                  white.
               attributes: u64be flags DeviceAttributes {
                 bit 0 = transparency, bit 1 = matte, bit 2 = negative, bit 3 = black and white
               }
@@ -192,10 +194,11 @@ root PNG {
                 }
               }
               creator: text[4] padded with 0x00 latin1
-              // An MD5 of the whole profile with the flags, rendering intent and profile ID
-                  fields set to zero. All zero when no ID was calculated.
+              // MD5 hash of the whole profile, calculated with the flags, rendering intent and
+                  profile ID fields taken as zero. All 16 bytes are zero when no ID was
+                  calculated.
               profile_id: bytes[16]
-              // 28 bytes reserved by the ICC, all zero.
+              // 28 bytes reserved by the ICC, which must be zero.
               reserved: bytes[28]
             }
             tag_count: u32be
@@ -254,7 +257,8 @@ root PNG {
               }
               // Where the tag's data starts, counted from the first byte of the profile.
               offset: u32be
-              // How many bytes of data the tag has, not counting the padding after it.
+              // Size of the tag's data in bytes. The spec leaves out the padding after the
+                  data, but some writers count it.
               size: u32be
               data: at(offset from window) sized(size) TagData (contents contents) {
                 type: u32be enum TagType {
@@ -291,7 +295,7 @@ root PNG {
                     ascii_count: u32be
                     ascii: text[ascii_count] padded with 0x00 ascii
                     unicode_language: switch 1 * (3 < remaining) {1 => u32be, _ => bytes[0]}
-                    // Characters of UTF-16 text, its nul included, two bytes each.
+                    // UTF-16 code units of text, two bytes each, its nul included.
                     unicode_count: switch 1 * (3 < remaining) {1 => u32be, _ => bytes[0]}
                     unicode: switch 1 * (0 < remaining) {
                       1 => text[unicode_count * 2] padded with 0x00 utf16be
@@ -308,7 +312,7 @@ root PNG {
                   }
                   'mluc' => multiLocalizedUnicodeType {
                     record_count: u32be
-                    // The size of each record in bytes, which is 12.
+                    // Bytes per record: 12.
                     record_size: u32be
                     records: LocalizedString (contents string, unit string) {
                       language: text[2] padded with 0x00 ascii
@@ -356,8 +360,8 @@ root PNG {
                     }
                   }
                   'curv' => curveType {
-                    // 0 for the identity curve, 1 for a curve that is one gamma value, and
-                        otherwise the number of entries.
+                    // Number of entries. 0 means the identity curve, and with 1 the entry is
+                        the gamma exponent.
                     count: u32be
                     // The exponent: Y = X^gamma.
                     gamma: optional(when count == 1) u8Fixed8Number
@@ -365,8 +369,8 @@ root PNG {
                       stored: u16be
                       worth: computed real stored / 256.0
                     }
-                    // The curve sampled at even steps of X from 0.0 to 1.0, each stored from 0
-                        for 0.0 to 65535 for 1.0.
+                    // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y value is
+                        stored from 0 for 0.0 to 65535 for 1.0.
                     entries: optional(when count > 1) u16be[count]
                   }
                   'para' => parametricCurveType {
@@ -639,7 +643,8 @@ root PNG {
                     output_channels: u8be
                     grid_points: u8be
                     padding: u8be
-                    // Applied first, and only when the input is XYZ. Otherwise the identity.
+                    // A 3 by 3 matrix applied before the input tables. It must be the identity
+                        unless the input colour space is XYZ.
                     matrix: Matrix {
                       e1: s15Fixed16Number (inline, payload stored, line worth) {
                         stored: i32be
@@ -689,7 +694,8 @@ root PNG {
                     output_channels: u8be
                     grid_points: u8be
                     padding: u8be
-                    // Applied first, and only when the input is XYZ. Otherwise the identity.
+                    // A 3 by 3 matrix applied before the input tables. It must be the identity
+                        unless the input colour space is XYZ.
                     matrix: Matrix {
                       e1: s15Fixed16Number (inline, payload stored, line worth) {
                         stored: i32be
@@ -774,8 +780,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -783,8 +789,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -833,8 +839,8 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[output_channels]
                     // A 3 by 3 matrix, e1 to e9 by rows, then the offsets e10 to e12.
                     matrix: optional(when matrix_offset != 0) at(matrix_offset from window)
@@ -921,8 +927,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -930,8 +936,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -980,16 +986,16 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[output_channels]
                     clut: optional(when clut_offset != 0) at(clut_offset from window) CLUT {
-                      // Grid points along each input dimension. Only the first input_channels
-                          are used.
+                      // Number of grid points along each input dimension. Only the first
+                          input_channels entries are used.
                       grid_points: u8be[16]
                       // Bytes per value: 1 or 2.
                       precision: u8be
-                      padding: bytes[3]
+                      padding: u24be
                       values: switch precision {
                         1 => u8be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
                             (grid_points[1] == 0 ? 1 : grid_points[1]) *
@@ -1058,8 +1064,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -1067,8 +1073,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -1117,8 +1123,8 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[input_channels]
                   }
                   'mBA ' => lutBToAType {
@@ -1163,8 +1169,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -1172,8 +1178,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -1222,8 +1228,8 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[input_channels]
                     // A 3 by 3 matrix, e1 to e9 by rows, then the offsets e10 to e12.
                     matrix: optional(when matrix_offset != 0) at(matrix_offset from window)
@@ -1310,8 +1316,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -1319,8 +1325,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -1369,16 +1375,16 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[input_channels]
                     clut: optional(when clut_offset != 0) at(clut_offset from window) CLUT {
-                      // Grid points along each input dimension. Only the first input_channels
-                          are used.
+                      // Number of grid points along each input dimension. Only the first
+                          input_channels entries are used.
                       grid_points: u8be[16]
                       // Bytes per value: 1 or 2.
                       precision: u8be
-                      padding: bytes[3]
+                      padding: u24be
                       values: switch precision {
                         1 => u8be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
                             (grid_points[1] == 0 ? 1 : grid_points[1]) *
@@ -1447,8 +1453,8 @@ root PNG {
                       reserved: u32be
                       contents: switch type {
                         'curv' => curveType {
-                          // 0 for the identity curve, 1 for a curve that is one gamma value,
-                              and otherwise the number of entries.
+                          // Number of entries. 0 means the identity curve, and with 1 the entry
+                              is the gamma exponent.
                           count: u32be
                           // The exponent: Y = X^gamma.
                           gamma: optional(when count == 1) u8Fixed8Number
@@ -1456,8 +1462,8 @@ root PNG {
                             stored: u16be
                             worth: computed real stored / 256.0
                           }
-                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
-                              from 0 for 0.0 to 65535 for 1.0.
+                          // Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y
+                              value is stored from 0 for 0.0 to 65535 for 1.0.
                           entries: optional(when count > 1) u16be[count]
                         }
                         'para' => parametricCurveType {
@@ -1506,8 +1512,8 @@ root PNG {
                         }
                         _ => bytes[0]
                       }
-                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
-                          sizeof(contents), 4), remaining)]
+                      padding: u(min(padding(sizeof(type) + sizeof(reserved) + sizeof(contents),
+                          4), remaining) * 8)be
                     }[output_channels]
                   }
                   'dict' => dictType {
@@ -1565,7 +1571,7 @@ root PNG {
                         contents: switch type {
                           'mluc' => multiLocalizedUnicodeType {
                             record_count: u32be
-                            // The size of each record in bytes, which is 12.
+                            // Bytes per record: 12.
                             record_size: u32be
                             records: LocalizedString (contents string, unit string) {
                               language: text[2] padded with 0x00 ascii
@@ -1616,7 +1622,7 @@ root PNG {
                         contents: switch type {
                           'mluc' => multiLocalizedUnicodeType {
                             record_count: u32be
-                            // The size of each record in bytes, which is 12.
+                            // Bytes per record: 12.
                             record_size: u32be
                             records: LocalizedString (contents string, unit string) {
                               language: text[2] padded with 0x00 ascii
@@ -1687,8 +1693,8 @@ root PNG {
                   }
                   _ => bytes[remaining]
                 }
-                // Bytes inside the tag's size after its contents. Some writers count the
-                    padding to a four-byte boundary in the size.
+                // Bytes after the tag's contents that the tag's size still counts, usually
+                    padding to a four-byte boundary.
                 padding: switch type {
                   'mluc' => bytes[0]
                   'dict' => bytes[0]
@@ -1847,7 +1853,7 @@ root PNG {
         frame_data: bytes[remaining]
       }
       'eXIf' => eXIf (contents tiff) {
-        tiff: sized(remaining) TIFF {
+        tiff: sized(remaining) TIFF (contents file) {
           byte_order: u16be enum ByteOrder {
             18761 = intel, little-endian, 19789 = motorola, big-endian
           }
@@ -1856,13 +1862,13 @@ root PNG {
               version: u16le enum Version {42 = tiff, 43 = bigtiff}
               ifd_offset: u32le
               ifd: at(ifd_offset from window) tiff.Ifd.le
-              body: bytes[remaining]
+              body: bytes[remaining]  aside
             }
             'MM' => Header {
               version: u16be enum Version {42 = tiff, 43 = bigtiff}
               ifd_offset: u32be
               ifd: at(ifd_offset from window) tiff.Ifd.be
-              body: bytes[remaining]
+              body: bytes[remaining]  aside
             }
             _ => bytes[remaining]
           }
@@ -1884,7 +1890,7 @@ root PNG {
           13 = IEC 61966-2-1 (sRGB), 14 = BT.2020, 10-bit, 15 = BT.2020, 12-bit,
           16 = SMPTE ST 2084 (PQ), 17 = SMPTE ST 428-1, 18 = ARIB STD-B67 (HLG)
         }
-        // Always 0 in a PNG, which holds RGB only.
+        // Must be 0 in a PNG, which holds RGB only.
         matrix_coefficients: u8be enum MatrixCoefficients {
           0 = identity (RGB), 1 = BT.709, 2 = unspecified, 4 = FCC 73.682,
           5 = BT.470 System B, G (BT.601 625-line), 6 = SMPTE 170M (BT.601 525-line),
@@ -1929,12 +1935,12 @@ root PNG {
           stored: u16be
           worth: computed real stored / 50000.0
         }
-        // The display's maximum luminance in cd/m², stored in units of 0.0001 cd/m².
+        // Maximum luminance of the mastering display in cd/m², stored in units of 0.0001 cd/m².
         max_luminance: Scaled (inline, payload stored) {
           stored: u32be
           worth: computed real stored / 10000.0
         }
-        // The display's minimum luminance in cd/m², stored in units of 0.0001 cd/m².
+        // Minimum luminance of the mastering display in cd/m², stored in units of 0.0001 cd/m².
         min_luminance: Scaled (inline, payload stored) {
           stored: u32be
           worth: computed real stored / 10000.0
@@ -1942,12 +1948,13 @@ root PNG {
       }
       'cLLI' => cLLI {
         // MaxCLL, the luminance of the brightest pixel in the image or any of its frames, in
-            cd/m². 0 means unknown.
+            cd/m², stored in units of 0.0001 cd/m². 0 means unknown.
         max_cll: Scaled (inline, payload stored) {
           stored: u32be
           worth: computed real stored / 10000.0
         }
-        // MaxFALL, the average luminance of the brightest frame, in cd/m². 0 means unknown.
+        // MaxFALL, the average luminance of the brightest frame, in cd/m², stored in units of
+            0.0001 cd/m². 0 means unknown.
         max_fall: Scaled (inline, payload stored) {
           stored: u32be
           worth: computed real stored / 10000.0
@@ -1960,9 +1967,9 @@ root PNG {
       }
       'pCAL' => pCAL {
         calibration_name: text until 0x00 latin1
-        // x0, the stored sample value that maps to one end of the range.
+        // x0, the original sample value that a stored sample of 0 maps to.
         original_zero: i32be
-        // x1, the stored sample value that maps to the other end of the range.
+        // x1, the original sample value that the largest stored sample maps to.
         original_max: i32be
         equation_type: u8be enum EquationType {
           0 = linear, 1 = base-e exponential, 2 = arbitrary-base exponential, 3 = hyperbolic
@@ -1984,7 +1991,8 @@ root PNG {
           0 = unspecified, 1 = leave in place, 2 = restore background, 3 = restore previous
         }
         user_input_flag: u8be
-        // How long to wait before going on, in hundredths of a second.
+        // How long to wait before going on with the rest of the stream, in hundredths of a
+            second.
         delay_time: u16be
         delay_seconds: computed real delay_time / 100.0
       }
@@ -2251,7 +2259,7 @@ root PNG {
   }
 }
 
-type tiff.ExifIfd.be = ExifIfd {
+type tiff.ExifIfd.be = ExifIfd (contents entries) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -2388,7 +2396,7 @@ type tiff.ExifIfd.be = ExifIfd {
   next_ifd_offset: u32be
 }
 
-type tiff.ExifIfd.le = ExifIfd {
+type tiff.ExifIfd.le = ExifIfd (contents entries) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2525,7 +2533,7 @@ type tiff.ExifIfd.le = ExifIfd {
   next_ifd_offset: u32le
 }
 
-type tiff.GpsIfd.be = GpsIfd {
+type tiff.GpsIfd.be = GpsIfd (contents entries) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -2649,7 +2657,7 @@ type tiff.GpsIfd.be = GpsIfd {
   next_ifd_offset: u32be
 }
 
-type tiff.GpsIfd.le = GpsIfd {
+type tiff.GpsIfd.le = GpsIfd (contents entries) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2773,7 +2781,7 @@ type tiff.GpsIfd.le = GpsIfd {
   next_ifd_offset: u32le
 }
 
-type tiff.Ifd.be = Ifd {
+type tiff.Ifd.be = Ifd (contents entries) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -3190,7 +3198,7 @@ type tiff.Ifd.be = Ifd {
   next_ifd_offset: u32be
 }
 
-type tiff.Ifd.le = Ifd {
+type tiff.Ifd.le = Ifd (contents entries) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
