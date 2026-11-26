@@ -15,7 +15,7 @@
 //!
 //! How much output each block produced is what the decoder says as it goes,
 //! and for the first window's worth of a frame it does not say: see
-//! [`zstd_walk`]. Those blocks are one step.
+//! [`ZstdWalk`]. Those blocks are one step.
 //!
 //! When the steps do not tile, the run still opens: the trace becomes one step
 //! over all of it. A map nobody can draw is better than a stream nobody can
@@ -76,7 +76,7 @@ const MAX_WINDOW: u64 = 128 << 20;
 ///
 /// Every frame of the run, not only the first: `pzstd` writes one frame per
 /// few megabytes, each behind a skippable frame saying how long it is, and a
-/// file made by joining two `.zst` files is two frames. See [`zstd_walk`].
+/// file made by joining two `.zst` files is two frames. See [`ZstdWalk`].
 pub fn zstd(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let cap = super::CAP_BYTES as u64;
     let mut out = Vec::new();
@@ -103,18 +103,42 @@ pub(super) fn zstd_done(mut b: TraceBuilder, input: usize, output: u64) -> Trace
     }
 }
 
-/// Decode the frames of `data[span]`, and say which bits of each made which
-/// bytes: a step for each frame header, each block header and each block, and
-/// one for the checksum at the end of a frame that has one.
+/// Decode the frames of `data[span]` in one go: a [`ZstdWalk`] that does not
+/// stop until the end of `span`. Returns how much output there is there.
+pub(super) fn zstd_walk(
+    data: &[u8],
+    span: std::ops::Range<usize>,
+    out: u64,
+    frame_cap: u64,
+    b: &mut TraceBuilder,
+    on_frame: &mut dyn FnMut(usize, u64),
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
+) -> Result<u64, Refusal> {
+    ZstdWalk::new(span, out, frame_cap).run(data, u64::MAX, b, on_frame, sink)?.ok_or(Refusal::Failed)
+}
+
+/// The most output one zstd block may make: 128 KiB, or the frame's window
+/// when that is smaller.
+const BLOCK_MAX: u64 = 128 << 10;
+
+/// A walk over the frames of `data[span]`, which decodes them and says which
+/// bits of each made which bytes: a step for each frame header, each block
+/// header and each block, and one for the checksum at the end of a frame that
+/// has one. It can stop between two blocks and carry on from there, which is
+/// what the index pass does a step at a time; [`zstd_walk`] is one that does
+/// not stop.
 ///
-/// `out` is how much output came before `span`, which is where the steps'
-/// bytes count from. Bytes go to `sink` as the decoder lets go of them, and
-/// every frame is announced to `on_frame` before it is decoded, with the byte
-/// it starts at and how much output comes before it. The skippable frames in
-/// front of a frame are counted as part of it. A frame that comes to more than
-/// `frame_cap`, or asks for a window larger than [`MAX_WINDOW`], is
-/// [`Refusal::TooLarge`]. Returns how much output there is at the end of
-/// `span`.
+/// A walk stopped inside a frame keeps that frame's decoder. `ruzstd` keeps
+/// everything a frame needs between two blocks in the decoder, the window
+/// included, and is handed the input afresh for each block, so carrying on
+/// later decodes exactly what carrying on at once would have.
+///
+/// Bytes go to the sink as the decoder lets go of them, and every frame is
+/// announced before it is decoded, with the byte it starts at and how much
+/// output comes before it. The skippable frames in front of a frame are
+/// counted as part of it. A frame that comes to more than `frame_cap`, or asks
+/// for a window larger than [`MAX_WINDOW`], is [`Refusal::TooLarge`]. A frame
+/// whose checksum does not match what it decoded is [`Refusal::Failed`].
 ///
 /// The decoder keeps the frame's window, the last bytes it may copy from, and
 /// lets go only of what has left it. So for the first window's worth of a
@@ -123,31 +147,163 @@ pub(super) fn zstd_done(mut b: TraceBuilder, input: usize, output: u64) -> Trace
 /// on, each block's output is what the decoder lets go of after it, and each
 /// block is its own step. A frame of no more than its window, which is any
 /// frame whose header gives its size in place of a window, is one step.
-pub(super) fn zstd_walk(
-    data: &[u8],
-    span: std::ops::Range<usize>,
-    mut out: u64,
+pub(super) struct ZstdWalk {
+    end: usize,
+    /// Where the next frame, or the skippable frames in front of it, start,
+    /// while no frame is part of the way through.
+    at: usize,
+    /// How much output comes before `at`, or before the frame part of the way
+    /// through. Where the steps' bytes count from.
+    out: u64,
     frame_cap: u64,
-    b: &mut TraceBuilder,
-    on_frame: &mut dyn FnMut(usize, u64),
-    sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
-) -> Result<u64, Refusal> {
-    use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
+    frame: Option<Frame>,
+}
 
-    let mut at = span.start;
-    while at < span.end {
-        let starts = at;
-        // A skippable frame: a magic in `0x184d2a50..=0x184d2a5f`, a length,
-        // and bytes an application put there that no decoder reads.
-        while let Some(size) = skippable(&data[at..span.end]) {
-            b.push(at as u64 * 8, out, StepKind::Header(StepField::FrameHeader, 0));
-            at += size;
+/// A frame decoded part of the way, between two blocks.
+struct Frame {
+    dec: ruzstd::decoding::FrameDecoder,
+    /// Where the frame's own magic is, after any skippable frames.
+    at: usize,
+    /// How many bytes of the frame the decoder has read.
+    read: usize,
+    /// How much of the frame's output the decoder has let go of.
+    collected: u64,
+    /// Where the next block's output starts, when that is known.
+    next: Option<u64>,
+    window: u64,
+    checksum: bool,
+}
+
+impl ZstdWalk {
+    /// A walk over `span`, with `out` bytes of output before it.
+    pub(super) fn new(span: std::ops::Range<usize>, out: u64, frame_cap: u64) -> ZstdWalk {
+        ZstdWalk { end: span.end, at: span.start, out, frame_cap, frame: None }
+    }
+
+    /// How far into the run the decoder has read.
+    pub(super) fn reached(&self) -> usize {
+        self.frame.as_ref().map_or(self.at, |f| f.at + f.read)
+    }
+
+    /// How much output the decoder has let go of so far, which is what has
+    /// gone to the sink.
+    pub(super) fn let_go(&self) -> u64 {
+        self.out + self.frame.as_ref().map_or(0, |f| f.collected)
+    }
+
+    /// How much output has been decoded so far. Between frames, and once a
+    /// frame has let go of anything, that is exact, since what the decoder
+    /// keeps then is one window. Before that each block counts as the most
+    /// one may make, up to the window.
+    fn decoded(out: u64, frame: Option<&Frame>) -> u64 {
+        match frame {
+            None => out,
+            Some(f) if f.collected > 0 => out + f.collected + f.window,
+            Some(f) => out + f.window.min(f.dec.blocks_decoded() as u64 * BLOCK_MAX),
         }
-        if at == span.end {
-            break;
+    }
+
+    /// Decode on to the end of the span, or until about `share` more bytes of
+    /// output have been decoded, and stop between two blocks or two frames.
+    /// The output at the end of the span, or nothing when the walk stopped
+    /// first and is to be carried on.
+    ///
+    /// The walk stops at the first block boundary past its share, so it goes
+    /// past it by at most one block, 128 KiB. Until a frame's output first
+    /// passes its window the decoder does not say how much it holds, so there
+    /// a block counts as 128 KiB, which is what a full block makes. A walk
+    /// over smaller blocks there stops early, and the next one decodes the
+    /// difference as well as its own share.
+    pub(super) fn run(
+        &mut self,
+        data: &[u8],
+        share: u64,
+        b: &mut TraceBuilder,
+        on_frame: &mut dyn FnMut(usize, u64),
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
+    ) -> Result<Option<u64>, Refusal> {
+        use ruzstd::decoding::BlockDecodingStrategy;
+
+        let until = ZstdWalk::decoded(self.out, self.frame.as_ref()).saturating_add(share.max(1));
+        loop {
+            let f = match &mut self.frame {
+                Some(f) => f,
+                None if self.out >= until => return Ok(None),
+                None => {
+                    let starts = self.at;
+                    // A skippable frame: a magic in `0x184d2a50..=0x184d2a5f`,
+                    // a length, and bytes an application put there that no
+                    // decoder reads.
+                    while let Some(size) = skippable(&data[self.at..self.end]) {
+                        b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
+                        self.at += size;
+                    }
+                    if self.at == self.end {
+                        return Ok(Some(self.out));
+                    }
+                    on_frame(starts, self.out);
+                    let frame = self.start_frame(data)?;
+                    b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
+                    self.frame.insert(frame)
+                }
+            };
+            while !f.dec.is_finished() {
+                if ZstdWalk::decoded(self.out, Some(&*f)) >= until {
+                    return Ok(None);
+                }
+                let block_at = (f.at + f.read) as u64 * 8;
+                match f.next {
+                    Some(_) if b.over_budget() => b.coarsen(),
+                    Some(o) => {
+                        b.push(block_at, o, StepKind::Header(StepField::BlockHeader, 0));
+                        // The three-byte block header, and then the block itself.
+                        b.push(block_at + 24, o, StepKind::Block);
+                    }
+                    None => {}
+                }
+                let mut src = &data[f.at + f.read..self.end];
+                f.dec.decode_blocks(&mut src, BlockDecodingStrategy::UptoBlocks(1)).map_err(|_| Refusal::Failed)?;
+                let now = f.dec.bytes_read_from_source() as usize;
+                if now == f.read {
+                    return Err(Refusal::Failed);
+                }
+                f.read = now;
+                if let Some(bytes) = f.dec.collect().filter(|v| !v.is_empty()) {
+                    f.collected += bytes.len() as u64;
+                    if f.collected > self.frame_cap {
+                        return Err(Refusal::TooLarge);
+                    }
+                    sink(&bytes)?;
+                }
+                // Once the decoder has let go of anything, what it keeps is
+                // exactly one window, so the output so far is that and what it
+                // let go of. Before then it is somewhere under one window.
+                f.next = match (f.dec.is_finished(), f.collected) {
+                    (true, _) => Some(self.out + f.collected),
+                    (false, 0) => None,
+                    (false, _) => Some(self.out + f.collected + f.window),
+                };
+            }
+            // The last `collect` let go of the rest of the frame, so the sum
+            // the decoder took is over all of it.
+            if f.checksum && f.dec.get_calculated_checksum() != f.dec.get_checksum_from_data() {
+                return Err(Refusal::Failed);
+            }
+            self.out += f.collected;
+            // The decoder counts the frame's checksum as bytes it read, so it
+            // is already inside `read`; what is left is to name it.
+            if f.checksum {
+                let Some(sum_at) = (f.at + f.read).checked_sub(4) else { return Err(Refusal::Failed) };
+                b.push(sum_at as u64 * 8, self.out, StepKind::Header(StepField::Footer, 0));
+            }
+            self.at = f.at + f.read;
+            self.frame = None;
         }
-        on_frame(starts, out);
-        let frame = &data[at..span.end];
+    }
+
+    /// Read the header of the frame at `self.at` and set up its decoder.
+    fn start_frame(&self, data: &[u8]) -> Result<Frame, Refusal> {
+        let frame = &data[self.at..self.end];
         let checksum = frame_has_checksum(frame).ok_or(Refusal::Failed)?;
         let mut src = frame;
         // A decoder of its own for every frame. `ruzstd` refuses a window
@@ -155,61 +311,15 @@ pub(super) fn zstd_walk(
         // used for a second frame, so one decoder for every frame would read
         // the first of two `zstd --long` files joined end to end and refuse
         // the second.
-        let mut dec = FrameDecoder::new();
+        let mut dec = ruzstd::decoding::FrameDecoder::new();
         dec.init(&mut src).map_err(|_| Refusal::Failed)?;
         let window = window_size(frame, dec.content_size()).ok_or(Refusal::Failed)?;
         if window > MAX_WINDOW {
             return Err(Refusal::TooLarge);
         }
-        b.push(at as u64 * 8, out, StepKind::Header(StepField::FrameHeader, 0));
-        let mut read = dec.bytes_read_from_source() as usize;
-        // How much of the frame the decoder has let go of, and where the next
-        // block's output starts, when that is known.
-        let mut collected = 0u64;
-        let mut next = Some(out);
-        while !dec.is_finished() {
-            let block_at = (at + read) as u64 * 8;
-            match next {
-                Some(_) if b.over_budget() => b.coarsen(),
-                Some(o) => {
-                    b.push(block_at, o, StepKind::Header(StepField::BlockHeader, 0));
-                    // The three-byte block header, and then the block itself.
-                    b.push(block_at + 24, o, StepKind::Block);
-                }
-                None => {}
-            }
-            dec.decode_blocks(&mut src, BlockDecodingStrategy::UptoBlocks(1)).map_err(|_| Refusal::Failed)?;
-            let now = dec.bytes_read_from_source() as usize;
-            if now == read {
-                return Err(Refusal::Failed);
-            }
-            read = now;
-            if let Some(bytes) = dec.collect().filter(|v| !v.is_empty()) {
-                collected += bytes.len() as u64;
-                if collected > frame_cap {
-                    return Err(Refusal::TooLarge);
-                }
-                sink(&bytes)?;
-            }
-            // Once the decoder has let go of anything, what it keeps is
-            // exactly one window, so the output so far is that and what it
-            // let go of. Before then it is somewhere under one window.
-            next = match (dec.is_finished(), collected) {
-                (true, _) => Some(out + collected),
-                (false, 0) => None,
-                (false, _) => Some(out + collected + window),
-            };
-        }
-        out += collected;
-        // The decoder counts the frame's checksum as bytes it read, so it is
-        // already inside `read`; what is left is to name it.
-        if checksum {
-            let Some(sum_at) = (at + read).checked_sub(4) else { return Err(Refusal::Failed) };
-            b.push(sum_at as u64 * 8, out, StepKind::Header(StepField::Footer, 0));
-        }
-        at += read;
+        let read = dec.bytes_read_from_source() as usize;
+        Ok(Frame { dec, at: self.at, read, collected: 0, next: Some(self.out), window, checksum })
     }
-    Ok(out)
 }
 
 /// How many bytes back a block of a zstd frame may copy from, which is what

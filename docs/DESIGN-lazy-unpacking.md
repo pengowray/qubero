@@ -5,9 +5,9 @@ Written 2026-10-21. How a compressed run whose output is larger than
 Deflate, zlib and gzip first; zstd and xz in "zstd frames and xz blocks"; the
 other codecs are covered at the end.
 
-**State, 2026-10-26:** built as described below and merged into main, in
-`codec/lazy.rs`, `eval/space.rs`, `eval/stitch.rs` and the wasm crate. It was
-built in four parts:
+**State, 2026-11-26:** built as described below and merged into main, in
+`codec/lazy/`, `eval/space.rs`, `eval/stitch.rs` and the wasm crate. It was
+built in these parts:
 
 - 2026-10-21: the index, the spans and reading a run through them.
 - 2026-10-26: the `blocks` listing for these runs. See "Blocks".
@@ -20,6 +20,10 @@ built in four parts:
   as well as for the pass, and a tab over a recognised stream shows the
   progress of its stream being unpacked again after an edit. See "The
   browser".
+- 2026-11-26: zstd's index pass runs a go at a time as deflate's does, and
+  each zstd frame's checksum is checked. See "zstd: the pass in steps" and
+  "zstd checksums".
+- 2026-11-26: a read of an xz span decodes only as far as the read reaches.
 
 "Still to do" at the end lists what is left.
 
@@ -182,9 +186,9 @@ decodes about that much more output, stops, and the next step carries on from
 exactly where it stopped, not from the last checkpoint: the sink (with its
 window or its whole output), the trace builder, the checkpoints, the block
 starts and the running sums are all kept in the `Indexing` between steps.
-`decode_or_index` is `step(u64::MAX)` until it is done. Only deflate's pass is
-done in steps; see `lazy::can_step`, and "zstd frames and xz blocks" for the
-other two.
+`decode_or_index` is `step(u64::MAX)` until it is done. Deflate's and zstd's
+passes are done in steps (see `lazy::can_step`). This section is about
+deflate's; zstd's is in "zstd frames and xz blocks".
 
 - **Where a step stops.** At the first code past its share of output, and
   never inside a stored block (so at most 64 KiB over). In the traced phase a
@@ -225,8 +229,9 @@ passes are kept, since one in its traced phase holds up to 64 MiB. A finished
 index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
 tab's source reads an index with no evaluator behind it. `Spaces::forget`
 drops both. `Evaluator::unpacking` reports the pass stepped most recently.
-A zstd or xz run comes through `index_run` too, and is handed to
-`decode_or_index` there, which indexes it in one go with nothing charged.
+A zstd run is stepped there the same way. An xz run comes through
+`index_run` too, and is handed to `decode_or_index` there, which lays it out
+in one go with nothing charged.
 
 ### One decoder
 
@@ -367,7 +372,8 @@ cache, `read(at, out)`, `map_out(byte)`, `map_in(bit)`, `span_trace(k)`,
 `block_trace(i)`. `decode_traced` keeps its signature; a new
 `decode_or_index(codec, packed)` returns either the whole bytes and trace or a
 `Seekable`, for the three deflate codecs, zstd and xz, and calls
-`decode_traced` for the rest. `Indexing` is deflate's pass in steps.
+`decode_traced` for the rest. `Indexing` is the pass in steps, for deflate
+and zstd.
 
 **`Spaces` (`eval/space.rs`).** A third backing, `Backing::Lazy(Arc<Seekable>)`.
 `Spaces::set_lazy_limits` (tests only) makes the limits small, as
@@ -558,8 +564,8 @@ block only if it keeps the LZMA dictionary (up to 64 MiB).
 
 **zstd: one pass.** A zstd frame records its output size only in the
 optional content size field, and `pzstd` does not write that field, so the
-index pass decodes every frame. The pass uses `frames::zstd_walk`, the same
-function that decodes a run whole, in the same way that deflate's index pass
+index pass decodes every frame. The pass uses `frames::ZstdWalk`, the same
+walk that decodes a run whole, in the same way that deflate's index pass
 uses the same inflater. Until the output passes `Limits::whole`, the pass
 keeps the output and the trace, and a run that ends before then is returned
 whole. Once the output passes `Limits::whole`, the pass starts again at the
@@ -569,11 +575,45 @@ passes `Limits::span`, the pass stops there and the run is refused. Each
 skippable frame that `pzstd` writes before a frame is in the same span as the
 frame that follows it.
 
-The zstd pass is not done in steps. `Evaluator::index_run` hands a zstd run to
-`decode_or_index`, which makes the whole pass in one go, so in the browser
-the page stops for the length of the pass and no progress is shown. xz has no
-pass to step. Neither gets the `blocks` child that "Blocks" describes, which
-is for deflate: `Seekable::blocks` is 0 for both.
+**zstd: the pass in steps.** Since 2026-11-26 `lazy::Indexing` makes zstd's
+pass a step at a time too, and `Evaluator::index_run` charges each step to
+the go as it does deflate's. So the browser keeps drawing while the pass
+runs, and the listing and the status bar say how far it has got, with the
+strings deflate's pass uses.
+
+A step stops between two zstd blocks, inside a frame as well as between
+frames. `ruzstd`'s frame decoder holds everything a frame needs between two
+blocks, its window included, and is handed the input again for each block.
+So the walk keeps the frame's decoder from one step to the next, with how far
+it has read and how much of the frame's output the decoder has let go of,
+and the next step decodes the next block, as the pass in one go would. The
+pass comes to the same checkpoints and spans as the pass in one go, and a run
+under the cap comes back with the same bytes and the same trace, step for
+step. A step that takes the output past `Limits::whole` ends the traced part,
+and the next step starts again at the start of that frame, as the pass in one
+go does. `Indexing::known_large` starts a zstd pass past the cap, with the
+trace off, as it does deflate's.
+
+**How long a step is.** A step stops at the first block boundary after it has
+decoded its share, 256 KiB in the evaluator, so it decodes at most one block
+(128 KiB) more than that. Once a frame's decoder has let go of any output,
+it holds exactly one window, so the output so far is known. Before that it is
+not, since `ruzstd` does not say how much it holds, and each block counts as
+a full 128 KiB. If the blocks before a frame's window fills are smaller than
+that, a step stops early, and the next step decodes the difference as well as
+its own share. That is at most one window more, and never more than the
+frame's own output: 512 KiB for `pzstd -1`, 2 MiB for `pzstd -3`, and at
+most 64 MiB, since a frame larger than `Limits::span` is refused. On the
+generated `pzstd -1` file measured below, no step took longer than 14 ms
+native.
+
+An unfinished pass holds what the pass in one go holds at the same point: in
+the traced part up to `Limits::whole` of output and its trace, and the
+decoder of the frame it is in, with up to one window of that frame's output.
+`Unfinished` keeps two passes, as it does for deflate.
+
+xz has no pass to step. Neither zstd nor xz gets the `blocks` child that
+"Blocks" describes, which is for deflate: `Seekable::blocks` is 0 for both.
 
 **xz: no pass.** The index at the end of an xz stream lists each block's
 packed and unpacked size, so `codec::xz::layout` finds every block without
@@ -660,6 +700,18 @@ output. An xz block's own check (declared in the template with
 `Covers::UnpackedMember`) is computed over that block's output, read through
 the index.
 
+**zstd checksums.** A zstd frame may end with a checksum of its own output
+(the low 32 bits of its XXH64), and `zstd` and `pzstd` write one by default.
+Since 2026-11-26 every walk over a frame checks it when the frame ends: the
+whole decode of a run under the cap, both parts of the index pass, and each
+span's decode and trace. A frame whose checksum does not match is refused as
+`Refusal::Failed`, as a gzip trailer that does not match is. `ruzstd` sums
+the output as it lets go of it when built with its `hash` feature, which adds
+only the `twox-hash` crate with that one hash. On the generated `pzstd -1`
+file measured below, the sums over its 500 MB of output took 52 to 88 ms
+native, about 6 to 8% of the index pass, and made decoding 2 to 4% slower
+in wasm.
+
 **What the tools write.** Checked with zstd 1.5.5 and xz 5.4.5:
 
 - `pzstd -<level>` cuts its input every four window sizes (2 MiB at level 1,
@@ -707,6 +759,35 @@ The cache keeps 16 MiB of spans and always the most recent one, so it keeps
 one or two of these blocks part decoded. Reading the whole file 1 MiB at a
 time decodes each block once, a chunk or two per read.
 
+Measured on 2026-11-26, before and after zstd's pass was made a step at a
+time and its checksums checked, in a release build, native. The file is
+another 500,000,000 bytes of generated CSV-like text (16 KB blocks of rows, a
+sixth of them new and the rest repeats of one of the 8 new blocks before it),
+packed by `pzstd -1` to 33,360,350 bytes: 239 frames of 2 MiB, each with its
+checksum. Other work was running on the machine, so the before and after
+runs were made back to back, twice, and each cell gives the first pair's
+time, then the second pair's. A range is the two opens of one run.
+
+| | Before | After |
+|---|---|---|
+| Index pass in one go (`decode_or_index`), best of 3 | 817 ms; 1,041 ms | 863 ms; 1,087 ms |
+| Opening `decoded` through the zstd template in goes of 5,000 elements | 1 go: 695 to 727 ms; 819 to 909 ms | 192 goes: 729 to 792 ms; 946 to 963 ms |
+| Longest go | the one go | the first: 98 to 108 ms; 130 to 139 ms |
+| Every other go | | under 21 ms |
+| The pass in steps of 256 KiB (`Indexing::step`) | | 1,911 steps, the longest 8 to 11 ms; 10 to 14 ms |
+| XXH64 over all 500 MB of output | | 52 ms; 88 ms |
+
+The first go spends its time before the pass starts, and the pass reads only
+the first 8,709 bytes of the run in it. About 40 to 55 ms of it is `read_in`
+copying the 33 MB packed run out of the document in `index_run`, which
+`index_run` does for every codec; the rest is in `open_space` before
+`index_run` is reached. Both were inside the one go before.
+
+In wasm, under Node 24, a loop that decodes the same file a block at a time
+with `ruzstd`, as the walk does, took 668 to 681 ms without the `hash`
+feature and 693 to 696 ms with it and the checksums compared: 2 to 4% more.
+The `hash` feature makes that module 2.3 KB larger.
+
 ## The other codecs
 
 | Codec | Restart points | Plan |
@@ -735,17 +816,11 @@ time decodes each block once, a chunk or two per read.
 - While the pass runs, the listing shows no rows for a structure whose
   children wait on it, even the ones before the stream (a gzip member's
   header fields), since a slice of children is answered whole.
-- zstd's index pass runs in one go, with nothing charged to the go, so a large
-  `pzstd` file stops the page for the whole pass (1.6 s native for 500 MB at
-  `-1`) with no progress shown. It could stop at frame starts, as deflate's
-  pass stops between codes.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
 - A read of an xz span decodes to the end of the LZMA2 chunk that holds its
   last byte, up to 2 MiB past the read. Stopping at the read's last byte
   would need the range coder's state kept between reads, and a stop between
   two symbols in `decoder::run`.
-- zstd frame checksums (XXH64) are not checked: `ruzstd` is built without its
-  `hash` feature.
 - A run refused because one frame or block is past 64 MiB says "over 64 MiB"
   like any other run past the cap. It could say that one frame or block is
   too large.
@@ -791,6 +866,16 @@ time decodes each block once, a chunk or two per read.
   go at a time, with `unpacking` moving forward between goes and the index
   the same as one go's, and a gzip's joined stream read a go at a time
   through the listing's path, a read of its first bytes.
+- zstd's pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,
+  over frames shorter than their window and frames three windows long, with
+  and without skippable frames, come to the same checkpoints and bytes as one
+  pass, and under the cap to the same trace step for step; progress never
+  goes back, across the cap as well; a step of 16 KiB over 400 KB frames lets
+  go of at most its share, a block and a window; `known_large`; the same
+  refusals in steps as in one go. A damaged checksum, and a damaged byte in a
+  frame of raw blocks, are refused whole, past the cap, and in steps. In
+  `eval::space`, a zstd run past the cap opened through its template a go at
+  a time, with `unpacking` moving forward, comes to the index of one go.
 - zstd and xz, in `codec::lazy` with the limits made small: runs of several
   frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
   streams of several blocks packed by `lzma-rust2`, read back from anywhere;

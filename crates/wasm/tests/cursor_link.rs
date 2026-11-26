@@ -53,10 +53,25 @@ fn json(reply: &str) -> Value {
     v["node"].clone()
 }
 
+/// The reply to `ask`, asked again while it is "working", as the web asks
+/// again: a stream that takes more than one go to unpack answers that until
+/// it is done, and so does anything that waits on it.
+fn finished(mut ask: impl FnMut() -> String) -> String {
+    let mut reply = ask();
+    for _ in 0..1000 {
+        let v: Value = serde_json::from_str(&reply).unwrap();
+        if v["status"] != "working" {
+            break;
+        }
+        reply = ask();
+    }
+    reply
+}
+
 /// The space a stream of the file opened as from the file's tab, failing on
 /// anything but a tab.
 fn opened(ed: &mut Editor, path: &[u32]) -> u32 {
-    let node = json(&ed.open_space(0, path));
+    let node = json(&finished(|| ed.open_space(0, path)));
     assert!(node["refused"].is_null(), "opening {path:?} was refused: {node}");
     let space = node["space"].as_f64().unwrap() as u32;
     assert_ne!(space, 0, "opening {path:?} gave no space: {node}");
@@ -64,7 +79,7 @@ fn opened(ed: &mut Editor, path: &[u32]) -> u32 {
 }
 
 fn node(ed: &mut Editor, path: &[u32]) -> Value {
-    json(&ed.template_node(0, path))
+    json(&finished(|| ed.template_node(0, path)))
 }
 
 fn num(v: &Value, key: &str) -> u64 {

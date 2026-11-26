@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::deflate::{BlockMarks, WindowSink};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
 use crate::codec::inflate::{self, CountSink, Ended, Framing, Resume, Sink, Wrapper};
-use crate::codec::{frames, xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, MAX_STEPS};
+use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
 
 /// A compressed run that comes to more than can be held whole, read through
 /// its checkpoints.
@@ -246,16 +246,7 @@ impl Seekable {
                 bytes
             }
             Kind::Zstd => {
-                let mut bytes = Vec::with_capacity(want);
-                let frame_cap = self.limits.span as u64;
-                frames::zstd_walk(&self.packed, self.span_in(k), c.out, frame_cap, &mut TraceBuilder::off(), &mut |_, _| {}, &mut |b| {
-                    if bytes.len() + b.len() > want {
-                        return Err(Refusal::Failed);
-                    }
-                    bytes.extend_from_slice(b);
-                    Ok(())
-                })?;
-                bytes
+                super::zstd::decode_span(&self.packed, self.span_in(k), c.out, want, self.limits.span)?
             }
             Kind::Xz(l) => super::xz::decode_span(&self.packed, l, self.span_units(k, l))?,
         };
@@ -287,12 +278,7 @@ impl Seekable {
         let t = Arc::new(match &self.kind {
             Kind::Deflate(f) => self.deflate_span_trace(k, c, f)?,
             Kind::Zstd => {
-                let range = self.span_in(k);
-                let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, c.out);
-                let frame_cap = self.limits.span as u64;
-                let end = frames::zstd_walk(&self.packed, range.clone(), c.out, frame_cap, &mut b, &mut |_, _| {}, &mut |_| Ok(()))?;
-                b.finish_at(range.end as u64 * 8, end);
-                b.done()
+                super::zstd::span_trace(&self.packed, self.span_in(k), c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
                 super::xz::span_trace(&self.packed, l, k, self.span_in(k), self.span_units(k, l), c.out)?

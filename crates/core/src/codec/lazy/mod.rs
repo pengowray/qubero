@@ -30,8 +30,8 @@
 //! needs to start inside one is its whole window or dictionary, which can be
 //! as large as the output.
 //!
-//! Deflate's pass can be done a step at a time, carrying on from where the
-//! step before stopped: see [`Indexing`]. zstd's pass is done in one go.
+//! The pass over a deflate or a zstd run can be done a step at a time,
+//! carrying on from where the step before stopped: see [`Indexing`].
 //!
 //! Deflate's pass also records where each deflate block starts, in the run
 //! and in the output. That is enough to list the blocks, and to trace any one
@@ -55,10 +55,10 @@ mod seekable;
 mod xz;
 mod zstd;
 
-pub use deflate::{Indexing, Progress, Stepped};
+use deflate::DeflatePass;
 pub use seekable::Seekable;
 use xz::index_xz;
-use zstd::index_zstd;
+use zstd::ZstdPass;
 
 /// The most a run read a piece at a time may come to. Past this it is refused
 /// as [`Refusal::TooLargeLazy`].
@@ -162,11 +162,11 @@ pub fn can_index(codec: Codec) -> bool {
 }
 
 /// Whether the pass that indexes a run packed with `codec` can be done a step
-/// at a time, by an [`Indexing`]: deflate, zlib and gzip. A zstd run is
-/// decoded in one go to index it, and an xz stream is laid out from its own
-/// index without decoding any of it, by [`decode_or_index`].
+/// at a time, by an [`Indexing`]: deflate, zlib, gzip and zstd. An xz stream
+/// is laid out from its own index without decoding any of it, by
+/// [`decode_or_index`].
 pub fn can_step(codec: Codec) -> bool {
-    wrapper(codec).is_some()
+    wrapper(codec).is_some() || codec == Codec::Zstd
 }
 
 fn wrapper(codec: Codec) -> Option<Wrapper> {
@@ -192,7 +192,7 @@ pub enum Decoded {
 /// way; a run that ends under the cap comes back exactly as that function
 /// gives it, and one that passes the cap carries on from its last checkpoint
 /// with the trace off and the output dropped as soon as nothing can copy from
-/// it. Deflate's pass is an [`Indexing`] run to the end; zstd's is made in
+/// it. The pass is an [`Indexing`] stepped to the end in
 /// one go. An xz stream is laid out from its own index, without a
 /// pass. Every other codec is decoded whole or refused, as it always was.
 pub fn decode_or_index(codec: Codec, packed: Arc<Vec<u8>>) -> Result<Decoded, Refusal> {
@@ -213,9 +213,97 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
                 }
             }
         }
-        Codec::Zstd => index_zstd(packed, limits),
         Codec::Xz => index_xz(packed, limits),
         _ => whole(codec, &packed),
+    }
+}
+
+/// The pass [`decode_or_index`] makes over a deflate, zlib, gzip or zstd run,
+/// done a slice at a time: each [`Indexing::step`] decodes about as much
+/// output as it is told to, stops at a place the decoder can carry on from,
+/// and the next step carries on from exactly there. A browser calls it
+/// between frames, so that indexing 500 MB of output does not stop the page
+/// for seconds. What it comes to is what the pass in one go comes to.
+///
+/// A deflate step stops between two codes, and a zstd step between two zstd
+/// blocks. See [`DeflatePass`] and [`ZstdPass`].
+pub struct Indexing(Pass);
+
+enum Pass {
+    Deflate(DeflatePass),
+    Zstd(ZstdPass),
+}
+
+/// What one [`Indexing::step`] came to.
+pub enum Stepped {
+    /// Not finished yet. Step again to carry on.
+    Working,
+    Done(Decoded),
+}
+
+/// How far an [`Indexing`] has got: `read_bits` of the run's `run_bits`, and
+/// `unpacked` bytes of output so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    pub read_bits: u64,
+    pub run_bits: u64,
+    pub unpacked: u64,
+}
+
+impl Indexing {
+    /// Start indexing `packed`. `codec` is one [`can_step`] says yes to; any
+    /// other, xz included, is refused as [`Refusal::Failed`]. Nothing is
+    /// decoded until the first step.
+    pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
+        if packed.len() > CAP_BYTES {
+            return Err(Refusal::TooLarge);
+        }
+        Ok(Indexing(match codec {
+            Codec::Zstd => Pass::Zstd(ZstdPass::new(packed, limits)),
+            _ => Pass::Deflate(DeflatePass::new(codec, packed, limits)?),
+        }))
+    }
+
+    /// The same pass for a run the caller knows comes to more than the cap: a
+    /// stitched stream's part whose length the file gives. It starts with the
+    /// trace off, as a pass that has passed the cap carries on, and so skips
+    /// decoding the first 64 MiB with the trace on, which is the slowest part
+    /// of the pass and is thrown away at the cap. What it comes to is the
+    /// index the pass would have made. A run that turns out to fit under the
+    /// cap after all comes back indexed too, and a caller that knew its
+    /// length finds it is not the one it was told.
+    pub fn known_large(self) -> Indexing {
+        Indexing(match self.0 {
+            Pass::Deflate(p) => Pass::Deflate(p.known_large()),
+            Pass::Zstd(p) => Pass::Zstd(p.known_large()),
+        })
+    }
+
+    /// How far the pass has got: the bits of the run read and the bytes of
+    /// output let go of, at the furthest each has been, so that neither goes
+    /// back when the pass goes back at the cap.
+    pub fn progress(&self) -> Progress {
+        match &self.0 {
+            Pass::Deflate(p) => p.progress(),
+            Pass::Zstd(p) => p.progress(),
+        }
+    }
+
+    /// Decode about `out_bytes` more output and stop, or finish.
+    pub fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+        match &mut self.0 {
+            Pass::Deflate(p) => p.step(out_bytes),
+            Pass::Zstd(p) => p.step(out_bytes),
+        }
+    }
+
+    /// Deflate's pass, for tests that look at where its steps stopped.
+    #[cfg(test)]
+    fn deflate(&self) -> &DeflatePass {
+        match &self.0 {
+            Pass::Deflate(p) => p,
+            Pass::Zstd(_) => panic!("a zstd pass"),
+        }
     }
 }
 
