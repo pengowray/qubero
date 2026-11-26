@@ -22,7 +22,7 @@ fn cc(s: &str) -> i128 {
 }
 
 pub fn id3() -> Template {
-    Template::new("id3", tag())
+    Template::new("id3", file_tag())
 }
 
 /// The tag itself, which is also what a WAVE file keeps in an `id3 ` chunk.
@@ -53,6 +53,61 @@ pub(super) fn tag() -> T {
                     T::repeat(frame(), Until::FieldBytes { field: "id".into(), bytes: vec![0, 0, 0, 0] }),
                 ),
             ),
+        ],
+    )
+}
+
+/// The tag as it sits in front of the audio in an MP3 file. The same as
+/// [`tag`], with three more things read: the flags byte bit by bit, the zero
+/// bytes after the last frame as padding, and the 10-byte footer a version 2.4
+/// tag can end with.
+pub(super) fn file_tag() -> T {
+    let synchsafe = || {
+        E::field("size_0")
+            .mul(E::lit(1 << 21))
+            .add(E::field("size_1").mul(E::lit(1 << 14)))
+            .add(E::field("size_2").mul(E::lit(1 << 7)))
+            .add(E::field("size_3"))
+    };
+    // How far into the tag the next field starts, and how far the tag goes:
+    // the 10-byte header and the size it gives.
+    let into = || E::SpacePos.sub(E::start_of(E::field("magic")));
+    let end = || E::lit(10).add(synchsafe());
+    // A frame ID is letters and digits, so a zero byte where the next frame
+    // would start is the padding.
+    let another_frame = into().add(E::lit(10)).less_or_equal(end()).both(E::peek(8, Big).not_equal(E::lit(0)));
+    T::structure(
+        "ID3",
+        vec![
+            ("magic", T::magic(b"ID3")),
+            ("version", T::u8()),
+            ("revision", T::u8()),
+            ("flags", T::flags("ID3Flags", T::u8(), TAG_FLAGS)),
+            ("size_0", T::u8()),
+            ("size_1", T::u8()),
+            ("size_2", T::u8()),
+            ("size_3", T::u8()),
+            ("frames", T::repeat(frame(), Until::While(another_frame))),
+            ("padding", T::when(end().greater_than(into()), T::bytes(end().sub(into())))),
+            ("footer", T::when(E::field("version").equal_to(E::lit(4)).both(E::field("flags").bit(4)), footer())),
+        ],
+    )
+    .field_doc("padding", "Zero bytes after the last frame, left so that the tag can grow without moving the audio after it.")
+    .field_doc("footer", "A copy of the tag header with the ID 3DI, so that the tag can be found from its end.")
+}
+
+/// The bits of the tag header's flags byte.
+const TAG_FLAGS: &[(u32, &str)] = &[(7, "unsynchronisation"), (6, "extended header"), (5, "experimental"), (4, "footer present")];
+
+fn footer() -> T {
+    T::structure(
+        "ID3Footer",
+        vec![
+            ("magic", T::magic(b"3DI")),
+            ("version", T::u8()),
+            ("revision", T::u8()),
+            ("flags", T::flags("ID3Flags", T::u8(), TAG_FLAGS)),
+            ("size", T::array(T::u8(), E::lit(4))),
         ],
     )
 }
