@@ -1085,16 +1085,11 @@ impl Evaluator {
         // Up to the cap and no further. A stream that ends inside that is
         // measured however long the file goes on after it; one that does not
         // runs out of bytes and measures as nothing, the way one past the cap
-        // is refused when opened.
+        // is refused when opened. The walk reads only as far as the stream
+        // goes, a window at a time, so the stretch can be longer than the
+        // file's chunk store keeps.
         let space = self.space_at(at);
-        let mut total = ((limit - offset) / 8).min(crate::codec::CAP_BYTES as u64);
-        // And, in the file, up to half of what its chunk store keeps: the
-        // bytes are read in one call, and one longer than the store would
-        // wait for ever. Half leaves room for what else the go reads. A
-        // stream longer than that measures as nothing, as one past the cap.
-        if let (0, Some(resident)) = (space, doc.resident_limit()) {
-            total = total.min(resident / 2);
-        }
+        let total = ((limit - offset) / 8).min(crate::codec::CAP_BYTES as u64);
         let key = (space, offset, total * 8);
         Ok(match self.stream_end(doc, key, codec)? {
             Ok(n) => n as i128,

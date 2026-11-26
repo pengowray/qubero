@@ -9,6 +9,7 @@ import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatLimit, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
+import { waitToOpen, type OpenStep } from "./openwait.ts";
 
 /** What the signature database made of a file, and where its lists came from. */
 export type SigVerdict = {
@@ -3473,6 +3474,33 @@ export class Doc {
    */
   runCheck(path: readonly number[]): TemplateReply<Verdict | null> {
     return this.handleReply<Verdict | null>(this.editor.run_check(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * `runCheck` asked until it answers: again after a "working" reply, and
+   * once the chunks a "pending" one names have loaded. The core reads a run
+   * longer than a window of the chunk store a window at a time, over several
+   * asks. Gives up the way Open unpacked does (see `waitToOpen`), with a
+   * "pending" answer.
+   */
+  runCheckLoaded(path: readonly number[]): Promise<TemplateReply<Verdict | null>> {
+    const ask = (): OpenStep<TemplateReply<Verdict | null>> => {
+      const raw = JSON.parse(this.editor.run_check(this.space, Uint32Array.from(path))) as RawReply<Verdict | null>;
+      const r = this.settle(raw);
+      if (raw.status === "pending") return { kind: "pending", chunks: raw.chunks };
+      if (r.status === "working") return { kind: "working", unpacking: null };
+      return { kind: "done", value: r };
+    };
+    return new Promise((resolve, reject) => {
+      waitToOpen(ask(), ask, (chunks) => this.fileChunks(chunks), {
+        live: () => true,
+        working: () => {},
+        loading: () => {},
+        done: resolve,
+        lost: () => resolve({ status: "pending", reachedBytes: 0 }),
+        failed: reject,
+      });
+    });
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */

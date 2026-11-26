@@ -2633,16 +2633,27 @@ impl Evaluator {
                 }
             });
         }
-        // Read whole in one call, so a run longer than the file's chunk store
-        // keeps would wait for ever.
-        if self.cannot_fit(doc, r.space, r.offset, size) {
-            self.spaces.refuse(path, Refusal::TooMuchAtOnce);
-            return Ok(space::Opened::Refused(Refusal::TooMuchAtOnce));
-        }
-        let packed = self.read(doc, &r, r.offset, size)?;
+        // The settings first: the run is read a window at a time across goes
+        // when it is long (see `gather_run`), and its copy is handed over
+        // once it is complete, so nothing that could still wait for bytes
+        // should come after it.
         let Some(settings) = self.settings_at(doc, path, &r)? else {
             self.spaces.refuse(path, Refusal::Settings);
             return Ok(space::Opened::Refused(Refusal::Settings));
+        };
+        if r.offset.checked_add(size).is_none_or(|end| end > r.limit) {
+            return fail("field extends beyond its parent");
+        }
+        let gathered = match r.lsb {
+            true => Ok(self.read(doc, &r, r.offset, size)?),
+            false => self.gather_run(doc, r.space, r.offset, size)?,
+        };
+        let packed = match gathered {
+            Ok(packed) => packed,
+            Err(why) => {
+                self.spaces.refuse(path, why);
+                return Ok(space::Opened::Refused(why));
+            }
         };
         Ok(match crate::codec::decode_traced_with(codec, &packed, &settings) {
             Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
