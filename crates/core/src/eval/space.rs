@@ -763,6 +763,22 @@ impl Measures {
 const INDEX_STEP_BYTES: u64 = 256 << 10;
 const INDEX_STEP_ELEMENTS: u64 = INDEX_STEP_BYTES / 512;
 
+/// The most bits of the run one step of an indexing pass reads, whatever
+/// output it has made. Deflate's empty blocks are ten bits each and make no
+/// output, so without this a run of them is one step however long it is.
+///
+/// As many bits as the step's share of output has, 2 Mibit (256 KiB of the
+/// run), so a step over a run whose output is at least as large as the run
+/// still ends at its share of output, as before: stored blocks and packed
+/// photos as well as text. Only a run that makes less output than it takes up
+/// is stepped by its bits. Measured native on 2026-11-26, a step of 2 Mibit
+/// of empty fixed blocks took up to 31 ms and a go of ten steps up to 250 ms,
+/// most of it the trace each block adds while the run may still be held
+/// whole; past the cap, with the trace off, 9 ms and 90 ms. Half as many bits
+/// would halve those, and would double the steps over random bytes, which
+/// are about 0.5 ms each.
+const INDEX_STEP_BITS: u64 = INDEX_STEP_BYTES * 8;
+
 /// How many bits of a deflate stream one step of measuring it reads, and how
 /// many bits are charged as one element of a go's allowance.
 ///
@@ -1205,7 +1221,7 @@ impl super::Evaluator {
                 self.spaces.unfinished.borrow_mut().put(key, codec, pass, stamp);
                 return Err(busy);
             }
-            match pass.step(INDEX_STEP_BYTES) {
+            match pass.step(INDEX_STEP_BYTES, INDEX_STEP_BITS) {
                 Ok(Stepped::Working) => {}
                 Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
                 Err(why) => return Ok(Err(why)),
