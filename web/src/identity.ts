@@ -174,6 +174,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   flac: ["flac"],
   w4v: ["wav", "w4v"],
   zc: ["zc"],
+  mp3: ["mp3", "mp2", "mpa"],
   midi: ["mid", "midi"],
   swf: ["swf"],
   png: ["png"],

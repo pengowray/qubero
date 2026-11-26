@@ -145,6 +145,7 @@ mod mca;
 mod midi;
 mod mkv;
 mod mp4;
+mod mp3;
 mod mseed;
 mod mseed3;
 pub mod mseed_steim;
@@ -305,6 +306,7 @@ pub use mat::mat;
 pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
+pub use mp3::mp3;
 pub use mp4::mp4;
 pub use mseed::mseed;
 pub use mseed3::mseed3;
@@ -430,6 +432,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("dv", |_| dv()),
     ("iso9660", |_| iso9660()),
     ("id3", |_| id3()),
+    ("mp3", |_| mp3()),
     ("wav", |_| wav()),
     ("w4v", |_| w4v()),
     ("midi", |_| midi()),

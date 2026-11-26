@@ -371,6 +371,9 @@ const PROBES: &[Probe] = &[
     // at the front has to be the file's length too, which is what makes four
     // letters partway in enough to go on.
     Probe::Is("icc", icc::is_icc),
+    // An MP3 file with an ID3v2 tag in front, which the table would take as
+    // the tag alone. A tag in front of anything but MPEG audio stays `id3`.
+    Probe::Is("mp3", mp3::is_tagged_mp3),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the
     // table above knows `{"` and nothing else, and a brace, a newline and two
@@ -391,6 +394,10 @@ const PROBES: &[Probe] = &[
     // word of evidence and no front marker at all, so every format that does
     // mark its front is asked first.
     Probe::Is("sac", sac::is_sac),
+    // MPEG audio with no tag in front. Two bytes of sync are weak evidence,
+    // so three frame headers have to follow one another, each where the
+    // length in the one before it says.
+    Probe::Is("mp3", mp3::is_mpeg_audio),
     // The header NIfTI-1 grew from, which has its size and no magic at all:
     // recognised by that size and by the dimensions and voxel type agreeing.
     Probe::Is("analyze", nifti::is_analyze),
@@ -567,6 +574,10 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("icm", "icc", icc::is_named_icc),
     // An Anabat file whose header the bytes alone do not take for one.
     ("zc", "zc", zc::is_named_zc),
+    // MPEG audio too short for three frames, or with junk in front of them.
+    ("mp3", "mp3", mp3::is_named_mpeg_audio),
+    ("mp2", "mp3", mp3::is_named_mpeg_audio),
+    ("mpa", "mp3", mp3::is_named_mpeg_audio),
 ];
 
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the

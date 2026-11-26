@@ -22,7 +22,7 @@ fn cc(s: &str) -> i128 {
 }
 
 pub fn id3() -> Template {
-    Template::new("id3", tag())
+    Template::new("id3", file_tag())
 }
 
 /// The tag itself, which is also what a WAVE file keeps in an `id3 ` chunk.
@@ -57,21 +57,112 @@ pub(super) fn tag() -> T {
     )
 }
 
-fn frame() -> T {
-    // In 2.4 the four size bytes carry seven bits each, so the number the field
-    // reads as is not the size. Take the four bytes back out of it by dividing,
-    // then put them together shifted by sevens.
-    let raw = E::field("size");
+/// The tag as it sits in front of the audio in an MP3 file. The same as
+/// [`tag`], with more of it read: the flags byte bit by bit, the extended
+/// header, version 2.2's shorter frames, the zero bytes after the last frame
+/// as padding, and the 10-byte footer a version 2.4 tag can end with. A frame
+/// whose size runs past the tag is cut off where the tag ends.
+pub(super) fn file_tag() -> T {
+    let synchsafe = || {
+        E::field("size_0")
+            .mul(E::lit(1 << 21))
+            .add(E::field("size_1").mul(E::lit(1 << 14)))
+            .add(E::field("size_2").mul(E::lit(1 << 7)))
+            .add(E::field("size_3"))
+    };
+    // How far into the tag the next field starts, and how far the tag goes:
+    // the 10-byte header and the size it gives.
+    let into = || E::SpacePos.sub(E::start_of(E::field("magic")));
+    let end = || E::lit(10).add(synchsafe());
+    // A frame ID is letters and digits, so a zero byte where the next frame
+    // would start is the padding. A version 2.2 frame header is 6 bytes, and
+    // later ones 10.
+    let another_frame = |header: i128| into().add(E::lit(header)).less_or_equal(end()).both(E::peek(8, Big).not_equal(E::lit(0)));
+    let frames = T::switch(
+        E::field("version"),
+        vec![(2, T::repeat(frame_v2_2(), Until::While(another_frame(6))))],
+        T::repeat(frame_in(true), Until::While(another_frame(10))),
+    );
+    let extended = E::field("version").greater_or_equal(E::lit(3)).both(E::field("flags").bit(6));
+    T::structure(
+        "ID3",
+        vec![
+            ("magic", T::magic(b"ID3")),
+            ("version", T::u8()),
+            ("revision", T::u8()),
+            ("flags", T::flags("ID3Flags", T::u8(), TAG_FLAGS)),
+            ("size_0", T::u8()),
+            ("size_1", T::u8()),
+            ("size_2", T::u8()),
+            ("size_3", T::u8()),
+            ("extended_header", T::when(extended, extended_header())),
+            ("frames", frames),
+            ("padding", T::when(end().greater_than(into()), T::bytes(end().sub(into())))),
+            ("footer", T::when(E::field("version").equal_to(E::lit(4)).both(E::field("flags").bit(4)), footer())),
+        ],
+    )
+    .field_doc("padding", "Zero bytes after the last ID3v2 frame, so a tagger can add to the tag without moving the audio.")
+    .field_doc(
+        "footer",
+        "10-byte copy of the tag header with the ID \"3DI\", so that a program can find the tag by searching back from \
+         its end. Only in ID3v2.4.",
+    )
+}
+
+/// The bits of the tag header's flags byte.
+const TAG_FLAGS: &[(u32, &str)] = &[(7, "unsynchronisation"), (6, "extended header"), (5, "experimental"), (4, "footer present")];
+
+fn footer() -> T {
+    T::structure(
+        "ID3Footer",
+        vec![
+            ("magic", T::magic(b"3DI")),
+            ("version", T::u8()),
+            ("revision", T::u8()),
+            ("flags", T::flags("ID3Flags", T::u8(), TAG_FLAGS)),
+            ("size", T::array(T::u8(), E::lit(4))),
+        ],
+    )
+}
+
+/// The extended header of a version 2.3 or 2.4 tag, which the flags say is
+/// there. Its size counts the bytes after it in 2.3, and is synchsafe and
+/// counts itself in 2.4.
+fn extended_header() -> T {
+    let size = || E::field("size");
+    T::structure(
+        "ExtendedHeader",
+        vec![
+            ("size", T::u32(Big)),
+            (
+                "data",
+                T::bytes(E::cond(E::field("version").equal_to(E::lit(4)), unsynchsafe(size()).sub(E::lit(4)), size()).at_least(E::lit(0)).at_most(E::Remaining)),
+            ),
+        ],
+    )
+    .field_doc("data", "Extended header flags and the data they describe, such as a CRC-32 of the frames and padding size.")
+}
+
+/// A synchsafe number read as a plain 32-bit one, put back together: in 2.4
+/// the four size bytes carry seven bits each, so the number the field reads as
+/// is not the size. Take the four bytes back out of it by dividing, then put
+/// them together shifted by sevens.
+fn unsynchsafe(raw: E) -> E {
     let b0 = raw.clone().div(E::lit(1 << 24));
     let b1 = raw.clone().div(E::lit(1 << 16)).sub(b0.clone().mul(E::lit(256)));
     let b2 = raw.clone().div(E::lit(1 << 8)).sub(raw.clone().div(E::lit(1 << 16)).mul(E::lit(256)));
     let b3 = raw.clone().sub(raw.clone().div(E::lit(256)).mul(E::lit(256)));
-    let synchsafe = b0
-        .mul(E::lit(1 << 21))
-        .add(b1.mul(E::lit(1 << 14)))
-        .add(b2.mul(E::lit(1 << 7)))
-        .add(b3);
+    b0.mul(E::lit(1 << 21)).add(b1.mul(E::lit(1 << 14))).add(b2.mul(E::lit(1 << 7))).add(b3)
+}
 
+fn frame() -> T {
+    frame_in(false)
+}
+
+/// A version 2.3 or 2.4 frame. With `clip`, a body whose size runs past the
+/// end of the tag stops there.
+fn frame_in(clip: bool) -> T {
+    let room = |size: E| if clip { size.at_most(E::Remaining) } else { size };
     T::structure_named(
         "Frame",
         "id",
@@ -84,10 +175,29 @@ fn frame() -> T {
                 "body",
                 T::switch(
                     E::field("version"),
-                    vec![(4, T::sized(synchsafe, body()))],
-                    T::sized(E::field("size"), body()),
+                    vec![(4, T::sized(room(unsynchsafe(E::field("size"))), body()))],
+                    T::sized(room(E::field("size")), body()),
                 ),
             ),
+        ],
+    )
+}
+
+/// A version 2.2 frame: a three-letter ID and a 24-bit size, and no flags.
+fn frame_v2_2() -> T {
+    let mut cases: Vec<(i128, T)> = Vec::new();
+    for id in ["TT2", "TP1", "TP2", "TAL", "TCO", "TRK", "TYE", "TCM", "TEN", "TSS", "TPA"] {
+        cases.push((cc(id), text_frame()));
+    }
+    cases.push((cc("COM"), comment_frame()));
+    T::structure_named(
+        "Frame",
+        "id",
+        "body",
+        vec![
+            ("id", T::text(StrLen::Fixed(E::lit(3)), Encoding::Ascii)),
+            ("size", T::UInt { bits: 24, endian: Big }),
+            ("body", T::sized(E::field("size").at_most(E::Remaining), T::switch(E::field("id"), cases, T::bytes(E::Remaining)))),
         ],
     )
 }
@@ -186,6 +296,31 @@ mod tests {
     }
 
     #[test]
+    fn zeros_after_the_last_frame_are_padding_and_a_footer_is_read() {
+        let frames = frame_bytes(b"TIT2", &[3, b'H', b'i']);
+        let size = frames.len() + 300;
+        let synchsafe = [(size >> 21) as u8 & 0x7f, (size >> 14) as u8 & 0x7f, (size >> 7) as u8 & 0x7f, size as u8 & 0x7f];
+        // Version 2.4 with the footer flag, so the 300 zeros are padding the
+        // standard does not allow with a footer; read as written all the same.
+        let mut out = b"ID3\x04\x00\x10".to_vec();
+        out.extend(synchsafe);
+        out.extend(&frames);
+        out.extend([0; 300]);
+        out.extend(b"3DI\x04\x00\x10");
+        out.extend(synchsafe);
+        let d = Document::new(MemSource(out.clone()));
+        let mut ev = Evaluator::new(id3());
+        assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[10]).unwrap().size_bits, 300 * 8);
+        assert_eq!(ev.node(&d, &[11]).unwrap().size_bits, 10 * 8);
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, out.len() as u64 * 8);
+        match ev.node(&d, &[3]).unwrap().value {
+            Value::Flags { set, .. } => assert_eq!(set, ["footer present"]),
+            other => panic!("flags read as {other:?}"),
+        }
+    }
+
+    #[test]
     fn version_4_frame_sizes_are_synchsafe() {
         // One frame of 200 bytes: 0xC8 as a plain u32, but 0x01 0x48 synchsafe.
         let body = vec![3u8; 200];
@@ -207,40 +342,40 @@ mod tests {
 
         let d = Document::new(MemSource(out));
         let mut ev = Evaluator::new(id3());
-        assert_eq!(ev.node(&d, &[8]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 1);
         // The body is 200 bytes, not the 328 the raw number would say.
-        assert_eq!(ev.node(&d, &[8, 0, 3]).unwrap().size_bits, 200 * 8);
-        assert_eq!(ev.node(&d, &[8, 0]).unwrap().size_bits, 210 * 8);
+        assert_eq!(ev.node(&d, &[9, 0, 3]).unwrap().size_bits, 200 * 8);
+        assert_eq!(ev.node(&d, &[9, 0]).unwrap().size_bits, 210 * 8);
     }
 
     #[test]
     fn text_frames_read_in_the_encoding_their_first_byte_names() {
         let d = Document::new(MemSource(tag()));
         let mut ev = Evaluator::new(id3());
-        let frames = ev.node(&d, &[8]).unwrap();
+        let frames = ev.node(&d, &[9]).unwrap();
         assert_eq!(frames.child_count, 3);
 
         // TIT2: UTF-16, and the mark says little-endian.
-        assert_eq!(ev.node(&d, &[8, 0, 0]).unwrap().value, Value::Str("TIT2".into()));
-        let title = ev.node(&d, &[8, 0, 3, 1]).unwrap();
+        assert_eq!(ev.node(&d, &[9, 0, 0]).unwrap().value, Value::Str("TIT2".into()));
+        let title = ev.node(&d, &[9, 0, 3, 1]).unwrap();
         assert_eq!(title.value, Value::Str("Blue".into()));
         assert_eq!(title.read_as.as_deref(), Some("Read as UTF-16 LE, from a byte-order mark"));
         assert_eq!(title.value_offset_bits, title.offset_bits + 16);
 
         // TPE1: Latin-1, where 0xF6 is a letter rather than half a character.
-        let artist = ev.node(&d, &[8, 1, 3, 1]).unwrap();
+        let artist = ev.node(&d, &[9, 1, 3, 1]).unwrap();
         assert_eq!(artist.value, Value::Str("Bj\u{00f6}rk".into()));
         assert_eq!(artist.type_name, "latin1[]");
 
         // TCON: UTF-8, named outright, so nothing to report.
-        let genre = ev.node(&d, &[8, 2, 3, 1]).unwrap();
+        let genre = ev.node(&d, &[9, 2, 3, 1]).unwrap();
         assert_eq!(genre.value, Value::Str("Pop".into()));
         assert_eq!(genre.read_as, None);
 
         // Writing keeps the encoding: an accent stays one Latin-1 byte.
-        let w = ev.prepare_write(&d, &[8, 1, 3, 1], "Bj\u{00f8}rn").unwrap();
+        let w = ev.prepare_write(&d, &[9, 1, 3, 1], "Bj\u{00f8}rn").unwrap();
         assert_eq!(w.data, vec![b'B', b'j', 0xf8, b'r', b'n']);
         // And a character Latin-1 cannot hold is refused rather than mangled.
-        assert!(ev.prepare_write(&d, &[8, 1, 3, 1], "Bj\u{5c3d}rk").is_err());
+        assert!(ev.prepare_write(&d, &[9, 1, 3, 1], "Bj\u{5c3d}rk").is_err());
     }
 }

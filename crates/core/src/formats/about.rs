@@ -79,6 +79,8 @@ static ABOUT: &[(&str, About)] = &[
         "A Standard MIDI File stores music as timed instructions for a synthesizer, such as which note to start and stop, not as recorded sound. It holds a header chunk and one chunk per track. Each track is a list of events, each written after the time since the previous one.")),
     ("id3", a("ID3", Some("ID3"),
         "ID3 stores information about an MP3 file, such as the title, the artist, and cover art, as frames in a tag before the audio.")),
+    ("mp3", a("MP3", Some("MP3"),
+        "MP3 stores audio with lossy compression, which discards sound a listener is unlikely to hear. The file is a series of frames, each starting with a 4-byte header that gives the bitrate and sample rate, so a reader can work out where the next frame starts. MP2 files use the same frames. Tags hold the title, the artist, and other information: ID3v2 before the frames, and APEv2, Lyrics3, and ID3v1 after them.")),
     ("mp4", a("MP4", Some("MP4 file format"),
         "MP4 stores video, audio, and subtitles as tracks in one file. It is a tree of boxes, each with a length and a four-character type. The moov box describes the tracks, and the mdat box holds the compressed samples they point to.")),
     ("mkv", a("Matroska", Some("Matroska"),
