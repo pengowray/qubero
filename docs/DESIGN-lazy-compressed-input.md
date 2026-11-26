@@ -1,12 +1,13 @@
 # Design: reading the compressed input of large runs a piece at a time
 
-Written 2026-11-26, for developers. This is a proposal, and nothing in it is
-built yet. It follows `docs/DESIGN-lazy-unpacking.md`, which describes how a
-compressed run whose output is past `codec::CAP_BYTES` (64 MiB) is indexed in
-steps and its output read a span at a time. This design does the same for the
-compressed input, so that memory no longer grows with the compressed size and
-the browser can open a run whose compressed bytes do not fit in its chunk
-store.
+Written 2026-11-26, for developers. This is a proposal. Part 1 is built
+(2026-11-26; "The smaller fix first (part 1)" says where the code differs
+from this text), and parts 2 to 11 are not. It follows
+`docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
+output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
+read a span at a time. This design does the same for the compressed input, so
+that memory no longer grows with the compressed size and the browser can open
+a run whose compressed bytes do not fit in its chunk store.
 
 "Still to do" and "Open questions" at the end list what this leaves open.
 "What was checked" lists the code read to write it.
@@ -752,6 +753,55 @@ so its refusal becomes rare, and that is fine.
   other chunks a go needs, can still ask for the same chunks for ever.
   `waitToOpen`'s rule stays for that.
 
+**Built on 2026-11-26.** Where the code differs from the list above:
+
+- **Runs in a stitched space are counted too.** A run inside a joined stream,
+  such as a PNG's zlib stream over its IDAT chunks, is read with
+  `read_in` on the stitched space, which `read_stitched` turns into one
+  space-0 read per stored part. Each of those fits, so the guard in `read_in`
+  never fires, and the run asked for the same chunks for ever. The three
+  refusals ask `Evaluator::cannot_fit`, which adds up what
+  `file_bytes_at_once` says the read needs of the file: the bytes for space
+  0, the stored parts in the file for a stitched space, nothing for a space in
+  memory. The joins use the same sum (`parts_cannot_fit`). The guard in
+  `read_in` stays space 0 only.
+- **A join past the cap is refused as too large, before reading.** Without
+  that, `join_lazily` would read parts up to the 64 MiB cap before refusing,
+  and in the browser that read waits for ever. So when the parts cannot fit,
+  a stream whose runs pass the cap (or, in `join_whole`, one with a packed run
+  past 64 MiB or runs past what a trace can count) is refused with
+  `TooLarge`, as it is natively, and any other with `TooMuchAtOnce`.
+- **`stream_len_at` still reads in one call**, through `stream_end`, which now
+  measures a deflate stream a step at a time with `inflate::Measuring` and
+  keeps the walk in `Measures`. The walk's bytes are still one `read_in` of
+  the whole stretch, so the cap is applied where the stretch is chosen, in
+  `stream_len_at`, for space 0 only.
+- **Bytes, not chunks.** The checks compare bytes against
+  `resident_limit()`. A read within one chunk of the limit that does not start
+  on a chunk can still touch one chunk more than the store keeps, and waits
+  as before. `waitToOpen`'s rule covers it.
+- **What is still wrong, and expected.** A .gz of several members, one of
+  them over 16 MiB compressed, now reads in the browser as one member running
+  to the last trailer, even when the file fits in the store; part 2's
+  doubling stretches fix it. And listing a joined stream whose part is
+  refused, such as a large .gz's `decoded`, fails the read with the part's
+  name (`members[0].compressed is too large for the editor to keep in memory
+  at once`), which `flatten.ts` draws as nothing under the stream, as for any
+  part that fails.
+- **Strings.** Beyond the two below: the joined stream's status-bar message
+  reuses `UNPACKED.tooMuchAtOnce`, which now takes the limit; the report's
+  finding (`RV.refused`) and its PNG paragraph (`RV.pngNotInflated`) have
+  words of their own; a check over a refused stream says "the data it covers
+  is too large for the editor to keep in memory at once". The 32 MiB comes
+  from `RESIDENT_BYTES` in `doc.ts`, made from the numbers the store is made
+  with, and in the core from `resident_limit()`. The listing and the
+  inspector carry it in the hover.
+- **Tests.** `crates/wasm/tests/open_space_waits.rs` reproduced the zip entry
+  and the .gz asking for chunk 0 again before the fix, and asserts the
+  refusal after it; the test that asserted the old behaviour is now
+  `a_run_longer_than_the_store_is_refused_as_too_much_at_once`. The core's
+  are in `eval/tests/resident.rs`.
+
 **Proposed strings.** Drafted by a fresh agent from a brief, with no code in
 its context, and checked against the code since. They are proposals for
 sign-off.
@@ -798,7 +848,8 @@ order. Each part needs only the parts before it.
    for joins whose parts add up to more than the store keeps,
    `stream_len_at`'s read capped at half the store, the web strings. Fixes:
    the endless wait, wherever one call needs more chunks than the store
-   keeps.
+   keeps. **Done 2026-11-26**; see the end of "The smaller fix first
+   (part 1)".
 2. **Gather a run a window at a time.** `Evaluator::gather_run`: a run read in
    one call today is read `GATHER_WINDOW` at a time through `read_in`, into a
    copy kept in `Spaces` from one go to the next (at most 64 MiB of partial

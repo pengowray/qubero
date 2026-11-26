@@ -69,15 +69,16 @@ pub(super) enum PartTrouble {
 }
 
 /// What a read of a packed part says after the part's name when the part's
-/// decoder refused it. A part too large says "is" and [`Refusal::message`],
-/// the words a compressed run's own row has (`DECODED_REFUSED` in the web's
-/// `strings.ts`). A part with a frame or block too large says which it has,
-/// since that message names the frame or block and not the part. Any other
-/// refusal says "could not be unpacked": the other messages, such as
-/// "unpacking failed", do not read as a sentence after a field's name.
+/// decoder refused it. A part too large, for the cap or for the file's chunk
+/// store, says "is" and [`Refusal::message`], the words a compressed run's own
+/// row has (`DECODED_REFUSED` in the web's `strings.ts`). A part with a frame
+/// or block too large says which it has, since that message names the frame
+/// or block and not the part. Any other refusal says "could not be unpacked":
+/// the other messages, such as "unpacking failed", do not read as a sentence
+/// after a field's name.
 fn part_refused(why: Refusal) -> String {
     match why {
-        Refusal::TooLarge | Refusal::TooLargeLazy => format!("is {}", why.message()),
+        Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooMuchAtOnce => format!("is {}", why.message()),
         Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB)".into(),
         Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB)".into(),
         _ => "could not be unpacked".into(),
@@ -388,6 +389,9 @@ impl Evaluator {
         if size / 8 > crate::codec::CAP_BYTES as u64 {
             return Ok(Err(Refusal::TooLarge));
         }
+        if self.cannot_fit(doc, space, at, size) {
+            return Ok(Err(Refusal::TooMuchAtOnce));
+        }
         let packed = self.read_in(doc, space, at, size)?;
         #[cfg(test)]
         self.spaces.decodes.set(self.spaces.decodes.get() + 1);
@@ -511,8 +515,9 @@ impl Evaluator {
     /// The stitched stream at `path` held whole, for opening it as a document
     /// of its own: its bytes, a trace of every part, and where each part's run
     /// is. Refused when the stream would not open, when it comes to more than
-    /// a decoded stream may (the same cap, and the same refusal), and when a
-    /// part will not read.
+    /// a decoded stream may (the same cap, and the same refusal), when its
+    /// parts take up more of the file than the file's chunk store keeps (see
+    /// [`Self::parts_cannot_fit`]), and when a part will not read.
     ///
     /// The trace is each part's laid end to end. A stored part is one step
     /// over its own bytes; a packed part is the trace its decoder kept; and
@@ -533,6 +538,24 @@ impl Evaluator {
         let Some(stitch) = self.spaces.stitch(id) else { return fail("this stream is no longer open") };
         if stitch.len_bytes > self.spaces.whole_cap() as u64 {
             return self.join_lazily(doc, stitch);
+        }
+        if self.parts_cannot_fit(doc, stitch) {
+            // The walk below refuses as too large a stream whose runs pass
+            // what a trace can count, or one with a packed run past the cap,
+            // which is true wherever the stream is read. Here that is said
+            // before anything is read, since the walk would wait for ever on
+            // its way there.
+            let runs: u64 = stitch
+                .parts
+                .iter()
+                .map(|p| match &p.source {
+                    PartSource::Stored { .. } => p.len * 8,
+                    PartSource::Packed { size_bits, .. } => *size_bits,
+                })
+                .sum();
+            let packed_past_cap = stitch.parts.iter().any(|p| matches!(p.source, PartSource::Packed { size_bits, .. } if size_bits / 8 > crate::codec::CAP_BYTES as u64));
+            let too_large = runs > u64::from(u32::MAX) || packed_past_cap;
+            return Ok(Err(if too_large { Refusal::TooLarge } else { Refusal::TooMuchAtOnce }));
         }
         // A read that has to wait for bytes waits; one that fails is a part
         // that will not read, which refuses the whole as a stream that will
@@ -620,6 +643,8 @@ impl Evaluator {
     /// packed part too large to decode whole is read through its index.
     ///
     /// Refused as too large when what it is read from passes the cap, as
+    /// [`Refusal::TooMuchAtOnce`] when it does not but the parts' runs take
+    /// up more of the file than its chunk store keeps, as
     /// [`Refusal::TooLargeLazy`] when a part unpacks to more than
     /// [`lazy::LAZY_CAP_BYTES`], as [`Refusal::TooLargeUnit`] when a part has
     /// a zstd frame or xz block past 64 MiB, and as failed when a part will
@@ -637,6 +662,22 @@ impl Evaluator {
             };
         }
         let cap = self.spaces.whole_cap() as u64;
+        if self.parts_cannot_fit(doc, stitch) {
+            // What the walk below would hold once done. Past the cap the walk
+            // refuses the stream as too large, which is true wherever the
+            // stream is read, so that is the reason given; but here it is
+            // given before anything is read, since the walk would wait for
+            // ever on its way there.
+            let read_from: u64 = stitch
+                .parts
+                .iter()
+                .map(|p| match &p.source {
+                    PartSource::Stored { .. } => p.len,
+                    PartSource::Packed { size_bits, .. } => size_bits / 8,
+                })
+                .sum();
+            return Ok(Err(if read_from > cap { Refusal::TooLarge } else { Refusal::TooMuchAtOnce }));
+        }
         let mut held = 0u64;
         let mut parts = Vec::with_capacity(stitch.parts.len());
         let mut runs = Vec::with_capacity(stitch.parts.len());
@@ -662,10 +703,10 @@ impl Evaluator {
                     }
                     let bytes = match self.index_part(doc, stitch, i)? {
                         Ok(Some(index)) => JoinedBytes::Indexed(index),
-                        // A part past `LAZY_CAP_BYTES`, or with a zstd frame
-                        // or xz block past 64 MiB, refuses the stream for
-                        // that.
-                        Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeUnit(_)))) => return Ok(Err(why)),
+                        // A part past `LAZY_CAP_BYTES`, with a zstd frame or
+                        // xz block past 64 MiB, or too long for the chunk
+                        // store, refuses the stream for that.
+                        Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeUnit(_) | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
                         Err(_) => return Ok(Err(Refusal::Failed)),
                         Ok(None) => {
                             let run = read!(*space, *at_bits, *size_bits);
@@ -684,6 +725,25 @@ impl Evaluator {
         }
         let joined = Arc::new(Joined::new(parts, stitch.len_bytes, super::space::STITCH_CACHE_BYTES));
         Ok(Ok(Joining::Lazy { joined, runs }))
+    }
+
+    /// Whether the two joins, which read every part of `stitch` in one call,
+    /// need more of the file at once than the document's source keeps. Each
+    /// part's read may fit on its own, but a call that waits on the next
+    /// part's bytes starts again from the first part, and the chunks fed for
+    /// the later parts push out the earlier ones. So what the parts' runs
+    /// take up in the file is added up before any is read.
+    fn parts_cannot_fit<S: Source>(&self, doc: &Document<S>, stitch: &Stitch) -> bool {
+        let Some(limit) = doc.resident_limit() else { return false };
+        let needed: u64 = stitch
+            .parts
+            .iter()
+            .map(|p| match &p.source {
+                PartSource::Stored { space, at_bits } => self.file_bytes_at_once(*space, *at_bits, p.len * 8),
+                PartSource::Packed { space, at_bits, size_bits, .. } => self.file_bytes_at_once(*space, *at_bits, *size_bits),
+            })
+            .sum();
+        needed > limit
     }
 
     /// Part `i` as a reader would name it, for a read that failed in it: the

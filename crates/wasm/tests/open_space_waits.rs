@@ -101,11 +101,11 @@ fn a_stream_waiting_on_bytes_opens_once_the_chunks_it_names_are_fed() {
 }
 
 /// A compressed run longer than the editor keeps chunks of can never be read
-/// whole: the chunks fed for it push out the first ones, and the next reply
-/// asks for those again. This is the case Open unpacked has to stop on rather
-/// than go round for ever.
+/// whole: the chunks fed for it would push out the first ones, and the next
+/// reply would ask for those again. Open unpacked is refused instead, with
+/// the reason, and no chunk is asked for twice.
 #[test]
-fn a_run_longer_than_the_store_asks_again_for_chunks_it_was_fed() {
+fn a_run_longer_than_the_store_is_refused_as_too_much_at_once() {
     // Bytes that do not pack, so the run is as long as they are.
     let mut x = 0x2545_f491_u32;
     let noise: Vec<u8> = (0..6 * CHUNK)
@@ -119,24 +119,223 @@ fn a_run_longer_than_the_store_asks_again_for_chunks_it_was_fed() {
     let file = gzip_of(&noise);
     let mut ed = unfed(&file, 3, "gzip");
     let mut fed = BTreeSet::new();
-    let mut again = false;
-    for _ in 0..10 {
+    let mut rounds = 0;
+    let reply = loop {
         let reply = parse(&ed.open_space(0, &[1]));
         match reply["status"].as_str().unwrap() {
             "pending" => {
                 for c in chunks_of(&reply) {
-                    again |= !fed.insert(c);
+                    assert!(fed.insert(c), "chunk {c} asked for again after it was fed");
                     feed(&mut ed, &file, c);
+                }
+                rounds += 1;
+            }
+            "working" => {}
+            _ => break reply,
+        }
+        assert!(rounds < 10, "still pending after {rounds} rounds");
+    };
+    assert_eq!(reply["status"], "ok", "{reply}");
+    assert_eq!(reply["node"]["refused"], "too-much-at-once", "a run of seven chunks with room for three: {reply}");
+}
+
+/// A gzip file of one member, packed at the fastest level, for a test that
+/// wants megabytes of it.
+fn gzip_fast(content: &[u8]) -> Vec<u8> {
+    let mut gz = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    gz.extend(miniz_oxide::deflate::compress_to_vec(content, 1));
+    gz.extend(crc32(content).to_le_bytes());
+    gz.extend((content.len() as u32).to_le_bytes());
+    gz
+}
+
+/// A zip of one entry, `content` deflated at the fastest level and named
+/// `name`, with its central directory and end record.
+fn zip_of(name: &[u8], content: &[u8]) -> Vec<u8> {
+    let packed = miniz_oxide::deflate::compress_to_vec(content, 1);
+    let crc = crc32(content);
+    let sizes = |z: &mut Vec<u8>| {
+        z.extend(crc.to_le_bytes());
+        z.extend((packed.len() as u32).to_le_bytes());
+        z.extend((content.len() as u32).to_le_bytes());
+        z.extend((name.len() as u16).to_le_bytes());
+    };
+    let mut z = Vec::new();
+    z.extend(0x0403_4b50u32.to_le_bytes());
+    z.extend(20u16.to_le_bytes()); // version needed to extract
+    z.extend(0u16.to_le_bytes()); // flags
+    z.extend(8u16.to_le_bytes()); // deflate
+    z.extend([0u8; 4]); // time and date
+    sizes(&mut z);
+    z.extend(0u16.to_le_bytes()); // extra field length
+    z.extend(name);
+    z.extend(&packed);
+    let central = z.len();
+    z.extend(0x0201_4b50u32.to_le_bytes());
+    z.extend(20u16.to_le_bytes()); // version made by
+    z.extend(20u16.to_le_bytes());
+    z.extend(0u16.to_le_bytes());
+    z.extend(8u16.to_le_bytes());
+    z.extend([0u8; 4]);
+    sizes(&mut z);
+    // Extra field and comment lengths, disk, internal and external
+    // attributes, and the local header's offset, which is 0.
+    z.extend([0u8; 2 + 2 + 2 + 2 + 4 + 4]);
+    z.extend(name);
+    let size = z.len() - central;
+    z.extend(0x0605_4b50u32.to_le_bytes());
+    z.extend([0u8; 4]); // this disk, and the disk the directory starts on
+    z.extend(1u16.to_le_bytes());
+    z.extend(1u16.to_le_bytes());
+    z.extend((size as u32).to_le_bytes());
+    z.extend((central as u32).to_le_bytes());
+    z.extend(0u16.to_le_bytes()); // comment length
+    z
+}
+
+/// What came of asking the same question until it was answered, feeding
+/// exactly the chunks each "pending" reply named and asking again on
+/// "working", the way the web's listing does.
+enum Asked {
+    Answered(Value),
+    /// A chunk that was fed was asked for again: the chunks fed for the
+    /// answer pushed out ones it needed, so it can never come.
+    Again(u64),
+}
+
+fn ask_feeding(ed: &mut Editor, file: &[u8], fed: &mut BTreeSet<u64>, mut ask: impl FnMut(&mut Editor) -> String) -> Asked {
+    for _ in 0..100_000 {
+        let reply = parse(&ask(ed));
+        match reply["status"].as_str().unwrap() {
+            "pending" => {
+                for c in chunks_of(&reply) {
+                    if !fed.insert(c) {
+                        return Asked::Again(c);
+                    }
+                    feed(ed, file, c);
                 }
             }
             "working" => {}
-            _ => panic!("a run of seven chunks opened with room for three: {reply}"),
-        }
-        if again {
-            return;
+            _ => return Asked::Answered(reply),
         }
     }
-    panic!("no chunk was asked for twice");
+    panic!("neither answered nor asked again");
+}
+
+/// The children of the node at `path`, or the chunk asked for again.
+fn children(ed: &mut Editor, file: &[u8], fed: &mut BTreeSet<u64>, path: &[u32]) -> Result<Vec<Value>, u64> {
+    match ask_feeding(ed, file, fed, |ed| ed.template_children(0, path, 0.0, 1e9)) {
+        Asked::Answered(reply) => {
+            assert_eq!(reply["status"], "ok", "{reply}");
+            Ok(reply["node"].as_array().unwrap().clone())
+        }
+        Asked::Again(c) => Err(c),
+    }
+}
+
+/// The path of the child of `path` called `name`.
+fn child_named(ed: &mut Editor, file: &[u8], fed: &mut BTreeSet<u64>, path: &[u32], name: &str) -> Result<Vec<u32>, u64> {
+    let found = children(ed, file, fed, path)?;
+    let child = found.iter().find(|c| c["name"] == name).unwrap_or_else(|| panic!("no {name} under {path:?}: {found:?}"));
+    Ok(child["path"].as_array().unwrap().iter().map(|i| i.as_u64().unwrap() as u32).collect())
+}
+
+/// The node at `path`, which the listing asks for once it has the children.
+fn node(ed: &mut Editor, file: &[u8], fed: &mut BTreeSet<u64>, path: &[u32]) -> Value {
+    match ask_feeding(ed, file, fed, |ed| ed.template_node(0, path)) {
+        Asked::Answered(reply) => {
+            assert_eq!(reply["status"], "ok", "{reply}");
+            reply["node"].clone()
+        }
+        Asked::Again(c) => panic!("chunk {c} asked for again for the node at {path:?}"),
+    }
+}
+
+/// The listing of a zip whose one deflated entry is several times longer
+/// than the editor keeps chunks of, as the web lists it: the entry's `data`,
+/// then what is inside it.
+fn list_a_long_zip_entry(ed: &mut Editor, file: &[u8], fed: &mut BTreeSet<u64>) -> Result<(Vec<u32>, Vec<Value>), u64> {
+    let body = child_named(ed, file, fed, &[0, 0], "body")?;
+    let data = child_named(ed, file, fed, &body, "data")?;
+    let inside = children(ed, file, fed, &data)?;
+    Ok((data, inside))
+}
+
+/// The entry for the zip and gzip tests below: lines of hex that pack to
+/// about three times the 16 chunks those tests keep.
+fn long_lines() -> Vec<u8> {
+    lines(260_000)
+}
+
+/// A deflated zip entry longer than the chunk store, listed the way the web
+/// lists it. The entry's run would be read in one call, which needs more
+/// chunks at once than the store keeps: feeding the chunks it named pushed
+/// out ones it needed, and the listing asked for them again for ever. Now
+/// the entry's `data` is refused with the reason, before any of its run is
+/// asked for.
+#[test]
+fn a_zip_entry_longer_than_the_store_is_refused_as_too_much_at_once() {
+    let file = zip_of(b"lines.txt", &long_lines());
+    assert!(file.len() > 3 * 16 * CHUNK, "{} bytes is too few for a store of 16 chunks", file.len());
+    let mut ed = unfed(&file, 16, "zip");
+    let mut fed = BTreeSet::new();
+    let (data, inside) = match list_a_long_zip_entry(&mut ed, &file, &mut fed) {
+        Ok(listed) => listed,
+        Err(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert!(inside.is_empty(), "{inside:?}");
+    assert_eq!(node(&mut ed, &file, &mut fed, &data)["refused"], "too-much-at-once");
+    // The header and the directory at the end, and none of the run between.
+    assert!(fed.len() < 16, "{} chunks loaded: {fed:?}", fed.len());
+    // Open unpacked gives the same reason.
+    let reply = parse(&ed.open_space(0, &data));
+    assert_eq!(reply["node"]["refused"], "too-much-at-once", "{reply}");
+}
+
+/// A .gz whose one member is longer than the chunk store. The member is
+/// measured by inflating it from where its run starts, and that read was
+/// longer than the store keeps, so the member never got a size and its fields
+/// asked for the same chunks for ever. Now the measuring reads at most half
+/// the store and finds no end there, so the template takes the member's run
+/// to be everything before its trailer. That run is still longer than the
+/// store, and it is refused with the reason.
+#[test]
+fn a_gzip_member_longer_than_the_store_is_refused_as_too_much_at_once() {
+    let file = gzip_fast(&long_lines());
+    assert!(file.len() > 3 * 16 * CHUNK, "{} bytes is too few for a store of 16 chunks", file.len());
+    let mut ed = unfed(&file, 16, "gzip");
+    let mut fed = BTreeSet::new();
+    let compressed = match child_named(&mut ed, &file, &mut fed, &[0, 0], "compressed") {
+        Ok(path) => path,
+        Err(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    let run = node(&mut ed, &file, &mut fed, &compressed);
+    // Everything between the ten bytes of header and the eight of trailer.
+    assert_eq!(run["size_bits"].as_f64().unwrap() as usize, (file.len() - 18) * 8, "{run}");
+    let inside = match children(&mut ed, &file, &mut fed, &compressed) {
+        Ok(inside) => inside,
+        Err(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert!(inside.is_empty(), "{inside:?}");
+    assert_eq!(node(&mut ed, &file, &mut fed, &compressed)["refused"], "too-much-at-once");
+    assert!(fed.len() < 16, "{} chunks loaded: {fed:?}", fed.len());
+    // Open unpacked on the file's `decoded`, which joins the members, says the
+    // same of the joined stream.
+    let reply = parse(&ed.open_space(0, &[1]));
+    assert_eq!(reply["node"]["refused"], "too-much-at-once", "{reply}");
+    // And listing `decoded` where it is declared reads the member's run as
+    // the joined stream's one part, which fails the same way, naming the part,
+    // instead of waiting.
+    let inside = match children(&mut ed, &file, &mut fed, &[1]) {
+        Ok(inside) => inside,
+        Err(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert_eq!(inside.len(), 1, "{inside:?}");
+    let reply = match ask_feeding(&mut ed, &file, &mut fed, |ed| ed.template_children(0, &[1, 0], 0.0, 1e9)) {
+        Asked::Answered(reply) => reply,
+        Asked::Again(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert_eq!(reply["message"], "members[0].compressed is too large for the editor to keep in memory at once", "{reply}");
 }
 
 /// Bits in the order deflate packs them, from the low bit of each byte up.

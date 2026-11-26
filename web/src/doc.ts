@@ -6,7 +6,7 @@ import { formatBytes, formatOffset } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
 import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
-export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
+export { ADDRESS_MARK, byteText, formatBytes, formatLimit, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
 
@@ -30,6 +30,12 @@ const TEXT_ROUNDS = 512;
  * worth of metadata that way is hundreds of them. */
 const READ_AHEAD = 48;
 const CHUNK_CAPACITY = 512; // 32 MiB resident at most
+/** How much of the file the editor keeps in memory at once: what the core's
+ *  chunk store holds, from the same two numbers the store is made with. A
+ *  stream that has to be read from the file in one piece and takes up more
+ *  than this is refused as `too-much-at-once`, and the words for that say
+ *  this number. */
+export const RESIDENT_BYTES = CHUNK_SIZE * CHUNK_CAPACITY;
 
 // What the file(1) rules get to look at. Their offsets count from the start of
 // the file, so this is always the head and never a window from elsewhere. Rules
@@ -278,8 +284,8 @@ export type TemplateNode = {
    *  from the front of those rather than from the front of the file. */
   readonly space: number;
   /** For a compressed run that would not open, why not, as a key of
-   *  `DECODED_REFUSED`: `too-large`, `failed` and the rest. Null for every
-   *  other field. */
+   *  `DECODED_REFUSED`: `too-large`, `too-much-at-once`, `failed` and the
+   *  rest. Null for every other field. */
   readonly refused: string | null;
   /** True for a compressed run. One that opened can be opened as a document of
    *  its own; one that did not says why in `refused` instead. */
@@ -2528,6 +2534,12 @@ export class Doc {
   /** True for the file, false for an unpacked stream. */
   get isFile(): boolean {
     return this.space === 0;
+  }
+
+  /** `RESIDENT_BYTES`, for code that has a document and does not import this
+   *  module: the report's sections, which tests load without the core. */
+  get residentBytes(): number {
+    return RESIDENT_BYTES;
   }
 
   /** Said when a change was asked for and refused. */

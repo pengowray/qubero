@@ -216,6 +216,11 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
    *  write, is refused this way once it is past 64 MiB. */
   "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB)",
   "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB)",
+  /** A run read from the file in one piece, which takes up more of it than
+   *  the editor keeps in memory at once (`RESIDENT_BYTES` in `doc.ts`), so
+   *  waiting for it would wait for ever. The limit is in the hover,
+   *  `DECODED_REFUSED_TITLE`. */
+  "too-much-at-once": "too large for the editor to keep in memory at once",
   failed: "unpacking failed",
   unaligned: "not on a byte boundary",
   /**
@@ -236,6 +241,13 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
 
 /** The same, for a run whose reason is one this build does not know. */
 export const DECODED_REFUSED_OTHER = "not unpacked";
+
+/** The hover on a `DECODED_REFUSED` reason, for the reasons whose words leave
+ *  out a limit the reader may want. `resident` is how much of the file the
+ *  editor keeps in memory, as `formatLimit` writes it: `32 MiB`. */
+export const DECODED_REFUSED_TITLE: Readonly<Record<string, (resident: string) => string>> = {
+  "too-much-at-once": (resident: string): string => `The editor keeps at most ${resident} of the file in memory.`,
+};
 
 /**
  * What the `+` in front of a decoded field's address is counted from, carried
@@ -677,8 +689,11 @@ export const JOINED = {
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
   /** Which of the above a refusal of Open joined stream is, by the core's
-   *  refusal word. */
-  refused: (refused: string, tab: string): string => {
+   *  refusal word. `too-much-at-once` is parts that take up more of the file
+   *  than the editor keeps in memory at once, which is what
+   *  `UNPACKED.tooMuchAtOnce` says of any stream; `resident` is that limit,
+   *  as there. */
+  refused: (refused: string, tab: string, resident: string): string => {
     switch (refused) {
       case "too-large":
         return JOINED.tooLarge(tab);
@@ -688,6 +703,8 @@ export const JOINED = {
         return JOINED.partZstdFrameTooLarge(tab);
       case "too-large-xz-block":
         return JOINED.partXzBlockTooLarge(tab);
+      case "too-much-at-once":
+        return UNPACKED.tooMuchAtOnce(tab, resident);
       default:
         return JOINED.failed(tab);
     }
@@ -732,12 +749,14 @@ export const UNPACKED = {
    *  then says `unpacking` instead. Any kind of stream, so no codec's verb. */
   loading: (field: string): string => `Loading ${field} from the file… A new tab opens when it is ready.`,
   /** In the status bar when the stream's bytes were read and dropped again
-   *  before it could be opened: the file's chunks are kept 512 of 64 KiB at
-   *  most (`CHUNK_CAPACITY` in `doc.ts`), and a stream that needs more of the
-   *  file than that at once never has all of it there. `tab` is the title the
-   *  tab would have had, as in `JOINED.failed`. */
-  tooMuchAtOnce: (tab: string): string =>
-    `Couldn't open ${tab}: it needs more than 32 MiB of the file in memory at once, and the editor keeps at most 32 MiB.`,
+   *  before it could be opened, or when the core refused a joined stream as
+   *  `too-much-at-once`: the editor keeps at most `resident` of the file in
+   *  memory (`RESIDENT_BYTES` in `doc.ts`, written by `formatLimit`), and a
+   *  stream that needs more of the file than that at once never has all of it
+   *  there. `tab` is the title the tab would have had, as in
+   *  `JOINED.failed`. */
+  tooMuchAtOnce: (tab: string, resident: string): string =>
+    `Couldn't open ${tab}: it needs more than ${resident} of the file in memory at once, and the editor keeps at most ${resident}.`,
   /** In the status bar when reading the stream's bytes from the file failed.
    *  `reason` is the `ReadFailure` message, which names the bytes and says
    *  why. */

@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { formatAddress, formatBytes, formatLimit, formatOffset, RESIDENT_BYTES } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
@@ -15,7 +15,7 @@ import { docPlaces } from "./tableplace.ts";
 import type { CodecKind, DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -1105,8 +1105,10 @@ export class Inspector {
     }
     // A compressed run nothing could open says so where its value would be.
     if (n.refused !== null) {
-      const why = DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
-      this.detail.append(` · ${why}`);
+      const why = el("span", "", DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER);
+      const limit = DECODED_REFUSED_TITLE[n.refused];
+      if (limit !== undefined) why.title = limit(formatLimit(RESIDENT_BYTES));
+      this.detail.append(" · ", why);
     }
     // Whether this field is one of a compressed block's codes decides three
     // things below, so it is settled once here: what the box holds, whether

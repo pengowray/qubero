@@ -426,6 +426,14 @@ pub enum Refusal {
     /// say [`Refusal::TooLarge`] for the same frame, since there the whole
     /// run is past the cap.
     TooLargeUnit(SpanUnit),
+    /// The run has to be read in one call, and it takes up more of the file
+    /// than the file's source keeps at once (see
+    /// [`Source::resident_limit`](crate::source::Source::resident_limit)): in
+    /// the browser, more chunks than the chunk store keeps. Asking for it
+    /// would push out the chunks it had to have, and the read would wait for
+    /// ever, so it is refused instead. Only the browser says this, and only
+    /// for a run in the file.
+    TooMuchAtOnce,
     /// The decoder would not read it.
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
@@ -498,6 +506,7 @@ impl Refusal {
             Refusal::TooLargeLazy => "too-large-lazy",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
+            Refusal::TooMuchAtOnce => "too-much-at-once",
             Refusal::Failed => "failed",
             Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
@@ -521,6 +530,7 @@ impl Refusal {
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB)",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB)",
+            Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
             Refusal::Unaligned => "not on a byte boundary",
             Refusal::Settings => "the file doesn't say how this was packed",

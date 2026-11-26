@@ -1254,6 +1254,11 @@ impl super::Evaluator {
         if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
             return Ok(Err(Refusal::TooLarge));
         }
+        // The whole run is read in the one call below, so a run longer than
+        // the file's chunk store keeps would wait for ever.
+        if self.cannot_fit(doc, key.0, key.1, key.2) {
+            return Ok(Err(Refusal::TooMuchAtOnce));
+        }
         // A go with no allowance carries its pass to the end before it hands
         // back, so it never puts one back and needs no place. A go that has
         // spent its allowance already starts nothing: the pass would take a
