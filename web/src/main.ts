@@ -790,7 +790,7 @@ function buildDocument(tab: Tab): Page {
     if (first.kind === "done") {
       if (waiting?.key === key) {
         waiting = null;
-        say("");
+        waitSays("");
       }
       return showOpened(path, node, first.value);
     }
@@ -798,23 +798,30 @@ function buildDocument(tab: Tab): Page {
     waiting = wait;
     waitToOpen(first, () => askOpen(path), (chunks) => doc.fileChunks(chunks), {
       live: () => waiting === wait,
-      working: (u) => say(UNPACKED.unpacking(node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0))),
-      loading: () => say(UNPACKED.loading(node.name)),
+      working: (u) => waitSays(UNPACKED.unpacking(node.name, percentText(u?.read_bits ?? 0, u?.run_bits ?? 0), formatBytes(u?.unpacked_bytes ?? 0))),
+      loading: () => waitSays(UNPACKED.loading(node.name)),
       done: (value) => {
         waiting = null;
-        say("");
+        waitSays("");
         showOpened(path, node, value);
       },
       lost: () => {
         waiting = null;
-        say(UNPACKED.tooMuchAtOnce(wouldBeTitle(path, node)), true);
+        waitSays(UNPACKED.tooMuchAtOnce(wouldBeTitle(path, node)), true);
       },
       failed: (error) => {
         waiting = null;
-        say(UNPACKED.readFailed(wouldBeTitle(path, node), error instanceof Error ? error.message : String(error)), true);
+        waitSays(UNPACKED.readFailed(wouldBeTitle(path, node), error instanceof Error ? error.message : String(error)), true);
       },
     });
     return null;
+  };
+  /** Write this page's status bar, where the wait began, rather than through
+   *  `say`, which writes the bar of whichever page is showing when the wait
+   *  moves on. */
+  const waitSays = (text: string, warn = false): void => {
+    saveMsg.textContent = text;
+    saveMsg.classList.toggle("warn", warn);
   };
   /** The tab for what Open unpacked came to: focused if it was open already,
    *  added if not, and nothing for a stream that would not open. */
