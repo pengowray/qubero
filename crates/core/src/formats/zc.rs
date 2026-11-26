@@ -47,10 +47,6 @@ const DATA_INFO_AT: i128 = 0x11a;
 const RECORDING_AT: i128 = 0x120;
 const RECORDING_END: i128 = 0x150;
 
-/// The timing resolution of a detector that has not been recalibrated: 25,000
-/// counts in 25 ms, so one count is one microsecond.
-const DEFAULT_RES1: u16 = 25_000;
-
 pub fn zc() -> Template {
     let file_type = || E::field("file_type");
     let data_pointer = || E::within(&["data_info", "data_pointer"]);
@@ -468,6 +464,10 @@ mod tests {
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
+
+    /// The timing resolution of a detector that has not been recalibrated:
+    /// 25,000 counts in 25 ms, so one count is one microsecond.
+    const DEFAULT_RES1: u16 = 25_000;
 
     /// A header of the given type, with text in a few fields, and the data
     /// information table saying the intervals start at `data_pointer`.
