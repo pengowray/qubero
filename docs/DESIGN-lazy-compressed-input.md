@@ -1,9 +1,9 @@
 # Design: reading the compressed input of large runs a piece at a time
 
-Written 2026-11-26, for developers. This is a proposal. Parts 1 and 2 are
-built (2026-11-26; "The smaller fix first (part 1)" and "Gathering a run a
-window at a time (part 2)" say where the code differs from this text), and
-parts 3 to 11 are not. It follows
+Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
+built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
+window at a time (part 2)" and "Built (part 3)" say where the code differs
+from this text), and parts 4 to 11 are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
