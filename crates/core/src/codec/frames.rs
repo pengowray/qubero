@@ -137,7 +137,8 @@ const BLOCK_MAX: u64 = 128 << 10;
 /// announced before it is decoded, with the byte it starts at and how much
 /// output comes before it. The skippable frames in front of a frame are
 /// counted as part of it. A frame that comes to more than `frame_cap`, or asks
-/// for a window larger than [`MAX_WINDOW`], is [`Refusal::TooLarge`].
+/// for a window larger than [`MAX_WINDOW`], is [`Refusal::TooLarge`]. A frame
+/// whose checksum does not match what it decoded is [`Refusal::Failed`].
 ///
 /// The decoder keeps the frame's window, the last bytes it may copy from, and
 /// lets go only of what has left it. So for the first window's worth of a
@@ -282,6 +283,11 @@ impl ZstdWalk {
                     (false, 0) => None,
                     (false, _) => Some(self.out + f.collected + f.window),
                 };
+            }
+            // The last `collect` let go of the rest of the frame, so the sum
+            // the decoder took is over all of it.
+            if f.checksum && f.dec.get_calculated_checksum() != f.dec.get_checksum_from_data() {
+                return Err(Refusal::Failed);
             }
             self.out += f.collected;
             // The decoder counts the frame's checksum as bytes it read, so it

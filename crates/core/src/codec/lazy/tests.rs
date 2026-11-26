@@ -839,6 +839,44 @@ fn a_zstd_pass_in_steps_refuses_what_one_pass_does() {
     }
 }
 
+/// A frame whose checksum does not match what it decodes to is refused, as
+/// a gzip trailer that does not match is: decoded whole, and indexed past
+/// the cap in one go and in steps. The damage is to a checksum, and to a
+/// byte inside a frame of raw blocks, which without the checksum decodes to
+/// bytes that are not what was packed.
+#[test]
+fn a_zstd_frame_whose_checksum_does_not_match_is_refused() {
+    use ruzstd::encoding::{compress_to_vec, CompressionLevel};
+    let data = mixed(400_000, 71);
+    let frames: Vec<Vec<u8>> = data
+        .chunks(30_000)
+        .enumerate()
+        .map(|(i, part)| compress_to_vec(part, if i % 3 == 2 { CompressionLevel::Uncompressed } else { CompressionLevel::Fastest }))
+        .collect();
+    // Every frame says it has a checksum: the descriptor's third bit.
+    assert!(frames.iter().all(|f| f[4] & 0x04 != 0));
+    let run: Vec<u8> = frames.concat();
+    let start = |k: usize| frames[..k].iter().map(|f| f.len()).sum::<usize>();
+    // The checksum of frame 7, its last four bytes, and a byte in the
+    // middle of frame 8, which is raw.
+    let sum = start(8) - 2;
+    let content = start(8) + frames[8].len() / 2;
+    for at in [sum, content] {
+        let mut bad = run.clone();
+        bad[at] ^= 0x10;
+        let bad = Arc::new(bad);
+        assert_eq!(decode_or_index_with(Codec::Zstd, bad.clone(), small()).err(), Some(Refusal::Failed), "byte {at}");
+        assert_eq!(in_steps(Indexing::new(Codec::Zstd, bad.clone(), small()).expect("starts"), 5000).0.err(), Some(Refusal::Failed), "byte {at}");
+        let whole = Limits { whole: 1 << 20, ..small() };
+        assert_eq!(decode_or_index_with(Codec::Zstd, bad.clone(), whole).err(), Some(Refusal::Failed), "byte {at}");
+        let short = bad[..start(9)].to_vec();
+        assert_eq!(crate::codec::decode_traced(Codec::Zstd, &short).err(), Some(Refusal::Failed), "byte {at}");
+    }
+    // Undamaged, the same run reads.
+    let s = indexed(Codec::Zstd, &run, small());
+    reads_back(&s, &data, 73);
+}
+
 /// An xz stream of several blocks past the cap, laid out from its index:
 /// read back from anywhere, a checkpoint at the start of a block, a trace
 /// per span that says what the whole trace says, and members that are the
