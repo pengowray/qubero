@@ -245,7 +245,7 @@ impl Seekable {
                 })?;
                 bytes
             }
-            Kind::Xz(l) => xz::blocks(&self.packed, l, self.span_units(k, l), c.out, 0, &mut TraceBuilder::off())?,
+            Kind::Xz(l) => super::xz::decode_span(&self.packed, l, self.span_units(k, l), c.out)?,
         };
         if bytes.len() != want {
             return Err(Refusal::Failed);
@@ -283,19 +283,7 @@ impl Seekable {
                 b.done()
             }
             Kind::Xz(l) => {
-                let range = self.span_in(k);
-                let units = self.span_units(k, l);
-                let last = units.end == l.blocks.len();
-                let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, c.out);
-                if k == 0 {
-                    b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
-                }
-                let end = c.out + xz::blocks(&self.packed, l, units, c.out, MAX_STEPS, &mut b)?.len() as u64;
-                if last {
-                    xz::push_index(l, &mut b, end);
-                }
-                b.finish_at(range.end as u64 * 8, end);
-                b.done()
+                super::xz::span_trace(&self.packed, l, k, self.span_in(k), self.span_units(k, l), c.out)?
             }
         });
         *lock(&self.traced) = Some((k, t.clone()));
