@@ -302,7 +302,7 @@ fn opus_head() -> T {
             ("extra", extra()),
         ],
     )
-    .reads_as(&[("output_channel_count", "{} channels", ""), ("input_sample_rate", "from {} Hz", "")])
+    .reads_as(&[("output_channel_count", "{} channels", ""), ("input_sample_rate", "input {} Hz", "")])
     .field_doc("version", "Format version, 1 in RFC 7845. The high 4 bits are the major version.")
     .field_doc("pre_skip", "Samples at 48 kHz to discard from the start of the decoded audio.")
     .field_doc("input_sample_rate", "The sample rate the audio had before it was encoded, for information only; playback normally uses 48 kHz.")
