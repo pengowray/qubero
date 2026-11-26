@@ -111,12 +111,6 @@ impl<'a> Window<'a> {
         self.bytes.get(from..to)
     }
 
-    /// Bytes of the run from `at` to the end of the window. Nothing for a
-    /// byte before the window starts or past its end.
-    pub fn from(&self, at: usize) -> Option<&'a [u8]> {
-        self.bytes.get(at.checked_sub(self.at)?..)
-    }
-
     /// The window over a run that is bytes `range` of this one, such as the
     /// LZMA2 data of an xz block, with its positions counted from that run's
     /// front: what this window holds of `range`. When it holds none of it,
@@ -1894,6 +1888,32 @@ mod tests {
         assert_eq!(decode(Codec::Zstd, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Xz, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Lzip, b"not compressed at all, not even a bit"), Err(Refusal::Failed));
+    }
+
+    /// A window gives the bytes of the run it holds by their place in the
+    /// run, and nothing for bytes it does not hold; over part of the run it
+    /// counts from that part's front, and holds what it held of it.
+    #[test]
+    fn a_window_reads_by_place_in_the_run() {
+        let run: Vec<u8> = (0..100).collect();
+        let w = Window::of(&run[20..60], 20, run.len()).expect("inside the run");
+        assert!(Window::of(&run[20..60], 70, run.len()).is_none());
+        assert_eq!((w.start(), w.end(), w.reaches_end()), (20, 60, false));
+        assert!(Window::whole(&run).reaches_end());
+        assert_eq!(w.get(25..30), Some(&run[25..30]));
+        assert_eq!(w.get(19..30), None);
+        assert_eq!(w.get(55..61), None);
+        // A part that starts before the window and ends inside it.
+        let part = w.within(10..40);
+        assert_eq!((part.start(), part.end(), part.run_len()), (10, 30, 30));
+        assert_eq!(part.get(10..30), Some(&run[20..40]));
+        assert!(part.reaches_end());
+        // A part inside it, and parts it holds none of.
+        assert_eq!(w.within(30..50).get(0..20), Some(&run[30..50]));
+        for outside in [0..10, 60..90, 70..80] {
+            let p = w.within(outside.clone());
+            assert_eq!((p.start(), p.bytes().len(), p.run_len()), (0, 0, outside.len()), "{outside:?}");
+        }
     }
 
 }
