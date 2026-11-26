@@ -93,7 +93,7 @@ fn every_project_file_is_recognised_and_read_whole() {
         // Every byte of the file is in a field.
         assert_eq!(ev.node(d, &[]).unwrap().size_bits, FILE_SIZE * 8, "{f}");
         assert_eq!(int(ev, d, &[], &["version"]), 1, "{f}");
-        for field in ["version", "ms_decode", "ms_decode_width", "unknown_0e", "master_level", "unknown_32"] {
+        for field in ["version", "ms_decode", "ms_decode_width", "unknown_0e", "master_level", "solo"] {
             assert!(holds(ev, d, &[], &[field]), "{f}: {field}");
         }
         let ms_decode = named(ev, d, &[], &["ms_decode"]);
@@ -121,9 +121,12 @@ fn every_project_file_is_recognised_and_read_whole() {
         }
         let tail = named(ev, d, &[], &["metronome"]);
         assert_eq!(ev.node(d, &tail).unwrap().offset_bits, 0x100 * 8, "{f}");
-        let values = ["tempo", "beat", "level", "unknown_8", "unknown_flags", "unknown_a", "unknown_b"]
+        let values = ["tempo", "beat", "level", "sound", "bar_display", "accent", "click", "unused_bits", "signature", "unused"]
             .map(|field| int(ev, d, &tail, &[field]));
-        assert_eq!(values, [120, 4, 50, 0, 2, 27, 0], "{f}");
+        assert_eq!(values, [120, 4, 50, 0, 0, 1, 0, 0, 27, 0], "{f}");
+        for field in ["sound", "click", "signature"] {
+            assert!(holds(ev, d, &tail, &[field]), "{f}: metronome {field}");
+        }
 
         if take == "260430_0070" {
             assert_eq!(int(ev, d, &[], &["length_seconds"]), 157, "{f}");

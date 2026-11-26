@@ -2,21 +2,28 @@
 //! recorder saves beside a take's WAV files, such as `260430_0070.bin` beside
 //! `260430_0070_3-4.wav` and `260430_0070_MIX.wav`.
 //!
-//! The file holds the take's length and the mixer settings the take was
-//! recorded with: MS decode, and a level and a pan for each of the six
-//! tracks, and the master level. It does not hold an input's source, gain or
-//! phantom power. Every field is little-endian.
+//! The file holds the take's length, the recording app, the DUAL REC setting
+//! and the mixer settings the take was recorded with: MS decode, a level and
+//! a pan for each of the six tracks, the master level and the SOLO switch.
+//! In POCKET STUDIO it also holds each track's 4-band EQ and the metronome's
+//! settings. It does not hold an input's source, gain or phantom power. Every
+//! field is little-endian.
+//!
+//! With DUAL REC on, the recorder makes a second project for the MP3 or
+//! 32-bit float copy and writes the same 268 bytes for it, named with an `M`
+//! or an `F` after the take's name: `TASCAM_0001M.bin` or `TASCAM_0001F.bin`
+//! beside `TASCAM_0001.bin`.
 //!
 //! The layout was read from the recorder's V2.03 firmware, which writes the
 //! file at the end of a take and reads it when the take is opened, and it was
 //! compared with 127 files an X8 recorded. Tascam does not document the
-//! file. Where the firmware's use of a field was not traced, the field is
-//! named `unknown` with its offset, and its note gives the range the
-//! firmware's mixer range table allows and the values in the 127 files.
-//! The six 32-byte blocks at 0x40 are each track's 4-band EQ, and the 12
-//! bytes at 0x100 are the metronome's settings. Both were read from the
-//! firmware's code and tables. Every one of the 127 files has the default
-//! values there, so no file has confirmed a value other than a default.
+//! file. A field the firmware stores but never uses for anything that was
+//! found is named `unknown` with its offset, and its note says what the
+//! firmware does with it and what values the 127 files have. The six 32-byte
+//! blocks at 0x40 (the EQ) and the 12 bytes at 0x100 (the metronome) were
+//! read from the firmware's code and tables. Every one of the 127 files has
+//! the default values there, so no file has confirmed a value other than a
+//! default.
 //!
 //! Nothing in the file is a signature. [`is_project`] recognises a file by
 //! its length of exactly 268 bytes and by every field with a known range
@@ -41,13 +48,22 @@ const MAX_PAN: u8 = 40;
 const MAX_PERCENT: u8 = 100;
 const MAX_MS_DECODE: u8 = 3;
 
-/// The recording apps whose number is confirmed. The X8 has other apps, and
-/// one of the 127 files has 5 here, but only MANUAL's number was matched to
-/// its name.
-const APPS: &[(i128, &str)] = &[(2, "MANUAL")];
+/// The recording apps, by the number the firmware's C code gives each one.
+/// The firmware writes 9 for POCKET STUDIO and also for the tuner and the
+/// metronome opened inside it (10 and 11). TUNER (7) and METRONOME (8) do not
+/// record.
+const APPS: &[(i128, &str)] =
+    &[(1, "ASMR"), (2, "MANUAL"), (3, "MUSIC"), (4, "VOICE"), (5, "FIELD"), (6, "PODCAST"), (9, "POCKET STUDIO")];
 
-/// The MS DECODE setting's values.
-const MS_DECODE: &[(i128, &str)] = &[(0, "OFF"), (1, "INPUT 1-2"), (2, "INPUT 3-4"), (3, "INPUT 5-6")];
+/// The DUAL REC setting's values. The firmware's code also handles 0, but no
+/// setting in V2.03 writes it.
+const DUAL_REC: &[(i128, &str)] = &[(1, "ON"), (3, "OFF")];
+
+/// The MS DECODE setting's values, named as in the reference manual.
+const MS_DECODE: &[(i128, &str)] = &[(0, "OFF"), (1, "TRACK 1-2"), (2, "TRACK 3-4"), (3, "TRACK 5-6")];
+
+/// Off and on, for the switches.
+const OFF_ON: &[(i128, &str)] = &[(0, "OFF"), (1, "ON")];
 
 /// Whether a file is an X8 project file. The file has no signature, so every
 /// one of these has to hold:
@@ -92,7 +108,7 @@ pub fn x8project() -> Template {
                 ("version", T::u32(Little)),
                 ("length_seconds", T::u32(Little)),
                 ("recording_app", T::enumeration("X8RecordingApp", T::u8(), APPS)),
-                ("file_mode", T::u8()),
+                ("dual_rec", T::enumeration("X8DualRec", T::u8(), DUAL_REC)),
                 ("unknown_0a", T::u8()),
                 ("unknown_0b", T::u8()),
                 ("ms_decode", T::enumeration("X8MsDecode", T::u8(), MS_DECODE)),
@@ -100,10 +116,10 @@ pub fn x8project() -> Template {
                 ("unknown_0e", T::u8()),
                 ("unknown_0f", T::u8()),
                 ("channels", T::array(channel(), E::lit(TRACKS as i128))),
-                ("unknown_entries", T::array(unknown_entry(), E::lit(2))),
+                ("unused_channels", T::array(channel(), E::lit(2))),
                 ("master_level", T::u8()),
                 ("unknown_31", T::u8()),
-                ("unknown_32", T::u8()),
+                ("solo", T::enumeration("X8Solo", T::u8(), OFF_ON)),
                 ("unknown_33", T::u8()),
                 ("unused", T::bytes(E::lit(3))),
                 ("unknown_37", T::u8()),
@@ -118,7 +134,7 @@ pub fn x8project() -> Template {
         .field_valid("ms_decode_width", Valid::Max(E::lit(MAX_PERCENT)))
         .field_valid("unknown_0e", Valid::Max(E::lit(MAX_PERCENT)))
         .field_valid("master_level", Valid::Max(E::lit(MAX_LEVEL)))
-        .field_valid("unknown_32", Valid::Max(E::lit(1)))
+        .field_valid("solo", Valid::InEnum)
         .field_doc(
             "version",
             "The version of the file's layout. The X8's V2.03 firmware writes 1. A file with 0 here is in an older layout. When the firmware reads a file with 0 here that is at least 0x34 bytes long, it fills everything from 0x40 on with default values and sets the version to 1.",
@@ -126,50 +142,62 @@ pub fn x8project() -> Template {
         .field_doc("length_seconds", "The length of the take in whole seconds: the number of audio frames divided by the sample rate, with the fraction dropped.")
         .field_doc(
             "recording_app",
-            "The number of the recording app the take was made with. 2 is MANUAL. The firmware writes 9 for apps 9, 10 and 11. The names of the apps numbered 1, 3, 4, 5 and 6 are not confirmed. Of the 127 files compared, 126 have 2 and 1 has 5.",
+            "The recording app the take was made with. The values for MANUAL, MUSIC, FIELD and POCKET STUDIO were read from the firmware's code. The values for ASMR, VOICE and PODCAST were matched by elimination and from how the firmware treats each app. The firmware also writes 9 (POCKET STUDIO) when the tuner or the metronome inside POCKET STUDIO is open. Of the 127 files compared, 126 have 2 (MANUAL). One has 5 (FIELD), and that take's only file is a stereo master.",
         )
-        .field_doc("file_mode", "A file mode setting. Its values were not traced. All 127 files compared have 3.")
-        .field_doc("unknown_0a", "Not traced. All 127 files compared have 0.")
-        .field_doc("unknown_0b", "Not traced. All 127 files compared have 0.")
-        .field_doc("ms_decode", "The MS DECODE setting: OFF, or the pair of inputs whose mid-side signal the mixer decodes to left and right.")
+        .field_doc(
+            "dual_rec",
+            "The DUAL REC setting (GENERAL SETTINGS > REC SETTINGS): 3 is OFF and 1 is ON. With DUAL REC on, the recorder also writes the second copy's project file, whose file name has M (MP3) or F (32-bit float) after the take's name. All 127 files compared have 3.",
+        )
+        .field_doc(
+            "unknown_0a",
+            "A setting from 0 to 8, set by the firmware's internal settings message 0xFFD. The firmware's audio code reads it as bits: bit 0 when the app is VOICE, bit 1 when it is MUSIC and bit 2 when it is PODCAST. Each of those bits changes how channels 3 and 4 are routed in the mixer. The screen setting it belongs to was not found. All 127 files compared have 0.",
+        )
+        .field_doc("unknown_0b", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
+        .field_doc("ms_decode", "The MS DECODE setting: OFF, or the pair of tracks whose mid-side signal the mixer decodes to left and right.")
         .field_doc(
             "ms_decode_width",
             "The MS decode width, from 0 to 100. The default is 50. The firmware uses this value as an index into its table of mid gains, and 100 minus this value as an index into its table of side gains.",
         )
-        .field_doc("unknown_0e", "Not traced. The firmware allows 0 to 100, and the default is 100. All 127 files compared have 100.")
-        .field_doc("unknown_0f", "Not traced. All 127 files compared have 0.")
+        .field_doc(
+            "unknown_0e",
+            "A mixer setting from 0 to 100, set by the firmware's internal settings message 0xC06, which follows 0xC05 (the MS decode width). The default is 100. The firmware stores the value and can report it, but no audio code reads it, so in V2.03 the value has no effect on the sound. All 127 files compared have 100.",
+        )
+        .field_doc("unknown_0f", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
         .field_doc("channels", "The mixer channels of tracks 1 to 6, in track order, 4 bytes each.")
         .field_doc(
-            "unknown_entries",
-            "Two 4-byte entries after the six mixer channels. Their use was not traced. In all 127 files compared, the first entry is 97, 0, 0, 0 and the second is 97, 40, 0, 0. If the first two bytes are a level and a pan, as they are in a mixer channel, those values are the default level with pan fully left, and the default level with pan fully right.",
+            "unused_channels",
+            "Two more entries laid out like a mixer channel. The firmware's defaults set both to level 97, the first with pan 0 and the second with pan 40, and no code changes them afterwards. The audio code's mixer reads only the six track channels. All 127 files compared have the defaults.",
         )
         .field_doc(
             "master_level",
-            "The mixer's master level, from 0 to 127. The 127 files compared have 97, 100 or 113. The value's unit was not traced; a channel's level, which has the same range, is an index into a gain table.",
+            "The mixer's master level, from 0 to 127. The default is 97. Like a channel's level, the value is an index into the firmware's gain table. The 127 files compared have 97, 100 or 113.",
         )
-        .field_doc("unknown_31", "Not traced. All 127 files compared have 70.")
-        .field_doc("unknown_32", "A setting that is 0 or 1. Its meaning was not traced. Of the 127 files compared, 86 have 0 and 41 have 1.")
-        .field_doc("unknown_33", "Not traced. All 127 files compared have 0.")
+        .field_doc("unknown_31", "The firmware's defaults set this byte to 70, and no other code reads or writes it by itself. All 127 files compared have 70.")
+        .field_doc(
+            "solo",
+            "The SOLO switch, which solos one track for monitoring (AFL); added in firmware V2.00 for MANUAL and PODCAST. The firmware passes this switch and the soloed track to the audio code. The audio code builds the solo mix only in MANUAL, PODCAST and POCKET STUDIO, and only on two screens, probably INPUT SETTINGS and MIXER SETTINGS. The file does not record which track was soloed. Of the 127 files compared, 86 have 0 and 41 have 1. The 41 are consecutive takes from 4 to 18 February 2026, so the switch stays as it was left from one take to the next.",
+        )
+        .field_doc("unknown_33", "No code in V2.03 reads or writes this byte on its own. The firmware only copies it together with the neighbouring bytes. All 127 files compared have 0.")
         .field_doc("unused", "Three bytes the firmware does not write. All 127 files compared have zeros.")
         .field_doc(
             "unknown_37",
-            "Not traced. The firmware copies this byte from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
+            "In POCKET STUDIO the firmware copies this byte from a value its file writer keeps during the take. In other apps it keeps the value from the project that was open, or writes 0. All 127 files compared have 0.",
         )
         .field_doc(
             "unknown_38",
-            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
+            "In POCKET STUDIO the firmware copies this 32-bit value from the first 32-bit word of the firmware's table entry for the take's first open file. In other apps it keeps the value from the project that was open, or writes 0. All 127 files compared have 0.",
         )
         .field_doc(
             "unknown_3c",
-            "Not traced. The firmware copies this 32-bit value from the recorder's state, or keeps the value from the project that was open. All 127 files compared have 0.",
+            "In POCKET STUDIO the firmware copies this 32-bit value from the second 32-bit word of the firmware's table entry for the take's first open file. In other apps it keeps the value from the project that was open, or writes 0. All 127 files compared have 0.",
         )
         .field_doc(
             "eq",
-            "The 4-band EQ of each of tracks 1 to 6, in track order, 32 bytes each. The firmware saves these from the recorder's settings only in apps 9, 10 and 11; a take from another app has the default values, or the values of the project that was open. All 127 files compared have the default values.",
+            "The 4-band EQ of each of tracks 1 to 6, in track order, 32 bytes each. The firmware saves these from the recorder's settings only in POCKET STUDIO; a take from another app has the default values, or the values of the project that was open. All 127 files compared have the default values.",
         )
         .field_doc(
             "metronome",
-            "The metronome's settings, 12 bytes. The firmware saves them from the recorder's settings only in apps 9, 10 and 11. All 127 files compared have the default values.",
+            "The metronome's settings, 12 bytes. They are the settings on POCKET STUDIO's METRONOME settings screen. The firmware saves them from the recorder's settings only in POCKET STUDIO; a take from another app has the default values. All 127 files compared have the default values.",
         ),
     )
 }
@@ -185,15 +213,9 @@ fn channel() -> T {
         .field_doc("pan", "The track's pan in the mix, from 0 to 40: 0 is fully left, 20 is centre and 40 is fully right.")
         .field_doc(
             "unknown_2",
-            "Not traced. The firmware allows 0 to 100. The byte's position in the mixer channel suggests a send level. All 127 files compared have 0.",
+            "A setting whose range in the firmware's mixer range table is 0 to 100. When two tracks are stereo-linked, the firmware copies this byte and the level from the second track of the pair to the first. The audio code's mixer does not read it. All 127 files compared have 0.",
         )
-        .field_doc("out_of_mix", "1 if the track is left out of the mix, and 0 if the track is in the mix. The firmware uses this flag only in app 6.")
-}
-
-/// One of the two entries after the six channels, which are the same size as
-/// a channel and whose use was not traced.
-fn unknown_entry() -> T {
-    T::structure("X8UnknownEntry", vec![("unknown_0", T::u8()), ("unknown_1", T::u8()), ("unknown_2", T::u8()), ("unknown_3", T::u8())])
+        .field_doc("out_of_mix", "1 if the track is left out of the mix, and 0 if the track is in the mix. The firmware uses this flag only in PODCAST.")
 }
 
 /// The EQ's gain steps: 0 is -12 dB, 12 is 0 dB and 24 is 12 dB.
@@ -206,7 +228,7 @@ fn track_eq() -> T {
     T::structure("X8TrackEq", vec![("bands", T::array(eq_band(), E::lit(4))), ("unused", T::bytes(E::lit(16)))])
         .field_doc(
             "bands",
-            "Bands 1 to 4, 4 bytes each. The defaults are 400 Hz, 1,700 Hz, 1,700 Hz and 5,500 Hz, each with 0 dB of gain and a Q of 2.",
+            "Bands 1 to 4 (LOW, L-MID, H-MID and HIGH), 4 bytes each. The defaults are 400 Hz, 1,700 Hz, 1,700 Hz and 5,500 Hz, each with 0 dB of gain and a Q of 2.",
         )
         .field_doc("unused", "Sixteen bytes that are zero in the default values and in all 127 files compared.")
 }
@@ -227,33 +249,56 @@ fn eq_band() -> T {
     .field_doc("padding", "A byte that is 0 in the default values and in all 127 files compared.")
 }
 
+/// The metronome's click sounds.
+const METRONOME_SOUND: &[(i128, &str)] = &[(0, "CLICK"), (1, "STICK"), (2, "BELL")];
+/// When the metronome's click is heard.
+const METRONOME_CLICK: &[(i128, &str)] = &[(0, "OFF"), (1, "REC"), (2, "REC&PLAY")];
+
+/// The time signatures, 1/1 to 12/8: twelve beat counts for each of the note
+/// values 1, 2, 4 and 8, so 4/4 is 27.
+fn signatures() -> Vec<(i128, String)> {
+    [1, 2, 4, 8]
+        .iter()
+        .enumerate()
+        .flat_map(|(at, note)| (1..=12).map(move |beats| ((at * 12 + beats - 1) as i128, format!("{beats}/{note}"))))
+        .collect()
+}
+
 /// The metronome's settings, at 0x100.
 fn metronome() -> T {
+    let signatures = signatures();
+    let signatures: Vec<(i128, &str)> = signatures.iter().map(|(v, n)| (*v, n.as_str())).collect();
     T::structure(
         "X8Metronome",
         vec![
             ("tempo", T::u32(Little)),
             ("beat", T::u16(Little)),
             ("level", T::u16(Little)),
-            ("unknown_8", T::u8()),
-            ("unknown_flags", T::u8()),
-            ("unknown_a", T::u8()),
-            ("unknown_b", T::u8()),
+            ("sound", T::enumeration("X8MetronomeSound", T::u8(), METRONOME_SOUND)),
+            ("bar_display", T::enumeration("X8BarDisplay", T::UInt { bits: 1, endian: Little }, OFF_ON)),
+            ("accent", T::enumeration("X8Accent", T::UInt { bits: 1, endian: Little }, OFF_ON)),
+            ("click", T::enumeration("X8MetronomeClick", T::UInt { bits: 2, endian: Little }, METRONOME_CLICK)),
+            ("unused_bits", T::UInt { bits: 4, endian: Little }),
+            ("signature", T::enumeration("X8Signature", T::u8(), &signatures)),
+            ("unused", T::u8()),
         ],
     )
-    .field_doc("tempo", "The tempo in beats per minute, from 20 to 250. The default is 120. The firmware uses the low 16 bits.")
+    .field_valid("sound", Valid::InEnum)
+    .field_valid("click", Valid::InEnum)
+    .field_valid("signature", Valid::InEnum)
+    .field_doc("tempo", "The tempo in beats per minute, from 20 to 250. The default is 120. The firmware uses only the low 16 bits of this 32-bit value.")
     .field_doc("beat", "The number of beats in a bar, from 1 to 9. The default is 4.")
     .field_doc("level", "The metronome's level, from 0 to 100. The default is 50.")
-    .field_doc("unknown_8", "A metronome setting from 0 to 2. Its meaning was not traced. The default is 0.")
+    .field_doc("sound", "The click sound: CLICK, STICK or BELL. The default is CLICK.")
+    .field_doc("bar_display", "1 if the project status bar counts in bars and beats instead of hours, minutes and seconds. The default is 0.")
+    .field_doc("accent", "1 if the metronome plays a different sound on the first beat of each bar. The default is 1.")
+    .field_doc("click", "When the click is heard: OFF, REC (while recording) or REC&PLAY (while recording and playing). The default is OFF.")
+    .field_doc("unused_bits", "The top 4 bits of the byte that holds bar_display, accent and click. The firmware leaves them at 0.")
     .field_doc(
-        "unknown_flags",
-        "Three metronome settings in one byte: bit 0 is a setting of 0 or 1, bit 1 is another, and bits 2 and 3 hold a setting from 0 to 2. Their meanings were not traced. The default is 2, which is bit 1 alone.",
+        "signature",
+        "The time signature, as an index into the firmware's list of 48 signatures: 1/1 to 12/1, then 1/2 to 12/2, 1/4 to 12/4 and 1/8 to 12/8. The default is 27, which is 4/4. When the number of beats is set to n, the firmware sets the signature to n/4. The order of the list was worked out from the default, that n/4 rule and the count of 48. The list's text was not found in the firmware.",
     )
-    .field_doc(
-        "unknown_a",
-        "A metronome setting from 0 to 47. Its meaning was not traced. When the number of beats is set, the firmware sets this byte to the number of beats plus 23, so the default is 27.",
-    )
-    .field_doc("unknown_b", "Not traced. The default is 0.")
+    .field_doc("unused", "A byte that is 0 in the default values.")
 }
 
 #[cfg(test)]
@@ -327,31 +372,78 @@ pub(crate) mod tests {
         let tail = ev.child_named(d, &[], "metronome").unwrap().unwrap();
         assert_eq!(ev.node(d, &tail).unwrap().offset_bits, 0x100 * 8);
         assert_eq!(int(ev, d, &tail, &["tempo"]), 120);
-        assert_eq!(int(ev, d, &tail, &["unknown_a"]), 27);
+        assert_eq!(int(ev, d, &tail, &["signature"]), 27);
+    }
+
+    fn named_value(bytes: Vec<u8>, path: &[&str]) -> Value {
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(x8project());
+        let mut p = vec![];
+        for name in path {
+            p = ev.child_named(&d, &p, name).unwrap().unwrap_or_else(|| panic!("no {name}"));
+        }
+        ev.node(&d, &p).unwrap().value
+    }
+
+    fn enum_value(raw: i128, name: &str) -> Value {
+        Value::Enum { raw, name: Some(name.into()), hex: false }
     }
 
     #[test]
     fn the_settings_with_names_show_them() {
         let mut bytes = default_project();
         bytes[0x0c] = 3;
-        let d = Document::new(MemSource(bytes));
-        let mut ev = Evaluator::new(x8project());
-        let app = ev.child_named(&d, &[], "recording_app").unwrap().unwrap();
-        assert_eq!(ev.node(&d, &app).unwrap().value, Value::Enum { raw: 2, name: Some("MANUAL".into()), hex: false });
-        let ms = ev.child_named(&d, &[], "ms_decode").unwrap().unwrap();
-        assert_eq!(ev.node(&d, &ms).unwrap().value, Value::Enum { raw: 3, name: Some("INPUT 5-6".into()), hex: false });
+        bytes[0x32] = 1;
+        assert_eq!(named_value(bytes.clone(), &["recording_app"]), enum_value(2, "MANUAL"));
+        assert_eq!(named_value(bytes.clone(), &["dual_rec"]), enum_value(3, "OFF"));
+        assert_eq!(named_value(bytes.clone(), &["ms_decode"]), enum_value(3, "TRACK 5-6"));
+        assert_eq!(named_value(bytes, &["solo"]), enum_value(1, "ON"));
     }
 
-    /// App 5 is in one real file. Its name is not confirmed, so it shows as a
-    /// number, and it is not marked as a wrong value.
+    /// The default metronome flags byte, 2, is ACCENT on with the bar display
+    /// and the click off. Bit 0 is the first field.
     #[test]
-    fn an_app_with_no_confirmed_name_shows_its_number() {
+    fn the_metronome_reads_by_name_and_bit() {
+        let tail = |field: &str| named_value(default_project(), &["metronome", field]);
+        assert_eq!(tail("sound"), enum_value(0, "CLICK"));
+        assert_eq!(tail("bar_display"), enum_value(0, "OFF"));
+        assert_eq!(tail("accent"), enum_value(1, "ON"));
+        assert_eq!(tail("click"), enum_value(0, "OFF"));
+        assert_eq!(tail("signature"), enum_value(27, "4/4"));
+
         let mut bytes = default_project();
-        bytes[0x08] = 5;
+        bytes[0x108] = 2;
+        bytes[0x109] = 0b1001;
+        bytes[0x10a] = 47;
+        let tail = |field: &str| named_value(bytes.clone(), &["metronome", field]);
+        assert_eq!(tail("sound"), enum_value(2, "BELL"));
+        assert_eq!(tail("bar_display"), enum_value(1, "ON"));
+        assert_eq!(tail("accent"), enum_value(0, "OFF"));
+        assert_eq!(tail("click"), enum_value(2, "REC&PLAY"));
+        assert_eq!(tail("signature"), enum_value(47, "12/8"));
+    }
+
+    #[test]
+    fn each_time_signature_has_its_place_in_the_list() {
+        let list = signatures();
+        assert_eq!(list.len(), 48);
+        assert_eq!(list[0], (0, "1/1".to_string()));
+        // Setting the number of beats to n writes n + 23.
+        for beats in 1..=9 {
+            assert_eq!(list[beats + 23].1, format!("{beats}/4"));
+        }
+    }
+
+    /// TUNER and METRONOME do not record, so a file never has 7 or 8. The
+    /// number shows as it is, and it is not marked as a wrong value.
+    #[test]
+    fn an_app_with_no_name_shows_its_number() {
+        let mut bytes = default_project();
+        bytes[0x08] = 7;
+        assert_eq!(named_value(bytes.clone(), &["recording_app"]), Value::Enum { raw: 7, name: None, hex: false });
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(x8project());
         let app = ev.child_named(&d, &[], "recording_app").unwrap().unwrap();
-        assert_eq!(ev.node(&d, &app).unwrap().value, Value::Enum { raw: 5, name: None, hex: false });
         assert!(ev.valid_of(&d, &app).unwrap().is_none());
     }
 
@@ -423,7 +515,7 @@ pub(crate) mod tests {
         }
 
         // The fields with no known range do not count: the app number, and
-        // the two entries after the six channels.
+        // the two unused channels after the six track channels.
         let mut other = good.clone();
         other[0x08] = 5;
         other[0x29] = 255;
