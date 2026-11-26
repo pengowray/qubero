@@ -12,7 +12,7 @@
 use crate::template::{Colour, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What a frame does to what was on screen before it.
-const DISPOSAL: &[(i128, &str)] = &[
+pub(crate) const DISPOSAL: &[(i128, &str)] = &[
     (0, "unspecified"),
     (1, "leave in place"),
     (2, "restore background"),

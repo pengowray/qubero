@@ -366,6 +366,10 @@ const PROBES: &[Probe] = &[
     // one at byte 20; the table of signatures still takes one whose product
     // code is a known one.
     Probe::Is("tascamfw", tascamfw::is_update),
+    // An ICC colour profile, whose signature `acsp` is 36 bytes in. The size
+    // at the front has to be the file's length too, which is what makes four
+    // letters partway in enough to go on.
+    Probe::Is("icc", icc::is_icc),
     Probe::Signatures,
     // JSON written the way a person or `json.dump(indent=2)` writes it: the
     // table above knows `{"` and nothing else, and a brace, a newline and two
@@ -551,6 +555,10 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("eml", "eml", eml::is_named_message),
     ("nws", "eml", eml::is_named_message),
     ("_nws", "eml", eml::is_named_message),
+    // A profile with bytes after its end, which the bytes alone do not take
+    // for one because its size is not the file's.
+    ("icc", "icc", icc::is_named_icc),
+    ("icm", "icc", icc::is_named_icc),
 ];
 
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the
@@ -561,8 +569,6 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
 const KAITAI_BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("bson", "ksy:bson", is_bson),
     ("dcm", "ksy:dicom", is_dicom),
-    ("icc", "ksy:icc_4", is_icc_4),
-    ("icm", "ksy:icc_4", is_icc_4),
     // The `.ksy` names no extension. This is the one the MessagePack site
     // and most tools write.
     ("msgpack", "ksy:msgpack", is_msgpack),
@@ -621,16 +627,6 @@ fn is_bson(head: &[u8], len: u64) -> bool {
 /// four letters `DICM`.
 fn is_dicom(head: &[u8], _len: u64) -> bool {
     head.get(128..132) == Some(b"DICM")
-}
-
-/// An ICC colour profile of version 4, which is what `icc_4` reads. The four
-/// letters `acsp` are 36 bytes in rather than at the front, and the profile's
-/// length is the first thing in it.
-fn is_icc_4(head: &[u8], len: u64) -> bool {
-    let Some(size) = head.get(..4) else { return false };
-    u32::from_be_bytes(size.try_into().expect("four bytes")) as u64 == len
-        && head.get(8) == Some(&4)
-        && head.get(36..40) == Some(b"acsp")
 }
 
 /// A TrueType font: the version a TrueType outline font opens with, and a
@@ -2512,6 +2508,26 @@ mod tests {
         assert_eq!(sniff_named(png, png.len() as u64, "tile.tga"), Some("png"));
     }
 
+    /// An ICC profile of either version is recognised by `acsp` and a size
+    /// that is the file's, and by its name when it has bytes after its end.
+    /// The Kaitai reading of version 4 is still there to pick by name.
+    #[test]
+    fn an_icc_profile_is_recognised_by_its_signature_and_size() {
+        let mut icc = vec![0; 132];
+        icc[..4].copy_from_slice(&132u32.to_be_bytes());
+        icc[36..40].copy_from_slice(b"acsp");
+        for version in [2, 4] {
+            icc[8] = version;
+            assert_eq!(sniffed(&icc), Some("icc"));
+            assert_eq!(sniff_named(&icc, 132, "srgb.ICM"), Some("icc"));
+        }
+        // A size that is not the file's is a profile only when the name says so.
+        assert_eq!(sniff(&icc, 140), None);
+        assert_eq!(sniff_named(&icc, 140, "srgb.icc"), Some("icc"));
+        assert_eq!(sniff_named(&icc, 131, "srgb.icc"), None);
+        assert!(template("ksy:icc_4").is_some());
+    }
+
     /// The bundled Kaitai formats with no magic at offset 0 are claimed by
     /// name too, each only when the bytes agree with it, and only after every
     /// other answer: a builtin still wins.
@@ -2522,16 +2538,6 @@ mod tests {
         assert_eq!(sniff_named(bson, bson.len() as u64, "doc.bson"), Some("ksy:bson"));
         assert_eq!(sniff_named(bson, bson.len() as u64 + 1, "doc.bson"), None);
         assert_eq!(sniff_named(bson, bson.len() as u64, "doc.bin"), None);
-
-        let mut icc = vec![0; 132];
-        icc[..4].copy_from_slice(&132u32.to_be_bytes());
-        icc[8] = 4;
-        icc[36..40].copy_from_slice(b"acsp");
-        assert_eq!(sniff_named(&icc, 132, "srgb.icc"), Some("ksy:icc_4"));
-        assert_eq!(sniff_named(&icc, 132, "srgb.ICM"), Some("ksy:icc_4"));
-        // Version 2 has the same header, and `icc_4` is not written for it.
-        icc[8] = 2;
-        assert_eq!(sniff_named(&icc, 132, "srgb.icc"), None);
 
         // One table, `head`, 54 bytes at 28.
         let mut ttf = b"\0\x01\0\0\0\x01\0\x10\0\0\0\0head\0\0\0\0\0\0\0\x1c\0\0\0\x36".to_vec();

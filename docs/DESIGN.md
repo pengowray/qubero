@@ -3359,7 +3359,13 @@ tRNS and bKGD and sBIT laid out by the colour type (found by searching the
 chunks before them for IHDR, the idiom GWF uses for its own records), gAMA
 and cHRM as the number stored and what it is worth at a hundred-thousandth,
 sRGB's rendering intent, pHYs, tIME, hIST, sPLT, iCCP's profile and zTXt's and
-iTXt's text as zlib streams, and APNG's acTL, fcTL and fdAT.
+iTXt's text as zlib streams, and APNG's acTL, fcTL and fdAT. The inflated
+iCCP stream is read by the ICC profile template (`formats/icc.rs`, versions 2
+and 4, borrowed as `icc_part()`), and eXIf by the TIFF template as a JPEG's
+Exif block is. The third edition's cICP, mDCV and cLLI and the registered
+extension chunks (oFFs, pCAL, sCAL, sTER, gIFg, gIFx, gIFt, dSIG) read their
+fields. fdAT pieces stay unjoined: no `Step` selects the chunks between one
+fcTL and the next.
 
 **Colours.** A structure can say its fields are the samples of a colour
 (`StructDef::colour`, `crate::template::Colour`): which field is grey, or red,
