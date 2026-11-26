@@ -461,8 +461,13 @@ fn app14() -> T {
                     &[(0, "no transform"), (1, "ycbcr"), (2, "ycck")],
                 ),
             ),
+            // Some Adobe software writes more after the transform. No
+            // published description says what, and decoders stop reading at
+            // the transform.
+            ("extra", T::bytes(E::Remaining)),
         ],
     )
+    .field_doc("extra", "Bytes after the transform flag. Their meaning is not published, and decoders do not read them.")
     .reads_as(&[("identifier", "", "Adobe"), ("transform", "", "")])
 }
 
@@ -973,8 +978,11 @@ mod tests {
         body.extend_from_slice(b"8BIM");
         body.extend_from_slice(&1028u16.to_be_bytes()); // IPTC-NAA
         body.extend_from_slice(&[0, 0]); // empty name, padded to even
-        body.extend_from_slice(&3u32.to_be_bytes());
-        body.extend_from_slice(&[1, 2, 3, 0]); // three bytes and a pad
+        // One IPTC dataset, the caption (2:120), and a pad to even.
+        let dataset = [&[0x1c, 2, 120, 0, 5][..], b"hello"].concat();
+        body.extend_from_slice(&(dataset.len() as u32).to_be_bytes());
+        body.extend_from_slice(&dataset);
+        body.push(0);
         let d = doc_of(0xffed, &body);
         let mut ev = Evaluator::new(jpeg());
         let first = [1usize, 0, 1, 1, 1, 0];
@@ -983,6 +991,12 @@ mod tests {
             Value::Enum { raw: 1028, name: Some("IPTC-NAA".into()), hex: false }
         );
         assert_eq!(ev.node(&d, &[1, 0, 1, 1, 1]).unwrap().child_count, 1);
+        let caption = [first.as_slice(), &[6, 0]].concat();
+        assert_eq!(
+            ev.node(&d, &[caption.as_slice(), &[2]].concat()).unwrap().value,
+            Value::Enum { raw: 120, name: Some("caption".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &[caption.as_slice(), &[4]].concat()).unwrap().value, Value::Str("hello".into()));
     }
 
     #[test]
