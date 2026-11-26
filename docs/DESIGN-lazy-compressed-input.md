@@ -167,9 +167,10 @@ the rule to one piece of code that reads:
   `SpaceSource::read_bytes`, which reports it as a chunk of the file. The web
   side already fetches every chunk a reply names as a chunk of the file.
 - **Every read of a `Seekable` has a bounded compressed input (part 6).**
-  Deflate checkpoints are taken by compressed distance as well as by output,
-  a block trace stops decoding once its trace has turned coarse, and a zstd
-  frame or xz block over 16 MiB compressed is refused as too large.
+  Checkpoints are taken by compressed distance as well as by output, a block
+  trace stops decoding once its trace has turned coarse, a zstd frame or xz
+  block over 16 MiB compressed is refused as too large, and a zstd or xz span
+  read that would need more than 16 MiB at once is refused when read.
 
 "Order of work" splits this into parts that build and merge on their own.
 
@@ -250,9 +251,9 @@ their chunks pushed out of the store. Nothing reads that much in one call
 except a check over one xz block (`run_check`, up to 64 MiB of output); see
 "Still to do".
 
-The bounds in part 6 keep the single read in step 1 to at most
-8 MiB + 64 KiB for a deflate span, and 20 MiB for a zstd or xz span, under the
-store's 32 MiB.
+The bounds in part 6 keep the single read in step 1 to at most 8.5 MiB for a
+deflate span, and to at most `Limits::span_input` (16 MiB) for a zstd or xz
+span, under the store's 32 MiB. See "Checkpoints by compressed distance".
 
 ## The decoders read a window
 
@@ -435,7 +436,8 @@ head until `framing` can parse the wrapper.
 A zstd step does the same with the zstd margin. A frame whose compressed size
 passes `Limits::unit_input` (16 MiB) is refused as `TooLarge`, the way a frame
 whose output passes `Limits::span` is; that limit and its refusals come in
-part 6.
+part 6. The size counted is the frame's own, without the skippable frames in
+front of it.
 
 ### How `Pending` fits the go machinery
 
@@ -478,17 +480,44 @@ spacings. Without the second rule a span's input has no bound: an empty fixed
 block is 10 bits and makes no output, and a hostile run can be made of
 nothing but empty blocks.
 
-- A deflate checkpoint can go between any two codes, so a span's input is at
-  most twice `in_spacing` plus one stored block. At the 512 MiB input limit,
-  512 MiB at 2 MiB apart is 256 checkpoints, which is `MAX_CHECKPOINTS`, so
-  one more checkpoint thins the list and `in_spacing` doubles to 4 MiB. So a
-  deflate span needs at most 8 MiB + 64 KiB of input.
-- A zstd or xz checkpoint is only ever at the start of a frame or block, so a
-  span's input is at most `in_spacing` plus one frame or block: at most
-  4 MiB + 16 MiB.
-- A span may now hold no output at all. `span_of_byte` already answers the
-  last span that starts at or before a byte, so such a span is never read for
-  bytes. `span_of_bit` still finds it for the bits it covers.
+- **How far the spacings grow.** Output and input checkpoints share one list
+  of at most `MAX_CHECKPOINTS` (256), so a run has about `out / s + in / s`
+  checkpoints, where `s` is the spacing both rules use (they start equal and
+  double together). At the limits, 1 GiB of output and 512 MiB of input, that
+  is 1.5 GiB / `s`, which is at most 256 once `s` is 8 MiB. So both spacings
+  reach at most 8 MiB, three doublings from 1 MiB. Today the output spacing
+  reaches at most 4 MiB; a run that is large on both sides now gets spans of
+  up to 8 MiB of output, two of which fill the 16 MiB span cache.
+- **Deflate.** A deflate checkpoint can go between any two codes. A new
+  checkpoint is taken at the first boundary at or past `in_spacing`, so a
+  span's input is at most `in_spacing` plus the longest stretch between two
+  boundaries (a stored block, 64 KiB). Each thinning joins two spans and so
+  adds one more such stretch to the most a span can be, and there are at most
+  three thinnings: at most 8 MiB + 8 × 64 KiB, which is 8.5 MiB.
+- **zstd and xz.** A checkpoint is only ever at the start of a frame or block.
+  So the pass also takes one at the start of any frame or block whose own
+  compressed size is `in_spacing` or more, so that such a frame or block is a
+  span of its own: xz knows each block's size from its index, and the zstd
+  pass learns a frame's size when the frame ends and puts the checkpoint in
+  at the frame's start then. Before thinning, a span is then either one frame
+  or block of at most `unit_input` (16 MiB), or smaller ones that come to at
+  most twice `in_spacing`. Thinning can join two spans into one larger than
+  that. So a zstd or xz span read checks the span's compressed size against
+  `Limits::span_input` (16 MiB) before it reads anything, and a span over it
+  is refused when read, as `TooLarge`, instead of asking for more chunks than
+  the store keeps. Thinning needs more than 256 frames or blocks, and the
+  tools do not write runs that reach the limit that way: `pzstd -1` writes
+  frames of 2 MiB of output, and `xz -T0 -0` blocks of 1 MiB, so their spans
+  stay a few MiB of input even after thinning.
+- **Skippable frames** count towards `in_spacing`, since they are bytes of the
+  run, but not towards a frame's `unit_input`. A zstd span read reads the
+  8-byte header of each skippable frame at the span's start and gathers its
+  input from the first frame on, so a skippable frame's contents are never
+  read.
+- **Spans of no output.** A span may now hold no output at all.
+  `span_of_byte` already answers the last span that starts at or before a
+  byte, so such a span is never read for bytes. `span_of_bit` still finds it
+  for the bits it covers.
 
 When the output passes the cap, the pass goes back to the last checkpoint, as
 today. It reads its window again from that checkpoint's bit, which is at most
@@ -521,10 +550,10 @@ under way"):
 
 | Read | Compressed input it needs at once |
 |---|---|
-| `decode_span(k)`, `deflate_span_trace(k)` | from checkpoint k's bit to checkpoint k+1's, and the header copy: at most 8 MiB + 64 KiB |
-| zstd `decode_span`, `span_trace` | the span's frames: at most 20 MiB |
-| xz `read_span` (`Prefix::reach`) | the LZMA2 data of the block the read is in, read again on each later read of the span: at most 16 MiB |
-| xz `span_trace` | the span's blocks: at most 20 MiB |
+| `decode_span(k)`, `deflate_span_trace(k)` | from checkpoint k's bit to checkpoint k+1's, and the header copy: at most 8.5 MiB |
+| zstd `decode_span`, `span_trace` | the span's frames, without the contents of skippable frames: at most `span_input`, 16 MiB, or the read is refused |
+| xz `read_span` (`Prefix::reach`) | the LZMA2 data of the block the read is in, read again on each later read of the span: at most `unit_input`, 16 MiB |
+| xz `span_trace` | the span's blocks: at most `span_input`, 16 MiB, or the read is refused |
 | `block(i)` | none. The index pass records BFINAL and BTYPE with each kept block start, in the top bits of the integer that holds the start's bit position, which is always under 2^32 |
 | `group(g)` | from kept block start g to kept block start g+1. Block starts are thinned once a run has more than `MAX_BLOCK_MARKS` (65,536) blocks, so this only arises then, and only a hostile run then has a long stretch between two kept starts. A stretch longer than `Limits::unit_input` is refused as `TooLarge` |
 | `block_trace(i)` | from the block's start until its trace turns coarse: `span_steps` is 1,000,000 trace steps, one per code, so at most 6,000,000 bytes. The decode stops there and closes the block with one opaque step to the block's end, which the index knows. Today it decodes to the block's end without recording the codes, and the trace comes out the same |
@@ -550,8 +579,13 @@ zeroes. Each must pass `Missing` on instead:
 
 ## Measuring a gzip member
 
-`stream_len_at` reads up to 64 MiB in one `read_in`. Part 2 gathers that read
-a window at a time, which fixes a .gz of up to 64 MiB compressed. Part 9
+`stream_len_at` reads up to 64 MiB in one `read_in`: the rest of the file
+from the run's start, not the member, whose length is what is being found.
+Part 2 gathers that read in stretches that double, from 1 MiB up to 64 MiB,
+and runs `inflate_len` after each stretch; a stream that ends inside a
+stretch is measured there. So a small member costs a small read, and a large
+one is decoded at most about twice over, in total, before it is measured.
+This fixes a .gz of up to 64 MiB compressed. Part 9
 replaces the gathered copy with a pass of its own, `lazy::Measuring`: the
 `CountSink` decode that `inflate_len` makes, done a window at a time through
 a `RunInput` over the stretch `stream_len_at` measures in, from the run's
@@ -581,21 +615,24 @@ Part 10, after part 7.
   part is under 64 KiB compressed.
 - `JoinedBytes::Indexed` keeps its `Seekable`, which reads its own input.
 - The 64 MiB limit on what `join_lazily` reads is removed.
+
+Three changes need no handle and come earlier, in part 2. Without them a
+joined stream whose parts come to more than the store keeps asks for chunks
+for ever, since both joins start again from the first part on every
+`Pending`, and each part's own read fits.
+
+- `join_whole`, for a stream of at most 64 MiB, reads every part in one call.
+  It becomes a walk kept from one go to the next, in `Spaces` and keyed by
+  the stream's path, holding the bytes and the trace made so far, as it holds
+  them now.
 - `join_lazily` checks that every small packed part unpacks to the length its
   run claimed, by decoding every part in one call, uncharged: a 1 GiB BAM is
-  1 GiB of inflate in one go. It becomes a walk kept from one go to the next
-  in `Spaces`, keyed by the stream's path and holding the parts made so far,
-  charged per part like an index step and reported by
+  1 GiB of inflate in one go. It becomes the same kind of walk, holding the
+  parts made so far, charged per part like an index step and reported by
   `Evaluator::unpacking`. The alternative is to drop this check and rely on
   the check `Joined::read` already makes when it first decodes a part. That
   is cheaper, but the tab would open over a part of the wrong length and show
   zeroes there.
-
-Two changes need no handle and come earlier, in part 2:
-
-- `join_whole`, for a stream of at most 64 MiB, reads every part in one call.
-  It becomes a walk kept from one go to the next too, holding the bytes and
-  the trace made so far, as it holds them now.
 - `unpacked_part` reads a packed part whole through `unpack_run`. For a codec
   that can be indexed, `unpacked_part` calls `index_run` instead, which steps;
   for any other codec, `unpack_run`'s read is gathered.
@@ -613,8 +650,9 @@ Two changes need no handle and come earlier, in part 2:
 | `INDEXED_RUN_BYTES` | 64 MiB of compressed runs | Stays at 64 MiB, but weighs each index by what it holds for as long as it is kept: its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB) and its block starts (at most 1 MiB), about 9.1 MiB at most. The caches inside each index are bounded as today. |
 | `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Removed. |
 | `Limits::input` (new) | 512 MiB of compressed input | A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB. A longer run is refused as `TooLarge` before anything is read, since the size of the field holding the run is known. |
-| `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned. |
-| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame or xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). Keeps a zstd or xz span's reads under 20 MiB. A frame, block or stretch over it is refused as `TooLarge`. |
+| `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned, to at most 8 MiB. |
+| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). A frame, block or stretch over it is refused as `TooLarge`. |
+| `Limits::span_input` (new) | 16 MiB of compressed input | The most one read of a zstd or xz span may gather at once. A span over it is refused when read, as `TooLarge`. Deflate spans never reach it (8.5 MiB at most). |
 | `STEP_INPUT` (new) | 256 KiB of compressed input | How far past its start a step may stop; its window reaches `DEFLATE_MARGIN` further. Beside `INDEX_STEP_BYTES`, 256 KiB of output. |
 | `DEFLATE_MARGIN`, and the zstd margin (new) | 65,541 bytes; 128 KiB + 25 bytes | How far past where a step stops its window has to reach. |
 | `MAX_HEAD_BYTES` (new) | 287 bytes | A deflate block header and its tables, from the header's first byte. |
@@ -682,9 +720,9 @@ it waits on, so no new query of the core is needed.
 ### The smaller fix first (part 1)
 
 **Worth doing first: yes.** It is about half a day. It ends the endless wait
-in every case where one read needs more chunks than the store keeps: the zip
+in every case where one call needs more chunks than the store keeps: the zip
 entry, the .gz, a bzip2 or LZMA run, a checksum check over a long run, a
-joined stream. Its check in `read_in` stays as the guard for any read that
+joined stream whose parts add up to more than the store. Its check in `read_in` stays as the guard for any read that
 later parts leave as it is. After part 2 no compressed run reaches the check,
 so its refusal becomes rare, and that is fine.
 
@@ -695,14 +733,20 @@ so its refusal becomes rare, and that is fine.
 - `read_in`, for space 0, fails a read that touches more chunks than the
   store keeps, with the message below, instead of answering `Pending`.
 - Before reading a run in one call, `index_pass`, `open_space_at`'s arm for
-  codecs that cannot be indexed, `unpack_run`, `join_whole` and `join_lazily`
-  refuse it with a new `Refusal::TooMuchAtOnce` (tag `too-much-at-once`),
-  kept like any refusal. A refusal shows on the field, whereas a failed read
-  would leave the field with nothing under it (`flatten.ts` draws an error
-  reply for children as no children).
-- `stream_len_at` measures nothing for such a run, as for a run past the cap,
-  so the gzip template's fallback places the member as everything before its
-  trailer.
+  codecs that cannot be indexed and `unpack_run` refuse it with a new
+  `Refusal::TooMuchAtOnce` (tag `too-much-at-once`), kept like any refusal. A
+  refusal shows on the field, whereas a failed read would leave the field
+  with nothing under it (`flatten.ts` draws an error reply for children as no
+  children).
+- `join_whole` and `join_lazily` read many parts in one call, and each part's
+  read fits on its own. So they add up the sizes of the parts' runs that are
+  in the file before reading any, and refuse the stream with the same
+  refusal when the total is more than the store keeps.
+- `stream_len_at` caps its read at half of what the store keeps, as well as
+  at 64 MiB. A member whose stream ends inside that is measured as now. A
+  longer one measures as nothing, as a run past the cap does, and the gzip
+  template's fallback places it as everything before its trailer, which is
+  right for a file of one member.
 - On the web side, `DECODED_REFUSED` and `JOINED.refused` get the new tag.
 - What part 1 does not catch: a read that fits on its own, but not beside the
   other chunks a go needs, can still ask for the same chunks for ever.
@@ -732,8 +776,8 @@ For an indexed run, besides DESIGN-lazy-unpacking's table:
   zstd, while the pass runs;
 - the header copies: under 72 KiB per run, for as long as the index is kept;
 - the trailer: 8 bytes, while the pass runs;
-- what a span read gathers: at most 8 MiB + 64 KiB for deflate and 20 MiB for
-  zstd or xz, for the length of the read;
+- what a span read gathers: at most 8.5 MiB for deflate and 16 MiB for zstd
+  or xz, for the length of the read;
 - what a block trace gathers: at most 6,000,000 bytes, for the length of the
   trace.
 
@@ -750,18 +794,21 @@ Each part builds, passes its tests and can be merged on its own, in this
 order. Each part needs only the parts before it.
 
 1. **Refuse a read that can never fit.** `Source::resident_limit`, the check
-   in `read_in`, `Refusal::TooMuchAtOnce` before the reads of a whole run,
-   `stream_len_at` measuring nothing, the web strings. Fixes: the endless
-   wait, wherever one read needs more chunks than the store keeps.
+   in `read_in`, `Refusal::TooMuchAtOnce` before the reads of a whole run and
+   for joins whose parts add up to more than the store keeps,
+   `stream_len_at`'s read capped at half the store, the web strings. Fixes:
+   the endless wait, wherever one call needs more chunks than the store
+   keeps.
 2. **Gather a run a window at a time.** `Evaluator::gather_run`: a run read in
    one call today is read `GATHER_WINDOW` at a time through `read_in`, into a
    copy kept in `Spaces` from one go to the next (at most 64 MiB of partial
    copies), charged per window. Used by `index_pass`, `open_space_at`,
-   `unpack_run`, `stream_len_at` and `covered_bytes`. `join_whole` becomes a
-   walk kept from one go to the next, and `unpacked_part` steps through
-   `index_run` for codecs that can be indexed. Fixes: the 34 MiB zip entry,
-   and a .gz of up to 64 MiB compressed, in the browser, with memory as
-   today.
+   `unpack_run` and `covered_bytes`, and by `stream_len_at` in doubling
+   stretches. `join_whole` and `join_lazily` become walks kept from one go to
+   the next, and `unpacked_part` steps through `index_run` for codecs that can
+   be indexed. Fixes, in the browser and with memory as today: the 34 MiB zip
+   entry, a .gz of up to 64 MiB compressed, and a joined stream such as a BAM
+   whose parts come to up to 64 MiB.
 3. **Decoders read a window.** `Bits` with a base, `inflate::run` taking an
    `Input`, `framing` and `trailer_agrees` taking pieces of the run,
    `ZstdWalk`, `Lzma2` and `decode_step` on windows. Every caller passes the
@@ -774,8 +821,9 @@ order. Each part needs only the parts before it.
    finds a chunk missing; `ReadError`; every row of the table in "Everything
    that has to treat `Missing` as 'not yet'". Nothing a reader sees changes.
 6. **Bound what a `Seekable` read needs.** Checkpoints by compressed
-   distance, header copies, BFINAL and BTYPE with the block starts, block
-   traces that stop when coarse, `group`'s bound, `Limits::unit_input` and its
+   distance, and at the start of large frames and blocks; header copies;
+   BFINAL and BTYPE with the block starts; block traces that stop when coarse;
+   `group`'s bound; `Limits::unit_input` and `Limits::span_input` and their
    refusals. The spans of runs that pack badly change; their bytes and traces
    stay the same.
 7. **Share the source.** `Source::share`, `ChunkStore`'s chunks behind an
@@ -791,7 +839,7 @@ order. Each part needs only the parts before it.
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
 10. **Joined streams through handles.** `JoinedBytes` over `RunInput`, and
-    `join_lazily` without its input limit and walked from one go to the next.
+    `join_lazily` without its 64 MiB input limit.
 11. **Bring DESIGN-lazy-unpacking up to date.** Its "State", the "Limits" row
     for `CAP_BYTES`, the paragraph at the end of "The browser", and "Still to
     do".
@@ -820,8 +868,13 @@ limit.
   bytes. A span is never cached from a read that was missing chunks, and an
   xz prefix is kept after a read that was missing chunks.
 - **Compressed distance.** Runs of empty fixed blocks, of stored blocks and of
-  incompressible data: no span's input is over the bound, thinning doubles
-  both spacings, and a span of no output is never read for bytes.
+  incompressible data, with both limits reached: no deflate span's input is
+  over `in_spacing` plus one stored block for each thinning, thinning doubles
+  both spacings, and a span of no output is never read for bytes. zstd and
+  xz runs with one large frame or block among small ones: the large one is a
+  span of its own. A span joined by thinning past `span_input` is refused
+  when read and reads nothing. A zstd span read with a large skippable frame
+  at its start does not read the skippable frame's contents.
 - **Block traces.** A block of more than `span_steps` codes: the trace stops
   decoding at the coarse point, reads no further input, and equals the trace
   made by decoding to the block's end.
@@ -847,7 +900,12 @@ limit.
   fallback copy). An edit drops the index and its handle.
 - Gathering (part 2): a run read through a store of four chunks comes to the
   same bytes as one `read_in`, and a gather interrupted by `Busy` and by
-  `Pending` carries on from where it stopped.
+  `Pending` carries on from where it stopped. `stream_len_at` over a gzip of
+  several small members reads about each member's length, not 64 MiB, and
+  still measures a member that ends past the first stretch.
+- Joins (parts 1 and 2): a BGZF stream whose parts add up to more than a
+  small store is refused with `too-much-at-once` after part 1, and opens as a
+  document after part 2, with no part decoded twice for the length check.
 - Joined streams: a BGZF stream joined through handles reads the same bytes
   as with copies, and the walk that checks the parts' lengths carries on from
   one go to the next and refuses a part of the wrong length as now.
