@@ -269,9 +269,15 @@ fn gzip_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
 /// record are written: the template reads the records in order and needs
 /// nothing from a central directory.
 fn zip_of_two_tars_of_zeros(size: usize) -> (Vec<u8>, [u64; 2]) {
+    let (file, starts) = zip_of_tars_of_zeros(size, 2);
+    (file, [starts[0], starts[1]])
+}
+
+/// The same with `count` tars, named `a.tar`, `b.tar` and on.
+fn zip_of_tars_of_zeros(size: usize, count: u8) -> (Vec<u8>, Vec<u64>) {
     let mut file = Vec::new();
-    let mut starts = [0; 2];
-    for (i, name) in [b"a.tar", b"b.tar"].into_iter().enumerate() {
+    let mut starts = vec![0; count as usize];
+    for (i, name) in (0..count).map(|i| [b'a' + i, b'.', b't', b'a', b'r']).enumerate() {
         let (packed, crc, len) = deflate_of_a_tar_of_zeros(size);
         file.extend(b"PK\x03\x04");
         file.extend(20u16.to_le_bytes()); // version needed
@@ -508,4 +514,51 @@ fn a_listing_and_open_unpacked_each_say_how_far_their_own_stream_has_got() {
     let tab = opened.unwrap();
     assert!(ed.space_recognised(tab), "the second tar was not recognised");
     assert_eq!(name(&mut ed, tab), "zeros.bin");
+}
+
+/// A listing showing three ZIP entries at once, each a stream that takes
+/// several goes to unpack, asks for each entry's fields once a round. Only
+/// two passes are kept unfinished. The entries all list, in a few rounds
+/// each: a stream that finds both places taken carries the others on, and
+/// its "working" replies name no pass at all rather than another entry's. No
+/// entry's pass goes back. The streams are 12 MiB, under the 64 MiB a stream
+/// is held whole under, which takes as many goes per megabyte as one past it.
+#[test]
+fn a_listing_of_three_large_entries_lists_them_all() {
+    let (file, starts) = zip_of_tars_of_zeros(12 << 20, 3);
+    let mut ed = fed(&file, "zip");
+    let mut listed: Vec<Option<Vec<String>>> = vec![None; 3];
+    let (mut read, mut working, mut waiting) = (vec![0u64; 3], 0, 0);
+    let mut rounds = 0;
+    while listed.iter().any(Option::is_none) {
+        for i in 0..3 {
+            if listed[i].is_some() {
+                continue;
+            }
+            let reply = parse(&ed.template_children(0, &[0, i as u32, 1], 0.0, 20.0));
+            match reply["status"].as_str().unwrap() {
+                "ok" => listed[i] = Some(names(&reply["node"])),
+                "working" => {
+                    working += 1;
+                    let progress = &reply["unpacking"];
+                    if progress.is_null() {
+                        waiting += 1;
+                        continue;
+                    }
+                    assert_eq!(run_at(progress), starts[i], "round {rounds}: entry {i} named another entry's pass");
+                    let now = progress["read_bits"].as_f64().unwrap() as u64;
+                    assert!(now >= read[i], "round {rounds}: entry {i}'s pass went back from {} to {now}", read[i]);
+                    read[i] = now;
+                }
+                _ => panic!("{reply}"),
+            }
+        }
+        rounds += 1;
+        assert!(rounds < 100, "no end to the rounds, the passes at {read:?}");
+    }
+    assert!(working >= 6, "{working} working replies: the streams took too few goes to wait on each other");
+    assert!(waiting >= 1, "no entry waited for a place");
+    for (i, fields) in listed.into_iter().enumerate() {
+        assert_eq!(fields.unwrap().get(14).map(String::as_str), Some("data"), "entry {i}");
+    }
 }

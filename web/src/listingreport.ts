@@ -26,7 +26,7 @@ import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
 import { CARD_RESIZED, formatCardKind, toggleAskedCard } from "./formatcards.ts";
 import { figureOpenOn, isFigureKey } from "./viz/headingfigures.ts";
-import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, pendingText, spaceOf } from "./listingdraw.ts";
+import { drawItem, headingTitle, holdsSelection, isSelected, itemOpens, keepsProgress, spaceOf, writePending } from "./listingdraw.ts";
 import type { DrawContext, Selected } from "./listingdraw.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
@@ -649,12 +649,12 @@ export class ListingReport {
         if (item.kind !== "heading") setLevel(node, this.levels[i] ?? 0);
         this.mounted.set(item.key, node);
         this.canvas.append(node);
-      } else if (item.kind === "pending" && (item.unpacking !== null || !item.working)) {
+      } else if (item.kind === "pending" && !keepsProgress(node, item)) {
         // Kept standing between redraws, and what it says moves on while a
         // large stream is unpacked a go at a time. A go that ran out before
-        // it reached the stream's pass has no progress to give, so the row
-        // keeps the progress it showed last.
-        node.textContent = pendingText(item);
+        // it reached the stream's pass has no progress to give, so a row
+        // showing progress keeps the progress it showed last.
+        writePending(node, item);
       }
       node.style.top = `${this.tops[i] ?? 0}px`;
       if (item.key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);

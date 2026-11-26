@@ -192,9 +192,11 @@ pub(super) struct Go {
     /// it was put back: an index pass or the walk measuring where a gzip
     /// member's stream ends. That pass is what the call that handed back
     /// `Busy` waits on. The first one only: a pass reached after the
-    /// allowance has gone is put back without having moved. A cell, since
+    /// allowance has gone is put back without having moved. `Some(None)` is a
+    /// go that ran out carrying on another call's pass while its own waited
+    /// for a place, which has no progress of its own to give. A cell, since
     /// passes are stepped from inside reads, which take the evaluator shared.
-    ran_out_in: std::cell::Cell<Option<super::Unpacking>>,
+    ran_out_in: std::cell::Cell<Option<Option<super::Unpacking>>>,
 }
 
 impl Go {
@@ -225,13 +227,32 @@ impl Go {
     /// having got as far as `at` says. Only the first pass of a go is kept.
     pub(super) fn ran_out_in(&self, at: super::Unpacking) {
         if self.ran_out_in.get().is_none() {
-            self.ran_out_in.set(Some(at));
+            self.ran_out_in.set(Some(Some(at)));
         }
     }
 
-    /// The pass this go ran out of allowance in, if it ran out in one.
+    /// Note that this go ran out of allowance carrying on another call's pass
+    /// while its own pass waited for a place. The call waits on its own
+    /// stream, which has no progress to give, so nothing is reported, and a
+    /// pass reached after this is not reported either. Only the first is
+    /// kept, as with `ran_out_in`.
+    pub(super) fn ran_out_waiting(&self) {
+        if self.ran_out_in.get().is_none() {
+            self.ran_out_in.set(Some(None));
+        }
+    }
+
+    /// The pass this go ran out of allowance in, if it ran out in one of its
+    /// own.
     pub(super) fn waits_on(&self) -> Option<super::Unpacking> {
-        self.ran_out_in.get()
+        self.ran_out_in.get().flatten()
+    }
+
+    /// Whether this go has an allowance at all. A go with none works to the
+    /// end of whatever it is asked, so a pass it starts never has to be put
+    /// back.
+    pub(super) fn limited(&self) -> bool {
+        self.left.get().is_some()
     }
 
     /// The same, and back to the start of the file, for when what was worked
