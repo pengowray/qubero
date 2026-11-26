@@ -54,6 +54,12 @@ test("the heading and the counts say how many use which filter, most first", () 
   assert.equal(RV.pngFilterCounts([["None", 32]], null), "Every scanline uses None.");
 });
 
+test("image data left compressed says which limit it passed, or that the stream is damaged", () => {
+  assert.equal(RV.pngNotInflated("too-large"), "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large.");
+  assert.equal(RV.pngNotInflated("too-large-lazy"), "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB.");
+  assert.equal(RV.pngNotInflated("failed"), "The image data did not inflate: the zlib stream is damaged or cut short.");
+});
+
 test("an enum's number is read from the brackets its value ends with", () => {
   assert.equal(numberOf({ kind: "enum", value: "adam7 (1)", edit_text: "adam7" }), 1);
   assert.equal(numberOf({ kind: "enum", value: "paeth (4)", edit_text: "paeth" }), 4);
