@@ -160,6 +160,13 @@ pub struct Unpacking {
     pub unpacked_bytes: u64,
 }
 
+impl Unpacking {
+    /// The pass over the run at `key`, as far as `p` says it has got.
+    pub(crate) fn of((run_space, run_offset_bits, _): space::RunKey, p: crate::codec::lazy::Progress) -> Unpacking {
+        Unpacking { run_space, run_offset_bits, read_bits: p.read_bits, run_bits: p.run_bits, unpacked_bytes: p.unpacked }
+    }
+}
+
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
 }
@@ -1654,8 +1661,32 @@ impl Evaluator {
     }
 
     /// Children `from..to` of the node at `path` (clamped to the child count).
+    /// The slice is answered whole: when any child waits, so does the slice.
     pub fn children<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<NodeInfo>> {
-        let n = self.child_count(doc, path)?;
+        let (ready, rest) = self.children_ready(doc, path, from, to);
+        rest.map(|()| ready)
+    }
+
+    /// Children `from..to` of the node at `path`, as far as they can be given
+    /// now: every child before the first one that waits, and what the rest
+    /// wait on. `Ok(())` when none waits, and the children are then all of
+    /// them, as [`Evaluator::children`] gives them.
+    ///
+    /// A gzip member's header fields are ready while its stream is still being
+    /// unpacked a go at a time, and a listing can show them above the stream
+    /// rather than waiting for the whole member.
+    ///
+    /// A child that waits on more work (`Busy`) ends the slice there, since the
+    /// go has nothing left to read the rest with. One that waits on bytes
+    /// (`Pending`) does not: the children after it are still read, for the
+    /// chunks they want, and the wait names them all. Only those before the
+    /// first child that waits are given. A child that fails gives nothing,
+    /// and the failure.
+    pub fn children_ready<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> (Vec<NodeInfo>, R<()>) {
+        let n = match self.child_count(doc, path) {
+            Ok(n) => n,
+            Err(e) => return (Vec::new(), Err(e)),
+        };
         let mut out = Vec::new();
         let mut missing: Vec<Missing> = Vec::new();
         let mut p = path.to_vec();
@@ -1664,22 +1695,24 @@ impl Evaluator {
             let got = self.node(doc, &p);
             p.pop();
             match got {
-                Ok(info) => out.push(info),
+                Ok(info) if missing.is_empty() => out.push(info),
+                Ok(_) => {}
                 // Children placed by offsets sit apart from one another, so the
                 // bytes one of them needs say nothing about the next. Asking
                 // for all of them together is one wait; stopping at the first
                 // is one wait per child, and a page of two hundred tensors
                 // would trickle in over two hundred goes.
                 Err(EvalError::Pending(m)) => missing.extend(m),
-                Err(e) => return Err(e),
+                Err(busy @ EvalError::Busy { .. }) => return (out, Err(busy)),
+                Err(e) => return (Vec::new(), Err(e)),
             }
         }
         if !missing.is_empty() {
             missing.sort_by_key(|m| m.chunk);
             missing.dedup();
-            return Err(EvalError::Pending(missing));
+            return (out, Err(EvalError::Pending(missing)));
         }
-        Ok(out)
+        (out, Ok(()))
     }
 
     // ----- resolution -----
@@ -2861,14 +2894,15 @@ impl Evaluator {
         }))
     }
 
-    /// How far the pass unpacking a large compressed stream has got, while one
-    /// is under way: the stream asked for most recently, whose pass a go ran
-    /// out in the middle of. That pass is an index pass or the walk measuring
-    /// where a gzip member's stream ends. Nothing when no pass is unfinished.
-    /// See [`Unpacking`].
+    /// How far the pass this go ran out of allowance in has got: an index pass
+    /// over a large compressed stream, or the walk measuring where a gzip
+    /// member's stream ends. That is the stream the call that just handed back
+    /// `Busy` waits on, so asked right after the call, it is that call's
+    /// stream and not one another call carried on in between. Nothing when
+    /// this go has not run out in a pass, and from `begin_slice` on until it
+    /// does. See [`Unpacking`].
     pub fn unpacking(&self) -> Option<Unpacking> {
-        let ((run_space, run_offset_bits, _), p) = self.spaces.unpacking()?;
-        Some(Unpacking { run_space, run_offset_bits, read_bits: p.read_bits, run_bits: p.run_bits, unpacked_bytes: p.unpacked })
+        self.go.waits_on()
     }
 
     /// Why the stream at `path` of the file did not open as a document of its
