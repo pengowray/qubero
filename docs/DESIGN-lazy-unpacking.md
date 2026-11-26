@@ -16,6 +16,8 @@ built in four parts:
   See "The pass in steps" and "The browser".
 - 2026-10-26: zstd runs of several frames and xz streams of several blocks are
   indexed too. See "zstd frames and xz blocks".
+- 2026-11-26: finding where a gzip member's deflate stream ends is done a step
+  at a time too. See "Measuring a member's stream in steps".
 
 "Still to do" at the end lists what is left.
 
@@ -169,7 +171,9 @@ at 64 MiB. Past that the template's fallback (everything before the trailer)
 is right for a file of one member, which the test file is. Raising it would
 make a hostile file cost the full 1 GiB walk once to size the member and again
 to index it. Since 2026-10-26 it counts the output rather than keeping it, and
-keeps no trace, since only the end of the stream is wanted.
+keeps no trace, since only the end of the stream is wanted. Since 2026-11-26
+the evaluator makes the same walk a step at a time: see "Measuring a member's
+stream in steps".
 
 ### The pass in steps
 
@@ -223,6 +227,128 @@ tab's source reads an index with no evaluator behind it. `Spaces::forget`
 drops both. `Evaluator::unpacking` reports the pass stepped most recently.
 A zstd or xz run comes through `index_run` too, and is handed to
 `decode_or_index` there, which indexes it in one go with nothing charged.
+
+### Measuring a member's stream in steps
+
+A gzip member's deflate run has no length in the file, so the gzip template
+sizes it with `E::stream_len(Codec::Deflate)`. To find where the stream ends,
+the evaluator decodes it with the output counted and not kept (`inflate_len`).
+It decodes the compressed bytes from the start of the run to the end of the
+file, and at most 64 MiB of them. A stream whose output comes to more than
+64 MiB is refused, `StreamLen` comes to 0, and the template falls back to
+sizing the run as everything up to the 8-byte trailer at the end of the
+file.
+
+Until 2026-11-26 this walk was made in one go, with nothing charged to the
+go's allowance. For the Rubin raw that is 5 ms native, because its 64 MiB of
+output are long matches. For 64 MiB of CSV-like text it is about 500 ms
+native, and the page stopped for all of it before the listing showed
+anything. Now the walk is made a step at a time and charged to the go, like
+the index pass. Its result is unchanged: the same end, the same refusals, and
+the same fallback past 64 MiB.
+
+- **What a walk keeps.** `inflate::Measuring` keeps the bit where the last
+  step stopped, the bit where the block it stopped in starts, and how many
+  bytes of output the stream has come to. Nothing more is needed, because the
+  output is counted and not kept. A step that stopped inside a Huffman-coded
+  block reads that block's header and tables again before it goes on.
+  `inflate_len` is the same walk made in one step.
+- **Where a step stops.** At the first code or block start that is 1 Mibit
+  (128 KiB) or more past where the step started (`MEASURE_STEP_BITS`), and
+  never inside a stored block. Steps are counted in bits read, not in output,
+  because a decoder that only counts the output does about the same work for
+  each code it reads, whether the code is a literal or a match that copies 258
+  bytes. A code is at least one bit long, so a step of 1 Mibit reads at most
+  about a million codes. Measured native: a step takes 3.5 ms on CSV-like
+  text, and 8 ms on a stream of literals whose codes are one or two bits
+  long, the slowest stream measured apart from a hostile one of empty blocks
+  (see "Still to do"). The Rubin raw's run is 95 KB of compressed bytes, so
+  it is measured in one step.
+- **Charging.** `Evaluator::stream_end` checks that the go has allowance left
+  before each step (`Go::charge(0)`, which hands back `Busy` when it has
+  none). After the step it takes one element off the allowance for each 1,024
+  bits the step read (`Go::spent`). So a go of 5,000 elements is about five
+  steps, 17 ms native on CSV-like text. Because a step is charged after it is
+  done, for the bits it read, a short member costs a go almost nothing. The
+  index pass charges each step in full before it starts it; charged that way,
+  each member of a file of a thousand short members would cost a full step,
+  1,024 elements.
+- **Between goes.** A go that runs out hands back `Busy`, and the walk goes
+  into the `Measures` table in `Spaces`, together with the bytes it walks. The
+  table is keyed by the space, the bit where the stream starts and the number
+  of bits measured. The next go that measures the same stream carries on from
+  where the walk stopped, without reading the bytes again. At most two walks
+  are kept, and each holds its compressed bytes, up to 64 MiB. `Measures` is
+  separate from `Unfinished`, so measuring one member never evicts another
+  member's index pass.
+- **The ends found.** `Measures` also keeps the last 64 results: where each
+  stream ended, or why it was refused. A go can run out after a walk has
+  finished but before the field that the walk sizes is placed. The next go
+  then asks for the same stream again. Without the result kept, each go would
+  start the walk again from the beginning, and for a stream that takes more
+  than one go to measure, every go would run out before the walk finished.
+- **Edits.** An edit clears the spaces only when `Spaces::any` says there are
+  some. Before this change `Spaces::any` counted only streams that had been
+  opened. A member is measured before anything opens it, so an edit could have
+  left the result measured from the old bytes in place. `Spaces::any` now also
+  counts measuring walks, the results they found, and indexes, finished or
+  not.
+- **Progress.** `Evaluator::unpacking` reports a walk in the same way as an
+  index pass: the bits of the measured bytes read so far, and the bytes of
+  output counted. If a walk and an index pass are both under way, it reports
+  whichever was stepped most recently (`Spaces::stamp`). For a member past
+  64 MiB, the walk stops at 64 MiB of output and then the index pass starts
+  from the beginning of the run, so the percentage in the listing and the
+  status bar drops back to 0 once.
+- **The cap.** `Limits::measure` is how much output a walk counts before it
+  refuses: 64 MiB. It is a separate limit from `Limits::whole`, so that a test
+  can make the runs held whole small and still measure members larger than
+  that.
+
+**Why the walk is not also the index pass.** The walk could have been the
+index pass itself, so that a run past 64 MiB is decoded once and its index
+kept for the open that follows. It is not, for three reasons:
+
+1. The walk does not know where the run ends. It reads from the start of the
+   run to the end of the file or to the cap, but an index holds exactly the
+   run's bytes and is keyed by where the run starts and how long it is. Past
+   the cap, the run's length comes from the template's fallback (`.or(...)`),
+   which the walk never sees.
+2. An index made over the longer bytes would be wrong at its end.
+   `inflate::run`, given bytes after the stream, adds an opaque step over
+   them, so the trace of the last span would cover the trailer and any members
+   after it.
+3. Members under the cap would cost more. The index pass keeps a window,
+   checkpoints and two checksums, or the whole output and its trace. Every
+   member of an ordinary gzip of several members would pay that, for an index
+   that is then thrown away.
+
+So the walk decodes the same bits as before, now in steps, and the work for
+the whole open is the same. What changes is how long the longest go takes.
+
+Measured on 2026-11-26 in a release build, native, with a harness outside
+`cargo test` that opens a gzip file in goes of 5,000 elements, as the web app
+asks, until the first bytes of `decoded` are read. Each file is one member
+past 64 MiB, so the measuring walk refuses and the index pass follows. The
+CSV-like text and the literals were generated for the measurement: rows of a
+date, a name, two numbers and a word, packed by Python's `gzip` at level 6;
+and bytes that are nine tenths one letter, packed by `zlib` with Huffman
+coding only. The machine was loaded (a load average of 12 to 16 on 12 cores),
+so single goes vary by a fifth or more.
+
+| File | Packed | Unpacked | Measuring in one go | Longest go before | Longest go after | Goes before | Goes after |
+|---|---|---|---|---|---|---|---|
+| The Rubin raw | 94,940 B | 75,677,760 B | 4.6 ms | 21 to 28 ms | 19 to 20 ms | 30 | 30 |
+| CSV-like text | 40,927,252 B | 120,062,834 B | 560 to 590 ms | 680 to 820 ms | 107 to 117 ms | 47 | 82 |
+| Literals of one or two bits | 11,434,544 B | 80,000,000 B | 535 to 620 ms | 710 to 750 ms | 89 to 111 ms | 31 | 46 |
+
+The whole open took about as long after the change as before: 0.4 s for the
+Rubin raw, 2.4 to 2.8 s for the CSV-like text, and 1.9 to 2.4 s for the
+literals. After the change, a go that only measures takes 16 to 18 ms on the
+CSV-like text and 32 to 40 ms on the literals. The first go also reads the run
+out of the document before measuring it, which for the CSV-like text is 41 MB
+in 56 ms. The other longest goes are in the index pass, which this change does
+not touch.
 
 ### One decoder
 
@@ -628,10 +754,19 @@ blocks.
 
 ## Still to do
 
-- `inflate_len` still counts up to 64 MiB of output in one go when a gzip
-  member's run is sized; it is about 175 ms of the open in wasm for the test
-  file above. It could be resumable the same way: its state is a bit, a block
-  and a count.
+- For a gzip member past 64 MiB, the percentage in the listing and the status
+  bar goes up to where the measuring walk reached 64 MiB of output, then drops
+  back to 0 when the index pass starts. Saying which of the two passes is
+  running, or reporting them as one, would need the interface to know there
+  are two.
+- An index pass stops a step only once the output has grown by the step's
+  share, so a run of empty blocks, which make no output, is indexed in one
+  step however long it is. Measuring stops by bits read and has no such
+  problem. But an empty fixed-Huffman block costs about 1.8 µs to decode, or
+  180 ns a bit, so measuring a hostile run of them takes about 200 ms native
+  a step. `inflate::run` builds the fixed tables again for every fixed block
+  (`fixed_codes`), which is probably most of that; building them once would
+  help every decode.
 - Open unpacked stops waiting when the reply is "pending" rather than
   "working" (bytes of the file still to load), as it did before, and has to
   be pressed again.
@@ -695,6 +830,17 @@ blocks.
   go at a time, with `unpacking` moving forward between goes and the index
   the same as one go's, and a gzip's joined stream read a go at a time
   through the listing's path, a read of its first bytes.
+- Measuring in steps. In `codec::inflate`: steps of 1 to 2^20 bits, over runs
+  packed at levels 0, 1, 6 and 9, with bytes after the stream, cut short,
+  damaged, and under a cap of a third of the output, end where one go ends or
+  are refused in the same way. In `eval::space`, with `whole` made small: a
+  gzip of two members, each run several steps long, reads to the same fields
+  in goes of 600 elements as in one go, with each walk moving forward from go
+  to go, and the joined stream reads across the join between the members. A
+  member past `Limits::measure`, set to 1 MiB, falls back in goes as in one
+  go, in a file of one member and in a file of two. An edit to a member that
+  has been measured, with no stream opened, gives the same fields as a fresh
+  reading of the edited file.
 - zstd and xz, in `codec::lazy` with the limits made small: runs of several
   frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
   streams of several blocks packed by `lzma-rust2`, read back from anywhere;
