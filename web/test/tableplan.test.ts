@@ -100,39 +100,44 @@ test("names are used when there are as many of them as columns", () => {
 
 test("names that do not fit the row are dropped for numbers", () => {
   // Two names and six channels means the file disagrees with the template.
-  // Numbering says nothing untrue; `left` over channel 3 would.
+  // Numbering says nothing untrue; `left` over channel 2 would.
   const s = shape({ names: ["left", "right"], column_word: "channel" });
   assert.deepEqual(
     shapeColumns(s, 3).map((c) => c.name),
-    ["channel 1", "channel 2", "channel 3"],
+    ["channel 0", "channel 1", "channel 2"],
   );
 });
 
 test("columns in groups are named by their group, with the group written out on hover", () => {
-  // A filterbank with two IFs of three channels: IF 1's channels, then IF 2's.
+  // A filterbank with two IFs of three channels: IF 0's channels, then IF 1's.
+  // Both are numbered from 0, as the table's title numbers its lists.
   const s = shape({ column_word: "channel", groups: { count: 2, word: "IF", spelled: "Intermediate frequency (IF)" } });
   const columns = shapeColumns(s, 6);
-  assert.deepEqual(columns.map((c) => c.name), ["IF 1 channel 1", "IF 1 channel 2", "IF 1 channel 3", "IF 2 channel 1", "IF 2 channel 2", "IF 2 channel 3"]);
-  assert.equal(columns[4]?.title, "Intermediate frequency (IF) 2 of 2, channel 2 of 3");
-  // Counts in the hover get their separators: 45,056 channels to an IF.
+  assert.deepEqual(columns.map((c) => c.name), ["IF 0 channel 0", "IF 0 channel 1", "IF 0 channel 2", "IF 1 channel 0", "IF 1 channel 1", "IF 1 channel 2"]);
+  assert.equal(columns[4]?.title, "Intermediate frequency (IF) [1] (of 2), channel [1] (of 3)");
+  // In the header and the hover, as in the title, a count has its thousands
+  // separators and an index does not: 45,056 channels to an IF.
   const wide = shapeColumns(shape({ column_word: "channel", groups: { count: 4, word: "IF", spelled: "Intermediate frequency (IF)" } }), 180_224);
-  assert.equal(wide[1]?.title, `Intermediate frequency (IF) 1 of 4, channel 2 of ${(45_056).toLocaleString()}`);
+  assert.equal(wide[1]?.title, `Intermediate frequency (IF) [0] (of 4), channel [1] (of ${(45_056).toLocaleString()})`);
+  assert.equal(wide[45_056 + 12_345]?.name, "IF 1 channel 12345");
+  assert.equal(wide[45_056 + 12_345]?.title, `Intermediate frequency (IF) [1] (of 4), channel [12345] (of ${(45_056).toLocaleString()})`);
   // One group, or groups that do not divide the row, and the columns are
   // channels alone.
   const one = shape({ column_word: "channel", groups: { count: 1, word: "pol", spelled: "Polarisation" } });
-  assert.deepEqual(shapeColumns(one, 2).map((c) => c.name), ["channel 1", "channel 2"]);
-  assert.deepEqual(shapeColumns(s, 5).map((c) => c.name)[4], "channel 5");
+  assert.deepEqual(shapeColumns(one, 2).map((c) => c.name), ["channel 0", "channel 1"]);
+  assert.deepEqual(shapeColumns(s, 5).map((c) => c.name)[4], "channel 4");
+  assert.equal(shapeColumns(s, 1_001)[1_000]?.name, "channel 1000");
 });
 
 test("named columns carry what their shorthand means for the hover", () => {
-  const s = shape({ names: ["pol 1 real", "pol 1 imaginary"], titles: ["Polarisation 1, real part", "Polarisation 1, imaginary part"] });
-  assert.equal(shapeColumns(s, 2)[1]?.title, "Polarisation 1, imaginary part");
+  const s = shape({ names: ["pol 0 real", "pol 0 imaginary"], titles: ["Polarisation [0] (of 2), real part", "Polarisation [0] (of 2), imaginary part"] });
+  assert.equal(shapeColumns(s, 2)[1]?.title, "Polarisation [0] (of 2), imaginary part");
 });
 
 test("a shape with no word for a column still names its columns", () => {
   assert.deepEqual(
     shapeColumns(shape(), 2).map((c) => c.name),
-    ["column 1", "column 2"],
+    ["column 0", "column 1"],
   );
 });
 

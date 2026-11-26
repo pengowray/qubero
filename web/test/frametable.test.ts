@@ -174,7 +174,7 @@ test("a computed table that names no columns heads them the way every other tabl
   assert.equal(plan.columns.length, 3);
   assert.deepEqual(
     plan.columns.map((c) => c.name),
-    ["column 1", "column 2", "column 3"],
+    ["column 0", "column 1", "column 2"],
   );
   assert.deepEqual(plan.row(1)?.cells.map((c) => c.text), ["3", "4", "5"]);
   // And a table with no rows still has a column rather than none at all.

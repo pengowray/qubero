@@ -32,7 +32,7 @@ export type TableColumn = {
   readonly name: string;
   readonly unit: string;
   /** What the name means, for its hover, where the name is shorthand:
-   *  `pol 1 real` is "Polarisation 1, real part". */
+   *  `pol 0 real` is "Polarisation [0] (of 2), real part". */
   readonly title?: string;
 };
 
@@ -146,7 +146,10 @@ export function rowCount(count: number, columns: number): number {
  * The names are used only when there are exactly as many of them as a row has
  * columns. A file whose channel count disagrees with the names the template
  * wrote is a file where one name would sit over another column's data, and a
- * wrong name is worse than a number: `channel 1` says nothing untrue.
+ * wrong name is worse than a number: `channel 0` says nothing untrue.
+ *
+ * Columns are numbered from 0, as the inspector numbers a list's elements and
+ * as the table's title numbers the lists it sits in.
  */
 export function shapeColumns(shape: TableShape, columns: number): TableColumn[] {
   const named = shape.names.length === columns;
@@ -155,20 +158,20 @@ export function shapeColumns(shape: TableShape, columns: number): TableColumn[] 
   if (named) {
     const titled = shape.titles.length === columns;
     return Array.from({ length: columns }, (_, i) => ({
-      name: shape.names[i] ?? TABLE.column(word, i + 1),
+      name: shape.names[i] ?? TABLE.column(word, i),
       unit: unit(i),
       ...(titled ? { title: shape.titles[i] ?? "" } : {}),
     }));
   }
-  // Columns in groups are named by their group as well, `IF 2 channel 5`,
+  // Columns in groups are named by their group as well, `IF 1 channel 4`,
   // when there is more than one group and the groups divide the row evenly.
   // Otherwise a column named by its group would be wrong somewhere.
   const g = shape.groups;
   if (g !== null && g.count > 1 && columns % g.count === 0) {
     const per = columns / g.count;
     return Array.from({ length: columns }, (_, i) => {
-      const group = Math.floor(i / per) + 1;
-      const n = (i % per) + 1;
+      const group = Math.floor(i / per);
+      const n = i % per;
       return {
         name: TABLE.groupColumn(g.word, group, word, n),
         unit: unit(i),
@@ -176,7 +179,7 @@ export function shapeColumns(shape: TableShape, columns: number): TableColumn[] 
       };
     });
   }
-  return Array.from({ length: columns }, (_, i) => ({ name: TABLE.column(word, i + 1), unit: unit(i) }));
+  return Array.from({ length: columns }, (_, i) => ({ name: TABLE.column(word, i), unit: unit(i) }));
 }
 
 /**

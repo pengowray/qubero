@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { exportName, exportSize, exportText, scopeOf, type ExportJob } from "../src/tableexport.ts";
-import type { TableRow } from "../src/tableplan.ts";
+import { shapeColumns, type TableRow } from "../src/tableplan.ts";
 import { csvLine, jsonObject, uniqueKeys, type Lead } from "../src/tabletext.ts";
 
 const PLAIN: Lead = { named: false, time: null, addresses: false };
@@ -64,6 +64,20 @@ test("a number JSON cannot write goes out as a string, and a big one keeps its d
 
 test("two columns of one name do not overwrite each other", () => {
   assert.deepEqual(uniqueKeys(["x", "y", "x", "x"]), ["x", "y", "x (2)", "x (3)"]);
+});
+
+test("channel columns are headed from 0 in every format, as on screen", async () => {
+  // Two IFs of two channels, the way a SIGPROC filterbank with nifs = 2 is
+  // named: the same names the table's header shows.
+  const headings = shapeColumns(
+    { columns: null, names: [], units: [], column_word: "channel", titles: [], groups: { count: 2, word: "IF", spelled: "Intermediate frequency (IF)" }, row_word: "sample", rate: null, facts: [], cells: null },
+    4,
+  ).map((c) => c.name);
+  const one = [row([["1", "uint"], ["2", "uint"], ["3", "uint"], ["4", "uint"]])];
+  const base = job({ headings, count: 1, records: { from: 0, to: 1 } });
+  assert.equal(await written(base, one), "#,IF 0 channel 0,IF 0 channel 1,IF 1 channel 0,IF 1 channel 1\r\n0,1,2,3,4\r\n");
+  assert.equal(await written({ ...base, format: "tsv" }, one), "#\tIF 0 channel 0\tIF 0 channel 1\tIF 1 channel 0\tIF 1 channel 1\n0\t1\t2\t3\t4\n");
+  assert.match(await written({ ...base, format: "json" }, one), /"IF 0 channel 0": 1, "IF 0 channel 1": 2, "IF 1 channel 0": 3, "IF 1 channel 1": 4/);
 });
 
 test("some of the records can be written, numbered as they are in the table", async () => {
