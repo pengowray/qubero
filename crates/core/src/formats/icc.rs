@@ -440,15 +440,15 @@ fn header() -> T {
         ],
     )
     .field_doc("profile_size", "The size of the whole profile in bytes, header, tag table and tag data included.")
-    .field_doc("preferred_cmm", "The colour management module the profile was made for, as a registered signature. Empty when none is named.")
-    .field_doc("colour_space", "The colour space of the device side of the profile's transforms.")
-    .field_doc("pcs", "The profile connection space: XYZ or Lab for every class but a device link, whose PCS field is its second device's colour space.")
+    .field_doc("preferred_cmm", "The preferred colour management module (CMM), as a registered signature. Four zero bytes when no CMM is named.")
+    .field_doc("colour_space", "The data colour space, such as RGB or CMYK. In a device link, the first device's colour space.")
+    .field_doc("pcs", "The profile connection space, XYZ or Lab. In a device link, the second device's colour space.")
     .field_doc("created", "When the profile was first created, in UTC.")
     .field_doc("flags", "Bit 0 is set when the profile is embedded in a file. Bit 1 is set when it must only be used with the colour data it is embedded with.")
-    .field_doc("attributes", "Bits 0 to 3 describe the media. A clear bit means reflective, glossy, positive or colour media.")
+    .field_doc("attributes", "Bits 0 to 3 describe the media, clear or set: bit 0 reflective or transparency, bit 1 glossy or matte, bit 2 positive or negative, bit 3 colour or black and white.")
     .field_doc("illuminant", "The PCS illuminant, which the spec fixes at D50: X 0.9642, Y 1.0, Z 0.8249.")
-    .field_doc("profile_id", "An MD5 of the whole profile with the flags, rendering intent and profile ID fields set to zero. All zero when no ID was calculated.")
-    .field_doc("reserved", "28 bytes reserved by the ICC, all zero.")
+    .field_doc("profile_id", "MD5 hash of the whole profile, calculated with the flags, rendering intent and profile ID fields taken as zero. All 16 bytes are zero when no ID was calculated.")
+    .field_doc("reserved", "28 bytes reserved by the ICC, which must be zero.")
 }
 
 /// The version, written as binary-coded decimal: the major version in the
@@ -520,7 +520,7 @@ fn entry() -> T {
     )
     .counted_as("tag")
     .field_doc("offset", "Where the tag's data starts, counted from the first byte of the profile.")
-    .field_doc("size", "How many bytes of data the tag has, not counting the padding after it.")
+    .field_doc("size", "Size of the tag's data in bytes. The spec leaves out the padding after the data, but some writers count it.")
 }
 
 /// A tag's data: its type signature, four reserved bytes, and what the type
@@ -540,7 +540,7 @@ fn element() -> T {
             ("padding", T::switch(E::field("type"), PLACES_ITS_OWN.iter().map(|t| (*t, T::bytes(E::lit(0)))).collect(), T::bytes(E::Remaining))),
         ],
     )
-    .field_doc("padding", "Bytes inside the tag's size after its contents. Some writers count the padding to a four-byte boundary in the size.")
+    .field_doc("padding", "Bytes after the tag's contents that the tag's size still counts, usually padding to a four-byte boundary.")
 }
 
 /// The tag types whose contents are records with offsets to the rest.
@@ -610,7 +610,7 @@ fn text_description() -> T {
         ],
     )
     .field_doc("ascii_count", "Bytes of ASCII text, its nul included.")
-    .field_doc("unicode_count", "Characters of UTF-16 text, its nul included, two bytes each.")
+    .field_doc("unicode_count", "UTF-16 code units of text, two bytes each, its nul included.")
     .field_doc("scriptcode", "67 bytes, of which the first scriptcode_count are the Macintosh description.")
 }
 
@@ -637,7 +637,7 @@ fn mluc() -> T {
         "multiLocalizedUnicodeType",
         vec![("record_count", T::u32(Big)), ("record_size", T::u32(Big)), ("records", T::array(record, E::field("record_count")))],
     )
-    .field_doc("record_size", "The size of each record in bytes, which is 12.")
+    .field_doc("record_size", "Bytes per record: 12.")
 }
 
 /// XYZType: one XYZNumber for nearly every tag, and a list of them where a
@@ -664,9 +664,9 @@ fn curve() -> T {
             ("entries", T::when(count().greater_than(E::lit(1)), T::array(T::u16(Big), count()))),
         ],
     )
-    .field_doc("count", "0 for the identity curve, 1 for a curve that is one gamma value, and otherwise the number of entries.")
+    .field_doc("count", "Number of entries. 0 means the identity curve, and with 1 the entry is the gamma exponent.")
     .field_doc("gamma", "The exponent: Y = X^gamma.")
-    .field_doc("entries", "The curve sampled at even steps of X from 0.0 to 1.0, each stored from 0 for 0.0 to 65535 for 1.0.")
+    .field_doc("entries", "Y values of the curve at evenly spaced X from 0.0 to 1.0. Each Y value is stored from 0 for 0.0 to 65535 for 1.0.")
 }
 
 /// parametricCurveType: which function, then its parameters, of which there
@@ -843,7 +843,7 @@ fn lut16() -> T {
             ("output_tables", T::array(T::u16(Big), output)),
         ],
     )
-    .field_doc("matrix", "Applied first, and only when the input is XYZ. Otherwise the identity.")
+    .field_doc("matrix", "A 3 by 3 matrix applied before the input tables. It must be the identity unless the input colour space is XYZ.")
 }
 
 /// lut8Type: the same with 8-bit entries and 256 entries in every input and
@@ -864,7 +864,7 @@ fn lut8() -> T {
             ("output_tables", T::array(T::u8(), output)),
         ],
     )
-    .field_doc("matrix", "Applied first, and only when the input is XYZ. Otherwise the identity.")
+    .field_doc("matrix", "A 3 by 3 matrix applied before the input tables. It must be the identity unless the input colour space is XYZ.")
 }
 
 /// lutAToBType and lutBToAType: five offsets from the start of the tag, each
@@ -912,9 +912,13 @@ fn curves(count: E) -> T {
             ("type", T::enumeration_hex("TagType", T::u32(Big), TYPE)),
             ("reserved", T::u32(Big)),
             ("contents", T::switch(E::field("type"), vec![(sig(b"curv"), curve()), (sig(b"para"), parametric())], T::bytes(E::lit(0)))),
+            // Up to three bytes, read as the zero they should be.
             (
                 "padding",
-                T::bytes(E::size_of("type").add(E::size_of("reserved")).add(E::size_of("contents")).pad_to(4).at_most(E::Remaining)),
+                T::uint_expr(
+                    E::size_of("type").add(E::size_of("reserved")).add(E::size_of("contents")).pad_to(4).at_most(E::Remaining).mul(E::lit(8)),
+                    Big,
+                ),
             ),
         ],
     )
@@ -938,11 +942,11 @@ fn clut() -> T {
         vec![
             ("grid_points", T::array(T::u8(), E::lit(16))),
             ("precision", T::u8()),
-            ("padding", T::bytes(E::lit(3))),
+            ("padding", T::UInt { bits: 24, endian: Big }),
             ("values", T::switch(E::field("precision"), vec![(1, T::array(T::u8(), count.clone()))], T::array(T::u16(Big), count))),
         ],
     )
-    .field_doc("grid_points", "Grid points along each input dimension. Only the first input_channels are used.")
+    .field_doc("grid_points", "Number of grid points along each input dimension. Only the first input_channels entries are used.")
     .field_doc("precision", "Bytes per value: 1 or 2.")
 }
 

@@ -317,5 +317,8 @@ fn a_template_profile_counts_what_png_declares() {
     assert!(p.rows.iter().any(|r| r.category == "number" && r.width == 32 && r.order == "big"));
     let data = p.choices.iter().find(|c| c.name == "data").expect("the chunk data switch");
     assert!(data.cases >= 2);
-    assert_eq!(p.facts.every_field_follows, Some(true));
+    // The chunks follow each other, but the ICC profile in an iCCP chunk and
+    // the TIFF in an eXIf chunk place their data at offsets, so whether every
+    // field follows depends on the file.
+    assert_eq!(p.facts.every_field_follows, None);
 }

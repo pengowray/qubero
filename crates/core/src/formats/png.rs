@@ -682,7 +682,7 @@ fn cicp() -> T {
             ("video_full_range_flag", T::enumeration("VideoFullRange", T::u8(), H273_RANGE)),
         ],
     )
-    .field_doc("matrix_coefficients", "Always 0 in a PNG, which holds RGB only.")
+    .field_doc("matrix_coefficients", "Must be 0 in a PNG, which holds RGB only.")
 }
 
 /// mDCV: the colour volume of the display the image was mastered on. The
@@ -697,16 +697,16 @@ fn mdcv() -> T {
     fields.push(("max_luminance", nits()));
     fields.push(("min_luminance", nits()));
     T::structure("mDCV", fields)
-        .field_doc("max_luminance", "The display's maximum luminance in cd/m², stored in units of 0.0001 cd/m².")
-        .field_doc("min_luminance", "The display's minimum luminance in cd/m², stored in units of 0.0001 cd/m².")
+        .field_doc("max_luminance", "Maximum luminance of the mastering display in cd/m², stored in units of 0.0001 cd/m².")
+        .field_doc("min_luminance", "Minimum luminance of the mastering display in cd/m², stored in units of 0.0001 cd/m².")
 }
 
 /// cLLI: how bright the content gets, stored in units of 0.0001 cd/m².
 fn clli() -> T {
     let nits = || scaled(T::u32(Big), 10_000.0);
     T::structure("cLLI", vec![("max_cll", nits()), ("max_fall", nits())])
-        .field_doc("max_cll", "MaxCLL, the luminance of the brightest pixel in the image or any of its frames, in cd/m². 0 means unknown.")
-        .field_doc("max_fall", "MaxFALL, the average luminance of the brightest frame, in cd/m². 0 means unknown.")
+        .field_doc("max_cll", "MaxCLL, the luminance of the brightest pixel in the image or any of its frames, in cd/m², stored in units of 0.0001 cd/m². 0 means unknown.")
+        .field_doc("max_fall", "MaxFALL, the average luminance of the brightest frame, in cd/m², stored in units of 0.0001 cd/m². 0 means unknown.")
 }
 
 /// oFFs: where the image sits on the page, from its top left corner.
@@ -739,8 +739,8 @@ fn pcal() -> T {
             ("parameters", T::array(to_nul_or_end(), E::field("parameter_count"))),
         ],
     )
-    .field_doc("original_zero", "x0, the stored sample value that maps to one end of the range.")
-    .field_doc("original_max", "x1, the stored sample value that maps to the other end of the range.")
+    .field_doc("original_zero", "x0, the original sample value that a stored sample of 0 maps to.")
+    .field_doc("original_max", "x1, the original sample value that the largest stored sample maps to.")
 }
 
 /// sCAL: the physical size of one pixel, as two ASCII floating-point numbers
@@ -773,7 +773,7 @@ fn gifg() -> T {
             ("delay_seconds", T::computed_real(E::field("delay_time").div(E::real(100.0)))),
         ],
     )
-    .field_doc("delay_time", "How long to wait before going on, in hundredths of a second.")
+    .field_doc("delay_time", "How long to wait before going on with the rest of the stream, in hundredths of a second.")
 }
 
 /// gIFx: a GIF Application Extension kept from a GIF the image was converted
