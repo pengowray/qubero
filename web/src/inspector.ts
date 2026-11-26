@@ -1648,11 +1648,13 @@ export class Inspector {
                 : { at: check.blanked[0], bytes: check.blanked[1], byte: check.blanked[2] },
             ),
       check: async () => {
-        // Loaded here rather than in the core: the core refuses a run whose
-        // bytes have not arrived, and what a reader wants is for them to
-        // arrive. Asking for them and then asking again is the whole fix.
-        await this.doc.ensureRange(over[0], over[1]);
-        const verdict = this.doc.runCheck(path);
+        // Loaded here rather than in the core: the core answers "pending"
+        // for a run whose bytes have not arrived, and what a reader wants is
+        // for them to arrive. A run that fits in the chunk store is loaded in
+        // one go first. A longer one is read by the core a window at a time,
+        // loading each window's chunks as it asks for them.
+        if (over[1] <= RESIDENT_BYTES) await this.doc.ensureRange(over[0], over[1]);
+        const verdict = await this.doc.runCheckLoaded(path);
         if (verdict.status === "error") throw new Error(verdict.message);
         if (verdict.status !== "ok" || verdict.node === null) throw new Error(CHECKED.missingBytes);
         // Taking the sum over one member of an xz stream just opened that
