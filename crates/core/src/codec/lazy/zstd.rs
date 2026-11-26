@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::seekable::{seekable, Kind};
 use super::{Checkpoints, Decoded, Limits, Progress, Start, Stepped};
 use crate::codec::frames::{self, ZstdWalk};
-use crate::codec::{Codec, Refusal, Trace, TraceBuilder, MAX_STEPS};
+use crate::codec::{Codec, Refusal, SpanUnit, Trace, TraceBuilder, MAX_STEPS};
 
 /// A zstd run's index pass, done a step at a time as deflate's is. Frames
 /// copy nothing from the ones before them, so a checkpoint is the start of a
@@ -19,11 +19,14 @@ use crate::codec::{Codec, Refusal, Trace, TraceBuilder, MAX_STEPS};
 /// [`ZstdWalk::run`] for how far past its share of output, and of the run, a
 /// step goes.
 ///
-/// A frame larger than [`Limits::span`] is refused as too large however many
-/// frames there are, since a span is decoded whole and a frame cannot be
-/// entered anywhere but at its start. A file of one frame is the usual case:
-/// `zstd` writes one frame whatever `-T` and `-B` say, and only `pzstd`, or
-/// files joined end to end, have several.
+/// A frame larger than [`Limits::span`] is refused as
+/// [`Refusal::TooLargeUnit`] however many frames there are, since a span is
+/// decoded whole and a frame cannot be entered anywhere but at its start. A
+/// frame whose header asks for a window over 128 MiB is refused before it is
+/// decoded, as [`Refusal::TooLarge`], the refusal the whole decoder gives it,
+/// since nothing says yet how large the frame is. A file of one frame is the
+/// usual case: `zstd` writes one frame whatever `-T` and `-B` say, and only
+/// `pzstd`, or files joined end to end, have several.
 pub(super) struct ZstdPass {
     packed: Arc<Vec<u8>>,
     limits: Limits,
@@ -123,7 +126,7 @@ impl ZstdPass {
                     Err(Refusal::TooLarge) if over => {
                         drop((out, trace));
                         if largest > limits.span as u64 {
-                            return Err(Refusal::TooLarge);
+                            return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame));
                         }
                         // Past the cap: on from the start of the frame the
                         // walk stopped in, counting the output and keeping
@@ -133,6 +136,9 @@ impl ZstdPass {
                         self.phase = Phase::Index { walk, count: before };
                         Ok(Stepped::Working)
                     }
+                    // A frame past the walk's cap, which is at least the span
+                    // limit.
+                    Err(Refusal::TooLarge) if walk.frame_too_large() => Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
                     Err(other) => Err(other),
                 }
             }
@@ -143,7 +149,12 @@ impl ZstdPass {
                         true => Err(Refusal::TooLargeLazy),
                         false => Ok(()),
                     }
-                })?;
+                });
+                let walked = match walked {
+                    // A frame past the walk's cap, which is the span limit.
+                    Err(Refusal::TooLarge) if walk.frame_too_large() => return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
+                    w => w?,
+                };
                 match walked {
                     None => {
                         self.phase = Phase::Index { walk, count };

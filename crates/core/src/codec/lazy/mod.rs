@@ -25,10 +25,10 @@
 //! traced from their own start.
 //!
 //! A zstd frame or an xz block is decoded from its start, so one larger than
-//! [`Limits::span`] is refused as [`Refusal::TooLarge`]. That is what keeps a
-//! file of one frame or one block refused past [`CAP_BYTES`]: what a decoder
-//! needs to start inside one is its whole window or dictionary, which can be
-//! as large as the output.
+//! [`Limits::span`] is refused as [`Refusal::TooLargeUnit`]. That is what
+//! keeps a file of one frame or one block refused past [`CAP_BYTES`]: what a
+//! decoder needs to start inside one is its whole window or dictionary, which
+//! can be as large as the output.
 //!
 //! The pass over a deflate or a zstd run can be done a step at a time,
 //! carrying on from where the step before stopped: see [`Indexing`].

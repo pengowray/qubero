@@ -113,12 +113,22 @@ test("the open button and its refusals say joined, not unpacked", () => {
     JOINED.partTooLarge(JOINED.tabTitle("decoded", "big.gz")),
     "Couldn't open decoded joined from big.gz: one of its parts unpacks to over 1 GiB.",
   );
+  assert.equal(
+    JOINED.partZstdFrameTooLarge(JOINED.tabTitle("pages", "table.parquet")),
+    "Couldn't open pages joined from table.parquet: one of its parts has a zstd frame that unpacks to over 64 MiB.",
+  );
+  assert.equal(
+    JOINED.partXzBlockTooLarge(JOINED.tabTitle("pages", "table.parquet")),
+    "Couldn't open pages joined from table.parquet: one of its parts has an xz block that unpacks to over 64 MiB.",
+  );
 });
 
 test("a refusal of a joined stream is said by the core's word for it", () => {
   const tab = JOINED.tabTitle("stream", "range.bam");
   assert.equal(JOINED.refused("too-large", tab), JOINED.tooLarge(tab));
   assert.equal(JOINED.refused("too-large-lazy", tab), JOINED.partTooLarge(tab));
+  assert.equal(JOINED.refused("too-large-zstd-frame", tab), JOINED.partZstdFrameTooLarge(tab));
+  assert.equal(JOINED.refused("too-large-xz-block", tab), JOINED.partXzBlockTooLarge(tab));
   assert.equal(JOINED.refused("failed", tab), JOINED.failed(tab));
   // Any other word is said as a part that will not read, as before.
   assert.equal(JOINED.refused("unaligned", tab), JOINED.failed(tab));

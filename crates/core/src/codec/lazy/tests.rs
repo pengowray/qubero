@@ -829,18 +829,36 @@ fn a_zstd_run_under_the_cap_comes_back_whole_with_every_frame() {
     assert!(t.steps().eq(trace.steps()));
 }
 
-/// A frame past the most one span may come to is refused as too large,
-/// which is what a file of one frame is. Past the limit for a run read a
-/// piece at a time, a run of small frames is refused with the refusal that
-/// says so.
+/// A frame past the most one span may come to is refused as a frame too
+/// large, which is what a file of one frame is, and so is a frame past it
+/// after the cap, held to the span limit when the cap is larger, and in a
+/// pass told the run is large. A frame that asks for a window over 128 MiB
+/// is refused as too large, since nothing says how large the frame is. Past
+/// the limit for a run read a piece at a time, a run of small frames is
+/// refused with the refusal that says so.
 #[test]
 fn a_zstd_frame_past_the_span_limit_is_refused() {
+    let frame = Some(Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame));
     let data = mixed(300_000, 43);
     let one = zstd_of(&data, data.len(), false);
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one), small()).err(), frame);
+    // A frame of 150 KB is finished while the run may still be held whole,
+    // under 200 KB, and found past the span limit once it may not.
+    let held = Limits { whole: 200_000, span: 100_000, ..small() };
+    let first_large = [zstd_of(&data[..150_000], 150_000, false), zstd_of(&data[150_000..], 30_000, false)].concat();
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(first_large), held).err(), frame);
     let mut sizes = zstd_of(&data, 30_000, false);
     sizes.extend(zstd_of(&data[..100_000], 100_000, false));
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(sizes), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(sizes.clone()), small()).err(), frame);
+    let told = Indexing::new(Codec::Zstd, Arc::new(sizes), small()).expect("starts").known_large();
+    assert_eq!(in_steps(told, u64::MAX).0.err(), frame);
+    // Past the cap, then a frame of one raw block whose header asks for a
+    // window of 1 TiB.
+    let mut wide = zstd_of(&data, 30_000, false);
+    wide.extend_from_slice(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, (40 - 10) << 3]);
+    wide.extend_from_slice(&(1u32 | 4 << 3).to_le_bytes()[..3]);
+    wide.extend_from_slice(b"tiny");
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(wide), small()).err(), Some(Refusal::TooLarge));
     let many = zstd_of(&data, 30_000, true);
     let limits = Limits { lazy: 200_000, ..small() };
     assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(many), limits).err(), Some(Refusal::TooLargeLazy));
@@ -1015,7 +1033,7 @@ fn a_zstd_pass_in_steps_refuses_what_one_pass_does() {
     let one = Arc::new(zstd_of(&data, data.len(), false));
     let many = Arc::new(zstd_of(&data, 30_000, true));
     let lazy = Limits { lazy: 200_000, ..small() };
-    for (packed, limits, why) in [(one, small(), Refusal::TooLarge), (many, lazy, Refusal::TooLargeLazy)] {
+    for (packed, limits, why) in [(one, small(), Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame)), (many, lazy, Refusal::TooLargeLazy)] {
         for told in [false, true] {
             let pass = Indexing::new(Codec::Zstd, packed.clone(), limits).expect("starts");
             let pass = if told { pass.known_large() } else { pass };
@@ -1082,15 +1100,15 @@ fn an_xz_stream_of_several_blocks_reads_back_from_anywhere() {
     assert_eq!(s.members(), whole.members());
 }
 
-/// One block past the most one span may come to is refused as too large,
-/// which is what a file of one block is; past the limit for a run read a
-/// piece at a time, so is a stream of small blocks, with the refusal that
-/// says so. Under the cap the stream comes back whole as it always did.
+/// One block past the most one span may come to is refused as a block too
+/// large, which is what a file of one block is; past the limit for a run
+/// read a piece at a time, so is a stream of small blocks, with the refusal
+/// that says so. Under the cap the stream comes back whole as it always did.
 #[test]
 fn an_xz_block_past_the_span_limit_is_refused() {
     let data = mixed(300_000, 61);
     let one = xz_of(&data, data.len());
-    assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(one), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(one), small()).err(), Some(Refusal::TooLargeUnit(crate::codec::SpanUnit::XzBlock)));
     let limits = Limits { lazy: 200_000, ..small() };
     assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(xz_of(&data, 30_000)), limits).err(), Some(Refusal::TooLargeLazy));
     let under = xz_of(&data[..50_000], 20_000);

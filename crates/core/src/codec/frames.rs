@@ -190,6 +190,13 @@ impl ZstdWalk {
         self.frame.as_ref().map_or(self.at, |f| f.at + f.read)
     }
 
+    /// Whether the walk was refused as too large because the frame it is in
+    /// came to more than its `frame_cap`, rather than because a frame asked
+    /// for a window larger than [`MAX_WINDOW`].
+    pub(super) fn frame_too_large(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.collected > self.frame_cap)
+    }
+
     /// How much output the decoder has let go of so far, which is what has
     /// gone to the sink.
     pub(super) fn let_go(&self) -> u64 {
