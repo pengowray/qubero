@@ -176,6 +176,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   swf: ["swf"],
   png: ["png"],
   webp: ["webp"],
+  icc: ["icc", "icm"],
   p8png: ["png"],
   p64png: ["png"],
   bmp: ["bmp"],

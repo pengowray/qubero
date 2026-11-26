@@ -304,8 +304,8 @@ pub(crate) const H273_PRIMARIES: &[(i128, &str)] = &[
     (8, "generic film (illuminant C)"),
     (9, "BT.2020, BT.2100"),
     (10, "SMPTE ST 428-1 (CIE 1931 XYZ)"),
-    (11, "SMPTE RP 431-2 (DCI-P3)"),
-    (12, "SMPTE EG 432-1 (Display P3)"),
+    (11, "SMPTE ST 431-2 (DCI-P3)"),
+    (12, "SMPTE ST 432-1 (Display P3)"),
     (22, "EBU Tech. 3213-E"),
 ];
 
@@ -616,9 +616,6 @@ fn text_description() -> T {
 
 /// multiLocalizedUnicodeType: a list of records, each a language and country
 /// and where in the tag its UTF-16 string is.
-///
-/// A record is not drawn on one row: the listing does not place what a field
-/// of a one-row structure points at, and the string would read as a gap.
 fn mluc() -> T {
     let record = T::structure_named(
         "LocalizedString",
@@ -1007,8 +1004,8 @@ fn dict() -> T {
 
 /// vcgt: Apple's video card gamma, a private type the ICC spec does not
 /// define. Either a table of ramps, one per channel, or a gamma, a minimum
-/// and a maximum for each of red, green and blue, as Apple's
-/// `CMVideoCardGamma` structure lays them out.
+/// and a maximum for each of red, green and blue, laid out as LittleCMS's
+/// `Type_vcgt_Read` reads them.
 fn vcgt() -> T {
     let ramp = || T::switch(E::field("entry_size"), vec![(1, T::u8())], T::u16(Big));
     let table = T::structure(
