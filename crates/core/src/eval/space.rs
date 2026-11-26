@@ -647,31 +647,77 @@ const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 /// get there.
 ///
 /// A pass that might still come to a run held whole holds up to the cap of
-/// output, so only a couple are kept, and the one stepped longest ago goes
-/// first. A reading stepping two runs by turns keeps both.
+/// output, so there are places for only two. A pass that has started is never
+/// let go of to make room for another: a call whose pass finds both places
+/// taken carries on one of the passes holding them instead, and starts its
+/// own once a place comes free. See [`super::Evaluator::wait_for_a_place`].
 #[derive(Default)]
 pub(super) struct Unfinished {
-    /// Each pass with the stamp it was put back with (see [`Spaces::stamp`]).
-    entries: Vec<(RunKey, Codec, lazy::Indexing, u64)>,
+    /// What each place holds, with the stamp it was put there with (see
+    /// [`Spaces::stamp`]).
+    entries: Vec<(RunKey, Codec, Held, u64)>,
 }
 
-/// How many unfinished passes are kept at once.
+/// What one of the places in [`Unfinished`] holds.
+enum Held {
+    /// A pass that has started and not finished.
+    Pass(lazy::Indexing),
+    /// A pass that another call carried to its end, which came to a run held
+    /// whole. Its bytes and trace wait here for a call over the same run to
+    /// take them, since nothing else keeps a run held whole by where the run
+    /// is: a `Decoded` node keeps one by its own path. They take a place as a
+    /// pass does, since they are as large as a pass in its traced phase. A
+    /// pass that comes to an index or a refusal leaves no such thing behind:
+    /// those go to [`Indexes`] and to `refused_runs`, kept by the run.
+    Whole(Vec<u8>, Trace),
+}
+
+/// How many places there are for unfinished passes.
 const UNFINISHED_PASSES: usize = 2;
 
 impl Unfinished {
-    /// The pass over the run at `key`, taken out to be stepped.
-    fn take(&mut self, key: RunKey, codec: Codec) -> Option<lazy::Indexing> {
+    /// What the place for the run at `key` holds, taken out to be stepped or
+    /// handed back.
+    fn take(&mut self, key: RunKey, codec: Codec) -> Option<Held> {
         let i = self.entries.iter().position(|e| e.0 == key && e.1 == codec)?;
         Some(self.entries.swap_remove(i).2)
     }
 
-    /// Put a pass back to be carried on next go.
-    fn put(&mut self, key: RunKey, codec: Codec, pass: lazy::Indexing, stamp: u64) {
-        while self.entries.len() >= UNFINISHED_PASSES {
-            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
-            self.entries.swap_remove(oldest);
-        }
-        self.entries.push((key, codec, pass, stamp));
+    fn has_room(&self) -> bool {
+        self.entries.len() < UNFINISHED_PASSES
+    }
+
+    /// Put a pass back to be carried on next go, or a run another call
+    /// finished to be taken. A place has to be free: whatever took a pass out
+    /// puts it back in the place it left, and a pass only starts in a free
+    /// place.
+    fn put(&mut self, key: RunKey, codec: Codec, held: Held, stamp: u64) {
+        assert!(self.has_room(), "no free place to put a pass in");
+        self.entries.push((key, codec, held, stamp));
+    }
+
+    /// The pass with the fewest compressed bits left to read, taken out to be
+    /// carried on by a call waiting for a place, since it is the one that
+    /// frees a place soonest. None when every place holds a finished run.
+    fn take_nearest_its_end(&mut self) -> Option<(RunKey, Codec, lazy::Indexing)> {
+        let left = |held: &Held| match held {
+            Held::Pass(pass) => Some(pass.progress().run_bits.saturating_sub(pass.progress().read_bits)),
+            Held::Whole(..) => None,
+        };
+        let i = (0..self.entries.len()).filter(|&i| left(&self.entries[i].2).is_some()).min_by_key(|&i| left(&self.entries[i].2))?;
+        let (key, codec, held, _) = self.entries.swap_remove(i);
+        let Held::Pass(pass) = held else { unreachable!("chosen for being a pass") };
+        Some((key, codec, pass))
+    }
+
+    /// Let go of the finished run put in its place longest ago, when every
+    /// place holds one and no call has come for them: a call waiting for a
+    /// place would otherwise have nothing to carry on and nothing to wait
+    /// for. The run is unpacked again if it is asked for.
+    fn drop_oldest_whole(&mut self) {
+        let oldest = (0..self.entries.len()).filter(|&i| matches!(self.entries[i].2, Held::Whole(..))).min_by_key(|&i| self.entries[i].3);
+        let i = oldest.expect("a place holding a finished run");
+        self.entries.swap_remove(i);
     }
 }
 
@@ -701,8 +747,10 @@ pub(super) struct Measures {
     ended: std::collections::VecDeque<(RunKey, Codec, Result<u64, Refusal>)>,
 }
 
-/// How many unfinished measuring walks are kept at once. Each holds the bytes
-/// it walks, up to 64 MiB.
+/// How many places there are for unfinished measuring walks. Each holds the
+/// bytes it walks, up to 64 MiB. As with passes, a walk that has started is
+/// never let go of to make room for another: a call whose walk finds both
+/// places taken carries one of those walks on instead.
 const MEASURING_WALKS: usize = 2;
 
 /// How many ends found are kept, the oldest going first. A few bytes each.
@@ -727,13 +775,25 @@ impl Measures {
         Some((data, walk))
     }
 
-    /// Put a walk back to be carried on next go.
+    fn has_room(&self) -> bool {
+        self.walking.len() < MEASURING_WALKS
+    }
+
+    /// Put a walk back to be carried on next go. As in [`Unfinished::put`],
+    /// a place has to be free.
     fn put(&mut self, key: RunKey, codec: Codec, data: Vec<u8>, walk: inflate::Measuring, stamp: u64) {
-        while self.walking.len() >= MEASURING_WALKS {
-            let oldest = (0..self.walking.len()).min_by_key(|&i| self.walking[i].4).expect("not empty");
-            self.walking.swap_remove(oldest);
-        }
+        assert!(self.has_room(), "no free place to put a walk in");
         self.walking.push((key, codec, data, walk, stamp));
+    }
+
+    /// The walk with the fewest bits left to read, taken out to be carried on
+    /// by a call waiting for a place. A walk stops where its stream ends,
+    /// which may be well before the end of the bytes it measures, so this is
+    /// only a guess at which walk frees a place soonest.
+    fn take_nearest_its_end(&mut self) -> Option<(RunKey, Codec, Vec<u8>, inflate::Measuring)> {
+        let i = (0..self.walking.len()).min_by_key(|&i| (self.walking[i].2.len() as u64 * 8).saturating_sub(self.walking[i].3.read_bits()))?;
+        let (key, codec, data, walk, _) = self.walking.swap_remove(i);
+        Some((key, codec, data, walk))
     }
 
     fn is_empty(&self) -> bool {
@@ -1170,37 +1230,95 @@ impl super::Evaluator {
 
     /// The pass behind [`Self::index_run`], for a run with no refusal kept.
     fn index_pass<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
-        let started = self.spaces.unfinished.borrow_mut().take(key, codec);
-        let mut pass = match started {
-            Some(pass) => pass,
-            None => {
-                #[cfg(test)]
-                self.spaces.passes.set(self.spaces.passes.get() + 1);
-                if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
-                    return Ok(Err(Refusal::TooLarge));
-                }
-                let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
-                if !lazy::can_step(codec) {
-                    return Ok(lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits));
-                }
-                match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
-                    Ok(pass) if known_large => pass.known_large(),
-                    Ok(pass) => pass,
-                    Err(why) => return Ok(Err(why)),
-                }
-            }
+        let held = self.spaces.unfinished.borrow_mut().take(key, codec);
+        match held {
+            Some(Held::Pass(pass)) => return self.index_steps(key, codec, pass, true),
+            Some(Held::Whole(bytes, trace)) => return Ok(Ok(Decoded::Whole(bytes, trace))),
+            None => {}
+        }
+        if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
+            return Ok(Err(Refusal::TooLarge));
+        }
+        // A go with no allowance carries its pass to the end before it hands
+        // back, so it never puts one back and needs no place. A go that has
+        // spent its allowance already starts nothing: the pass would take a
+        // place having done nothing.
+        if lazy::can_step(codec) && self.go.limited() {
+            self.go.charge(0)?;
+            self.wait_for_a_place()?;
+        }
+        #[cfg(test)]
+        self.spaces.passes.set(self.spaces.passes.get() + 1);
+        let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
+        if !lazy::can_step(codec) {
+            return Ok(lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits));
+        }
+        let pass = match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
+            Ok(pass) if known_large => pass.known_large(),
+            Ok(pass) => pass,
+            Err(why) => return Ok(Err(why)),
         };
+        self.index_steps(key, codec, pass, true)
+    }
+
+    /// Step `pass`, over the run at `key`, until it finishes or this go runs
+    /// out. A go that runs out puts the pass back in its place and hands back
+    /// `Busy`. It notes the pass as the one it ran out in when the pass is the
+    /// call's own (`own`), and otherwise notes that the call waits for a place
+    /// with no progress of its own to give.
+    fn index_steps(&self, key: RunKey, codec: Codec, mut pass: lazy::Indexing, own: bool) -> super::R<Result<Decoded, Refusal>> {
         loop {
             if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
-                self.go.ran_out_in(super::Unpacking::of(key, pass.progress()));
+                if own {
+                    self.go.ran_out_in(super::Unpacking::of(key, pass.progress()));
+                } else {
+                    self.go.ran_out_waiting();
+                }
                 let stamp = self.spaces.stamp();
-                self.spaces.unfinished.borrow_mut().put(key, codec, pass, stamp);
+                self.spaces.unfinished.borrow_mut().put(key, codec, Held::Pass(pass), stamp);
                 return Err(busy);
             }
             match pass.step(INDEX_STEP_BYTES) {
                 Ok(Stepped::Working) => {}
                 Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
                 Err(why) => return Ok(Err(why)),
+            }
+        }
+    }
+
+    /// Wait for a free place in `Unfinished`, for a pass about to start.
+    ///
+    /// While both places are taken, this go carries on the pass nearest its
+    /// end, which is another call's, until the go runs out and hands back
+    /// `Busy`, or until that pass finishes. What a pass finished here comes to
+    /// is kept where its own call will find it: an index in `Indexes` and a
+    /// refusal in `refused_runs`, which free its place, or a run held whole in
+    /// the place itself. Every go that reaches a pass so moves one of the
+    /// unfinished passes on, so they all finish, and a pass nobody asks for
+    /// any more is finished by the calls waiting behind it.
+    ///
+    /// When both places hold runs finished this way and not yet taken, the
+    /// one put there first is let go of, since there is then nothing to carry
+    /// on and nothing would ever free a place.
+    fn wait_for_a_place(&self) -> super::R<()> {
+        loop {
+            if self.spaces.unfinished.borrow().has_room() {
+                return Ok(());
+            }
+            let nearest = self.spaces.unfinished.borrow_mut().take_nearest_its_end();
+            let Some((other, codec, pass)) = nearest else {
+                self.spaces.unfinished.borrow_mut().drop_oldest_whole();
+                continue;
+            };
+            match self.index_steps(other, codec, pass, false)? {
+                Ok(Decoded::Indexed(index)) => self.spaces.keep_index(other, codec, Arc::new(index)),
+                Ok(Decoded::Whole(bytes, trace)) => {
+                    let stamp = self.spaces.stamp();
+                    self.spaces.unfinished.borrow_mut().put(other, codec, Held::Whole(bytes, trace), stamp);
+                }
+                Err(why) => {
+                    self.spaces.refused_runs.borrow_mut().insert((other, codec), why);
+                }
             }
         }
     }
@@ -1215,28 +1333,52 @@ impl super::Evaluator {
     /// back `Busy` with the walk kept, to be carried on from where it stopped
     /// the next time the same stream is measured. What it finds is kept as
     /// well. Any other codec is answered in one go, as before.
+    ///
+    /// A walk that has started is never let go of to make room for another.
+    /// A deflate stream whose walk finds both places taken waits for one, as
+    /// an index pass does in [`Self::wait_for_a_place`]: this go carries on
+    /// the walk nearest its end, whose end is kept in `Measures` for its own
+    /// call. A go with no allowance needs no place.
     pub(super) fn stream_end<S: Source>(&mut self, doc: &Document<S>, key: RunKey, codec: Codec) -> super::R<Result<u64, Refusal>> {
         if let Some(found) = self.spaces.measures.ended(key, codec) {
             return Ok(found);
         }
-        let started = self.spaces.measures.take(key, codec);
-        let (data, mut walk) = match started {
-            Some(walk) => walk,
-            None => {
-                let data = self.read_in(doc, key.0, key.1, key.2)?;
-                if codec != Codec::Deflate {
-                    return Ok(crate::codec::stream_len(codec, &data));
-                }
-                (data, inflate::Measuring::new(self.spaces.lazy_limits.measure))
+        if let Some((data, walk)) = self.spaces.measures.take(key, codec) {
+            return self.measure_steps(key, codec, data, walk, true);
+        }
+        if codec == Codec::Deflate && self.go.limited() {
+            self.go.charge(0)?;
+            while !self.spaces.measures.has_room() {
+                let (other, other_codec, data, walk) = self.spaces.measures.take_nearest_its_end().expect("both places hold a walk");
+                // Whatever it finds is kept in `Measures` for its own call.
+                let _ = self.measure_steps(other, other_codec, data, walk, false)?;
             }
-        };
+        }
+        let data = self.read_in(doc, key.0, key.1, key.2)?;
+        if codec != Codec::Deflate {
+            return Ok(crate::codec::stream_len(codec, &data));
+        }
+        let walk = inflate::Measuring::new(self.spaces.lazy_limits.measure);
+        self.measure_steps(key, codec, data, walk, true)
+    }
+
+    /// Step the walk measuring the stream at `key` until it finds where the
+    /// stream ends, or why it has no end to give, or until this go runs out.
+    /// What it finds is kept in `Measures`. A go that runs out puts the walk
+    /// back and hands back `Busy`, noting the walk as the one it ran out in
+    /// when the walk is the call's own (`own`), as `index_steps` does.
+    fn measure_steps(&mut self, key: RunKey, codec: Codec, data: Vec<u8>, mut walk: inflate::Measuring, own: bool) -> super::R<Result<u64, Refusal>> {
         loop {
             if let Err(busy) = self.go.charge(0) {
-                // The share read is of the bytes the walk measures, which run
-                // from the start of the stream to the end of the container or
-                // the cap.
-                let progress = lazy::Progress { read_bits: walk.read_bits(), run_bits: data.len() as u64 * 8, unpacked: walk.unpacked() };
-                self.go.ran_out_in(super::Unpacking::of(key, progress));
+                if own {
+                    // The share read is of the bytes the walk measures, which
+                    // run from the start of the stream to the end of the
+                    // container or the cap.
+                    let progress = lazy::Progress { read_bits: walk.read_bits(), run_bits: data.len() as u64 * 8, unpacked: walk.unpacked() };
+                    self.go.ran_out_in(super::Unpacking::of(key, progress));
+                } else {
+                    self.go.ran_out_waiting();
+                }
                 let stamp = self.spaces.stamp();
                 self.spaces.measures.put(key, codec, data, walk, stamp);
                 return Err(busy);
@@ -1648,6 +1790,9 @@ mod tests {
                 Err(EvalError::Busy { .. }) => {
                     goes += 1;
                     assert!(goes < 2000, "no end to the goes");
+                    // A member's start is known only once the member before
+                    // it is measured, so one walk at a time is under way.
+                    assert!(e.spaces.measures.walking.len() <= 1, "{} walks under way", e.spaces.measures.walking.len());
                     if !e.spaces.measures.walking.is_empty() {
                         measuring += 1;
                         // The walk stepped last is the one reported, and it
@@ -1848,6 +1993,212 @@ mod tests {
         assert!(listing >= 3 && opening >= 3, "{listing} goes listing, {opening} opening");
         assert_eq!(listed, Some(13));
         assert!(opened.flatten().is_some(), "the second member's stream opened");
+    }
+
+    /// A ZIP of `entries`, each deflated at level 6, and where each entry's
+    /// deflate run starts, in bits. Only the local records and the end record
+    /// are written: the template reads the records in order and needs nothing
+    /// from a central directory.
+    fn zip_of(entries: &[Vec<u8>]) -> (Vec<u8>, Vec<u64>) {
+        let (mut file, mut starts) = (Vec::new(), Vec::new());
+        for (i, text) in entries.iter().enumerate() {
+            let packed = miniz_oxide::deflate::compress_to_vec(text, 6);
+            let name = format!("{i}.txt");
+            file.extend(b"PK\x03\x04");
+            file.extend(20u16.to_le_bytes()); // version needed
+            file.extend(0u16.to_le_bytes()); // flags
+            file.extend(8u16.to_le_bytes()); // deflate
+            file.extend([0u8; 4]); // time and date
+            file.extend(crate::checksum::crc32(text).to_le_bytes());
+            file.extend((packed.len() as u32).to_le_bytes());
+            file.extend((text.len() as u32).to_le_bytes());
+            file.extend((name.len() as u16).to_le_bytes());
+            file.extend(0u16.to_le_bytes()); // no extra field
+            file.extend(name.as_bytes());
+            starts.push(file.len() as u64 * 8);
+            file.extend(packed);
+        }
+        let directory = file.len() as u32;
+        file.extend(b"PK\x05\x06");
+        file.extend([0u8; 12]); // disks, entries and the directory's size: none
+        file.extend(directory.to_le_bytes());
+        file.extend(0u16.to_le_bytes()); // no comment
+        (file, starts)
+    }
+
+    /// Where entry `i`'s data is in the ZIP template: each record is its
+    /// signature and its body, and the body's fifteenth field is the data.
+    fn zip_data(i: usize) -> [usize; 4] {
+        [0, i, 1, 14]
+    }
+
+    /// Every byte of an opened space, whether it is held whole or read
+    /// through an index.
+    fn bytes_of(e: &Evaluator, id: crate::eval::SpaceId) -> Vec<u8> {
+        match e.space(id).expect("a space").source().clone() {
+            SpaceSource::Whole(bytes) => bytes.to_vec(),
+            SpaceSource::Lazy(index) => {
+                let mut got = vec![0u8; index.len() as usize];
+                assert!(index.read(0, &mut got).is_ok());
+                got
+            }
+            SpaceSource::Joined(_) => panic!("a joined stream"),
+        }
+    }
+
+    /// Open the data of the ZIP entries in `asks`, one go each, by turns,
+    /// until each of them has opened. An entry named more than once in `asks`
+    /// is asked that many times a round. Each go that hands back `Busy` names
+    /// its own entry's run or none, each entry's pass never goes back, and no
+    /// more passes are held unfinished than there are places for. Gives each
+    /// entry's space, by entry.
+    fn open_by_turns(e: &mut Evaluator, d: &Document<MemSource>, starts: &[u64], asks: &[usize]) -> Vec<Option<crate::eval::SpaceId>> {
+        use crate::eval::EvalError;
+        let mut opened = vec![None; starts.len()];
+        let mut read = vec![0u64; starts.len()];
+        let wanted: std::collections::BTreeSet<usize> = asks.iter().copied().collect();
+        let mut rounds = 0;
+        while wanted.iter().any(|&i| opened[i].is_none()) {
+            for &i in asks {
+                if opened[i].is_some() {
+                    continue;
+                }
+                e.begin_slice();
+                match e.open_space(d, 0, &zip_data(i)) {
+                    Ok(id) => opened[i] = Some(id.expect("the entry's data opens")),
+                    Err(EvalError::Busy { .. }) => {
+                        if let Some(p) = e.unpacking() {
+                            assert_eq!((p.run_space, p.run_offset_bits), (0, starts[i]), "round {rounds}: entry {i} named another entry's pass");
+                            assert!(p.read_bits >= read[i], "round {rounds}: entry {i}'s pass went back from {} to {}", read[i], p.read_bits);
+                            read[i] = p.read_bits;
+                        }
+                    }
+                    Err(other) => panic!("{other:?}"),
+                }
+                assert!(e.spaces.unfinished.borrow().entries.len() <= super::UNFINISHED_PASSES);
+            }
+            rounds += 1;
+            assert!(rounds < 300, "no end to the rounds, the passes at {read:?}");
+        }
+        opened
+    }
+
+    /// Three large streams carried on by turns, one go each, as a listing
+    /// showing three ZIP entries at once carries them on. There are places
+    /// for two passes that have not finished. A third stream used to push out
+    /// the pass stepped longest ago, which then started again from the front
+    /// on its next go, so that none of them ever finished. Now a stream that
+    /// finds both places taken spends its go carrying one of those passes on,
+    /// and starts its own once one of them has finished. Each pass is made
+    /// once, also when one stream is asked four times a round, and each
+    /// stream reads back its own text.
+    #[test]
+    fn three_streams_carried_on_by_turns_all_open() {
+        let texts: Vec<Vec<u8>> = (0..3).map(|i| numbered_lines(140_000, 10 + i)).collect();
+        let (file, starts) = zip_of(&texts);
+        let d = Document::new(MemSource(file));
+        for asks in [&[0, 1, 2][..], &[0, 1, 2, 2, 2, 2], &[2, 2, 2, 2, 0, 1]] {
+            let mut e = Evaluator::new(formats::builtin("zip").unwrap());
+            e.spaces.set_lazy_limits(small_limits());
+            e.set_slice(Some(600));
+            let opened = open_by_turns(&mut e, &d, &starts, asks);
+            assert_eq!(e.spaces.passes.get(), 3, "asked {asks:?}");
+            e.set_slice(None);
+            for (i, id) in opened.into_iter().enumerate() {
+                let id = id.expect("opened");
+                assert!(e.spaces.lazy(id).is_some(), "entry {i} is past the cap");
+                assert!(bytes_of(&e, id) == texts[i], "entry {i}'s bytes, asked {asks:?}");
+            }
+        }
+    }
+
+    /// Two streams started and never asked for again, then a third: the
+    /// third opens, by carrying the other two to their ends first, and the
+    /// first two are there for the asking afterwards. Past the cap they come
+    /// to indexes, kept with the others. Under it they come to runs held
+    /// whole, which wait in their places for a call to take them; with both
+    /// places holding one, the third lets go of the one put there first, and
+    /// that stream is unpacked again when it is asked for.
+    #[test]
+    fn a_stream_opens_behind_two_that_nobody_asks_for_any_more() {
+        use crate::eval::EvalError;
+        let texts: Vec<Vec<u8>> = (0..3).map(|i| numbered_lines(140_000, 30 + i)).collect();
+        let (file, starts) = zip_of(&texts);
+        let d = Document::new(MemSource(file));
+        let under = crate::codec::lazy::Limits { whole: 4 << 20, ..small_limits() };
+        for (limits, passes) in [(small_limits(), 3), (under, 4)] {
+            let mut e = Evaluator::new(formats::builtin("zip").unwrap());
+            e.spaces.set_lazy_limits(limits);
+            e.set_slice(Some(600));
+            for i in [0, 1] {
+                e.begin_slice();
+                assert!(matches!(e.open_space(&d, 0, &zip_data(i)), Err(EvalError::Busy { .. })), "entry {i} opened in one go");
+                assert_eq!(e.unpacking().map(|p| p.run_offset_bits), Some(starts[i]));
+            }
+            let third = open_by_turns(&mut e, &d, &starts, &[2]);
+            let opened = open_by_turns(&mut e, &d, &starts, &[0, 1]);
+            assert_eq!(e.spaces.passes.get(), passes, "{} passes, the cap at {} bytes", e.spaces.passes.get(), limits.whole);
+            e.set_slice(None);
+            for (i, id) in [opened[0], opened[1], third[2]].into_iter().enumerate() {
+                let id = id.expect("opened");
+                assert_eq!(e.spaces.lazy(id).is_some(), limits.whole < texts[i].len(), "entry {i}");
+                assert!(bytes_of(&e, id) == texts[i], "entry {i}'s bytes, the cap at {} bytes", limits.whole);
+            }
+        }
+    }
+
+    /// The same for the walks measuring where deflate streams end: three
+    /// streams measured by turns each carry on from where they stopped, and
+    /// each comes to its own end. The gzip template never has two walks under
+    /// way, since a member's start is known only once the member before it
+    /// has been measured, but a template of one's own can.
+    #[test]
+    fn three_streams_measured_by_turns_all_end() {
+        use crate::codec::Codec;
+        use crate::eval::EvalError;
+        let texts: Vec<Vec<u8>> = (0..3).map(|i| numbered_lines(90_000, 40 + i)).collect();
+        let members: Vec<Vec<u8>> = texts.iter().map(|t| gzip_member(t)).collect();
+        let file = members.concat();
+        // Each member's deflate, which starts after ten bytes of header, and
+        // the bits from there to the end of the file, which is what a walk
+        // measuring it reads.
+        let mut keys = Vec::new();
+        let mut at = 0u64;
+        for m in &members {
+            keys.push((0, (at + 10) * 8, (file.len() as u64 - at - 10) * 8));
+            at += m.len() as u64;
+        }
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        let (mut ended, mut read, mut rounds) = (vec![None; 3], vec![0u64; 3], 0);
+        while ended.iter().any(Option::is_none) {
+            for i in 0..3 {
+                if ended[i].is_some() {
+                    continue;
+                }
+                e.begin_slice();
+                match e.stream_end(&d, keys[i], Codec::Deflate) {
+                    Ok(found) => ended[i] = Some(found),
+                    Err(EvalError::Busy { .. }) => {
+                        if let Some(p) = e.unpacking() {
+                            assert_eq!(p.run_offset_bits, keys[i].1, "round {rounds}: stream {i} named another stream's walk");
+                            assert!(p.read_bits >= read[i], "round {rounds}: stream {i}'s walk went back from {} to {}", read[i], p.read_bits);
+                            read[i] = p.read_bits;
+                        }
+                    }
+                    Err(other) => panic!("{other:?}"),
+                }
+                assert!(e.spaces.measures.walking.len() <= super::MEASURING_WALKS);
+            }
+            rounds += 1;
+            assert!(rounds < 300, "no end to the rounds, the walks at {read:?}");
+        }
+        let deflate = |text: &[u8]| miniz_oxide::deflate::compress_to_vec(text, 6).len() as u64;
+        let ends: Vec<_> = texts.iter().map(|t| Some(Ok(deflate(t)))).collect();
+        assert_eq!(ended, ends);
+        assert!(read.iter().all(|&r| r > 0), "each walk took more than one go: {read:?}");
     }
 
     /// An xz stream of several blocks and a zstd run of several frames, past

@@ -26,6 +26,9 @@ built in these parts:
 - 2026-11-26: a read of an xz span decodes only as far as the read reaches.
 - 2026-11-26: finding where a gzip member's deflate stream ends is done a step
   at a time too. See "Measuring a member's stream in steps".
+- 2026-11-26: a pass that has started is never pushed out to make room for
+  another, so three or more large streams carried on by turns all finish. See
+  "Waiting for a place".
 
 "Still to do" at the end lists what is left.
 
@@ -229,8 +232,10 @@ In the evaluator, `Evaluator::index_run` is the one way in, used by
 charged to the go's allowance first (`Go::charge`, which takes the evaluator
 shared, since reads of a stitched stream reach here and reads do), and a go
 that runs out hands back `Busy` with the pass put back in `Spaces`'
-`Unfinished` table, keyed by the run like `Indexes`. Only two unfinished
-passes are kept, since one in its traced phase holds up to 64 MiB. A finished
+`Unfinished` table, keyed by the run like `Indexes`. It has places for only
+two unfinished passes, since one in its traced phase holds up to 64 MiB, and a
+pass that would start while both are taken waits for one (see "Waiting for a
+place"). A finished
 index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
 tab's source reads an index with no evaluator behind it. `Spaces::forget`
 drops both. `Evaluator::unpacking` reports the pass the current go ran out
@@ -288,10 +293,12 @@ the same fallback past 64 MiB.
   into the `Measures` table in `Spaces`, together with the bytes it walks. The
   table is keyed by the space, the bit where the stream starts and the number
   of bits measured. The next go that measures the same stream carries on from
-  where the walk stopped, without reading the bytes again. At most two walks
-  are kept, and each holds its compressed bytes, up to 64 MiB. `Measures` is
-  separate from `Unfinished`, so measuring one member never evicts another
-  member's index pass.
+  where the walk stopped, without reading the bytes again. There are places
+  for two walks, and each holds its compressed bytes, up to 64 MiB. A walk
+  that would start while both places are taken waits for one, as an index
+  pass does (see "Waiting for a place"). `Measures` is separate from
+  `Unfinished`, so a member's walk and another member's index pass never wait
+  for each other.
 - **The ends found.** `Measures` also keeps the last 64 results: where each
   stream ended, or why it was refused. This is a guard. If a go ran out after
   a walk had finished but before the field that the walk sizes was placed, the
@@ -653,7 +660,10 @@ backstop. `fileChunks` waits on the reads `handleReply` already started
 tab asked. A press while a wait is under way puts a new wait in its place.
 The listing's placeholder row for fields it cannot show yet says how far the
 unpacking of the stream they wait on has got (`pendingText` in
-`listingdraw.ts`), and is updated on each redraw. The report's streams
+`listingdraw.ts`), and is updated on each redraw. While the core works on them
+with no progress to give, it says "Reading these fields…" (see "Which pass a
+call waits on"), and while bytes of the file load, "Loading bytes needed to
+map these fields…". The report's streams
 section waits for it as it waits for bytes, and waits the same way while the
 bytes load.
 
@@ -679,13 +689,96 @@ So `unpacking` asked right after a call is that call's stream. `Doc.openSpace`
 asks right after `open_space`, as before. The listing cannot, since it draws
 after its walk, so `template_children` puts it on its "working" reply as
 `unpacking`, and the walk keeps it on the pending item it puts where those
-children go. Each placeholder then shows the stream its own fields wait on. A
-"working" reply with no `unpacking` leaves the text a placeholder already
-shows, and Open unpacked keeps the last progress it was told, rather than
-going back to 0% for a go.
+children go. Each placeholder then shows the stream its own fields wait on.
+After a "working" reply with no `unpacking`, a placeholder keeps the
+percentage it already shows (`keepsProgress` in `listingdraw.ts`), and Open
+unpacked keeps the last progress it was told, rather than going back to 0% for
+one go. A placeholder that shows no percentage yet says "Reading these
+fields…" after such a reply. It cannot say more, because a reply with no
+progress can come from a go that ran out before it reached the stream's pass,
+from a stream waiting for a place (see "Waiting for a place"), or from any
+other reading that takes more than one go. "Loading bytes needed to map these
+fields…" is said only while bytes of the file are loading.
 
-The stamps stay, to choose which pass to let go of when `Unfinished` or
-`Measures` is full.
+Each entry in `Unfinished` and `Measures` still has the stamp it was put there
+with. It is now used only to choose which finished run to drop when both
+places in `Unfinished` hold one (see "Waiting for a place").
+
+### Waiting for a place
+
+Passes that have not finished are kept in `Unfinished`, which has places for
+two (`UNFINISHED_PASSES`), because a pass in its traced phase holds up to
+64 MiB of output and its trace. Until 2026-11-26 a pass put back into a full
+table pushed out the pass stepped least recently. When three large streams
+were stepped in turn, as in a listing of three ZIP entries each past 64 MiB
+unpacked, each go started or carried on one pass and pushed out another, which
+started again from the front on its next go, so none of them finished. A test
+showed it before the change: three ZIP entries of about 2.2 MB unpacked each,
+with the cap lowered to 64 KiB for the test, stayed at one go's progress for
+300 rounds. Three walks measuring deflate streams in `Measures` did the same.
+
+Now a pass that has started is never pushed out. A call whose pass would start
+while both places are taken waits for a place, and does work meanwhile
+(`Evaluator::wait_for_a_place`):
+
+- With its own go's allowance, the call carries on the pass in `Unfinished`
+  with the fewest compressed bits left to read, since that pass frees a place
+  soonest. A go that runs out in that pass hands back `Busy` and notes that
+  its call waits with no progress of its own to give (`Go::ran_out_waiting`),
+  so `unpacking` says nothing, rather than the other stream's progress.
+- A pass finished this way leaves its result where the call over its own run
+  will find it. An index goes to `Indexes` and a refusal to `refused_runs`,
+  both kept by the run, and the pass's place comes free. Output of no more
+  than the cap, held whole, stays in the pass's place (`Held::Whole`) until a
+  call over the same run takes it. The call that finished the pass cannot hand
+  it to the `Decoded` node, which keeps a run held whole by the node's path,
+  because it does not know that path. Output held whole counts as one of the
+  two places, since it is as large as a pass in its traced phase.
+- When both places hold output finished this way and not yet taken, the one
+  put there first is dropped, since nothing would free a place otherwise. Its
+  stream is unpacked again if it is asked for.
+- A go with an unlimited allowance (`set_slice(None)`) finishes its pass
+  before it hands back, so it never puts one back and needs no place. Its pass
+  runs beside the two in `Unfinished`, as it did before. A go that has spent
+  all of its allowance starts no pass, since the pass would take a place
+  having done nothing.
+- `put` asserts that a place is free, rather than pushing a pass out.
+
+Measuring walks wait the same way in `Measures`, and the end a waiting call
+finds for another call's stream is kept in `Measures` with the other ends
+found. The gzip template never has two walks under way, since a member's start
+is known only once the member before it has been measured, and its tests check
+that. A template written in the text form can use `StreamLen` in fields that
+are read independently of each other, and then its walks can wait for a place.
+
+**Why waiting, and not more places.** Two other ways were considered.
+
+1. Keep a pass that is past its traced phase outside the two places. Such a
+   pass holds its window, its checkpoints (up to 8 MiB of windows) and its
+   compressed run (up to 64 MiB), so it is smaller than a traced pass but not
+   small. On its own this does not help. A ZIP entry's run is opened with
+   `known_large` false, so its pass starts traced, and raw deflate has no
+   trailer to say the run is large. So all three passes start in their traced
+   phase at once, and push each other out before any of them passes the cap.
+   Waiting is needed for the traced phase anyway, and with it, more places
+   would not finish the streams any sooner, since the work is the same and
+   each go's allowance is the limit. With waiting, the first two streams
+   finish first and the third after them, at about the time all three would
+   have finished together.
+2. Answer a waiting call with `Busy` at once, without carrying anything on,
+   and once it has been turned away some number of times, let it push out a
+   pass that no call stepped in that time. A call cannot tell a pass nobody
+   wants from one asked for less often than the waiting call is. Open unpacked
+   asks again on `setTimeout(0)`, several times a frame when each go comes back
+   at once, and the listing asks once a frame, so a turned-away Open unpacked
+   would push out passes the listing is still carrying on. Carrying a pass on
+   needs no such count: every ask moves a held pass forward, however often the
+   asks come.
+
+The cost: a pass nobody asks for any more, such as one whose Open unpacked was
+replaced by a press on another stream, keeps its place until calls waiting
+behind it have finished it, and finishing it can mean unpacking up to 1 GiB.
+Meanwhile those calls show no progress of their own. See "Still to do".
 
 ### Children that are ready
 
@@ -725,7 +818,8 @@ children are still to come is a placeholder until they are all in. A slice
 with none ready is a placeholder for the whole structure, as before.
 
 While the member's stream is measured, this does not help: the listing has
-no rows at all (see "Still to do").
+no rows at all, and showing any needs more than the children that are ready
+(see "Still to do").
 
 Measured on 2026-10-26 in Chromium, with a generated gzip of 500,007,092
 bytes of CSV-like text packed to 20,306,027 (`make_gz.py` in that session's
@@ -1016,14 +1110,41 @@ The `hash` feature makes that module 2.3 KB larger.
 ## Still to do
 
 - While a gzip member's stream is measured, the listing has no rows at all,
-  not even a placeholder. The root's node waits on the walk: `members` is a
-  list read to the end of the file, so its count and the root's extent need
-  every member's length. The header fields themselves are ready
-  (`node` answers them), but nothing above them is. Only once the index pass
-  starts does the listing show the member's header above a placeholder. For
-  the CSV-like text in "Measuring a member's stream in steps", measuring was
-  about 35 of the 82 goes it took to open. Answering a list's node before its
-  count is known would need the listing to cope with a count that grows.
+  not even a placeholder. Only once the index pass starts does the listing
+  show the member's header above a placeholder. For the CSV-like text in
+  "Measuring a member's stream in steps", measuring was about 35 of the 82
+  goes it took to open. The children that are ready (see "Children that are
+  ready") cannot show anything sooner, because everything above the member's
+  header waits on the walk:
+  1. `flatten` draws nothing until the root's `node` answers, and the root's
+     `node` needs `size_of`, which needs where every member ends.
+  2. `children_ready` of the root gives nothing while `members` waits:
+     `members` is a list read to the end of the file, and its `node` needs
+     its count, so `members` waits and ends the slice at the first child.
+  3. The member being measured has no size until its walk ends, so its own
+     `node` waits too, though its ten header fields are ready.
+
+  In a file of one member, which is most gzip files, no member has been
+  measured yet while the walk runs, so showing the members measured so far
+  would show nothing: only the member's own header could show. Doing it would
+  take a `NodeInfo` that can say its size and its count are not known yet; a
+  root, a list and a structure answered that way while a walk runs under
+  them; a `children_ready` that gives a list's elements before its count is
+  known; and a listing that draws a list whose count grows and a structure
+  whose end is not known: no edge counting the rest, no range on the heading
+  and no share of the file until the walk ends. A finished listing would look
+  as it does now. Neither the wire format nor the listing has any of these
+  yet, so this was left.
+- A pass nobody asks for any more keeps its place in `Unfinished` until calls
+  waiting for a place have finished it, up to 1 GiB of output: for example a
+  stream whose Open unpacked was replaced by a press on another stream, with
+  two other streams being unpacked. Letting it go instead would need a way to
+  tell a pass nobody wants from one asked for less often than the call
+  waiting; see "Waiting for a place" for why counting asks cannot. Meanwhile
+  the waiting call has no progress to show: the listing says "Reading these
+  fields…", and Open unpacked's status bar says 0% and 0 B unpacked until its
+  own pass starts. Saying that the stream waits for others to finish would
+  need `Unpacking` to carry that.
 - A slice whose children wait on bytes of the file is still answered whole on
   the wire, though `Evaluator::children_ready` has the children before the
   first that waits. Sending them too would let a ZIP entry's header show while
@@ -1031,12 +1152,6 @@ The `hash` feature makes that module 2.3 KB larger.
   children while their siblings' chunks load, which is what `CHUNK_BUDGET`
   was tuned against. It would want a test of the chunk cache whose source
   gives them, as `cachedSource` in `flatten.test.ts` does not.
-- Only two unfinished passes are kept (`UNFINISHED_PASSES`). Read from the
-  code, not yet tried: a ZIP with three large entries arrives with all three
-  open, so each frame of the listing steps three passes, and each one put back
-  pushes out the one stepped longest ago, which starts again from the front
-  the next frame. None of them would finish while the listing alone carries
-  them on.
 - A stream opened through the core's own reading of a recognised space
   (`Evaluator::open_space` given that space, or `tab_node`) is unpacked in
   one go, since that reading has no allowance. The wasm crate does not go
@@ -1163,7 +1278,11 @@ The `hash` feature makes that module 2.3 KB larger.
   ten header fields as `ready` and the member's run as `unpacking`, and then
   whole. Two such tars as the entries of a ZIP: a listing of the first
   entry's fields and Open unpacked on the second, by turns, each say how far
-  their own entry's pass has got, on every "working" reply.
+  their own entry's pass has got, on every "working" reply. Three tars of
+  12 MiB of zeros as the entries of a ZIP, each entry's fields asked for once
+  a round: all three list within 100 rounds, at least one "working" reply
+  names no pass, since its entry waited for a place, and every other one
+  names its own entry's pass, which never goes back.
 - Which pass a call waits on, and the children that are ready, in
   `eval::space` with the limits made small. A gzip member's children, read in
   goes of 600 elements, come back with the header ready and the rest waiting
@@ -1172,6 +1291,19 @@ The `hash` feature makes that module 2.3 KB larger.
   other, each report their own run; a go reports nothing until it runs out
   in a pass; and a go that runs out in one pass and then reaches the other
   reports the first.
+- Waiting for a place, in `eval::space` with the limits made small, on ZIPs
+  made in the test. Three entries of about 2 MB each, opened by turns a go at
+  a time, all open, with three passes made and no more; also with the third
+  entry asked four times a round, before the others and after them. Every
+  `Busy` names its own entry's run or none, no pass goes back, no more than
+  two passes are held at any go, and each entry reads back its own text. Two
+  entries started and never asked for again, then a third: the third opens,
+  past the cap with three passes made, and under it, where both places come
+  to hold runs held whole, with four, the first of those having been let go
+  of; then the first two open and read back their text. Three deflate streams
+  measured by turns each come to their own end, and the gzip template's
+  members are measured one walk at a time. Before the change, the three
+  entries and the three streams stayed at one go's progress for 300 rounds.
 - `web/test/openwait.test.ts`: `waitToOpen` loads and asks again through
   "pending" and "working" to the tab, and stops on the same chunks twice, on
   chunks pushed out by their own load, on a read that fails, after
