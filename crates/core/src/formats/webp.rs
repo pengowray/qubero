@@ -217,7 +217,7 @@ fn vp8() -> T {
     )
     .field_doc(
         "token_partitions",
-        "The quantized DCT and WHT coefficients, boolean-entropy-coded in 1, 2, 4 or 8 partitions. These bytes start with a 3-byte little-endian size for each partition except the last. The editor cannot show these sizes as separate fields, because the partition count is in first_partition.",
+        "The quantized DCT and WHT coefficients, boolean-entropy-coded in 1, 2, 4 or 8 partitions. When there is more than one partition, these bytes start with a 3-byte little-endian size for each partition except the last. The editor cannot show these sizes as separate fields, because the partition count is in first_partition.",
     )
 }
 
@@ -591,23 +591,34 @@ mod tests {
     #[test]
     fn exif_reads_as_a_tiff_with_or_without_the_jpeg_prefix() {
         // A big-endian TIFF with one directory of one ASCII tag, Make, whose
-        // eight bytes are behind an offset counted from the TIFF's start.
+        // seven bytes are behind an offset of 26, counted from the TIFF's
+        // first byte.
         let mut tiff = b"MM\0\x2a\0\0\0\x08".to_vec();
         tiff.extend_from_slice(&1u16.to_be_bytes());
         tiff.extend_from_slice(&0x010fu16.to_be_bytes());
         tiff.extend_from_slice(&2u16.to_be_bytes());
-        tiff.extend_from_slice(&8u32.to_be_bytes());
+        tiff.extend_from_slice(&7u32.to_be_bytes());
         tiff.extend_from_slice(&26u32.to_be_bytes());
         tiff.extend_from_slice(&0u32.to_be_bytes());
-        tiff.extend_from_slice(b"Qubero\0\0");
+        tiff.extend_from_slice(b"Qubero\0");
         let mut prefixed = b"Exif\0\0".to_vec();
         prefixed.extend_from_slice(&tiff);
-        for (data, tiff_at) in [(tiff.clone(), vec!["chunks", "0", "body"]), (prefixed, vec!["chunks", "0", "body", "tiff"])] {
+        // The chunk's payload starts 20 bytes into the file, and the TIFF 6
+        // bytes after that when the prefix is there.
+        let cases = [(tiff.clone(), vec!["chunks", "0", "body"], 20), (prefixed, vec!["chunks", "0", "body", "tiff"], 26)];
+        for (data, tiff_at, tiff_start) in cases {
             let d = file(&[chunk(b"EXIF", &data)]);
             let mut ev = Evaluator::new(webp());
             assert_eq!(node(&mut ev, &d, &tiff_at).type_name, "TIFF");
             let order = [tiff_at.as_slice(), &["byte_order"]].concat();
             assert_eq!(int(&mut ev, &d, &order), 0x4d4d);
+            // file, ifd, the directory, its entries, the first one, its
+            // value, the text it points at: the same steps a JPEG's EXIF
+            // block takes.
+            let make = [tiff_at.as_slice(), &["1", "2", "0", "1", "0", "4", "1", "0"]].concat();
+            let make = node(&mut ev, &d, &make);
+            assert_eq!(make.value, Value::Str("Qubero".into()));
+            assert_eq!(make.offset_bits, (tiff_start + 26) * 8);
         }
     }
 
