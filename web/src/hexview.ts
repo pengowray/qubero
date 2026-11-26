@@ -31,7 +31,7 @@ import { RowHeights, type StructuralExtra } from "./rowheights.ts";
 import { HEXGLYPHS } from "./strings.ts";
 import type { Cell } from "./doc.ts";
 import { ValueFetch } from "./valuefetch.ts";
-import { fieldStep, type FieldAt } from "./fieldstep.ts";
+import { fieldStep, stepDepth, type FieldAt } from "./fieldstep.ts";
 import {
   alignedWidth,
   chooseLayout,
@@ -1515,14 +1515,22 @@ export class HexView {
   // ----- editing -----
 
   /** Pick the field Alt+↑ or Alt+↓ goes to; picking it puts the cursor on its
-   *  start and brings that on screen. */
-  private stepField(dir: "up" | "down"): void {
+   *  start and brings that on screen. `outer` steps by the list or structure
+   *  around the field at the cursor instead of by the field. */
+  private stepField(dir: "up" | "down", outer: boolean): void {
+    const node = (path: readonly number[]) => {
+      const n = this.doc.templateNode(path);
+      return n.status === "ok" ? n.node : null;
+    };
+    const here = this.doc.locate(this.cursorState.bitOffset);
+    if (here.status !== "ok") return;
+    const depth = outer ? stepDepth(here.node) : here.node.length;
     const at: FieldAt = (bit) => {
       const found = this.doc.locate(bit);
       if (found.status !== "ok") return null;
-      const n = this.doc.templateNode(found.node);
-      if (n.status !== "ok") return null;
-      return { path: found.node, start: n.node.offset_bits, end: n.node.offset_bits + n.node.size_bits };
+      const path = found.node.slice(0, depth);
+      const n = node(path);
+      return n === null ? null : { path, start: n.offset_bits, end: n.offset_bits + n.size_bits };
     };
     const to = fieldStep(at, this.cursorState.bitOffset, dir, this.doc.lengthBits);
     if (to !== null) this.onPickField(to.path);
@@ -1554,10 +1562,11 @@ export class HexView {
       void this.copySelection();
       return;
     }
-    // Alt+↑ and Alt+↓ move by fields rather than rows. See `fieldstep.ts`.
+    // Alt+↑ and Alt+↓ move by fields rather than rows; with Shift, by the
+    // list or structure around the field. See `fieldstep.ts`.
     if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
       e.preventDefault();
-      return this.stepField(e.key === "ArrowUp" ? "up" : "down");
+      return this.stepField(e.key === "ArrowUp" ? "up" : "down", e.shiftKey);
     }
     if (mod && (e.key === "Home" || e.key === "End")) {
       // Ctrl+Home and Ctrl+End are the ends of the file. Plain Home and End

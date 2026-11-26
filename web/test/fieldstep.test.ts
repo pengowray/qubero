@@ -4,7 +4,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { fieldStep, type FieldAt } from "../src/fieldstep.ts";
+import { fieldStep, stepDepth, type FieldAt } from "../src/fieldstep.ts";
+
+test("the outer step is one level up from the field", () => {
+  // A field of chunk 7 steps by chunk; an element of list 2 steps over the list.
+  assert.equal(stepDepth([1, 7, 3]), 2);
+  assert.equal(stepDepth([2, 900]), 1);
+  // A field directly under the root steps as itself.
+  assert.equal(stepDepth([4]), 1);
+});
 
 const fields = [
   { path: [0], start: 0, end: 16 },
