@@ -666,16 +666,25 @@ impl Evaluator {
     /// The outermost enclosing structure that reads as one row, or the field
     /// itself when nothing on the way to it is marked that way. `locate` has
     /// already resolved every step, so this only reads what it left behind.
-    pub(super) fn inline_ancestor(&self, root: &[usize], path: &[usize]) -> Vec<usize> {
+    ///
+    /// Only a structure whose own bytes hold `bit` can stand for it. A TIFF
+    /// entry's value is one row, an offset and the values it points at, and
+    /// the values are somewhere else in the file: a bit of them lifted to the
+    /// row would be drawn at the entry, and the bytes where the values really
+    /// are would be left looking like nothing covers them.
+    pub(super) fn inline_ancestor<S: Source>(&mut self, doc: &Document<S>, root: &[usize], path: &[usize], bit: u64) -> R<Vec<usize>> {
         for n in root.len()..path.len() {
             let prefix = &path[..n];
-            if let Some(r) = self.memo.get(prefix) {
-                if matches!(r.ty.base(), Ty::Struct(s) if s.inline) {
-                    return prefix.to_vec();
-                }
+            let inline = matches!(self.memo.get(prefix).map(|r| r.ty.base()), Some(Ty::Struct(s)) if s.inline);
+            if !inline {
+                continue;
+            }
+            let at = self.memo[prefix].offset;
+            if at <= bit && bit < at + self.size_of(doc, prefix)? {
+                return Ok(prefix.to_vec());
             }
         }
-        path.to_vec()
+        Ok(path.to_vec())
     }
 
     /// Every field across a stretch of the file, in order, for the annotation
@@ -707,7 +716,7 @@ impl Evaluator {
         while at < end && out.len() < max {
             let path = self.locate_under(doc, root, at)?;
             // A structure marked to read on one row stands for its fields here.
-            let path = self.inline_ancestor(root, &path);
+            let path = self.inline_ancestor(doc, root, &path, at)?;
             // Everything a decoder's trace laid down stands for the block it
             // belongs to. The cursor goes all the way to one literal, because
             // a reader who clicks a byte of a deflate stream is asking which
@@ -739,6 +748,8 @@ impl Evaluator {
                 self.traced_block_span(doc, &path, &info)?
             } else if info.composite {
                 self.gap_inside(doc, root, &path, &info, at)?
+            } else if self.aside(&path) {
+                self.aside_between_placements(doc, root, &path, &info, at)?
             } else {
                 self.field_or_its_run(doc, &path, &info, at)?
             };
@@ -749,6 +760,35 @@ impl Evaluator {
             }
         }
         Ok(out)
+    }
+
+    /// A field that is a second reading of its bytes, at a bit nothing placed
+    /// over it covers: only the stretch between the placed things either side
+    /// of the bit. A TIFF's `body` is everything after the header, and its
+    /// directories and values are placed over it. Drawn whole from the first
+    /// bit of it the column reached, it would run over every directory after
+    /// that bit and hide them.
+    fn aside_between_placements<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        path: &[usize],
+        info: &NodeInfo,
+        at: u64,
+    ) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let mut begins = info.offset_bits;
+        let mut ends = info.offset_bits + info.size_bits;
+        if let Some(end) = self.placement_end_before(doc, root, at)? {
+            begins = begins.max(end);
+        }
+        if let Some(next) = self.placement_after(doc, root, at)? {
+            ends = ends.min(next);
+        }
+        let ends = ends.max(at + 8);
+        span.offset_bits = begins.min(at);
+        span.size_bits = ends - span.offset_bits;
+        Ok(span)
     }
 
     /// A bit no field covers at all, which in a format whose objects are all

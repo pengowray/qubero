@@ -575,3 +575,45 @@ fn a_field_takes_its_type_from_a_list_read_earlier() {
     assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::UInt(5));
     assert_eq!(ev.node(&d, &[2, 1]).unwrap().value, Value::UInt(7));
 }
+
+#[test]
+fn a_catch_all_field_yields_its_bytes_to_what_is_placed_over_them() {
+    // A header, a table placed at the end by an offset, and `rest`, which only
+    // says that the bytes after the header are there. The table is what those
+    // bytes are, and the column names it; `rest` stands only for the bytes
+    // before it.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("table_at", T::u8()),
+                ("table", T::at(E::field("table_at"), T::array(T::u16(Big), E::lit(2)))),
+                ("rest", T::bytes(E::Remaining)),
+            ],
+        )
+        .field_aside("rest"),
+    );
+    let d = doc(&[5, 0xaa, 0xbb, 0xcc, 0xdd, 0, 1, 0, 2]);
+    let mut ev = Evaluator::new(t);
+    let all = ev.spans(&d, 0, 9 * 8, 100).unwrap();
+    let names: Vec<(&str, u64, u64)> = all.iter().map(|s| (s.name.as_str(), s.offset_bits / 8, s.size_bits / 8)).collect();
+    assert_eq!(names, [("table_at", 0, 1), ("rest", 1, 4), ("[0]", 5, 2), ("[1]", 7, 2)]);
+}
+
+#[test]
+fn a_one_row_structure_does_not_stand_for_what_it_points_at() {
+    // An entry that is read on one row: an offset, and the text it points
+    // at. The text is somewhere else, and the column names it there.
+    let entry = T::inline_structure(
+        "Entry",
+        vec![("offset", T::u8()), ("text", T::at(E::field("offset"), T::text(StrLen::Fixed(E::lit(3)), Encoding::Ascii)))],
+    );
+    let t = Template::new("t", T::structure("Root", vec![("entry", entry), ("pad", T::bytes(E::lit(1)))]));
+    let d = doc(&[2, 0, b'a', b'b', b'c']);
+    let mut ev = Evaluator::new(t);
+    let all = ev.spans(&d, 0, 5 * 8, 100).unwrap();
+    let text = all.iter().find(|s| s.offset_bits == 2 * 8).expect("a span at the text");
+    assert_eq!(text.name, "text");
+    assert_eq!(text.size_bits, 3 * 8);
+}
