@@ -189,14 +189,23 @@ input[type="search"] {
   padding: 6px 10px;
   min-height: 32px;
 }
+/* A control that cannot be used is drawn in the muted colour, as the table
+   bar's choices, the export form and the settings draw theirs. Fading it
+   with opacity took its text to 1.8:1. */
 button:disabled {
-  opacity: 0.45;
+  color: var(--muted);
+  cursor: default;
 }
 button.primary {
   background: var(--accent);
   color: var(--on-accent);
   border-color: var(--accent);
   padding: 10px 18px;
+}
+button.primary:disabled {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--line);
 }
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -337,6 +346,9 @@ button.welcome-crystal {
   padding: 4px 4px 4px 10px;
   color: var(--muted);
 }
+.tab-pick:has(+ .tab-close) {
+  padding-right: 0;
+}
 .tab.is-active .tab-pick {
   color: var(--fg);
 }
@@ -347,8 +359,12 @@ button.welcome-crystal {
   margin-left: 5px;
   color: var(--accent);
 }
+/* At least 24 px wide, the smallest target WCAG 2.2 allows. The 4 px the
+   name's button had on its right are the close button's now, so a tab with
+   one is 2 px wider and every name stays where it was. */
 .tab-close {
-  padding: 4px 8px 4px 4px;
+  min-width: 24px;
+  padding: 4px 0;
   color: var(--muted);
 }
 /* On a phone two tabs do not fit side by side, and a strip that scrolls
@@ -3159,7 +3175,7 @@ qubero-spinner svg {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--fg);
 }
 .sb-close {
   margin-left: auto;
@@ -3171,8 +3187,9 @@ qubero-spinner svg {
 .sb-expand {
   min-width: 0;
 }
+/* Muted rather than faded, like a disabled button. */
 .sb-foldbox.is-off {
-  opacity: 0.5;
+  color: var(--muted);
 }
 .sb-replace {
   padding-left: 0;
