@@ -133,6 +133,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"CDF\x02", "netcdf"),
     (b"CDF\x05", "netcdf"),
     (b"GIF8", "gif"),
+    (flac::MAGIC, "flac"),
     (b"qoif", "qoi"),
     // Three bytes rather than two: the marker after the start-of-image is
     // the first segment, and every JPEG has one.
@@ -2295,6 +2296,7 @@ mod tests {
         assert_eq!(sniffed(b"SQLite format 3\0"), Some("sqlite"));
         assert_eq!(sniffed(b"qoif\0\0\x01\0\0\0\x01\0\x04\0"), Some("qoi"));
         assert_eq!(sniffed(b"GIF89a"), Some("gif"));
+        assert_eq!(sniffed(b"fLaC\0\0\0\x22"), Some("flac"));
         // Both ways round, and the 42 after the letters is written the way
         // the letters just said it would be.
         assert_eq!(sniffed(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));

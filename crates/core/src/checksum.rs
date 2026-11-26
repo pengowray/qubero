@@ -30,6 +30,16 @@ pub enum Checksum {
     /// which is what LHA sums a file with. Called ARC after the archiver that
     /// first shipped it.
     Crc16Arc,
+    /// The CRC-8 a FLAC frame header ends with: polynomial 0x07, unreflected,
+    /// starting from 0 with nothing taken out at the end. Catalogues call it
+    /// CRC-8/SMBUS.
+    Crc8Flac,
+    /// The CRC-16 a FLAC frame ends with: polynomial 0x8005, unreflected,
+    /// starting from 0 with nothing taken out at the end. Catalogues call it
+    /// CRC-16/UMTS. The same polynomial as [`Checksum::Crc16Arc`], whose bits
+    /// go in the other way round, so the two give different numbers over the
+    /// same bytes: 0xfee8 against 0xbb3d over `123456789`.
+    Crc16Flac,
     /// Every byte added up, kept to eight bits. LHA's header check.
     Sum8,
     /// Every byte added up and not truncated: what a tar header writes as six
@@ -103,7 +113,8 @@ impl Checksum {
     pub fn as_str(self) -> &'static str {
         match self {
             Checksum::Crc32 => "crc32",
-            Checksum::Crc32Low16 | Checksum::Crc16Arc => "crc16",
+            Checksum::Crc32Low16 | Checksum::Crc16Arc | Checksum::Crc16Flac => "crc16",
+            Checksum::Crc8Flac => "crc8",
             Checksum::Crc32Ogg | Checksum::Crc32Bzip2 => "crc32",
             Checksum::Sum8 => "sum8",
             Checksum::ByteSum | Checksum::Sum32 => "sum",
@@ -119,8 +130,8 @@ impl Checksum {
     pub fn digits(self) -> usize {
         match self {
             Checksum::Crc32 | Checksum::Crc32Ogg | Checksum::Crc32Bzip2 | Checksum::Adler32 => 8,
-            Checksum::Crc32Low16 | Checksum::Crc16Arc => 4,
-            Checksum::Sum8 => 2,
+            Checksum::Crc32Low16 | Checksum::Crc16Arc | Checksum::Crc16Flac => 4,
+            Checksum::Sum8 | Checksum::Crc8Flac => 2,
             Checksum::ByteSum => 6,
             Checksum::Sum32 => 8,
             Checksum::Crc64Xz => 16,
@@ -152,6 +163,8 @@ impl Checksum {
             Checksum::Crc32Ogg => hex(crc32_msb(bytes, 0, 0) as u128, self),
             Checksum::Crc32Bzip2 => hex(crc32_msb(bytes, !0, !0) as u128, self),
             Checksum::Crc16Arc => hex(crc16_arc(bytes) as u128, self),
+            Checksum::Crc8Flac => hex(crc8_flac(bytes) as u128, self),
+            Checksum::Crc16Flac => hex(crc16_flac(bytes) as u128, self),
             Checksum::Sum8 => hex(sum8(bytes) as u128, self),
             Checksum::ByteSum => hex(byte_sum(bytes) as u128, self),
             Checksum::Sum32 => hex(sum32(bytes) as u128, self),
@@ -296,6 +309,45 @@ pub fn crc16_arc(bytes: &[u8]) -> u16 {
         for _ in 0..8 {
             crc = if crc & 1 == 0 { crc >> 1 } else { (crc >> 1) ^ 0xa001 };
         }
+    }
+    crc
+}
+
+/// FLAC's frame header CRC-8. See [`Checksum::Crc8Flac`].
+pub fn crc8_flac(bytes: &[u8]) -> u8 {
+    let mut crc = 0u8;
+    for &b in bytes {
+        crc ^= b;
+        for _ in 0..8 {
+            crc = if crc & 0x80 == 0 { crc << 1 } else { (crc << 1) ^ 0x07 };
+        }
+    }
+    crc
+}
+
+/// The table FLAC's CRC-16 is worked out from, built once. A frame can be
+/// tens of kilobytes, so the sum goes a byte at a time rather than a bit.
+fn crc16_flac_table() -> &'static [u16; 256] {
+    static TABLE: std::sync::OnceLock<[u16; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [0u16; 256];
+        for (n, slot) in t.iter_mut().enumerate() {
+            let mut c = (n as u16) << 8;
+            for _ in 0..8 {
+                c = if c & 0x8000 == 0 { c << 1 } else { (c << 1) ^ 0x8005 };
+            }
+            *slot = c;
+        }
+        t
+    })
+}
+
+/// FLAC's frame CRC-16. See [`Checksum::Crc16Flac`].
+pub fn crc16_flac(bytes: &[u8]) -> u16 {
+    let t = crc16_flac_table();
+    let mut crc = 0u16;
+    for &b in bytes {
+        crc = (crc << 8) ^ t[((crc >> 8) as u8 ^ b) as usize];
     }
     crc
 }
@@ -581,6 +633,18 @@ mod tests {
         // meant one and got the other calls every valid file broken.
         assert_eq!(crc16_arc(b"123456789"), 0xbb3d);
         assert_eq!(crc16_arc(b""), 0);
+    }
+
+    /// The catalogue check values over `123456789`: CRC-8/SMBUS and
+    /// CRC-16/UMTS, which are what RFC 9639 describes for a frame header and
+    /// a frame.
+    #[test]
+    fn the_flac_crcs_match_their_catalogue_check_values() {
+        assert_eq!(crc8_flac(b"123456789"), 0xf4);
+        assert_eq!(crc16_flac(b"123456789"), 0xfee8);
+        assert_eq!(crc8_flac(b""), 0);
+        assert_eq!(crc16_flac(b""), 0);
+        assert_eq!(Checksum::Crc8Flac.over(b"123456789"), "0xf4");
     }
 
     #[test]

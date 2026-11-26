@@ -60,7 +60,6 @@ const KNOWN_FAILURES: &[&str] = &[
     // Formats that open with a magic, for which no template exists yet.
     "dds/magick-dxt5-rgba.dds",
     "exr/magick-rgb-half.exr",
-    "flac/ffmpeg-sine-mono-16k.flac",
     "font/qubero-fixture.woff",
     "font/qubero-fixture.woff2",
     "hdr/magick-rgbe.hdr",

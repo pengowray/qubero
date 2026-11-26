@@ -171,6 +171,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   mkv: ["mkv", "webm", "mka"],
   ogg: ["ogg", "oga", "ogv", "opus"],
   wav: ["wav"],
+  flac: ["flac"],
   w4v: ["wav", "w4v"],
   midi: ["mid", "midi"],
   swf: ["swf"],
