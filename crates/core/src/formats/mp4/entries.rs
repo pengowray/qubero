@@ -735,7 +735,20 @@ fn audio_specific_config() -> T {
     let aot = E::field("audio_object_type");
     let general = [1, 2, 3, 4, 6, 7, 17, 19, 20, 21, 22, 23].iter().map(|t| aot.clone().equal_to(E::lit(*t))).reduce(|a, b| a.either(b)).unwrap();
     let sync = E::Remaining.greater_or_equal(E::lit(2)).both(E::peek(11, Big).equal_to(E::lit(0x2b7)));
-    let synced = E::field("sync_extension_type").equal_to(E::lit(0x2b7));
+    // The SBR signal is its own structure, there or not as a whole, so that
+    // nothing after it asks about a field the file did not write: a phone's
+    // AAC config with no signal failed with `sync_extension_type is not in
+    // this file`.
+    let extension = T::structure(
+        "SyncExtension",
+        vec![
+            ("sync_extension_type", bits(11)),
+            ("extension_audio_object_type", T::enumeration("AudioObjectType", bits(5), AUDIO_OBJECT_TYPE)),
+            ("sbr_present_flag", T::when(E::field("extension_audio_object_type").equal_to(E::lit(5)), bits(1))),
+        ],
+    )
+    .field_doc("sync_extension_type", "0x2b7: an SBR extension follows. A decoder that only supports AAC LC can ignore it.")
+    .field_doc("sbr_present_flag", "1: HE-AAC, with spectral band replication doubling the output sample rate.");
     T::structure(
         "AudioSpecificConfig",
         vec![
@@ -748,15 +761,11 @@ fn audio_specific_config() -> T {
             ("depends_on_core_coder", T::when(general.clone(), bits(1))),
             ("core_coder_delay", T::when(general.clone().both(E::field("depends_on_core_coder")), bits(14))),
             ("extension_flag", T::when(general, bits(1))),
-            ("sync_extension_type", T::when(sync, bits(11))),
-            ("extension_audio_object_type", T::when(synced.clone(), T::enumeration("AudioObjectType", bits(5), AUDIO_OBJECT_TYPE))),
-            ("sbr_present_flag", T::when(synced.both(E::field("extension_audio_object_type").equal_to(E::lit(5))), bits(1))),
+            ("sync_extension", T::when(sync, extension)),
         ],
     )
     .field_doc("audio_object_type_ext", "When audio_object_type is 31, the type is 32 plus this value.")
     .field_doc("frame_length_flag", "0: 1024 samples per frame. 1: 960 samples per frame.")
-    .field_doc("sync_extension_type", "0x2b7: an SBR extension follows. A decoder that only supports AAC LC can ignore it.")
-    .field_doc("sbr_present_flag", "1: HE-AAC, with spectral band replication doubling the output sample rate.")
 }
 
 fn sl_config() -> T {
@@ -987,8 +996,10 @@ mod tests {
         assert_eq!(asc_field("audio_object_type"), named(2, "AAC LC"));
         assert_eq!(asc_field("sampling_frequency_index"), named(7, "22050 Hz"));
         assert_eq!(asc_field("channel_configuration"), named(1, "mono"));
-        assert_eq!(asc_field("sync_extension_type"), Value::UInt(0x2b7));
-        assert_eq!(asc_field("sbr_present_flag"), Value::UInt(0));
+        let sync = ["descriptors", "0", "body", "header", "sync_extension"];
+        let mut sync_field = |name: &'static str| under(&sync.iter().copied().chain([name]).collect::<Vec<_>>());
+        assert_eq!(sync_field("sync_extension_type"), Value::UInt(0x2b7));
+        assert_eq!(sync_field("sbr_present_flag"), Value::UInt(0));
     }
 
     #[test]

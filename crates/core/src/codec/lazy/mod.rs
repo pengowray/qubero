@@ -25,10 +25,10 @@
 //! traced from their own start.
 //!
 //! A zstd frame or an xz block is decoded from its start, so one larger than
-//! [`Limits::span`] is refused as [`Refusal::TooLarge`]. That is what keeps a
-//! file of one frame or one block refused past [`CAP_BYTES`]: what a decoder
-//! needs to start inside one is its whole window or dictionary, which can be
-//! as large as the output.
+//! [`Limits::span`] is refused as [`Refusal::TooLargeUnit`]. That is what
+//! keeps a file of one frame or one block refused past [`CAP_BYTES`]: what a
+//! decoder needs to start inside one is its whole window or dictionary, which
+//! can be as large as the output.
 //!
 //! The pass over a deflate or a zstd run can be done a step at a time,
 //! carrying on from where the step before stopped: see [`Indexing`].
@@ -215,7 +215,7 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
         _ if can_step(codec) => {
             let mut pass = Indexing::new(codec, packed, limits)?;
             loop {
-                if let Stepped::Done(decoded) = pass.step(u64::MAX)? {
+                if let Stepped::Done(decoded) = pass.step(u64::MAX, u64::MAX)? {
                     return Ok(decoded);
                 }
             }
@@ -227,13 +227,17 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
 
 /// The pass [`decode_or_index`] makes over a deflate, zlib, gzip or zstd run,
 /// done a slice at a time: each [`Indexing::step`] decodes about as much
-/// output as it is told to, stops at a place the decoder can carry on from,
-/// and the next step carries on from exactly there. A browser calls it
-/// between frames, so that indexing 500 MB of output does not stop the page
-/// for seconds. What it comes to is what the pass in one go comes to.
+/// output, or reads about as many bits of the run, as it is told to, stops at
+/// a place the decoder can carry on from, and the next step carries on from
+/// exactly there. A browser calls it between frames, so that indexing 500 MB
+/// of output does not stop the page for seconds. What it comes to is what the
+/// pass in one go comes to.
 ///
-/// A deflate step stops between two codes, and a zstd step between two zstd
-/// blocks. See [`DeflatePass`] and [`ZstdPass`].
+/// A deflate step stops between two codes or at the start of a block, and a
+/// zstd step between two zstd blocks, two frames or two skippable frames.
+/// The bits are what bound a step over blocks or frames that make no output,
+/// such as deflate's empty blocks, ten bits each. See [`DeflatePass`] and
+/// [`ZstdPass`].
 pub struct Indexing(Pass);
 
 enum Pass {
@@ -296,11 +300,14 @@ impl Indexing {
         }
     }
 
-    /// Decode about `out_bytes` more output and stop, or finish.
-    pub fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+    /// Decode about `out_bytes` more output, or read about `in_bits` more
+    /// bits of the run, whichever comes first, and stop; or finish. A deflate
+    /// step goes past either by at most one stored block (64 KiB), and a zstd
+    /// step by at most one zstd block (128 KiB).
+    pub fn step(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
         match &mut self.0 {
-            Pass::Deflate(p) => p.step(out_bytes),
-            Pass::Zstd(p) => p.step(out_bytes),
+            Pass::Deflate(p) => p.step(out_bytes, in_bits),
+            Pass::Zstd(p) => p.step(out_bytes, in_bits),
         }
     }
 

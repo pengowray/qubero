@@ -415,6 +415,17 @@ pub enum Refusal {
     /// limit for a run read a piece at a time, which is larger than
     /// [`CAP_BYTES`]. Only a codec [`lazy`] can index says this.
     TooLargeLazy,
+    /// One zstd frame or one xz block of the run comes to more than
+    /// [`lazy::Limits::span`], 64 MiB. A run of several frames or blocks is
+    /// read a piece at a time, up to [`lazy::LAZY_CAP_BYTES`], but each frame
+    /// or block is decoded from its start, so one larger than that is not
+    /// read. A file of one frame or one block past 64 MiB, which is what
+    /// plain `zstd` and `xz` write, is refused this way.
+    ///
+    /// Said only by [`lazy`]'s index pass. The decoders that hold a run whole
+    /// say [`Refusal::TooLarge`] for the same frame, since there the whole
+    /// run is past the cap.
+    TooLargeUnit(SpanUnit),
     /// The run has to be read in one call, and it takes up more of the file
     /// than the file's source keeps at once (see
     /// [`Source::resident_limit`](crate::source::Source::resident_limit)): in
@@ -444,6 +455,14 @@ pub enum Refusal {
     /// reading it with the baseline rules gives coefficients that look right
     /// and are not.
     Unsupported(Unsupported),
+}
+
+/// What a run read a piece at a time is cut into, for
+/// [`Refusal::TooLargeUnit`]: the part of it decoded from its own start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanUnit {
+    ZstdFrame,
+    XzBlock,
 }
 
 /// Which kind of stream a decoder turned away, for [`Refusal::Unsupported`].
@@ -485,6 +504,8 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too-large",
             Refusal::TooLargeLazy => "too-large-lazy",
+            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
+            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
             Refusal::TooMuchAtOnce => "too-much-at-once",
             Refusal::Failed => "failed",
             Refusal::Settings => "settings",
@@ -507,6 +528,8 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too large to unpack (over 64 MiB)",
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
+            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB)",
+            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB)",
             Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
             Refusal::Unaligned => "not on a byte boundary",

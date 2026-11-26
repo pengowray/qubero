@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use super::seekable::{lock, seekable, Kind, Recent};
 use super::{whole, Checkpoints, Decoded, Limits, Start};
 use crate::codec::lzma::{self, Lzma2, LZMA2_CHUNK_MAX};
-use crate::codec::{xz, Codec, Refusal, StepField, StepKind, Trace, TraceBuilder, MAX_STEPS};
+use crate::codec::{xz, Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBuilder, MAX_STEPS};
 
 /// An xz stream, indexed from the index at its end without decoding any of
 /// it: that index lists every block's packed and unpacked size, and an xz
@@ -18,9 +18,10 @@ use crate::codec::{xz, Codec, Refusal, StepField, StepKind, Trace, TraceBuilder,
 /// stream [`xz::layout`] cannot read, go to the whole decoder as before, which
 /// decodes them or refuses them. A larger stream is refused as too large when
 /// its blocks use a filter our LZMA2 decoder does not run, because `lzma-rs`,
-/// which runs those filters, reads only whole streams. It is refused as too
-/// large too when any block unpacks to more than [`Limits::span`], which is
-/// what a file of one block, as plain `xz` writes, is.
+/// which runs those filters, reads only whole streams. It is refused as
+/// [`Refusal::TooLargeUnit`] when any block unpacks to more than
+/// [`Limits::span`], which is what a file of one block, as plain `xz` writes,
+/// is.
 ///
 /// Nothing is decoded here, so a block whose unpacked size differs from the
 /// index is found only when a read reaches the block, and that read is
@@ -29,8 +30,11 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
     let Some(l) = xz::layout(&packed).filter(|l| l.total_out > limits.whole as u64) else {
         return whole(Codec::Xz, &packed);
     };
-    if !l.plain || l.blocks.iter().any(|b| b.unpacked > limits.span as u64) {
+    if !l.plain {
         return Err(Refusal::TooLarge);
+    }
+    if l.blocks.iter().any(|b| b.unpacked > limits.span as u64) {
+        return Err(Refusal::TooLargeUnit(SpanUnit::XzBlock));
     }
     if l.total_out > limits.lazy {
         return Err(Refusal::TooLargeLazy);
@@ -45,15 +49,6 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
     }
     let len = l.total_out;
     Ok(Decoded::Indexed(seekable(Codec::Xz, packed, Kind::Xz(l), len, marks.list, limits)))
-}
-
-/// Everything blocks `units` of the stream come to, one after another: a
-/// whole span's bytes, decoded the way [`read_span`] decodes the start of
-/// one.
-pub(super) fn decode_span(packed: &[u8], l: &xz::Layout, units: Range<usize>) -> Result<Vec<u8>, Refusal> {
-    let mut p = Prefix::new(l, units.clone());
-    p.reach(packed, l, units, p.len)?;
-    Ok(p.blocks.concat())
 }
 
 /// Bytes `from..from + dst.len()` of span `k`, whose blocks are `units`,
@@ -138,9 +133,8 @@ impl Prefix {
     /// Before a block's first chunk is decoded, its chunk headers are read up
     /// to the byte that ends its LZMA2, and they have to add up to what the
     /// index says the block comes to. So a block the index is wrong about is
-    /// refused before any of it is read, as it was when a span was decoded
-    /// whole. A chunk whose data is damaged is found only by a read that
-    /// reaches it.
+    /// refused before any of it is read. A chunk whose data is damaged is
+    /// found only by a read that reaches it.
     fn reach(&mut self, packed: &[u8], l: &xz::Layout, units: Range<usize>, upto: usize) -> Result<(), Refusal> {
         let mut off = TraceBuilder::off();
         while self.decoded < upto || upto >= self.len {

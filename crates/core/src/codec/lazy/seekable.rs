@@ -217,15 +217,13 @@ impl Seekable {
         Ok(bytes)
     }
 
-    /// Decode span `k` from its own checkpoint to the next one.
+    /// Decode deflate or zstd span `k` from its own checkpoint to the next
+    /// one. It is the same decoder over the same bits as the pass that
+    /// indexed it, so a span that comes out another length is a decoder
+    /// disagreeing with itself.
     ///
-    /// For deflate and zstd it is the same decoder over the same bits as the
-    /// pass that indexed it, so a span that comes out another length is a
-    /// decoder disagreeing with itself. For xz it is the first time the
-    /// span's blocks have been decoded, and a block that does not come to
-    /// what the index says is refused here. A read of an xz span does not
-    /// come here: it decodes only as far as the read reaches, through
-    /// `prefixes`.
+    /// An xz span is never decoded whole: a read of one decodes only as far
+    /// as the read reaches, through `prefixes`. See [`super::xz::read_span`].
     fn decode_span(&self, k: usize) -> Result<Vec<u8>, Refusal> {
         let c = &self.checkpoints[k];
         let range = self.span_bytes(k);
@@ -248,7 +246,7 @@ impl Seekable {
             Kind::Zstd => {
                 super::zstd::decode_span(&self.packed, self.span_in(k), c.out, want, self.limits.span)?
             }
-            Kind::Xz(l) => super::xz::decode_span(&self.packed, l, self.span_units(k, l))?,
+            Kind::Xz(_) => return Err(Refusal::Failed),
         };
         if bytes.len() != want {
             return Err(Refusal::Failed);

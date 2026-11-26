@@ -35,7 +35,7 @@ use super::gather::Landing;
 use super::space::{Joined, JoinedBytes, JoinedRun, Opened, Part, PartSource, Stitch};
 use super::*;
 use crate::codec::lazy::{self, Seekable};
-use crate::codec::{Codec, StepKind, Trace, TraceBuilder};
+use crate::codec::{Codec, SpanUnit, StepKind, Trace, TraceBuilder};
 
 /// A stitched stream held whole: its bytes, the trace of every part end to
 /// end, and where each part's run is. See [`Evaluator::join_whole`].
@@ -62,20 +62,25 @@ pub(super) enum PartTrouble {
     Length(u64),
     /// Its decoder refused it, for this reason. From an index pass,
     /// [`Refusal::TooLargeLazy`] is a part that unpacks to more than
-    /// [`lazy::LAZY_CAP_BYTES`], and [`Refusal::Failed`] one that will not
-    /// decode.
+    /// [`lazy::LAZY_CAP_BYTES`], [`Refusal::TooLargeUnit`] one with a zstd
+    /// frame or xz block past 64 MiB, and [`Refusal::Failed`] one that will
+    /// not decode.
     Refused(Refusal),
 }
 
 /// What a read of a packed part says after the part's name when the part's
 /// decoder refused it. A part too large, for the cap or for the file's chunk
 /// store, says "is" and [`Refusal::message`], the words a compressed run's own
-/// row has (`DECODED_REFUSED` in the web's `strings.ts`). Any other refusal
-/// says "could not be unpacked": the other messages, such as "unpacking
-/// failed", do not read as a sentence after a field's name.
+/// row has (`DECODED_REFUSED` in the web's `strings.ts`). A part with a frame
+/// or block too large says which it has, since that message names the frame
+/// or block and not the part. Any other refusal says "could not be unpacked":
+/// the other messages, such as "unpacking failed", do not read as a sentence
+/// after a field's name.
 fn part_refused(why: Refusal) -> String {
     match why {
         Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooMuchAtOnce => format!("is {}", why.message()),
+        Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB)".into(),
+        Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB)".into(),
         _ => "could not be unpacked".into(),
     }
 }
@@ -640,11 +645,12 @@ impl Evaluator {
     /// Refused as too large when what it is read from passes the cap, as
     /// [`Refusal::TooMuchAtOnce`] when it does not but the parts' runs take
     /// up more of the file than its chunk store keeps, as
-    /// [`Refusal::TooLargeLazy`] when a part
-    /// unpacks to more than [`lazy::LAZY_CAP_BYTES`], and as failed when a
-    /// part will not read or unpacks to another length than its run claimed.
-    /// Every packed part small enough to decode whole is decoded once here to
-    /// check that, and its bytes are not kept.
+    /// [`Refusal::TooLargeLazy`] when a part unpacks to more than
+    /// [`lazy::LAZY_CAP_BYTES`], as [`Refusal::TooLargeUnit`] when a part has
+    /// a zstd frame or xz block past 64 MiB, and as failed when a part will
+    /// not read or unpacks to another length than its run claimed. Every
+    /// packed part small enough to decode whole is decoded once here to check
+    /// that, and its bytes are not kept.
     fn join_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch) -> R<Result<Joining, Refusal>> {
         macro_rules! read {
             ($space:expr, $at:expr, $bits:expr) => {
@@ -697,15 +703,10 @@ impl Evaluator {
                     }
                     let bytes = match self.index_part(doc, stitch, i)? {
                         Ok(Some(index)) => JoinedBytes::Indexed(index),
-                        // A part past `LAZY_CAP_BYTES` refuses the stream for
-                        // that. A part's `TooLarge`, one zstd frame or xz
-                        // block past the cap, is not passed on: the stream's
-                        // `TooLarge` says its parts take up too much of the
-                        // file.
-                        Err(PartTrouble::Refused(Refusal::TooLargeLazy)) => return Ok(Err(Refusal::TooLargeLazy)),
-                        // A part too long for the chunk store, as the stream
-                        // is when its parts are added up.
-                        Err(PartTrouble::Refused(Refusal::TooMuchAtOnce)) => return Ok(Err(Refusal::TooMuchAtOnce)),
+                        // A part past `LAZY_CAP_BYTES`, with a zstd frame or
+                        // xz block past 64 MiB, or too long for the chunk
+                        // store, refuses the stream for that.
+                        Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeUnit(_) | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
                         Err(_) => return Ok(Err(Refusal::Failed)),
                         Ok(None) => {
                             let run = read!(*space, *at_bits, *size_bits);
@@ -1901,6 +1902,34 @@ mod tests {
         assert_eq!(e.spaces.len_bits(space), u64::from(claimed) * 8);
         match e.read_in(&d, space, 0, 8) {
             Err(EvalError::Failed(why)) => assert_eq!(why, "member.run is too large to unpack (over 64 MiB)"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A packed part of one zstd frame past the span limit refuses the joined
+    /// stream for that, and a read of the part says it has such a frame.
+    #[test]
+    fn a_part_with_a_zstd_frame_too_large_says_so() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::{Codec, Refusal, SpanUnit};
+        use crate::eval::EvalError;
+        let text: Vec<u8> = (0..40_000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..300_000].to_vec();
+        let mut file = (text.len() as u32).to_be_bytes().to_vec();
+        file.extend(ruzstd::encoding::compress_to_vec(&text[..], ruzstd::encoding::CompressionLevel::Fastest));
+        let member = T::structure("Member", vec![("claimed", T::u32(Big)), ("run", T::decoded(E::Remaining, Codec::Zstd, T::bytes(E::Remaining)))]);
+        let joined = T::stitched(vec![Step::field("member"), Step::field("run")], Some(E::field("claimed")), None, T::bytes(E::Remaining));
+        let template = Template::new("zstd-part", T::structure("File", vec![("member", member), ("joined", joined)]));
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(template);
+        // The stream is past the cap for one held whole, and the packed run
+        // is under it.
+        e.spaces.set_whole_cap(100_000);
+        e.spaces.set_lazy_limits(Limits { whole: 4096, span: 65_536, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() });
+        assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+        assert_eq!(e.open_refusal(&[1]), Some(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)));
+        let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
+        match e.read_in(&d, space, 0, 8) {
+            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run has a zstd frame that is too large to unpack (over 64 MiB)"),
             other => panic!("{other:?}"),
         }
     }

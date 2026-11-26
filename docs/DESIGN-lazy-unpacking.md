@@ -26,6 +26,14 @@ built in these parts:
 - 2026-11-26: a read of an xz span decodes only as far as the read reaches.
 - 2026-11-26: finding where a gzip member's deflate stream ends is done a step
   at a time too. See "Measuring a member's stream in steps".
+- 2026-11-26: deflate's fixed Huffman codes are built once, and a step of the
+  index pass also stops once it has read 2 Mibit of the run, so a run of
+  blocks or frames that make no output is indexed in many steps. See "A step
+  bounded by the bits it reads".
+- 2026-11-26: a run refused because one zstd frame or xz block unpacks to
+  more than 64 MiB has a refusal of its own, which the listing words as a
+  zstd frame or an xz block too large to unpack. See "zstd frames and xz
+  blocks".
 
 "Still to do" at the end lists what is left.
 
@@ -71,8 +79,9 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
   are made when the block is opened. See "Blocks".
 - A zstd run of several frames and an xz stream of several blocks open the
   same way, as long as no one frame or block comes to more than 64 MiB. A
-  file of one frame or one block past 64 MiB is refused as before, and so is
-  every other codec.
+  file of one frame or one block past 64 MiB is still refused, and its row
+  says that a zstd frame or an xz block is too large to unpack. Every other
+  codec is refused past 64 MiB as before.
 - Runs at or under 64 MiB are decoded and traced exactly as they are today.
 
 ## Limits
@@ -86,7 +95,7 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
 | `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one deflate block's trace, and in all the block traces a run keeps. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
 | `MAX_BLOCK_MARKS` | 65,536 | Deflate block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
-| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded from their start, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
+| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded from their start, so a larger one is refused, as `Refusal::TooLargeUnit`. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
 a time limit makes the same file open on one computer and not on another, and
@@ -195,13 +204,15 @@ starts and the running sums are all kept in the `Indexing` between steps.
 passes are done in steps (see `lazy::can_step`). This section is about
 deflate's; zstd's is in "zstd frames and xz blocks".
 
-- **Where a step stops.** At the first code past its share of output, and
-  never inside a stored block (so at most 64 KiB over). In the traced phase a
-  step that stops inside a block leaves the block open in the trace
-  (`TraceBuilder::carried_on`, `codec::Paused`), and the next step reads the
-  block's header and tables again with the trace muted, so the trace comes
-  out step for step as one pass makes it, including a block whose symbols are
-  named as one step once the trace passes `MAX_STEPS` partway through it.
+- **Where a step stops.** At the first code past its share of output, or past
+  its share of bits read, whichever comes first, and never inside a stored
+  block (so at most 64 KiB over). See "A step bounded by the bits it reads".
+  In the traced phase a step that stops inside a block leaves the block open
+  in the trace (`TraceBuilder::carried_on`, `codec::Paused`), and the next
+  step reads the block's header and tables again with the trace muted, so the
+  trace comes out step for step as one pass makes it, including a block whose
+  symbols are named as one step once the trace passes `MAX_STEPS` partway
+  through it.
 - **Block starts.** A step that stops at the start of a block does not record
   that start. The next step starts there, so the decoder tells the sink about
   the same start again, and the start is recorded then. A step that stops
@@ -225,18 +236,107 @@ deflate's; zstd's is in "zstd frames and xz blocks".
   the length is not the one it was told.
 
 In the evaluator, `Evaluator::index_run` is the one way in, used by
-`open_space_at`, `measure_run` and `index_part`. Each step of 256 KiB is
-charged to the go's allowance first (`Go::charge`, which takes the evaluator
-shared, since reads of a stitched stream reach here and reads do), and a go
-that runs out hands back `Busy` with the pass put back in `Spaces`'
-`Unfinished` table, keyed by the run like `Indexes`. Only two unfinished
-passes are kept, since one in its traced phase holds up to 64 MiB. A finished
-index goes to `Indexes`; a half-made one never leaves `Unfinished`, because a
-tab's source reads an index with no evaluator behind it. `Spaces::forget`
-drops both. `Evaluator::unpacking` reports the pass stepped most recently.
-A zstd run is stepped there the same way. An xz run comes through
-`index_run` too, and is handed to `decode_or_index` there, which lays it out
-in one go with nothing charged.
+`open_space_at`, `measure_run` and `index_part`. Each step, of 256 KiB of
+output or 2 Mibit of the run, whichever comes first, is charged to the go's
+allowance first (`Go::charge`, which takes the evaluator shared, since reads
+of a stitched stream reach here and reads do), and a go that runs out hands
+back `Busy` with the pass put back in `Spaces`' `Unfinished` table, keyed by
+the run like `Indexes`. Only two unfinished passes are kept, since one in its
+traced phase holds up to 64 MiB. A finished index goes to `Indexes`; a
+half-made one never leaves `Unfinished`, because a tab's source reads an index
+with no evaluator behind it. `Spaces::forget` drops both.
+`Evaluator::unpacking` reports the pass the current go ran out of allowance
+in, which is the pass the call that answered `Busy` waits on (see "Which
+pass a call waits on"). A zstd run is stepped there the same way. An xz run comes through `index_run` too, and is
+handed to `decode_or_index` there, which lays it out in one go with nothing
+charged.
+
+### A step bounded by the bits it reads
+
+Until 2026-11-26 a step of the index pass ended only once it had made its
+share of output (`out_bytes`, 256 KiB in the evaluator), so a run that makes
+no output was indexed in one step however long the run was. A deflate run
+can be all empty blocks. The smallest is an empty fixed-Huffman block of
+10 bits: a 3-bit block header and the 7-bit end-of-block code. A run may be
+up to 64 MiB of compressed bytes (`CAP_BYTES`), which can hold about
+54 million of them. zstd has the same kind of run: frames with no content,
+and skippable frames, which are at least 8 bytes each.
+
+Since 2026-11-26 `Indexing::step(out_bytes, in_bits)` also stops a step once
+it has read `in_bits` bits of the run since the step began, at the next place
+the following step can resume from:
+
+- **Deflate.** The next code or block start, the same places a step stops at
+  for its share of output. The bits are counted from the code the step
+  resumes at, not from the header of the block it is inside, whose tables it
+  reads again first. So every step decodes at least one code, and the pass
+  always moves forward, however long the block's tables are.
+- **zstd.** The next boundary between two zstd blocks of a frame, between two
+  frames, or between two skippable frames, once the step has read
+  `in_bits / 8` bytes. The skippable frames in front of a frame count as part
+  of that frame, so a checkpoint taken at the frame starts at the first of
+  them (see "zstd: one pass"). A step can stop partway through a sequence of
+  skippable frames, so the zstd walk keeps the offset of the first one, and
+  the frame after them, and any checkpoint taken at it, start at that offset,
+  as they do when the pass runs to the end in one call.
+
+The index that steps come to is the index the pass makes when it runs to the
+end in one call. Tests check this for both codecs (see "Tests").
+
+The evaluator gives each step 2 Mibit (`INDEX_STEP_BITS`), the number of
+bits in the step's 256 KiB share of output. So where the run unpacks to at
+least its own size, a step still ends at its share of output, as before. A
+step ends by its bits only over a stretch of the run that unpacks to less
+than it takes up.
+
+Building deflate's two fixed Huffman codes, for literals and lengths and for
+distances, once (`fixed_codes`) instead of for every fixed block made
+measuring an empty fixed block about 50 times faster (`inflate_len`), and
+decoding one with its trace about 16 times faster (`decode_traced`).
+
+Timed on 2026-11-26, native, with a bench outside `cargo test` built at
+`opt-level` 3 without LTO, on a raw deflate stream of 838,861 empty fixed
+blocks (1 MiB of compressed bytes). The machine was loaded (a load average
+of about 15 on 12 cores), so each cell gives two timings, taken one after
+the other.
+
+| | Before | Fixed codes built once |
+|---|---|---|
+| Decoding with the trace (`decode_traced`), each block | 1,840 and 1,630 ns | 116 and 95 ns |
+| Measuring in one call (`inflate_len`), each block | 1,740 and 1,520 ns | 35 and 29 ns |
+| Longest measuring step (1 Mibit of the run) | 188 and 180 ms | 3.7 and 3.2 ms |
+| The index pass, with the trace, all 1 MiB in one step | 1,357 and 1,423 ms | 95 and 98 ms |
+| The index pass with the trace off (`known_large`), all 1 MiB in one step | 1,298 and 1,307 ms | 35 and 36 ms |
+
+The trace is on while the run may still be held whole, that is while its
+output is under the cap (64 MiB), and a run of empty blocks never passes it.
+Most of an empty block's cost then is the trace: each empty block adds one
+block and three trace steps to it.
+
+With the fixed codes built once and steps of 2 Mibit, on a stream of
+6,710,886 empty fixed blocks (8 MiB), each figure the median of three
+timings:
+
+| | Steps | Longest step | Longest go |
+|---|---|---|---|
+| With the trace | 32 | 31 ms | 248 ms |
+| With the trace off (`known_large`) | 32 | 9.5 ms | 89 ms |
+
+A go of 5,000 elements, which is what the web app asks for, runs at most ten
+steps: each step is charged 512 elements before it starts, and a go starts
+another step while any of its allowance is left. The longest go in these
+tables is the longest ten steps in a row, added up, from the bench; no go was
+timed through the evaluator.
+
+Steps of 1 Mibit were tried as well. They made the longest go 127 ms with the
+trace and 56 ms with it off, but a gzip whose output is 100 MB, three fifths
+random bytes and two fifths zeros in pieces of 1 MB, took 601 steps
+instead of 381, about 0.5 ms each, and so 61 goes instead of 39. 2 Mibit was
+kept so that a run like that one, or a run of stored blocks, steps by its
+output as before. With 2 Mibit, the two files timed in "Measuring a member's
+stream in steps" took the same number of steps as before: 458 for the
+CSV-like text (120 MB of output) and 306 for the literals of one or two bits
+(80 MB), with the longest go 32 to 44 ms.
 
 ### Measuring a member's stream in steps
 
@@ -267,13 +367,14 @@ the same fallback past 64 MiB.
   (128 KiB) or more past where the step started (`MEASURE_STEP_BITS`), and
   never inside a stored block. Steps are counted in bits read, not in output,
   because a decoder that only counts the output does about the same work for
-  each code it reads, whether the code is a literal or a match that copies 258
-  bytes. A code is at least one bit long, so a step of 1 Mibit reads at most
-  about a million codes. Measured native: a step takes 3.5 ms on CSV-like
-  text, and 8 ms on a stream of literals whose codes are one or two bits
-  long, the slowest stream measured apart from a hostile one of empty blocks
-  (see "Still to do"). The Rubin raw's run is 95 KB of compressed bytes, so
-  it is measured in one step.
+  each code it reads, whether the code is a literal or a match that copies
+  258 bytes. A code is at least one bit long, so a step of 1 Mibit reads at
+  most about a million codes. Measured native: a step takes 3.5 ms on CSV-like
+  text, and 8 ms on a stream of literals whose codes are one or two bits long,
+  the slowest stream measured. A step over a hostile stream of empty fixed
+  blocks took about 180 ms until their codes were built once, and takes 3 to
+  4 ms since (see "A step bounded by the bits it reads"). The Rubin raw's run
+  is 95 KB of compressed bytes, so it is measured in one step.
 - **Charging.** `Evaluator::stream_end` checks that the go has allowance left
   before each step (`Go::charge(0)`, which hands back `Busy` when it has
   none). After the step it takes one element off the allowance for each 1,024
@@ -309,7 +410,7 @@ the same fallback past 64 MiB.
 - **Progress.** `Evaluator::unpacking` reports a walk in the same way as an
   index pass: the bits of the measured bytes read so far, and the bytes of
   output counted. If a walk and an index pass are both under way, it reports
-  whichever was stepped most recently (`Spaces::stamp`). The percentage is of
+  the one the current go ran out in. The percentage is of
   the bytes the walk measures, which run from the start of the member to the
   end of the file, at most 64 MiB of them. So in a file of several members,
   each walk ends short of 100% and the next one starts at 0. For a member
@@ -542,11 +643,13 @@ to 1 GiB is not.
 
 A packed part that unpacks to more than 1 GiB refuses the joined stream as
 `TooLargeLazy`, and a read of that part in the listing says
-`blocks[0].compressed is too large to unpack (over 1 GiB)`. Any other refusal
-from a part's index pass refuses the stream as `Failed`. That includes a
-part's `TooLarge` (one zstd frame or xz block past 64 MiB), because the
-stream's own `TooLarge` means its parts take up too much of the file. A read
-of such a part says `is too large to unpack (over 64 MiB)`, and a read of a
+`blocks[0].compressed is too large to unpack (over 1 GiB)`. A part with one
+zstd frame or xz block past 64 MiB refuses the stream as `TooLargeUnit`, and
+a read of it says `has a zstd frame that is too large to unpack (over 64 MiB)`
+or `has an xz block that ...`. (Until 2026-11-26 such a part said
+`TooLarge`, which refused the stream as `Failed`, since the stream's own
+`TooLarge` means its parts take up too much of the file.) Any other refusal
+from a part's index pass refuses the stream as `Failed`, and a read of a
 part that will not decode says `could not be unpacked`. A part of a codec with
 no index (bzip2, LZMA and the rest) is decoded whole, and a read of one past
 64 MiB says `is too large to unpack (over 64 MiB)` as well. The words after
@@ -605,10 +708,12 @@ in `joinedpart.ts`, and the same test in the `tab_probe` example). Whether
 one opens now depends on how much of the file its parts take up, which only
 the core knows, so every joined stream is offered and a refusal is said in the
 status bar when the button is pressed (`JOINED.refused`: `tooLarge`,
-`partTooLarge` for `too-large-lazy`, and `failed`). `DECODED_REFUSED` has a
-string for `too-large-lazy`, and the report's finding for a stream left as
-bytes (`RV.refused` in `report/text.ts`) says "Too large to unpack here" for
-it, as for `too-large`.
+`partTooLarge` for `too-large-lazy`, `partZstdFrameTooLarge` and
+`partXzBlockTooLarge` for `too-large-zstd-frame` and `too-large-xz-block`,
+and `failed`). `DECODED_REFUSED` has a string for each of those tags, and the
+report's finding for a stream left as bytes (`RV.refused` in
+`report/text.ts`) says "Too large to unpack here" for all of them, as for
+`too-large`.
 
 ## The browser
 
@@ -617,8 +722,9 @@ whatever reaches the stream first carries it on, a go at a time: the listing
 reading the stream's first bytes, or Open unpacked. `open_in` in the wasm
 crate runs with the usual `WORK_SLICE` now, and `open_space` answers
 "working" until the pass is done. `Editor::unpacking(space)` says how far the
-pass has got in the reading the tab's next call works in
-(`Editor::working_reading`): the tab's own reading, or its home's for a
+pass that the last call ran out in has got, in the reading the tab's next
+call works in (`Editor::working_reading`): the tab's own reading, or its
+home's for a
 stream read where it was declared, except while the tab's stream, or one it
 was opened from, is being opened again after an edit. `ensure_open` opens
 those first, from the file down, each in its home's reading, so the pass is
@@ -650,9 +756,80 @@ backstop. `fileChunks` waits on the reads `handleReply` already started
 (`has_chunk(0, c)`), since a pending reply's chunks are the file's whichever
 tab asked. A press while a wait is under way puts a new wait in its place.
 The listing's placeholder row for fields it cannot show yet says how far the
-unpacking has got while one is under way (`pendingText` in `listingdraw.ts`),
-and is updated on each redraw. The report's streams section waits for it as
-it waits for bytes, and waits the same way while the bytes load.
+unpacking of the stream they wait on has got (`pendingText` in
+`listingdraw.ts`), and is updated on each redraw. The report's streams
+section waits for it as it waits for bytes, and waits the same way while the
+bytes load.
+
+### Which pass a call waits on
+
+Until 2026-11-26 `Evaluator::unpacking` reported the pass stepped most
+recently, by the stamp each pass was put back with. The listing and Open
+unpacked work in the same reading, so while the listing carried on one stream
+and Open unpacked another, each could show the other's progress. The listing
+asked at draw time, after every call the walk made and any Open unpacked made
+between frames. Open unpacked asked right after its own call, but a go that
+ran out before it reached its stream's pass reported the other stream's.
+
+Now the go keeps the pass it ran out in (`Go::ran_out_in`): `index_pass` and
+`stream_end` note it, with how far the pass has got, as they put the pass
+back and hand back `Busy`. `begin_slice` clears it, so `Evaluator::unpacking`
+says nothing until the go runs out in a pass, and a go that runs out anywhere
+else waits on no pass. Only the first pass a go runs out in is kept. A pass
+reached after the allowance has gone is put back without having moved, and
+it is not what the go spent its allowance on.
+
+So `unpacking` asked right after a call is that call's stream. `Doc.openSpace`
+asks right after `open_space`, as before. The listing cannot, since it draws
+after its walk, so `template_children` puts it on its "working" reply as
+`unpacking`, and the walk keeps it on the pending item it puts where those
+children go. Each placeholder then shows the stream its own fields wait on. A
+"working" reply with no `unpacking` leaves the text a placeholder already
+shows, and Open unpacked keeps the last progress it was told, rather than
+going back to 0% for a go.
+
+The stamps stay, to choose which pass to let go of when `Unfinished` or
+`Measures` is full.
+
+### Children that are ready
+
+A slice of children used to be answered whole: `Evaluator::children` answered
+`Busy` or `Pending` as soon as one child did, and the listing drew one
+placeholder for the whole structure. While a gzip member's stream was
+unpacked, the member's ten header fields waited with it.
+
+`Evaluator::children_ready` gives the children before the first one that
+waits, and what the rest wait on. A child that answers `Busy` ends the slice,
+since the go has no allowance left to read the others. A child that answers
+`Pending` does not: the children after it are still read for the chunks they
+need, as before, so that children placed by offsets are one wait and not one
+each. `Evaluator::children` is the same answered whole.
+
+`template_children` puts the ready children on its "working" reply as
+`ready`, with the chunks their previews want as `wanted`. They are never sent
+under "ok", because a short array there reads as a page of a list: `drawn`
+would add an edge counting the rest, and the other callers of
+`templateChildren` would take it as the whole answer. A "pending" reply,
+which waits on bytes of the file, carries none, and the listing draws one
+placeholder for the structure as before: its walk over a file still loading
+was tuned to stop at such a structure, and reading on into the children it
+has would ask for more chunks at once (see `CHUNK_BUDGET`). The web's
+`TemplateReply` carries `ready` as children whatever its type, so that a reply
+that is not "ok" can still be handed on as the reply to another question.
+
+Only the listing's walk uses it (`Walk.kids`, which marks the slice with
+`waitsTo`). `drawn` puts the pending item after the ready rows, over the rest
+of the structure, and draws no edge counting the children still to come.
+`sections` does the same for the root. Neither draws a gap anywhere in a
+slice that waits: children placed by offsets need not be in the file in the
+order they are read, so a child still to come may land between two that are
+drawn, and calling that stretch bytes nothing describes would be false. A
+format card or a record table is drawn from the whole structure, so one whose
+children are still to come is a placeholder until they are all in. A slice
+with none ready is a placeholder for the whole structure, as before.
+
+While the member's stream is measured, this does not help: the listing has
+no rows at all (see "Still to do").
 
 Measured on 2026-10-26 in Chromium, with a generated gzip of 500,007,092
 bytes of CSV-like text packed to 20,306,027 (`make_gz.py` in that session's
@@ -697,11 +874,20 @@ list grows past `MAX_CHECKPOINTS` (256), every second checkpoint is dropped
 and the spacing doubles. So one span can hold several small frames or blocks,
 and the number of spans stays at most 256 however small the frames are.
 
-A span is decoded from its start, so a frame or an xz block whose output is larger
-than `Limits::span` is refused with `Refusal::TooLarge`. This rule is what
-keeps refusing a file whose only frame or only xz block unpacks to more than
-64 MiB. A decoder can start inside a frame only if the checkpoint keeps the
-frame's whole window (up to 128 MiB with `zstd --long`), and inside an xz
+A span is decoded from its start, so a frame or an xz block whose output is
+larger than `Limits::span` is refused with `Refusal::TooLargeUnit`. This rule
+is what keeps refusing a file whose only frame or only xz block unpacks to
+more than 64 MiB. The refusal says which of the two it is,
+`SpanUnit::ZstdFrame` or `SpanUnit::XzBlock`, and the listing says "a zstd
+frame is too large to unpack (over 64 MiB)" or "an xz block is too large to
+unpack (over 64 MiB)". Until 2026-11-26 the refusal was `TooLarge`, and the
+listing said "too large to unpack (over 64 MiB)", as it does for a run too
+large to hold whole. Only the index pass gives the new refusal: a frame
+decoded as part of a run held whole is refused as `TooLarge`, since there the
+whole run is past the cap too. A zstd frame whose header asks for a window
+over 128 MiB is refused as `TooLarge` as well, before anything says how large
+the frame is. A decoder can start inside a frame only if the checkpoint keeps
+the frame's whole window (up to 128 MiB with `zstd --long`), and inside an xz
 block only if it keeps the LZMA dictionary (up to 64 MiB).
 
 **zstd: one pass.** A zstd frame records its output size only in the
@@ -724,30 +910,32 @@ runs, and the listing and the status bar say how far it has got, with the
 strings deflate's pass uses.
 
 A step stops between two zstd blocks, inside a frame as well as between
-frames. `ruzstd`'s frame decoder holds everything a frame needs between two
-blocks, its window included, and is handed the input again for each block.
-So the walk keeps the frame's decoder from one step to the next, with how far
-it has read and how much of the frame's output the decoder has let go of,
-and the next step decodes the next block, as the pass in one go would. The
-pass comes to the same checkpoints and spans as the pass in one go, and a run
-under the cap comes back with the same bytes and the same trace, step for
-step. A step that takes the output past `Limits::whole` ends the traced part,
-and the next step starts again at the start of that frame, as the pass in one
-go does. `Indexing::known_large` starts a zstd pass past the cap, with the
-trace off, as it does deflate's.
+frames, and between two skippable frames (see "A step bounded by the bits it
+reads"). `ruzstd`'s frame decoder holds everything a frame needs between two
+blocks, its window included, and is handed the input again for each block. So
+the walk keeps the frame's decoder from one step to the next, with how far it
+has read and how much of the frame's output the decoder has let go of, and the
+next step decodes the next block, as the pass in one go would. The pass comes
+to the same checkpoints and spans as the pass in one go, and a run under the
+cap comes back with the same bytes and the same trace, step for step. A step
+that takes the output past `Limits::whole` ends the traced part, and the next
+step starts again at the start of that frame, as the pass in one go does.
+`Indexing::known_large` starts a zstd pass past the cap, with the trace off,
+as it does deflate's.
 
 **How long a step is.** A step stops at the first block boundary after it has
 decoded its share, 256 KiB in the evaluator, so it decodes at most one block
-(128 KiB) more than that. Once a frame's decoder has let go of any output,
-it holds exactly one window, so the output so far is known. Before that it is
-not, since `ruzstd` does not say how much it holds, and each block counts as
-a full 128 KiB. If the blocks before a frame's window fills are smaller than
-that, a step stops early, and the next step decodes the difference as well as
-its own share. That is at most one window more, and never more than the
-frame's own output: 512 KiB for `pzstd -1`, 2 MiB for `pzstd -3`, and at
-most 64 MiB, since a frame larger than `Limits::span` is refused. On the
-generated `pzstd -1` file measured below, no step took longer than 14 ms
-native.
+(128 KiB) more than that. It also stops once it has read 256 KiB of the run
+(2 Mibit), at most one block past that. Once a frame's decoder has let go of any
+output, it holds exactly one window, so the output so far is known. Before
+that it is not, since `ruzstd` does not say how much it holds, and each block
+counts as a full 128 KiB. If the blocks before a frame's window fills are
+smaller than that, a step stops early, and the next step decodes the
+difference as well as its own share. That is at most one window more, and
+never more than the frame's own output: 512 KiB for `pzstd -1`, 2 MiB for
+`pzstd -3`, and at most 64 MiB, since a frame larger than `Limits::span` is
+refused. On the generated `pzstd -1` file measured below, no step took longer
+than 14 ms native.
 
 An unfinished pass holds what the pass in one go holds at the same point: in
 the traced part up to `Limits::whole` of output and its trace, and the
@@ -942,10 +1130,28 @@ The `hash` feature makes that module 2.3 KB larger.
 
 ## Still to do
 
-- `Evaluator::unpacking` reports the pass stepped most recently, which while
-  the listing carries on one stream and Open unpacked another may be the
-  listing's, so the status bar can show the other stream's progress for a
-  go.
+- While a gzip member's stream is measured, the listing has no rows at all,
+  not even a placeholder. The root's node waits on the walk: `members` is a
+  list read to the end of the file, so its count and the root's extent need
+  every member's length. The header fields themselves are ready
+  (`node` answers them), but nothing above them is. Only once the index pass
+  starts does the listing show the member's header above a placeholder. For
+  the CSV-like text in "Measuring a member's stream in steps", measuring was
+  about 35 of the 82 goes it took to open. Answering a list's node before its
+  count is known would need the listing to cope with a count that grows.
+- A slice whose children wait on bytes of the file is still answered whole on
+  the wire, though `Evaluator::children_ready` has the children before the
+  first that waits. Sending them too would let a ZIP entry's header show while
+  its data loads, but the listing's walk would then read on into those
+  children while their siblings' chunks load, which is what `CHUNK_BUDGET`
+  was tuned against. It would want a test of the chunk cache whose source
+  gives them, as `cachedSource` in `flatten.test.ts` does not.
+- Only two unfinished passes are kept (`UNFINISHED_PASSES`). Read from the
+  code, not yet tried: a ZIP with three large entries arrives with all three
+  open, so each frame of the listing steps three passes, and each one put back
+  pushes out the one stepped longest ago, which starts again from the front
+  the next frame. None of them would finish while the listing alone carries
+  them on.
 - A stream opened through the core's own reading of a recognised space
   (`Evaluator::open_space` given that space, or `tab_node`) is unpacked in
   one go, since that reading has no allowance. The wasm crate does not go
@@ -958,25 +1164,21 @@ The `hash` feature makes that module 2.3 KB larger.
   output and goes back to 0 when the index pass starts. Saying which pass is
   running, or reporting them as one, would need the interface to know there
   are two.
-- An index pass stops a step only once the output has grown by the step's
-  share, so a run of empty blocks, which make no output, is indexed in one
-  step however long it is. Measuring stops by bits read and has no such
-  problem. But an empty fixed-Huffman block costs about 1.8 µs to decode, or
-  180 ns a bit, so measuring a hostile run of them takes about 200 ms native
-  a step. `inflate::run` builds the fixed tables again for every fixed block
-  (`fixed_codes`), which is probably most of that; building them once would
-  help every decode.
-- While the pass runs, the listing shows no rows for a structure whose
-  children wait on it, even the ones before the stream (a gzip member's
-  header fields), since a slice of children is answered whole.
+- A go over a run of empty deflate blocks takes up to about 250 ms native
+  while the run may still be held whole, most of it the trace each block adds
+  (see "A step bounded by the bits it reads"). Charging a step for the bits it
+  read, as measuring does, or a smaller trace for an empty block, would
+  shorten it.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
 - A read of an xz span decodes to the end of the LZMA2 chunk that holds its
   last byte, up to 2 MiB past the read. Stopping at the read's last byte
   would need the range coder's state kept between reads, and a stop between
   two symbols in `decoder::run`.
-- A run refused because one frame or block is past 64 MiB says "over 64 MiB"
-  like any other run past the cap. It could say that one frame or block is
-  too large.
+- A zstd frame whose header asks for a window over 128 MiB is refused as
+  "too large to unpack (over 64 MiB)" before anything says how large the
+  frame is. A frame from `zstd --long` is that large in practice, but a
+  frame that asked for such a window and held little would be refused with
+  words that are not true of it.
 
 ## Tests
 
@@ -1040,14 +1242,28 @@ The `hash` feature makes that module 2.3 KB larger.
   go, in a file of one member and in a file of two. An edit to a member that
   has been measured, with no stream opened, gives the same fields as a fresh
   reading of the edited file.
+- A step bounded by the bits it reads (`codec::lazy`): two runs of 40,000
+  empty fixed blocks, one before the cap and one after it, indexed in steps of
+  10,000 bits, are dozens of steps with no output and come to the index of one
+  pass, raw, zlib and gzip, with block starts thinned or not and told the run
+  is large or not; under the cap, steps of 1, 64 and 999 bits come back whole
+  with the trace of one pass, step for step, and steps of 200 bits over runs
+  of dynamic blocks stop at the first code of blocks whose tables are longer
+  than that. Runs of 2,000 skippable frames and 2,000 empty zstd frames,
+  before the cap and after it, indexed in steps of 1,000 bytes, come to the
+  same checkpoints, one of them at the first skippable frame of a run, and
+  under the cap to the same trace.
 - zstd and xz, in `codec::lazy` with the limits made small: runs of several
   frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
   streams of several blocks packed by `lzma-rust2`, read back from anywhere;
   span traces that match the whole trace; one frame or block past
-  `Limits::span` refused; a frame's raw blocks traced to exactly their own
-  bytes once the frame is past its first window; an xz block that does not
-  match the index refused when read. In `eval::space`, both open through their
-  templates, and an xz block's CRC-32 is checked through the index.
+  `Limits::span` refused as `TooLargeUnit`, in one go, in steps, told the run
+  is large, and when the frame was finished before the cap; a frame asking for
+  a 1 TiB window refused as `TooLarge`; a frame's raw blocks traced to exactly
+  their own bytes once the frame is past its first window; an xz block that
+  does not match the index refused when read. In `eval::space`, both open
+  through their templates, and an xz block's CRC-32 is checked through the
+  index.
 - xz spans read part at a time (`codec::lazy`, small limits), over blocks of
   many chunks that start over, blocks whose chunks carry the state on,
   stored chunks, and spans of two blocks: after each read, the span is
@@ -1062,7 +1278,8 @@ The `hash` feature makes that module 2.3 KB larger.
 - `crates/core/tests/lazy_frames_real.rs`: files from `pzstd -1`,
   `zstd -1 -T0 -B1MiB` and `xz -0 -T0` in the sample collection's
   `compressed` folder, made by its `tools/make_frame_samples.py`, read back
-  byte for byte with `whole` at 256 KiB. The `zstd -B` file is refused.
+  byte for byte with `whole` at 256 KiB. The `zstd -B` file is refused as a
+  frame too large.
 - `crates/wasm/tests/open_space_waits.rs`, on files made in the test: a gzip
   whose chunks are fed only as `open_space` names them opens in a few rounds,
   with no chunk asked for twice; a run longer than the editor's store asks
@@ -1070,8 +1287,30 @@ The `hash` feature makes that module 2.3 KB larger.
   zlib, opened as a recognised tab and then opened again after an edit, says
   how far that unpacking has got on every "working" reply about the tab. The
   same tar packed as a gzip inside a gzip, opened from the tab of the inner
-  gzip, says how far it has got in that tab's own reading.
+  gzip, says how far it has got in that tab's own reading. The tar packed as
+  a gzip of one member: the member's children come back "working" with the
+  ten header fields as `ready` and the member's run as `unpacking`, and then
+  whole. Two such tars as the entries of a ZIP: a listing of the first
+  entry's fields and Open unpacked on the second, by turns, each say how far
+  their own entry's pass has got, on every "working" reply.
+- Which pass a call waits on, and the children that are ready, in
+  `eval::space` with the limits made small. A gzip member's children, read in
+  goes of 600 elements, come back with the header ready and the rest waiting
+  in at least three goes of the index pass, and then whole. Two members'
+  streams carried on by turns, a listing read of one and an open of the
+  other, each report their own run; a go reports nothing until it runs out
+  in a pass; and a go that runs out in one pass and then reaches the other
+  reports the first.
 - `web/test/openwait.test.ts`: `waitToOpen` loads and asks again through
   "pending" and "working" to the tab, and stops on the same chunks twice, on
   chunks pushed out by their own load, on a read that fails, after
   `MAX_ROUNDS`, and with nothing more said once the wait is no longer wanted.
+- `web/test/flatten.test.ts`: a member whose children come back "working"
+  with six ready is six rows and one pending item over the rest of the
+  member, with no gap and no edge; with none ready, one pending item over the
+  member; two members waiting on two passes each keep their own progress; a
+  root whose second part waits has no gap after the first; a structure whose
+  ready children have a child still to come between them in the file has no
+  gap, at the root and further in; a record table whose rows wait is one
+  pending item; a page of a list that stops at a child that waits has no edge
+  counting the rest.

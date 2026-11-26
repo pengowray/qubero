@@ -189,14 +189,23 @@ input[type="search"] {
   padding: 6px 10px;
   min-height: 32px;
 }
+/* A control that cannot be used is drawn in the muted colour, as the table
+   bar's choices, the export form and the settings draw theirs. Fading it
+   with opacity took its text to 1.8:1. */
 button:disabled {
-  opacity: 0.45;
+  color: var(--muted);
+  cursor: default;
 }
 button.primary {
   background: var(--accent);
   color: var(--on-accent);
   border-color: var(--accent);
   padding: 10px 18px;
+}
+button.primary:disabled {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--line);
 }
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -337,6 +346,9 @@ button.welcome-crystal {
   padding: 4px 4px 4px 10px;
   color: var(--muted);
 }
+.tab-pick:has(+ .tab-close) {
+  padding-right: 0;
+}
 .tab.is-active .tab-pick {
   color: var(--fg);
 }
@@ -347,9 +359,18 @@ button.welcome-crystal {
   margin-left: 5px;
   color: var(--accent);
 }
+/* At least 24 px wide, the smallest target WCAG 2.2 allows. The 4 px the
+   name's button had on its right are the close button's now, so a tab with
+   one is 2 px wider and every name stays where it was. */
+/* The cross is drawn larger than the tab's 12 px name, which made it a speck,
+   and stays in the muted colour so the name is still what is read first. A
+   line height of 1 keeps the tab as tall as before. */
 .tab-close {
-  padding: 4px 8px 4px 4px;
+  min-width: 24px;
+  padding: 4px 0;
   color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
 }
 /* On a phone two tabs do not fit side by side, and a strip that scrolls
    sideways cut the second tab's name off at the screen edge with nothing to
@@ -1573,8 +1594,14 @@ button.welcome-crystal {
   padding: 1px 4px;
   border-radius: 3px;
 }
+/* A row that opens or leads somewhere is 24 px tall, the smallest target
+   WCAG 2.2 allows; a row that does neither keeps its 19 px. The padding is
+   above the text, so the label and value still share a baseline. */
 button.insp-prop-head {
   cursor: pointer;
+  min-height: 24px;
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 button.insp-prop-head:hover {
   background: var(--accent-soft);
@@ -1617,6 +1644,11 @@ button.insp-prop-head:hover {
    there. It stays the quiet second line, not another link. */
 .insp-prop-how[data-path] {
   cursor: pointer;
+}
+button.insp-prop-how {
+  min-height: 24px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 /* The fields named and the arithmetic over them, under the row they explain. */
 .insp-prop-detail {
@@ -2496,10 +2528,13 @@ qubero-spinner svg {
   gap: 6px;
   text-align: left;
 }
+/* 24 px wide at the least, the smallest target WCAG 2.2 allows; the word
+   alone made it 21. */
 .overview.is-collapsed .ov-toggle {
   writing-mode: vertical-rl;
   height: 100%;
   width: auto;
+  min-width: 24px;
   padding: 8px 2px;
 }
 .ov-body {
@@ -3159,7 +3194,7 @@ qubero-spinner svg {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--fg);
 }
 .sb-close {
   margin-left: auto;
@@ -3171,11 +3206,30 @@ qubero-spinner svg {
 .sb-expand {
   min-width: 0;
 }
+/* Muted rather than faded, like a disabled button. */
 .sb-foldbox.is-off {
-  opacity: 0.5;
+  color: var(--muted);
 }
 .sb-replace {
   padding-left: 0;
+}
+/* On a phone the controls wrap onto a second line rather than squeezing the
+   search box to nothing and pushing Close off the screen. The box keeps at
+   least 160 px, so it is what decides where the line breaks, and a button
+   label stays on one line. The buttons lose 2 px of padding a side so the
+   second line holds Ignore case to Close at 375 px. */
+@media (max-width: 700px) {
+  .sb-row {
+    flex-wrap: wrap;
+  }
+  .sb-find,
+  .sb-repl {
+    flex: 1 1 160px;
+  }
+  .searchbar button {
+    white-space: nowrap;
+    padding-inline: 8px;
+  }
 }
 
 /* A block of packed weights, taken apart. See `quantpanel.ts`. */

@@ -365,6 +365,10 @@ test("a stream that would not decode says why, with its codec's verb", () => {
     "The report could not unscramble this stream: the tascam byte table decoder returned an error.",
   );
   assert.equal(RV.streamFailedNote(codecWords("compression"), "zstd", "too-large"), "The report could not unpack this stream: too large to unpack (over 64 MiB).");
+  assert.equal(
+    RV.streamFailedNote(codecWords("compression"), "zstd", "too-large-zstd-frame"),
+    "The report could not unpack this stream: a zstd frame is too large to unpack (over 64 MiB).",
+  );
   assert.equal(RV.streamFailedNote(codecWords("stored"), "cfb-workbook", "failed"), "The report could not extract this stream: the cfb-workbook decoder returned an error.");
   // No reason from the core, or one this build does not know.
   assert.equal(RV.streamFailedNote(codecWords("compression"), "deflate", null), "The report could not unpack this stream.");
@@ -375,6 +379,8 @@ test("a stream that would not decode says why, with its codec's verb", () => {
 test("a finding for a stream left as bytes says it is too large past either limit", () => {
   assert.equal(RV.refused("too-large", "32 MiB"), "Too large to unpack here");
   assert.equal(RV.refused("too-large-lazy", "32 MiB"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-zstd-frame", "32 MiB"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-xz-block", "32 MiB"), "Too large to unpack here");
   assert.equal(
     RV.refused("too-much-at-once", "32 MiB"),
     "Takes up over 32 MiB of the file, more than the editor keeps in memory at once, so it was not unpacked",

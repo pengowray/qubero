@@ -649,10 +649,12 @@ export class ListingReport {
         if (item.kind !== "heading") setLevel(node, this.levels[i] ?? 0);
         this.mounted.set(item.key, node);
         this.canvas.append(node);
-      } else if (item.kind === "pending") {
+      } else if (item.kind === "pending" && (item.unpacking !== null || !item.working)) {
         // Kept standing between redraws, and what it says moves on while a
-        // large stream is unpacked a go at a time.
-        node.textContent = pendingText(this.doc);
+        // large stream is unpacked a go at a time. A go that ran out before
+        // it reached the stream's pass has no progress to give, so the row
+        // keeps the progress it showed last.
+        node.textContent = pendingText(item);
       }
       node.style.top = `${this.tops[i] ?? 0}px`;
       if (item.key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);

@@ -210,6 +210,12 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB)",
+  /** A zstd run, or an xz stream, read a piece at a time: each frame or
+   *  block of it is unpacked whole, and one of them unpacks to more than
+   *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
+   *  write, is refused this way once it is past 64 MiB. */
+  "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB)",
+  "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB)",
   /** A run read from the file in one piece, which takes up more of it than
    *  the editor keeps in memory at once (`RESIDENT_BYTES` in `doc.ts`), so
    *  waiting for it would wait for ever. The limit is in the hover,
@@ -665,6 +671,15 @@ export const JOINED = {
    */
   partTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts unpacks to over 1 GiB.`,
   /**
+   * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part has a zstd frame, or an xz block,
+   * that unpacks to more than 64 MiB (`too-large-zstd-frame`,
+   * `too-large-xz-block`): each frame or block is unpacked whole. The core
+   * does not say which part; a read of that part in the listing names it.
+   */
+  partZstdFrameTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has a zstd frame that unpacks to over 64 MiB.`,
+  partXzBlockTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has an xz block that unpacks to over 64 MiB.`,
+  /**
    * In the status bar, when Open joined stream was pressed and joining the
    * whole stream failed: a part would not read, would not unpack, or unpacked
    * to another length than its block said. The core does not say which part,
@@ -673,19 +688,27 @@ export const JOINED = {
    * what was pressed. Also said for any refusal this build has no words for.
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
-  /** Which of the four a refusal of Open joined stream is, by the core's
+  /** Which of the above a refusal of Open joined stream is, by the core's
    *  refusal word. `too-much-at-once` is parts that take up more of the file
    *  than the editor keeps in memory at once, which is what
    *  `UNPACKED.tooMuchAtOnce` says of any stream; `resident` is that limit,
    *  as there. */
-  refused: (refused: string, tab: string, resident: string): string =>
-    refused === "too-large"
-      ? JOINED.tooLarge(tab)
-      : refused === "too-large-lazy"
-        ? JOINED.partTooLarge(tab)
-        : refused === "too-much-at-once"
-          ? UNPACKED.tooMuchAtOnce(tab, resident)
-          : JOINED.failed(tab),
+  refused: (refused: string, tab: string, resident: string): string => {
+    switch (refused) {
+      case "too-large":
+        return JOINED.tooLarge(tab);
+      case "too-large-lazy":
+        return JOINED.partTooLarge(tab);
+      case "too-large-zstd-frame":
+        return JOINED.partZstdFrameTooLarge(tab);
+      case "too-large-xz-block":
+        return JOINED.partXzBlockTooLarge(tab);
+      case "too-much-at-once":
+        return UNPACKED.tooMuchAtOnce(tab, resident);
+      default:
+        return JOINED.failed(tab);
+    }
+  },
   /** Names the tab a joined stream opens in. The same shape as
    *  `UNPACKED.tabTitle`. */
   tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
@@ -3173,6 +3196,9 @@ function fromFields(c: HowContext): string {
  * Name; five verbs would be five things to learn.
  */
 export const PROPERTIES = {
+  /** The hover on the Position row's address, which is a link to the field's
+   *  first byte. Names the hex view's keys that do the same. */
+  goToStart: "Go to the start of this field (Alt+↑). Alt+↓ goes to the next field.",
   /**
    * The section heading. What every inspector calls the list of a selected
    * thing's attributes, from DevTools to Blender, so it costs nothing to

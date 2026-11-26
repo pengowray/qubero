@@ -472,6 +472,19 @@ impl Evaluator {
             let Ok(next) = self.node(doc, &child) else { break };
             info = next;
         }
+        // A number written as hex or octal digits names a record by those
+        // digits, as the file writes them: an RTF `\'e9` is the byte `e9`,
+        // and 233 is a number nobody reading the file would look for.
+        if let Some(r) = self.memo.get(&child).cloned() {
+            if matches!(r.ty.base(), Ty::TextInt { radix, .. } if *radix != 10) {
+                if let Ok(bytes) = self.read(doc, &r, r.offset, info.size_bits) {
+                    let text = String::from_utf8_lossy(&bytes).trim().to_string();
+                    if !text.is_empty() {
+                        return Some(Value::Str(text));
+                    }
+                }
+            }
+        }
         Some(info.value)
     }
 

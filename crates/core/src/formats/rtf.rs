@@ -282,6 +282,8 @@ mod tests {
         let (d, mut ev) = read(b"{\\'e9}");
         assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(0xe9));
         assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().size_bits, 4 * 8);
+        // Named by the digits as written, not by the number they spell.
+        assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().name, "[0] e9");
     }
 
     #[test]

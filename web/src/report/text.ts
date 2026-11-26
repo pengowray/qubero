@@ -169,14 +169,16 @@ export const RV = {
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
   /** A finding's text for a stream left as bytes, by the core's refusal word.
    *  `too-large-lazy` is a stream the core reads a piece at a time (deflate,
-   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and reads the
-   *  same as `too-large`. `too-much-at-once` is a stream read from the file
-   *  in one piece that takes up more of it than the editor keeps in memory,
+   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and
+   *  `too-large-zstd-frame` and `too-large-xz-block` one with a frame or
+   *  block that unpacks to more than 64 MiB. All read the same as
+   *  `too-large`. `too-much-at-once` is a stream read from the file in one
+   *  piece that takes up more of it than the editor keeps in memory,
    *  `resident` (`Doc.residentBytes`, as `formatLimit` writes it). It says
    *  the limit, since the line has no hover and a stream of another kind
    *  that takes up more still may have unpacked. */
   refused: (why: string, resident: string): string =>
-    why === "too-large" || why === "too-large-lazy"
+    why === "too-large" || why === "too-large-lazy" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
       ? "Too large to unpack here"
       : why === "too-much-at-once"
         ? `Takes up over ${resident} of the file, more than the editor keeps in memory at once, so it was not unpacked`
