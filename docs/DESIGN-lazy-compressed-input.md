@@ -342,6 +342,86 @@ crate's `decode_step` reads the run from byte `in_bits.start / 8` to byte
 `in_bits.end.div_ceil(8)`, at most 7 bytes, instead of reading with
 `field_bytes` from the run's front.
 
+### Built (part 3)
+
+**Built on 2026-11-26.** Every caller still passes the whole run, so the
+bytes, traces and refusals are the same as before. Where the code differs
+from the text above:
+
+- **One window type.** `codec::Window` serves all three decoders: the bytes,
+  the byte of the run they start at, and the run's length, so that
+  `reaches_end` can tell a window that ends early from a run that does.
+  `within` gives the window over part of the run, such as an xz block's LZMA2
+  data, with positions counted from that part's front.
+- **Deflate.** `Bits::with_base` sets the base; `pos`, `seek`, `end_at` and
+  `end_pos` count from the run's front, and `slice` takes a stored block's
+  payload. `inflate::Input` holds the code window and the optional head
+  window (`Input::whole`, `Input::new`). `DEFLATE_MARGIN` and
+  `MAX_HEAD_BYTES` are public constants in `inflate`. A decode that runs out
+  of a window that ends before the deflate data does is refused as `Failed`,
+  like a stream cut short: keeping the margin is the caller's job.
+- **The wrapper.** `framing(wrapper, head, run_len)` answers `Framed::At`, or
+  `Framed::NeedsHead(n)` when the header goes on past the head. A head that
+  is the whole run never gets `NeedsHead`, and `Framed::found` turns the
+  answer into a `Result` for callers that pass the whole run.
+  `trailer_agrees` takes the bytes `Framing::trailer` names.
+- **`Seekable`'s deflate reads take their input** as a parameter, so that
+  part 7 can pass windows: `deflate_span`, `deflate_span_trace`, `group_from`
+  and `block_trace_from`. Today each is passed `Input::whole`.
+- **`decode_step` keeps its signature**, the whole run from the front, so the
+  wasm crate and the evaluator's test did not change. The windowed form is
+  `decode_step_at(data, at, trace, step)`, for part 4 to call.
+- **zstd.** `ZstdWalk::run` takes a `Window` and answers `Walked::Ended`,
+  `Walked::Stopped` or `Walked::Needs(range)`. The range starts where the
+  walk stopped and ends where the thing it reads next ends. Before a frame
+  or skippable frame the walk needs 18 bytes, or up to the span's end if that
+  comes first. Before a block it needs the 3-byte header, and then the block
+  with the frame's checksum when the block is the last. A window that holds
+  one byte less gets the same `Needs` again, and the walk has not changed.
+  `ZSTD_MARGIN` (128 KiB + 25 bytes) is a public constant in `frames`.
+  `lazy::zstd::decode_span` and `span_trace` take a window.
+- **LZMA2 and xz.** The range coder has a base, which `bit_pos` and
+  `byte_pos` add; reading a byte costs the same. `Lzma2::chunk_in` and
+  `lzma2_len_in` read from a window. A window that does not hold the next
+  chunk is refused as `Failed`, before the decoder changes, rather than
+  answering that it needs more input as the zstd walk does: this design gives
+  that answer only to zstd, and a later part can call again with a larger
+  window. `Lzma2::chunk` still takes the whole stream, and `lzma2_len` is
+  now used only by tests. `xz::blocks`, `lazy::xz::read_span` and
+  `lazy::xz::span_trace` take a window of the stream, which has to hold the
+  LZMA2 data of every block they decode.
+- **Tests**, each from copies of only the bytes the decode needs: every
+  deflate span and its trace from its checkpoint's byte to the next
+  checkpoint's, with the block header in a head window of `MAX_HEAD_BYTES`
+  (stored, fixed and dynamic blocks, every wrapper, the last span with the
+  trailer); every block trace and every group of dropped block starts;
+  `decode_step_at` from the step's own bytes; a gzip header read from heads
+  of every length; a zstd walk given windows from 1 byte to the whole run,
+  with and without skippable frames; every zstd span; an LZMA2 stream read a
+  chunk at a time from windows that hold exactly the next chunk; every xz
+  span's trace and reads.
+- **Speed: no change that the measurements can show.** Measured on
+  2026-11-26 in release builds, native, with harnesses outside `cargo test`,
+  pinned to one core. "Before" is built from the commit this part started
+  from. Before and after runs alternated, and the table gives the fastest run
+  of each. The machine was loaded by other sessions (a load average of 6 to
+  14 on 12 cores), and single runs varied by 10% or more, so differences
+  under about 3% are noise. The files were generated for the measurement:
+  rows of CSV-like text packed by Python's `zlib` at level 6, and bytes that
+  are nine tenths one letter packed with Huffman coding only.
+
+  | What | File | Before | After | Change |
+  |---|---|---|---|---|
+  | `decode_or_index` | 190 MB of CSV, 61 MB packed (6 runs each) | 1,952 ms | 1,909 ms | -2.2% |
+  | Reading all of it through the index, 4 MiB at a time | the same | 1,562 ms | 1,527 ms | -2.2% |
+  | Every span's trace | the same | 1,277 ms | 1,275 ms | -0.2% |
+  | `decode_or_index` | 300 MB of literals, 56 MB packed (6 runs each) | 3,957 ms | 3,886 ms | -1.8% |
+  | Reading all of it through the index | the same | 3,221 ms | 3,162 ms | -1.8% |
+  | Every span's trace | the same | 2,413 ms | 2,434 ms | +0.9% |
+  | User CPU time of the whole run | the same | 10.45 s | 10.39 s | -0.6% |
+  | `inflate::gzip`, traced | 60 MB of CSV, 19 MB packed (8 runs each, fastest of 5) | 619.7 ms | 619.1 ms | -0.1% |
+  | `inflate_len` | the same | 350.2 ms | 353.0 ms | +0.8% |
+
 ## The index pass reads through a `RunInput`
 
 Part 7 for deflate and zstd. xz follows in part 8.
@@ -863,7 +943,8 @@ order. Each part needs only the parts before it.
 3. **Decoders read a window.** `Bits` with a base, `inflate::run` taking an
    `Input`, `framing` and `trailer_agrees` taking pieces of the run,
    `ZstdWalk`, `Lzma2` and `decode_step` on windows. Every caller passes the
-   whole run. Nothing a reader sees changes.
+   whole run. Nothing a reader sees changes. **Done 2026-11-26**; see "Built
+   (part 3)" under "The decoders read a window".
 4. **`decode_step` reads only its trace step.** The wasm crate reads at most
    7 bytes of the run. Fixes: the code panel on a trace step deep in a long
    run.
