@@ -1086,7 +1086,7 @@ impl Evaluator {
     /// The long run of values or records a field belongs to, as one entry, or
     /// None when it belongs to none that is worth folding.
     fn run_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at: u64) -> R<Option<Span>> {
-        let Some((run, count)) = self.collapsible(doc, path)? else { return Ok(None) };
+        let Some((run, count)) = self.collapsible(doc, path, at)? else { return Ok(None) };
         let run_info = self.node(doc, &run)?;
         // Pointer-heavy formats can reach a leaf through an overlapping
         // placement whose repeated ancestor has already ended. Collapsing that
@@ -1426,13 +1426,23 @@ impl Evaluator {
 
     /// The nearest repeated run `path` sits in, if it is long enough to be
     /// worth showing as one entry. Records use the higher threshold above.
-    pub(super) fn collapsible<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<(Vec<usize>, u64)>> {
+    pub(super) fn collapsible<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at: u64) -> R<Option<(Vec<usize>, u64)>> {
         for k in 0..path.len() {
             let ty = self.memo[&path[..k]].ty.clone();
             let elem = match &ty {
                 Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => (**elem).clone(),
                 _ => continue,
             };
+            // A list whose bytes do not hold `at` reached it through a pointer
+            // further down: a TIFF directory's entries are a list, and the
+            // values an entry points at are somewhere else. The run worth
+            // folding is a list nearer the field, if there is one.
+            // Only asked of a list in the same space as the field: `at` is a
+            // bit of that space.
+            let (start, space) = (self.memo[&path[..k]].offset, self.memo[&path[..k]].space);
+            if space == self.memo[path].space && (at < start || at >= start + self.size_of(doc, &path[..k])?) {
+                continue;
+            }
             // Instructions stay one entry per line however many there are.
             // A run of them is a program, and a row saying "245,678
             // instructions" is the one thing a reader of a program does not
