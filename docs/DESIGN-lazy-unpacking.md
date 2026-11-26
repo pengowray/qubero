@@ -552,6 +552,16 @@ no index (bzip2, LZMA and the rest) is decoded whole, and a read of one past
 64 MiB says `is too large to unpack (over 64 MiB)` as well. The words after
 "is" are `Refusal::message`, which FITS tiles and Parquet pages use too.
 
+A packed part that will not decode, or that decodes to another length than
+the file says, is kept with the reason in its stitched space
+(`Stitch::troubles`), whether it was decoded whole or through an index pass.
+A read that reaches it again fails with the same message and decodes
+nothing, so a listing scrolling over a damaged BGZF block decodes the block
+once. That includes a zstd or xz part the file says is past 64 MiB which
+decodes whole: the run itself decodes, so it is not a refusal in
+`refused_runs`, and the part's own `Decoded` node still opens it.
+`Spaces::forget` drops the stitched space, and the kept reasons with it.
+
 **`Space` (the document of its own).** Its document becomes
 `Document<SpaceSource>`, where `SpaceSource` is an enum of `Whole(Arc<Vec<u8>>)`,
 `Lazy(Arc<Seekable>)` and `Joined(Arc<Joined>)`, all implementing `Source`
