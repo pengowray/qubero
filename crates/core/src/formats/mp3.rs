@@ -38,7 +38,7 @@ fn file() -> T {
     T::structure(
         "MP3",
         vec![
-            ("id3v2", T::when(id3v2_ahead(E::SpaceSize.sub(E::SpacePos)), super::id3::file_tag())),
+            ("id3v2", T::when(id3v2_ahead(E::SpaceSize.sub(E::SpacePos)), id3v2(E::SpaceSize.sub(E::SpacePos)))),
             // Everything between the front tag and the back ones. Worked out
             // once here, so that a walk over the frames does not look at the
             // end of the file again for each one.
@@ -83,7 +83,8 @@ pub(super) fn audio() -> T {
     .field_doc(
         "not_frames",
         "Bytes after the last frame that Qubero cannot read as a frame or as one of the tags at the end. For example, \
-         free-format frames, whose length is not in the header, or a tag in a format Qubero does not read.",
+         a frame cut off by the end of the file, free-format frames, whose length is not in the header, or a tag in a \
+         format Qubero does not read.",
     )
 }
 
@@ -95,11 +96,13 @@ const ZEROS: i128 = 3;
 
 /// Which kind of element starts here: a frame, an ID3v2 tag (which a stream
 /// joined from several files has between them), a run of zero bytes (which
-/// some taggers leave after the tag in front), or nothing this reads.
+/// some taggers leave after the tag in front), or nothing this reads. A frame
+/// counts only when all of it is there, so one cut off by the end of the file
+/// is left to `not_frames`.
 fn ahead() -> E {
     let has = |n: i128| E::Remaining.greater_or_equal(E::lit(n));
     E::cond(
-        has(4).both(header_ok(&Peeked)),
+        has(4).both(header_ok(&Peeked)).both(frame_length(&Peeked).less_or_equal(E::Remaining)),
         E::lit(FRAME),
         E::cond(
             id3v2_ahead(E::Remaining),
@@ -113,12 +116,21 @@ fn id3v2_ahead(room: E) -> E {
     room.greater_or_equal(E::lit(10)).both(E::peek(24, Big).equal_to(E::lit(0x49_44_33)))
 }
 
+/// An ID3v2 tag in a window as long as its header says, so that the audio
+/// starts where the header says the tag ends, whatever its frames read as.
+fn id3v2(room: E) -> T {
+    let byte = |n: i128| E::peek_at(E::lit(8 * n), 8, Big);
+    let size = (6..10).fold(E::lit(0), |acc, n| acc.mul(E::lit(128)).add(byte(n).and(E::lit(0x7f))));
+    let footer = byte(3).equal_to(E::lit(4)).both(byte(5).bit(4)).mul(E::lit(10));
+    T::sized(E::lit(10).add(size).add(footer).at_most(room), super::id3::file_tag())
+}
+
 fn element() -> T {
     T::switch(
         ahead(),
         vec![
-            (FRAME, T::sized(frame_length(&Peeked).at_most(E::Remaining), frame())),
-            (TAG, super::id3::file_tag()),
+            (FRAME, T::sized(frame_length(&Peeked), frame())),
+            (TAG, id3v2(E::Remaining)),
             (
                 ZEROS,
                 T::structure("Padding", vec![("zeros", T::bytes(E::run(&[0])))])
@@ -757,7 +769,7 @@ fn lame() -> T {
          Tags at the end of the file are not counted.",
     )
     .field_doc("music_crc", "CRC-16 of the audio frames after this frame, computed when LAME wrote them.")
-    .field_doc("tag_crc", "CRC-16 of the first 190 bytes of this frame.")
+    .field_doc("tag_crc", "CRC-16 that protects the LAME tag. The LAME tag specification says it covers the first 190 bytes of this frame.")
 }
 
 const VBRI: i128 = 0x56_42_52_49;
@@ -1462,6 +1474,81 @@ mod tests {
         assert_eq!(frames, 4);
         let kinds: Vec<String> = (0..4).map(|i| ev.node(&d, &[1, 0, i]).unwrap().type_name).collect();
         assert_eq!(kinds, ["Padding", "Frame", "ID3", "Frame"]);
+    }
+
+    /// Every node under `path`, read, to a depth that reaches the granules.
+    fn read_all(ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize], depth: usize) {
+        let n = ev.node(d, path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+        if depth == 0 {
+            return;
+        }
+        for i in 0..n.child_count as usize {
+            read_all(ev, d, &[path, &[i]].concat(), depth - 1);
+        }
+    }
+
+    #[test]
+    fn a_frame_cut_off_by_the_end_of_the_file_is_left_out_of_the_frames() {
+        let mut xing = frame_bytes(MONO);
+        xing[21..29].copy_from_slice(b"Info\0\0\0\x0f");
+        for first in [frame_bytes(MONO), xing] {
+            for cut in [1, 3, 5, 10, 30, 100, 400] {
+                let file = [first.clone(), first[..cut].to_vec()].concat();
+                let d = Document::new(MemSource(file));
+                let mut ev = Evaluator::new(mp3());
+                read_all(&mut ev, &d, &[], 8);
+                assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 1, "cut at {cut}");
+                assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), cut as u64, "cut at {cut}");
+            }
+        }
+        // A file that is only the start of a frame.
+        let d = Document::new(MemSource(frame_bytes(MONO)[..40].to_vec()));
+        let mut ev = Evaluator::new(mp3());
+        read_all(&mut ev, &d, &[], 8);
+        assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), 40);
+    }
+
+    /// An ID3v2 tag header of the given version and flags around `body`.
+    fn id3v2(version: u8, flags: u8, body: &[u8]) -> Vec<u8> {
+        let n = body.len();
+        let mut v = vec![b'I', b'D', b'3', version, 0, flags];
+        v.extend([(n >> 21) as u8 & 0x7f, (n >> 14) as u8 & 0x7f, (n >> 7) as u8 & 0x7f, n as u8 & 0x7f]);
+        v.extend(body);
+        v
+    }
+
+    #[test]
+    fn the_audio_starts_where_the_id3v2_header_says_whatever_its_frames_read_as() {
+        let frames = [frame_bytes(MONO), frame_bytes(MONO)].concat();
+
+        // Version 2.2: three-letter IDs and 24-bit sizes.
+        let mut body = b"TT2\0\0\x03\0Hi".to_vec();
+        body.extend([0; 20]);
+        let d = Document::new(MemSource([id3v2(2, 0, &body), frames.clone()].concat()));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits / 8, 10 + body.len() as u64);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "id"])), "TT2");
+        assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "body", "text"])), "Hi");
+        assert_eq!(size(&mut ev, &d, &["id3v2", "padding"]), 20);
+
+        // Version 2.3 with an extended header: 6 bytes of flags and padding size.
+        let mut body = vec![0, 0, 0, 6, 0, 0, 0, 0, 0, 0];
+        body.extend(b"TIT2\0\0\0\x03\0\0\0Hi");
+        let d = Document::new(MemSource([id3v2(3, 0x40, &body), frames.clone()].concat()));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(size(&mut ev, &d, &["id3v2", "extended_header"]), 10);
+        assert_eq!(name(value(&mut ev, &d, &["id3v2", "frames", "0", "body", "text"])), "Hi");
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+
+        // A frame whose size runs past the end of the tag stops at the end of
+        // the tag, and the audio is still where the header says.
+        let body = b"TIT2\0\0\x10\0\0\0\x03Hi".to_vec();
+        let d = Document::new(MemSource([id3v2(3, 0, &body), frames].concat()));
+        let mut ev = Evaluator::new(mp3());
+        read_all(&mut ev, &d, &[0], 6);
+        assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits / 8, 10 + body.len() as u64);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
     }
 
     #[test]

@@ -70,6 +70,8 @@ fn every_sample_reads_as_frames_and_tags_with_nothing_left_over() {
         };
         let len = bytes.len() as u64;
         let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
+        // From the bytes alone, and with the name, which is asked first.
+        assert_eq!(formats::sniff(head, len), Some("mp3"), "{}: recognised from its bytes", s.file);
         assert_eq!(formats::sniff_named(head, len, s.file), Some("mp3"), "{}", s.file);
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(formats::template("mp3").unwrap());
