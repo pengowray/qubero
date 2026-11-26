@@ -207,8 +207,8 @@ export const DECODED_INSIDE = "in the unpacked stream";
 /** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
 export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   "too-large": "too large to unpack (over 64 MiB)",
-  /** A deflate, zlib or gzip run, which is read a piece at a time and so may
-   *  unpack to more than 64 MiB, up to this. */
+  /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
+   *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB)",
   failed: "unpacking failed",
   unaligned: "not on a byte boundary",
@@ -693,9 +693,10 @@ export const UNPACKED = {
   /** In the status bar after Open unpacked was pressed on a stream large
    *  enough to take several goes, until the tab opens. `percent` is how much
    *  of the compressed data has been read and `size` what it has unpacked to
-   *  so far; the final size is not known until the end. Only deflate, zstd
-   *  and xz streams unpack in goes (`codec/lazy.rs`), so these words are
-   *  always the ones for compression. */
+   *  so far; the final size is not known until the end. Only deflate, zlib,
+   *  gzip and zstd streams unpack in goes (`codec/lazy/`; an xz stream is
+   *  decoded or laid out in a single go), so these words are always the
+   *  ones for compression. */
   unpacking: (field: string, percent: string, size: string): string =>
     `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   /** In the status bar after Open unpacked, or Open joined stream, was

@@ -569,11 +569,16 @@ export const RV = {
   pngStripCaption: "Each mark is one scanline, lettered by its filter. Hover a mark for its row and size, and click it to show it in the listing.",
   pngStripCut: (shown: number, total: number): string => `Only the first ${shown.toLocaleString()} of ${counted(total, "scanline")} are shown.`,
   pngScanlinesUnread: "The scanlines could not be read",
-  /** Why the IDAT data did not inflate, by the core's refusal word. */
+  /** Why the IDAT data did not inflate, by the core's refusal word. A zlib
+   *  stream is `too-large` when the compressed stream itself is past 64 MiB,
+   *  and `too-large-lazy` when it inflates to more than 1 GiB. A stream that
+   *  inflates to between 64 MiB and 1 GiB is inflated a piece at a time. */
   pngNotInflated: (why: string): string =>
     why === "too-large"
-      ? "The image data inflates to more than 64 MiB, which is more than this view unpacks."
-      : "The image data did not inflate: the zlib stream is damaged or cut short.",
+      ? "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large."
+      : why === "too-large-lazy"
+        ? "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB."
+        : "The image data did not inflate: the zlib stream is damaged or cut short.",
   /** Why the inflated bytes were not unfiltered, by the core's refusal word. */
   pngNotUnfiltered: (why: string): string =>
     why === "settings"

@@ -26,6 +26,8 @@
 //! not unpack, or unpacks to another length than its run claimed, fails the
 //! read that reached it and names the part; a run of records inside stops
 //! there with the reason, the way it stops at any element it cannot read.
+//! The reason is kept with the part, so the next read of it fails the same
+//! way without unpacking it again.
 
 use std::sync::Arc;
 
@@ -52,14 +54,16 @@ pub(super) enum Joining {
     Lazy { joined: Arc<Joined>, runs: Vec<JoinedRun> },
 }
 
-/// Why a packed part too large to decode whole could not be read through an
-/// index.
-enum PartTrouble {
+/// Why a packed part could not be read, through an index or decoded whole.
+/// Kept in [`Stitch::troubles`] once found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PartTrouble {
     /// It unpacks to this many bytes, which is not what the file says.
     Length(u64),
-    /// The index pass refused it, for this reason: [`Refusal::TooLargeLazy`]
-    /// for a part that unpacks to more than [`lazy::LAZY_CAP_BYTES`], and
-    /// [`Refusal::Failed`] for one that will not decode.
+    /// Its decoder refused it, for this reason. From an index pass,
+    /// [`Refusal::TooLargeLazy`] is a part that unpacks to more than
+    /// [`lazy::LAZY_CAP_BYTES`], and [`Refusal::Failed`] one that will not
+    /// decode.
     Refused(Refusal),
 }
 
@@ -292,6 +296,13 @@ impl Evaluator {
     /// The index is the one already made for the part's run if there is one:
     /// by the part's own `Decoded` node, by the walk that measured it, or by
     /// an earlier read. One made here is kept the same way.
+    ///
+    /// A part that fails here is kept in [`Stitch::troubles`] with its
+    /// reason, and later calls return that reason without decoding. A
+    /// refusal is also kept by the run, in `refused_runs`. A part the file
+    /// says is past the cap that decodes whole is not a refusal of the run,
+    /// so only `troubles` keeps it: without that, every read would decode
+    /// the run again, up to 64 MiB, to find the same length.
     fn index_part<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize) -> R<Result<Option<Arc<Seekable>>, PartTrouble>> {
         let part = &stitch.parts[i];
         let PartSource::Packed { space, at_bits, size_bits, codec: Ok(codec) } = &part.source else { return Ok(Ok(None)) };
@@ -299,32 +310,35 @@ impl Evaluator {
         if !lazy::can_index(*codec) || part.len <= limits.whole as u64 {
             return Ok(Ok(None));
         }
+        let known = stitch.troubles.borrow().get(&i).copied();
+        if let Some(trouble) = known {
+            return Ok(Err(trouble));
+        }
         let key = (*space, *at_bits, *size_bits);
         let open = match self.spaces.get(&part.path) {
             Some(Opened::Space(id)) => self.spaces.lazy(id).cloned(),
             _ => None,
         };
-        let index = match open.or_else(|| self.spaces.indexed(key, *codec)) {
-            Some(index) => index,
+        let found = match open.or_else(|| self.spaces.indexed(key, *codec)) {
+            Some(index) => Ok(index),
             // Only a part the file says is past the cap gets here.
-            None => {
-                match self.index_run(doc, key, *codec, true)? {
-                    Ok(lazy::Decoded::Indexed(index)) => {
-                        let index = Arc::new(index);
-                        self.spaces.keep_index(key, *codec, index.clone());
-                        index
-                    }
-                    // Small enough to hold whole after all, which a part the
-                    // file says is larger than the cap is not.
-                    Ok(lazy::Decoded::Whole(bytes, _)) => return Ok(Err(PartTrouble::Length(bytes.len() as u64))),
-                    Err(why) => return Ok(Err(PartTrouble::Refused(why))),
+            None => match self.index_run(doc, key, *codec, true)? {
+                Ok(lazy::Decoded::Indexed(index)) => {
+                    let index = Arc::new(index);
+                    self.spaces.keep_index(key, *codec, index.clone());
+                    Ok(index)
                 }
-            }
+                // Small enough to hold whole after all, which a part the
+                // file says is larger than the cap is not.
+                Ok(lazy::Decoded::Whole(bytes, _)) => Err(PartTrouble::Length(bytes.len() as u64)),
+                Err(why) => Err(PartTrouble::Refused(why)),
+            },
         };
-        if index.len() != part.len {
-            return Ok(Err(PartTrouble::Length(index.len())));
+        let found = found.and_then(|index| if index.len() == part.len { Ok(index) } else { Err(PartTrouble::Length(index.len())) });
+        if let Err(trouble) = found {
+            stitch.troubles.borrow_mut().insert(i, trouble);
         }
-        Ok(Ok(Some(index)))
+        Ok(found.map(Some))
     }
 
     /// [`Self::index_part`], with its trouble said the way a read of the
@@ -332,13 +346,24 @@ impl Evaluator {
     fn part_index<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize) -> R<Option<Arc<Seekable>>> {
         match self.index_part(doc, stitch, i)? {
             Ok(index) => Ok(index),
-            Err(PartTrouble::Length(n)) => fail(format!(
-                "{} unpacks to {} bytes, not the {} the file says",
-                self.part_label(stitch, i),
-                n,
-                stitch.parts[i].len
-            )),
-            Err(PartTrouble::Refused(why)) => self.part_refusal(stitch, i, why),
+            Err(trouble) => self.part_trouble(stitch, i, trouble),
+        }
+    }
+
+    /// A read of packed part `i` failing for `trouble`. It is shown over the
+    /// bytes a run of records could not read, so it names the part the way
+    /// the listing names the field it is, and says what the file claimed in
+    /// the file's own voice: `blocks[2].compressed unpacks to 20 bytes, not
+    /// the 25 the file says`. Out of line for the same reason as
+    /// [`Self::part_refusal`].
+    #[cold]
+    #[inline(never)]
+    fn part_trouble<T>(&self, stitch: &Stitch, i: usize, trouble: PartTrouble) -> R<T> {
+        match trouble {
+            PartTrouble::Length(n) => {
+                fail(format!("{} unpacks to {} bytes, not the {} the file says", self.part_label(stitch, i), n, stitch.parts[i].len))
+            }
+            PartTrouble::Refused(why) => self.part_refusal(stitch, i, why),
         }
     }
 
@@ -360,6 +385,8 @@ impl Evaluator {
             return Ok(Err(Refusal::TooLarge));
         }
         let packed = self.read_in(doc, space, at, size)?;
+        #[cfg(test)]
+        self.spaces.decodes.set(self.spaces.decodes.get() + 1);
         Ok(crate::codec::decode(codec, &packed))
     }
 
@@ -431,43 +458,50 @@ impl Evaluator {
     /// Everything packed part `i` unpacks to: from the stream already open over
     /// its run when something opened that, from the cache when it was read
     /// lately, and unpacked now otherwise.
+    ///
+    /// A part that will not decode, or decodes to another length than the
+    /// file says, is kept in [`Stitch::troubles`], so a read that reaches it
+    /// again fails the same way without decoding it again. The cache keeps
+    /// only parts that decoded to the length the file says.
     fn unpacked_part<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize) -> R<Arc<Vec<u8>>> {
         let part = &stitch.parts[i];
         let PartSource::Packed { space, at_bits, size_bits, codec } = &part.source else {
             return fail("not a packed part");
         };
-        // Both of these are shown over the bytes a run of records could not
-        // read, so they name the part the way the listing names the field it
-        // is, and say what the file claimed in the file's own voice.
-        let checked = |bytes: Arc<Vec<u8>>| -> R<Arc<Vec<u8>>> {
-            if bytes.len() as u64 != part.len {
-                return fail(format!(
-                    "{} unpacks to {} bytes, not the {} the file says",
-                    self.part_label(stitch, i),
-                    bytes.len(),
-                    part.len
-                ));
-            }
-            Ok(bytes)
-        };
         if let Some(Opened::Space(id)) = self.spaces.get(&part.path) {
             if let Some(bytes) = self.spaces.buf(id) {
-                return checked(bytes.clone());
+                if bytes.len() as u64 != part.len {
+                    return self.part_trouble(stitch, i, PartTrouble::Length(bytes.len() as u64));
+                }
+                return Ok(bytes.clone());
             }
         }
         if let Some(bytes) = stitch.cache.borrow_mut().get(i) {
             return Ok(bytes);
         }
+        let known = stitch.troubles.borrow().get(&i).copied();
+        if let Some(trouble) = known {
+            return self.part_trouble(stitch, i, trouble);
+        }
         let unpacked = match codec {
             Ok(codec) => self.unpack_run(doc, *space, *at_bits, *size_bits, *codec)?,
             Err(why) => Err(*why),
         };
-        let bytes = match unpacked {
-            Ok(bytes) => checked(Arc::new(bytes))?,
-            Err(why) => return self.part_refusal(stitch, i, why),
+        let found = match unpacked {
+            Ok(bytes) if bytes.len() as u64 == part.len => Ok(Arc::new(bytes)),
+            Ok(bytes) => Err(PartTrouble::Length(bytes.len() as u64)),
+            Err(why) => Err(PartTrouble::Refused(why)),
         };
-        stitch.cache.borrow_mut().put(i, bytes.clone());
-        Ok(bytes)
+        match found {
+            Ok(bytes) => {
+                stitch.cache.borrow_mut().put(i, bytes.clone());
+                Ok(bytes)
+            }
+            Err(trouble) => {
+                stitch.troubles.borrow_mut().insert(i, trouble);
+                self.part_trouble(stitch, i, trouble)
+            }
+        }
     }
 
     /// The stitched stream at `path` held whole, for opening it as a document
@@ -1691,6 +1725,86 @@ mod tests {
             assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), None);
             assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
             assert_eq!(e.spaces.passes.get(), 2, "after the indexes were dropped");
+        }
+    }
+
+    /// A packed part small enough to decode whole that will not decode, or
+    /// that decodes to another length than its block's trailer says, is
+    /// decoded by the first read that reaches it and not by the next, which
+    /// fails the same way. Dropped with the spaces, so a stream opened again
+    /// after they are forgotten decodes the part again.
+    #[test]
+    fn a_part_that_fails_to_decode_is_decoded_once_however_often_it_is_read() {
+        use crate::eval::EvalError;
+        use crate::formats::bam::tests::bgzf_block;
+        let (first, second) = (b"the first block's text".as_slice(), b"and the second block's".as_slice());
+        let at = bgzf_block(first).len();
+        let end = at + bgzf_block(second).len();
+        let spoilt = |spoil: &dyn Fn(&mut Vec<u8>)| {
+            let mut file = bgzf_of(&[first, second]);
+            spoil(&mut file);
+            file
+        };
+        let (damaged, long) = (
+            spoilt(&|f| f[at + 18] = 0xff),
+            spoilt(&|f| {
+                let size = u32::from_le_bytes(f[end - 4..end].try_into().unwrap()) + 5;
+                f[end - 4..end].copy_from_slice(&size.to_le_bytes());
+            }),
+        );
+        let n = second.len();
+        for (file, said) in [
+            (damaged, "blocks[1].compressed could not be unpacked".to_string()),
+            (long, format!("blocks[1].compressed unpacks to {n} bytes, not the {} the file says", n + 5)),
+        ] {
+            let d = Document::new(MemSource(file));
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            let read = |e: &mut Evaluator| {
+                let super::Opened::Space(space) = e.open_stitched_at(&d, &[1]).unwrap() else { panic!("the stream did not open") };
+                let before = e.spaces.decodes.get();
+                for _ in 0..2 {
+                    match e.read_in(&d, space, first.len() as u64 * 8, 8) {
+                        Err(EvalError::Failed(why)) => assert_eq!(why, said),
+                        other => panic!("{other:?}"),
+                    }
+                }
+                e.spaces.decodes.get() - before
+            };
+            assert_eq!(read(&mut e), 1, "two reads of the second block");
+            e.spaces.forget();
+            assert_eq!(read(&mut e), 1, "after the spaces were forgotten");
+        }
+    }
+
+    /// An xz part the file says is past the cap a part may be decoded whole at,
+    /// which decodes whole all the same, is refused for its length by the
+    /// first read, and the second read says the same without another pass.
+    #[test]
+    fn a_part_shorter_than_the_file_says_is_not_decoded_again_to_say_so() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::Codec;
+        use crate::eval::EvalError;
+        let text: Vec<u8> = (0..200).flat_map(|i| format!("line {i}\n").into_bytes()).collect();
+        let mut packed = Vec::new();
+        lzma_rs::xz_compress(&mut &text[..], &mut packed).expect("packs");
+        let claimed: u32 = 10_000;
+        let mut file = claimed.to_be_bytes().to_vec();
+        file.extend_from_slice(&packed);
+        let member = T::structure("Member", vec![("claimed", T::u32(Big)), ("run", T::decoded(E::Remaining, Codec::Xz, T::bytes(E::Remaining)))]);
+        let joined = T::stitched(vec![Step::field("member"), Step::field("run")], Some(E::field("claimed")), None, T::bytes(E::Remaining));
+        let template = Template::new("xz-part", T::structure("File", vec![("member", member), ("joined", joined)]));
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(template);
+        e.spaces.set_lazy_limits(Limits { whole: 4096, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() });
+        let super::Opened::Space(space) = e.open_stitched_at(&d, &[1]).unwrap() else { panic!("the stream did not open") };
+        assert_eq!(e.spaces.len_bits(space), u64::from(claimed) * 8);
+        let before = e.spaces.passes.get();
+        for _ in 0..2 {
+            match e.read_in(&d, space, 0, 8) {
+                Err(EvalError::Failed(why)) => assert_eq!(why, format!("member.run unpacks to {} bytes, not the {claimed} the file says", text.len())),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(e.spaces.passes.get(), before + 1);
         }
     }
 

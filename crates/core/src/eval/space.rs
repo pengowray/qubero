@@ -789,6 +789,12 @@ pub(super) struct Stitch {
     pub(super) len_bytes: u64,
     /// The packed parts unpacked so far, as many as fit under the cap.
     pub(super) cache: std::cell::RefCell<PartCache>,
+    /// Why each packed part that failed did so, by part index: it would not
+    /// decode, or it decoded to another length than the file says. A read
+    /// that reaches one of these parts again fails with the same message
+    /// without decoding it again, so a listing scrolling over a damaged part
+    /// decodes it once. Dropped with the space when the spaces are forgotten.
+    pub(super) troubles: std::cell::RefCell<FxHashMap<usize, super::stitch::PartTrouble>>,
 }
 
 impl Stitch {
@@ -937,6 +943,10 @@ pub(super) struct Spaces {
     /// a pass is not made twice.
     #[cfg(test)]
     pub(super) passes: std::cell::Cell<u32>,
+    /// How many packed runs have been decoded whole outside an index pass, for
+    /// a test that wants to see a part is not decoded twice.
+    #[cfg(test)]
+    pub(super) decodes: std::cell::Cell<u32>,
     /// Deflate streams being measured to find where they end, and the ends
     /// found.
     measures: Measures,
@@ -959,6 +969,8 @@ impl Default for Spaces {
             refused_runs: Default::default(),
             #[cfg(test)]
             passes: Default::default(),
+            #[cfg(test)]
+            decodes: Default::default(),
             measures: Default::default(),
             stamps: Default::default(),
         }
@@ -1029,7 +1041,7 @@ impl Spaces {
     /// became.
     pub(super) fn add_stitched(&mut self, path: &[usize], parts: Vec<Part>, len_bytes: u64) -> u32 {
         let cache = std::cell::RefCell::new(PartCache::new(self.cache_cap));
-        self.backings.push(Backing::Stitched(Box::new(Stitch { path: path.to_vec(), parts, len_bytes, cache })));
+        self.backings.push(Backing::Stitched(Box::new(Stitch { path: path.to_vec(), parts, len_bytes, cache, troubles: Default::default() })));
         let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id
