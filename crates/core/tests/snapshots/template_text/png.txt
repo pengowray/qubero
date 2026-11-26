@@ -100,8 +100,1604 @@ root PNG {
           fdict: u1be
           fcheck: u5be
           dictid: switch fdict * (3 < remaining) {1 => u32be, _ => bytes[0]}
-          compressed: sized(remaining - 4) decoded(deflate) DecodedObject (contents object) {
-            object: bytes[remaining]
+          compressed: sized(remaining - 4) decoded(deflate) sized(remaining) ICCProfile {
+            header: Header {
+              // The size of the whole profile in bytes, header, tag table and tag data
+                  included.
+              profile_size: u32be
+              // The colour management module the profile was made for, as a registered
+                  signature. Empty when none is named.
+              preferred_cmm: text[4] padded with 0x00 latin1
+              version: Version (inline, line major worded "major" then minor worded "minor" then
+                  bugfix worded "bug fix") {
+                major: u8be
+                minor: u4be
+                bugfix: u4be
+                reserved: u16be
+              }
+              device_class: u32be enum DeviceClass {
+                0x73636e72 = scnr, input device, 0x6d6e7472 = mntr, display device,
+                0x70727472 = prtr, output device, 0x6c696e6b = link, device link,
+                0x73706163 = spac, colour space, 0x61627374 = abst, abstract,
+                0x6e6d636c = nmcl, named colour
+              }
+              // The colour space of the device side of the profile's transforms.
+              colour_space: u32be enum ColourSpace {
+                0x58595a20 = XYZ, 0x4c616220 = Lab, 0x4c757620 = Luv, 0x59436272 = YCbCr,
+                0x59787920 = Yxy, 0x52474220 = RGB, 0x47524159 = grey, 0x48535620 = HSV,
+                0x484c5320 = HLS, 0x434d594b = CMYK, 0x434d5920 = CMY, 0x32434c52 = 2 colours,
+                0x33434c52 = 3 colours, 0x34434c52 = 4 colours, 0x35434c52 = 5 colours,
+                0x36434c52 = 6 colours, 0x37434c52 = 7 colours, 0x38434c52 = 8 colours,
+                0x39434c52 = 9 colours, 0x41434c52 = 10 colours, 0x42434c52 = 11 colours,
+                0x43434c52 = 12 colours, 0x44434c52 = 13 colours, 0x45434c52 = 14 colours,
+                0x46434c52 = 15 colours
+              }
+              // The profile connection space: XYZ or Lab for every class but a device link,
+                  whose PCS field is its second device's colour space.
+              pcs: u32be enum ColourSpace {
+                0x58595a20 = XYZ, 0x4c616220 = Lab, 0x4c757620 = Luv, 0x59436272 = YCbCr,
+                0x59787920 = Yxy, 0x52474220 = RGB, 0x47524159 = grey, 0x48535620 = HSV,
+                0x484c5320 = HLS, 0x434d594b = CMYK, 0x434d5920 = CMY, 0x32434c52 = 2 colours,
+                0x33434c52 = 3 colours, 0x34434c52 = 4 colours, 0x35434c52 = 5 colours,
+                0x36434c52 = 6 colours, 0x37434c52 = 7 colours, 0x38434c52 = 8 colours,
+                0x39434c52 = 9 colours, 0x41434c52 = 10 colours, 0x42434c52 = 11 colours,
+                0x43434c52 = 12 colours, 0x44434c52 = 13 colours, 0x45434c52 = 14 colours,
+                0x46434c52 = 15 colours
+              }
+              // When the profile was first created, in UTC.
+              created: dateTimeNumber {
+                year: u16be
+                month: u16be
+                day: u16be
+                hour: u16be
+                minute: u16be
+                second: u16be
+              }
+              signature: magic "acsp"
+              platform: u32be enum Platform {
+                0x00 = none, 0x4150504c = Apple, 0x4d534654 = Microsoft,
+                0x53474920 = Silicon Graphics, 0x53554e57 = Sun Microsystems,
+                0x54474e54 = Taligent
+              }
+              // Bit 0 is set when the profile is embedded in a file. Bit 1 is set when it must
+                  only be used with the colour data it is embedded with.
+              flags: u32be flags ProfileFlags {
+                bit 0 = embedded, bit 1 = use with embedded data only
+              }
+              manufacturer: text[4] padded with 0x00 latin1
+              model: text[4] padded with 0x00 latin1
+              // Bits 0 to 3 describe the media. A clear bit means reflective, glossy, positive
+                  or colour media.
+              attributes: u64be flags DeviceAttributes {
+                bit 0 = transparency, bit 1 = matte, bit 2 = negative, bit 3 = black and white
+              }
+              rendering_intent: u32be enum RenderingIntent {
+                0 = perceptual, 1 = media-relative colorimetric, 2 = saturation,
+                3 = ICC-absolute colorimetric
+              }
+              // The PCS illuminant, which the spec fixes at D50: X 0.9642, Y 1.0, Z 0.8249.
+              illuminant: XYZNumber (inline, line x worded "X" then y worded "Y" then z worded
+                  "Z") {
+                x: s15Fixed16Number (inline, payload stored, line worth) {
+                  stored: i32be
+                  worth: computed real stored / 65536.0
+                }
+                y: s15Fixed16Number (inline, payload stored, line worth) {
+                  stored: i32be
+                  worth: computed real stored / 65536.0
+                }
+                z: s15Fixed16Number (inline, payload stored, line worth) {
+                  stored: i32be
+                  worth: computed real stored / 65536.0
+                }
+              }
+              creator: text[4] padded with 0x00 latin1
+              // An MD5 of the whole profile with the flags, rendering intent and profile ID
+                  fields set to zero. All zero when no ID was calculated.
+              profile_id: bytes[16]
+              // 28 bytes reserved by the ICC, all zero.
+              reserved: bytes[28]
+            }
+            tag_count: u32be
+            tags: TagEntry (named by tag, contents data, unit tag) {
+              tag: u32be enum TagSignature {
+                0x41324230 = A2B0, device to PCS, perceptual,
+                0x41324231 = A2B1, device to PCS, colorimetric,
+                0x41324232 = A2B2, device to PCS, saturation,
+                0x42324130 = B2A0, PCS to device, perceptual,
+                0x42324131 = B2A1, PCS to device, colorimetric,
+                0x42324132 = B2A2, PCS to device, saturation,
+                0x42324430 = B2D0, PCS to device, perceptual, floating point,
+                0x42324431 = B2D1, PCS to device, media-relative, floating point,
+                0x42324432 = B2D2, PCS to device, saturation, floating point,
+                0x42324433 = B2D3, PCS to device, ICC-absolute, floating point,
+                0x44324230 = D2B0, device to PCS, perceptual, floating point,
+                0x44324231 = D2B1, device to PCS, media-relative, floating point,
+                0x44324232 = D2B2, device to PCS, saturation, floating point,
+                0x44324233 = D2B3, device to PCS, ICC-absolute, floating point,
+                0x7258595a = rXYZ, red matrix column, 0x6758595a = gXYZ, green matrix column,
+                0x6258595a = bXYZ, blue matrix column,
+                0x72545243 = rTRC, red tone reproduction curve,
+                0x67545243 = gTRC, green tone reproduction curve,
+                0x62545243 = bTRC, blue tone reproduction curve,
+                0x6b545243 = kTRC, grey tone reproduction curve,
+                0x77747074 = wtpt, media white point, 0x626b7074 = bkpt, media black point,
+                0x63616c74 = calt, calibration date and time,
+                0x74617267 = targ, characterisation target,
+                0x63686164 = chad, chromatic adaptation, 0x6368726d = chrm, chromaticity,
+                0x63696370 = cicp, coding-independent code points,
+                0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                0x636c6f74 = clot, colorant table out,
+                0x63696973 = ciis, colorimetric intent image state,
+                0x63707274 = cprt, copyright, 0x64657363 = desc, profile description,
+                0x646d6e64 = dmnd, device manufacturer description,
+                0x646d6464 = dmdd, device model description, 0x67616d74 = gamt, gamut,
+                0x6c756d69 = lumi, luminance, 0x6d656173 = meas, measurement,
+                0x6d657461 = meta, metadata, 0x6e636f6c = ncol, named colour,
+                0x6e636c32 = ncl2, named colour 2, 0x72657370 = resp, output response,
+                0x72696730 = rig0, perceptual rendering intent gamut,
+                0x72696732 = rig2, saturation rendering intent gamut,
+                0x70726530 = pre0, preview 0, 0x70726531 = pre1, preview 1,
+                0x70726532 = pre2, preview 2, 0x70736571 = pseq, profile sequence description,
+                0x70736964 = psid, profile sequence identifier, 0x74656368 = tech, technology,
+                0x76756564 = vued, viewing conditions description,
+                0x76696577 = view, viewing conditions, 0x70736430 = psd0, PostScript CRD 0,
+                0x70736431 = psd1, PostScript CRD 1, 0x70736432 = psd2, PostScript CRD 2,
+                0x70736433 = psd3, PostScript CRD 3,
+                0x70733273 = ps2s, PostScript colour space array,
+                0x70733269 = ps2i, PostScript rendering intent,
+                0x73637264 = scrd, screening description, 0x7363726e = scrn, screening,
+                0x62666420 = bfd, undercolour removal and black generation,
+                0x64657673 = devs, device settings, 0x63726469 = crdi, CRD info,
+                0x76636774 = vcgt, video card gamma (Apple private tag),
+                0x6473636d = dscm, localised description (Apple private tag)
+              }
+              // Where the tag's data starts, counted from the first byte of the profile.
+              offset: u32be
+              // How many bytes of data the tag has, not counting the padding after it.
+              size: u32be
+              data: at(offset from window) sized(size) TagData (contents contents) {
+                type: u32be enum TagType {
+                  0x6368726d = chrm, chromaticity,
+                  0x63696370 = cicp, coding-independent code points,
+                  0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                  0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                  0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                  0x6d667432 = mft2, 16-bit lookup table,
+                  0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                  0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                  0x6d6c7563 = mluc, multi-localized Unicode,
+                  0x6d706574 = mpet, multi-process elements, 0x6e636c32 = ncl2, named colour 2,
+                  0x70617261 = para, parametric curve,
+                  0x70736571 = pseq, profile sequence description,
+                  0x70736964 = psid, profile sequence identifier,
+                  0x72637332 = rcs2, response curve set, 0x73663332 = sf32, s15Fixed16 array,
+                  0x73696720 = sig, signature, 0x74657874 = text, ASCII text,
+                  0x75663332 = uf32, u16Fixed16 array, 0x75693038 = ui08, 8-bit integer array,
+                  0x75693136 = ui16, 16-bit integer array,
+                  0x75693332 = ui32, 32-bit integer array,
+                  0x75693634 = ui64, 64-bit integer array,
+                  0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                  0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                  0x7363726e = scrn, screening,
+                  0x62666420 = bfd, undercolour removal and black generation,
+                  0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                  0x76636774 = vcgt, video card gamma (Apple private type)
+                }
+                reserved: u32be
+                contents: switch type {
+                  'desc' => textDescriptionType {
+                    // Bytes of ASCII text, its nul included.
+                    ascii_count: u32be
+                    ascii: text[ascii_count] padded with 0x00 ascii
+                    unicode_language: switch 1 * (3 < remaining) {1 => u32be, _ => bytes[0]}
+                    // Characters of UTF-16 text, its nul included, two bytes each.
+                    unicode_count: switch 1 * (3 < remaining) {1 => u32be, _ => bytes[0]}
+                    unicode: switch 1 * (0 < remaining) {
+                      1 => text[unicode_count * 2] padded with 0x00 utf16be
+                      _ => bytes[0]
+                    }
+                    scriptcode_code: switch 1 * (1 < remaining) {1 => u16be, _ => bytes[0]}
+                    scriptcode_count: switch 1 * (0 < remaining) {1 => u8be, _ => bytes[0]}
+                    // 67 bytes, of which the first scriptcode_count are the Macintosh
+                        description.
+                    scriptcode: switch 1 * (66 < remaining) {
+                      1 => text[67] padded with 0x00 latin1
+                      _ => bytes[0]
+                    }
+                  }
+                  'mluc' => multiLocalizedUnicodeType {
+                    record_count: u32be
+                    // The size of each record in bytes, which is 12.
+                    record_size: u32be
+                    records: LocalizedString (contents string, unit string) {
+                      language: text[2] padded with 0x00 ascii
+                      country: text[2] padded with 0x00 ascii
+                      length: u32be
+                      offset: u32be
+                      string: at(offset from window) text[length] utf16be
+                    }[record_count]
+                  }
+                  'text' => textType (contents text) {
+                    text: text[remaining] padded with 0x00 ascii
+                  }
+                  'XYZ ' => XYZType (contents xyz) {
+                    xyz: switch remaining / 12 {
+                      1 => XYZNumber (inline, line x worded "X" then y worded "Y" then z worded
+                          "Z") {
+                        x: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        y: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        z: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                      }
+                      _ => XYZNumber (inline, line x worded "X" then y worded "Y" then z worded
+                          "Z") {
+                        x: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        y: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        z: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                      }[remaining / 12]
+                    }
+                  }
+                  'curv' => curveType {
+                    // 0 for the identity curve, 1 for a curve that is one gamma value, and
+                        otherwise the number of entries.
+                    count: u32be
+                    // The exponent: Y = X^gamma.
+                    gamma: optional(when count == 1) u8Fixed8Number
+                        (inline, payload stored, line worth) {
+                      stored: u16be
+                      worth: computed real stored / 256.0
+                    }
+                    // The curve sampled at even steps of X from 0.0 to 1.0, each stored from 0
+                        for 0.0 to 65535 for 1.0.
+                    entries: optional(when count > 1) u16be[count]
+                  }
+                  'para' => parametricCurveType {
+                    function: u16be enum ParametricFunction {
+                      0 = Y = X^g, 1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                      2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                      3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                      4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                    }
+                    reserved: u16be
+                    g: s15Fixed16Number (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                    f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                        (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }
+                  }
+                  'sf32' => s15Fixed16ArrayType (contents values) {
+                    values: s15Fixed16Number (inline, payload stored, line worth) {
+                      stored: i32be
+                      worth: computed real stored / 65536.0
+                    }[remaining / 4]
+                  }
+                  'uf32' => u16Fixed16ArrayType (contents values) {
+                    values: u16Fixed16Number (inline, payload stored, line worth) {
+                      stored: u32be
+                      worth: computed real stored / 65536.0
+                    }[remaining / 4]
+                  }
+                  'ui08' => uInt8ArrayType (contents values) {
+                    values: u8be[remaining / 1]
+                  }
+                  'ui16' => uInt16ArrayType (contents values) {
+                    values: u16be[remaining / 2]
+                  }
+                  'ui32' => uInt32ArrayType (contents values) {
+                    values: u32be[remaining / 4]
+                  }
+                  'ui64' => uInt64ArrayType (contents values) {
+                    values: u64be[remaining / 8]
+                  }
+                  'sig ' => signatureType (contents signature) {
+                    signature: switch tag {
+                      'tech' => u32be enum Technology {
+                        0x6673636e = fscn, film scanner, 0x6463616d = dcam, digital camera,
+                        0x7273636e = rscn, reflective scanner,
+                        0x696a6574 = ijet, ink jet printer,
+                        0x74776178 = twax, thermal wax printer,
+                        0x6570686f = epho, electrophotographic printer,
+                        0x65737461 = esta, electrostatic printer,
+                        0x64737562 = dsub, dye sublimation printer,
+                        0x7270686f = rpho, photographic paper printer,
+                        0x6670726e = fprn, film writer, 0x7669646d = vidm, video monitor,
+                        0x76696463 = vidc, video camera,
+                        0x706a7476 = pjtv, projection television,
+                        0x43525420 = CRT, cathode ray tube display,
+                        0x504d4420 = PMD, passive matrix display,
+                        0x414d4420 = AMD, active matrix display,
+                        0x4c434420 = LCD, liquid crystal display,
+                        0x4f4c4544 = OLED, organic LED display, 0x4b504344 = KPCD, Photo CD,
+                        0x696d6773 = imgs, photographic image setter,
+                        0x67726176 = grav, gravure, 0x6f666673 = offs, offset lithography,
+                        0x73696c6b = silk, silkscreen, 0x666c6578 = flex, flexography,
+                        0x6d706673 = mpfs, motion picture film scanner,
+                        0x6d706672 = mpfr, motion picture film recorder,
+                        0x646d7063 = dmpc, digital motion picture camera,
+                        0x6463706a = dcpj, digital cinema projector
+                      }
+                      'ciis' => u32be enum ImageState {
+                        0x73636f65 = scoe, scene colorimetry estimates,
+                        0x73617065 = sape, scene appearance estimates,
+                        0x66706365 = fpce, focal plane colorimetry estimates,
+                        0x72686f63 = rhoc, reflection hardcopy original colorimetry,
+                        0x72706f63 = rpoc, reflection print output colorimetry
+                      }
+                      _ => text[4] padded with 0x00 latin1
+                    }
+                  }
+                  'meas' => measurementType {
+                    observer: u32be enum StandardObserver {
+                      0 = unknown, 1 = CIE 1931 standard observer,
+                      2 = CIE 1964 standard observer
+                    }
+                    // The nCIEXYZ tristimulus values of the measurement backing.
+                    backing: XYZNumber (inline, line x worded "X" then y worded "Y" then z
+                        worded "Z") {
+                      x: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      y: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      z: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    geometry: u32be enum MeasurementGeometry {
+                      0 = unknown, 1 = 0°:45° or 45°:0°, 2 = 0°:d or d:0°
+                    }
+                    // Measurement flare, from 0.0 for 0% to 1.0 for 100%.
+                    flare: u16Fixed16Number (inline, payload stored, line worth) {
+                      stored: u32be
+                      worth: computed real stored / 65536.0
+                    }
+                    illuminant: u32be enum StandardIlluminant {
+                      0 = unknown, 1 = D50, 2 = D65, 3 = D93, 4 = F2, 5 = D55, 6 = A,
+                      7 = E, equi-power, 8 = F8
+                    }
+                  }
+                  'view' => viewingConditionsType {
+                    // Un-normalized CIEXYZ of the illuminant, with Y in cd/m².
+                    illuminant: XYZNumber (inline, line x worded "X" then y worded "Y" then z
+                        worded "Z") {
+                      x: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      y: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      z: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    // Un-normalized CIEXYZ of the surround, with Y in cd/m².
+                    surround: XYZNumber (inline, line x worded "X" then y worded "Y" then z
+                        worded "Z") {
+                      x: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      y: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      z: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    illuminant_type: u32be enum StandardIlluminant {
+                      0 = unknown, 1 = D50, 2 = D65, 3 = D93, 4 = F2, 5 = D55, 6 = A,
+                      7 = E, equi-power, 8 = F8
+                    }
+                  }
+                  'chrm' => chromaticityType {
+                    channel_count: u16be
+                    colorant: u16be enum Colorant {
+                      0 = unknown, 1 = ITU-R BT.709-2, 2 = SMPTE RP145, 3 = EBU Tech. 3213-E,
+                      4 = P22, 5 = P3, 6 = ITU-R BT.2020
+                    }
+                    channels: xy (inline, line x worded "x" then y worded "y") {
+                      x: u16Fixed16Number (inline, payload stored, line worth) {
+                        stored: u32be
+                        worth: computed real stored / 65536.0
+                      }
+                      y: u16Fixed16Number (inline, payload stored, line worth) {
+                        stored: u32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }[channel_count]
+                  }
+                  'dtim' => dateTimeType {
+                    date_time: dateTimeNumber {
+                      year: u16be
+                      month: u16be
+                      day: u16be
+                      hour: u16be
+                      minute: u16be
+                      second: u16be
+                    }
+                  }
+                  'data' => dataType {
+                    flag: u32be enum DataFlag {0 = ASCII, 1 = binary}
+                    data: switch flag {
+                      0 => text[remaining] padded with 0x00 ascii
+                      _ => bytes[remaining]
+                    }
+                  }
+                  'cicp' => cicpType {
+                    colour_primaries: u8be enum ColourPrimaries {
+                      1 = BT.709, sRGB, 2 = unspecified, 4 = BT.470 System M,
+                      5 = BT.470 System B, G (BT.601 625-line),
+                      6 = SMPTE 170M (BT.601 525-line), 7 = SMPTE 240M,
+                      8 = generic film (illuminant C), 9 = BT.2020, BT.2100,
+                      10 = SMPTE ST 428-1 (CIE 1931 XYZ), 11 = SMPTE RP 431-2 (DCI-P3),
+                      12 = SMPTE EG 432-1 (Display P3), 22 = EBU Tech. 3213-E
+                    }
+                    transfer_characteristics: u8be enum TransferCharacteristics {
+                      1 = BT.709, 2 = unspecified, 4 = gamma 2.2 (BT.470 System M),
+                      5 = gamma 2.8 (BT.470 System B, G), 6 = SMPTE 170M (BT.601),
+                      7 = SMPTE 240M, 8 = linear, 9 = logarithmic, 100:1 range,
+                      10 = logarithmic, 100√10:1 range, 11 = IEC 61966-2-4 (xvYCC),
+                      12 = BT.1361 extended colour gamut, 13 = IEC 61966-2-1 (sRGB),
+                      14 = BT.2020, 10-bit, 15 = BT.2020, 12-bit, 16 = SMPTE ST 2084 (PQ),
+                      17 = SMPTE ST 428-1, 18 = ARIB STD-B67 (HLG)
+                    }
+                    matrix_coefficients: u8be enum MatrixCoefficients {
+                      0 = identity (RGB), 1 = BT.709, 2 = unspecified, 4 = FCC 73.682,
+                      5 = BT.470 System B, G (BT.601 625-line),
+                      6 = SMPTE 170M (BT.601 525-line), 7 = SMPTE 240M, 8 = YCgCo,
+                      9 = BT.2020 non-constant luminance, 10 = BT.2020 constant luminance,
+                      11 = SMPTE ST 2085 (Y'D'zD'x),
+                      12 = chromaticity-derived non-constant luminance,
+                      13 = chromaticity-derived constant luminance, 14 = ICtCp (BT.2100),
+                      15 = IPT-C2 (SMPTE ST 2128), 16 = YCgCo-R, even, 17 = YCgCo-R, odd
+                    }
+                    video_full_range_flag: u8be enum VideoFullRange {
+                      0 = narrow range, 1 = full range
+                    }
+                  }
+                  'clro' => colorantOrderType {
+                    count: u32be
+                    order: u8be[count]
+                  }
+                  'clrt' => colorantTableType {
+                    count: u32be
+                    colorants: Colorant (unit colorant) {
+                      name: text[32] padded with 0x00 ascii
+                      pcs: u16be[3]
+                    }[count]
+                  }
+                  'ncl2' => namedColor2Type {
+                    vendor_flags: u32be
+                    count: u32be
+                    device_coordinates: u32be
+                    prefix: text[32] padded with 0x00 ascii
+                    suffix: text[32] padded with 0x00 ascii
+                    colours: NamedColour (unit colour) {
+                      name: text[32] padded with 0x00 ascii
+                      pcs: u16be[3]
+                      device: u16be[device_coordinates]
+                    }[count]
+                  }
+                  'mft2' => lut16Type {
+                    input_channels: u8be
+                    output_channels: u8be
+                    grid_points: u8be
+                    padding: u8be
+                    // Applied first, and only when the input is XYZ. Otherwise the identity.
+                    matrix: Matrix {
+                      e1: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e2: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e3: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e4: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e5: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e6: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e7: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e8: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e9: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    input_entries: u16be
+                    output_entries: u16be
+                    input_tables: u16be[input_entries * input_channels]
+                    clut: u16be[remaining / 2 - output_entries * output_channels]
+                    output_tables: u16be[output_entries * output_channels]
+                  }
+                  'mft1' => lut8Type {
+                    input_channels: u8be
+                    output_channels: u8be
+                    grid_points: u8be
+                    padding: u8be
+                    // Applied first, and only when the input is XYZ. Otherwise the identity.
+                    matrix: Matrix {
+                      e1: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e2: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e3: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e4: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e5: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e6: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e7: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e8: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e9: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    input_tables: u8be[256 * input_channels]
+                    clut: u8be[remaining - 256 * output_channels]
+                    output_tables: u8be[256 * output_channels]
+                  }
+                  'mAB ' => lutAToBType {
+                    input_channels: u8be
+                    output_channels: u8be
+                    padding: u16be
+                    b_curves_offset: u32be
+                    matrix_offset: u32be
+                    m_curves_offset: u32be
+                    clut_offset: u32be
+                    a_curves_offset: u32be
+                    b_curves: optional(when b_curves_offset != 0)
+                        at(b_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[output_channels]
+                    // A 3 by 3 matrix, e1 to e9 by rows, then the offsets e10 to e12.
+                    matrix: optional(when matrix_offset != 0) at(matrix_offset from window)
+                        Matrix {
+                      e1: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e2: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e3: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e4: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e5: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e6: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e7: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e8: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e9: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e10: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e11: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e12: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    m_curves: optional(when m_curves_offset != 0)
+                        at(m_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[output_channels]
+                    clut: optional(when clut_offset != 0) at(clut_offset from window) CLUT {
+                      // Grid points along each input dimension. Only the first input_channels
+                          are used.
+                      grid_points: u8be[16]
+                      // Bytes per value: 1 or 2.
+                      precision: u8be
+                      padding: bytes[3]
+                      values: switch precision {
+                        1 => u8be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
+                            (grid_points[1] == 0 ? 1 : grid_points[1]) *
+                            (grid_points[2] == 0 ? 1 : grid_points[2]) *
+                            (grid_points[3] == 0 ? 1 : grid_points[3]) *
+                            (grid_points[4] == 0 ? 1 : grid_points[4]) *
+                            (grid_points[5] == 0 ? 1 : grid_points[5]) *
+                            (grid_points[6] == 0 ? 1 : grid_points[6]) *
+                            (grid_points[7] == 0 ? 1 : grid_points[7]) *
+                            (grid_points[8] == 0 ? 1 : grid_points[8]) *
+                            (grid_points[9] == 0 ? 1 : grid_points[9]) *
+                            (grid_points[10] == 0 ? 1 : grid_points[10]) *
+                            (grid_points[11] == 0 ? 1 : grid_points[11]) *
+                            (grid_points[12] == 0 ? 1 : grid_points[12]) *
+                            (grid_points[13] == 0 ? 1 : grid_points[13]) *
+                            (grid_points[14] == 0 ? 1 : grid_points[14]) *
+                            (grid_points[15] == 0 ? 1 : grid_points[15]) * output_channels]
+                        _ => u16be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
+                            (grid_points[1] == 0 ? 1 : grid_points[1]) *
+                            (grid_points[2] == 0 ? 1 : grid_points[2]) *
+                            (grid_points[3] == 0 ? 1 : grid_points[3]) *
+                            (grid_points[4] == 0 ? 1 : grid_points[4]) *
+                            (grid_points[5] == 0 ? 1 : grid_points[5]) *
+                            (grid_points[6] == 0 ? 1 : grid_points[6]) *
+                            (grid_points[7] == 0 ? 1 : grid_points[7]) *
+                            (grid_points[8] == 0 ? 1 : grid_points[8]) *
+                            (grid_points[9] == 0 ? 1 : grid_points[9]) *
+                            (grid_points[10] == 0 ? 1 : grid_points[10]) *
+                            (grid_points[11] == 0 ? 1 : grid_points[11]) *
+                            (grid_points[12] == 0 ? 1 : grid_points[12]) *
+                            (grid_points[13] == 0 ? 1 : grid_points[13]) *
+                            (grid_points[14] == 0 ? 1 : grid_points[14]) *
+                            (grid_points[15] == 0 ? 1 : grid_points[15]) * output_channels]
+                      }
+                    }
+                    a_curves: optional(when a_curves_offset != 0)
+                        at(a_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[input_channels]
+                  }
+                  'mBA ' => lutBToAType {
+                    input_channels: u8be
+                    output_channels: u8be
+                    padding: u16be
+                    b_curves_offset: u32be
+                    matrix_offset: u32be
+                    m_curves_offset: u32be
+                    clut_offset: u32be
+                    a_curves_offset: u32be
+                    b_curves: optional(when b_curves_offset != 0)
+                        at(b_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[input_channels]
+                    // A 3 by 3 matrix, e1 to e9 by rows, then the offsets e10 to e12.
+                    matrix: optional(when matrix_offset != 0) at(matrix_offset from window)
+                        Matrix {
+                      e1: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e2: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e3: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e4: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e5: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e6: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e7: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e8: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e9: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e10: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e11: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                      e12: s15Fixed16Number (inline, payload stored, line worth) {
+                        stored: i32be
+                        worth: computed real stored / 65536.0
+                      }
+                    }
+                    m_curves: optional(when m_curves_offset != 0)
+                        at(m_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[input_channels]
+                    clut: optional(when clut_offset != 0) at(clut_offset from window) CLUT {
+                      // Grid points along each input dimension. Only the first input_channels
+                          are used.
+                      grid_points: u8be[16]
+                      // Bytes per value: 1 or 2.
+                      precision: u8be
+                      padding: bytes[3]
+                      values: switch precision {
+                        1 => u8be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
+                            (grid_points[1] == 0 ? 1 : grid_points[1]) *
+                            (grid_points[2] == 0 ? 1 : grid_points[2]) *
+                            (grid_points[3] == 0 ? 1 : grid_points[3]) *
+                            (grid_points[4] == 0 ? 1 : grid_points[4]) *
+                            (grid_points[5] == 0 ? 1 : grid_points[5]) *
+                            (grid_points[6] == 0 ? 1 : grid_points[6]) *
+                            (grid_points[7] == 0 ? 1 : grid_points[7]) *
+                            (grid_points[8] == 0 ? 1 : grid_points[8]) *
+                            (grid_points[9] == 0 ? 1 : grid_points[9]) *
+                            (grid_points[10] == 0 ? 1 : grid_points[10]) *
+                            (grid_points[11] == 0 ? 1 : grid_points[11]) *
+                            (grid_points[12] == 0 ? 1 : grid_points[12]) *
+                            (grid_points[13] == 0 ? 1 : grid_points[13]) *
+                            (grid_points[14] == 0 ? 1 : grid_points[14]) *
+                            (grid_points[15] == 0 ? 1 : grid_points[15]) * output_channels]
+                        _ => u16be[1 * (grid_points[0] == 0 ? 1 : grid_points[0]) *
+                            (grid_points[1] == 0 ? 1 : grid_points[1]) *
+                            (grid_points[2] == 0 ? 1 : grid_points[2]) *
+                            (grid_points[3] == 0 ? 1 : grid_points[3]) *
+                            (grid_points[4] == 0 ? 1 : grid_points[4]) *
+                            (grid_points[5] == 0 ? 1 : grid_points[5]) *
+                            (grid_points[6] == 0 ? 1 : grid_points[6]) *
+                            (grid_points[7] == 0 ? 1 : grid_points[7]) *
+                            (grid_points[8] == 0 ? 1 : grid_points[8]) *
+                            (grid_points[9] == 0 ? 1 : grid_points[9]) *
+                            (grid_points[10] == 0 ? 1 : grid_points[10]) *
+                            (grid_points[11] == 0 ? 1 : grid_points[11]) *
+                            (grid_points[12] == 0 ? 1 : grid_points[12]) *
+                            (grid_points[13] == 0 ? 1 : grid_points[13]) *
+                            (grid_points[14] == 0 ? 1 : grid_points[14]) *
+                            (grid_points[15] == 0 ? 1 : grid_points[15]) * output_channels]
+                      }
+                    }
+                    a_curves: optional(when a_curves_offset != 0)
+                        at(a_curves_offset from window) Curve (contents contents, unit curve) {
+                      type: u32be enum TagType {
+                        0x6368726d = chrm, chromaticity,
+                        0x63696370 = cicp, coding-independent code points,
+                        0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                        0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                        0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                        0x6d667432 = mft2, 16-bit lookup table,
+                        0x6d667431 = mft1, 8-bit lookup table, 0x6d414220 = mAB, A to B lookup,
+                        0x6d424120 = mBA, B to A lookup, 0x6d656173 = meas, measurement,
+                        0x6d6c7563 = mluc, multi-localized Unicode,
+                        0x6d706574 = mpet, multi-process elements,
+                        0x6e636c32 = ncl2, named colour 2, 0x70617261 = para, parametric curve,
+                        0x70736571 = pseq, profile sequence description,
+                        0x70736964 = psid, profile sequence identifier,
+                        0x72637332 = rcs2, response curve set,
+                        0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                        0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                        0x75693038 = ui08, 8-bit integer array,
+                        0x75693136 = ui16, 16-bit integer array,
+                        0x75693332 = ui32, 32-bit integer array,
+                        0x75693634 = ui64, 64-bit integer array,
+                        0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                        0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                        0x7363726e = scrn, screening,
+                        0x62666420 = bfd, undercolour removal and black generation,
+                        0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                        0x76636774 = vcgt, video card gamma (Apple private type)
+                      }
+                      reserved: u32be
+                      contents: switch type {
+                        'curv' => curveType {
+                          // 0 for the identity curve, 1 for a curve that is one gamma value,
+                              and otherwise the number of entries.
+                          count: u32be
+                          // The exponent: Y = X^gamma.
+                          gamma: optional(when count == 1) u8Fixed8Number
+                              (inline, payload stored, line worth) {
+                            stored: u16be
+                            worth: computed real stored / 256.0
+                          }
+                          // The curve sampled at even steps of X from 0.0 to 1.0, each stored
+                              from 0 for 0.0 to 65535 for 1.0.
+                          entries: optional(when count > 1) u16be[count]
+                        }
+                        'para' => parametricCurveType {
+                          function: u16be enum ParametricFunction {
+                            0 = Y = X^g,
+                            1 = Y = (aX + b)^g for X ≥ -b/a, else 0 (CIE 122-1966),
+                            2 = Y = (aX + b)^g + c for X ≥ -b/a, else c (IEC 61966-3),
+                            3 = Y = (aX + b)^g for X ≥ d, else cX (IEC 61966-2-1, sRGB),
+                            4 = Y = (aX + b)^g + e for X ≥ d, else cX + f
+                          }
+                          reserved: u16be
+                          g: s15Fixed16Number (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          a: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          b: optional(when function >= 1 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          c: optional(when function >= 2 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          d: optional(when function >= 3 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          e: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                          f: optional(when function >= 4 and function <= 4) s15Fixed16Number
+                              (inline, payload stored, line worth) {
+                            stored: i32be
+                            worth: computed real stored / 65536.0
+                          }
+                        }
+                        _ => bytes[0]
+                      }
+                      padding: bytes[min(padding(sizeof(type) + sizeof(reserved) +
+                          sizeof(contents), 4), remaining)]
+                    }[output_channels]
+                  }
+                  'dict' => dictType {
+                    record_count: u32be
+                    // Bytes in each record: 16, 24 or 32.
+                    record_length: u32be
+                    records: NameValue (named by name, unit entry) {
+                      name_offset: u32be
+                      name_size: u32be
+                      value_offset: u32be
+                      value_size: u32be
+                      display_name_offset: optional(when record_length >= 24) u32be
+                      display_name_size: optional(when record_length >= 24) u32be
+                      display_value_offset: optional(when record_length >= 32) u32be
+                      display_value_size: optional(when record_length >= 32) u32be
+                      name: optional(when name_offset != 0) at(name_offset from window)
+                          text[name_size] utf16be
+                      value: optional(when value_offset != 0) at(value_offset from window)
+                          text[value_size] utf16be
+                      display_name: optional(when record_length >= 24)
+                          optional(when display_name_offset != 0 and display_name_size != 0)
+                          at(display_name_offset from window) sized(display_name_size)
+                          DisplayText (contents contents) {
+                        type: u32be enum TagType {
+                          0x6368726d = chrm, chromaticity,
+                          0x63696370 = cicp, coding-independent code points,
+                          0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                          0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                          0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                          0x6d667432 = mft2, 16-bit lookup table,
+                          0x6d667431 = mft1, 8-bit lookup table,
+                          0x6d414220 = mAB, A to B lookup, 0x6d424120 = mBA, B to A lookup,
+                          0x6d656173 = meas, measurement,
+                          0x6d6c7563 = mluc, multi-localized Unicode,
+                          0x6d706574 = mpet, multi-process elements,
+                          0x6e636c32 = ncl2, named colour 2,
+                          0x70617261 = para, parametric curve,
+                          0x70736571 = pseq, profile sequence description,
+                          0x70736964 = psid, profile sequence identifier,
+                          0x72637332 = rcs2, response curve set,
+                          0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                          0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                          0x75693038 = ui08, 8-bit integer array,
+                          0x75693136 = ui16, 16-bit integer array,
+                          0x75693332 = ui32, 32-bit integer array,
+                          0x75693634 = ui64, 64-bit integer array,
+                          0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                          0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                          0x7363726e = scrn, screening,
+                          0x62666420 = bfd, undercolour removal and black generation,
+                          0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                          0x76636774 = vcgt, video card gamma (Apple private type)
+                        }
+                        reserved: u32be
+                        contents: switch type {
+                          'mluc' => multiLocalizedUnicodeType {
+                            record_count: u32be
+                            // The size of each record in bytes, which is 12.
+                            record_size: u32be
+                            records: LocalizedString (contents string, unit string) {
+                              language: text[2] padded with 0x00 ascii
+                              country: text[2] padded with 0x00 ascii
+                              length: u32be
+                              offset: u32be
+                              string: at(offset from window) text[length] utf16be
+                            }[record_count]
+                          }
+                          _ => bytes[remaining]
+                        }
+                      }
+                      display_value: optional(when record_length >= 32)
+                          optional(when display_value_offset != 0 and display_value_size != 0)
+                          at(display_value_offset from window) sized(display_value_size)
+                          DisplayText (contents contents) {
+                        type: u32be enum TagType {
+                          0x6368726d = chrm, chromaticity,
+                          0x63696370 = cicp, coding-independent code points,
+                          0x636c726f = clro, colorant order, 0x636c7274 = clrt, colorant table,
+                          0x63757276 = curv, curve, 0x64617461 = data, ASCII or binary data,
+                          0x6474696d = dtim, date and time, 0x64696374 = dict, dictionary,
+                          0x6d667432 = mft2, 16-bit lookup table,
+                          0x6d667431 = mft1, 8-bit lookup table,
+                          0x6d414220 = mAB, A to B lookup, 0x6d424120 = mBA, B to A lookup,
+                          0x6d656173 = meas, measurement,
+                          0x6d6c7563 = mluc, multi-localized Unicode,
+                          0x6d706574 = mpet, multi-process elements,
+                          0x6e636c32 = ncl2, named colour 2,
+                          0x70617261 = para, parametric curve,
+                          0x70736571 = pseq, profile sequence description,
+                          0x70736964 = psid, profile sequence identifier,
+                          0x72637332 = rcs2, response curve set,
+                          0x73663332 = sf32, s15Fixed16 array, 0x73696720 = sig, signature,
+                          0x74657874 = text, ASCII text, 0x75663332 = uf32, u16Fixed16 array,
+                          0x75693038 = ui08, 8-bit integer array,
+                          0x75693136 = ui16, 16-bit integer array,
+                          0x75693332 = ui32, 32-bit integer array,
+                          0x75693634 = ui64, 64-bit integer array,
+                          0x76696577 = view, viewing conditions, 0x58595a20 = XYZ, XYZ values,
+                          0x64657363 = desc, text description, 0x6e636f6c = ncol, named colour,
+                          0x7363726e = scrn, screening,
+                          0x62666420 = bfd, undercolour removal and black generation,
+                          0x63726469 = crdi, CRD info, 0x64657673 = devs, device settings,
+                          0x76636774 = vcgt, video card gamma (Apple private type)
+                        }
+                        reserved: u32be
+                        contents: switch type {
+                          'mluc' => multiLocalizedUnicodeType {
+                            record_count: u32be
+                            // The size of each record in bytes, which is 12.
+                            record_size: u32be
+                            records: LocalizedString (contents string, unit string) {
+                              language: text[2] padded with 0x00 ascii
+                              country: text[2] padded with 0x00 ascii
+                              length: u32be
+                              offset: u32be
+                              string: at(offset from window) text[length] utf16be
+                            }[record_count]
+                          }
+                          _ => bytes[remaining]
+                        }
+                      }
+                    }[record_count]
+                  }
+                  'vcgt' => vcgtType {
+                    form: u32be enum VideoCardGammaForm {0 = table, 1 = formula}
+                    gamma: switch form {
+                      0 => VideoCardGammaTable {
+                        channels: u16be
+                        entry_count: u16be
+                        // Bytes per entry: 1 or 2.
+                        entry_size: u16be
+                        ramps: (switch entry_size {
+                          1 => u8be
+                          _ => u16be
+                        }[entry_count])[channels]
+                      }
+                      1 => VideoCardGammaFormula {
+                        red_gamma: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        red_min: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        red_max: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        green_gamma: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        green_min: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        green_max: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        blue_gamma: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        blue_min: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                        blue_max: s15Fixed16Number (inline, payload stored, line worth) {
+                          stored: i32be
+                          worth: computed real stored / 65536.0
+                        }
+                      }
+                      _ => bytes[remaining]
+                    }
+                  }
+                  _ => bytes[remaining]
+                }
+                // Bytes inside the tag's size after its contents. Some writers count the
+                    padding to a four-byte boundary in the size.
+                padding: switch type {
+                  'mluc' => bytes[0]
+                  'dict' => bytes[0]
+                  'mAB ' => bytes[0]
+                  'mBA ' => bytes[0]
+                  _ => bytes[remaining]
+                }
+              }
+            }[tag_count]
           }
           adler32: u32be  check adler32 over unpacked compressed
         }
@@ -249,6 +1845,175 @@ root PNG {
       'fdAT' => fdAT {
         sequence_number: u32be
         frame_data: bytes[remaining]
+      }
+      'eXIf' => eXIf (contents tiff) {
+        tiff: sized(remaining) TIFF {
+          byte_order: u16be enum ByteOrder {
+            18761 = intel, little-endian, 19789 = motorola, big-endian
+          }
+          file: switch byte_order {
+            'II' => Header {
+              version: u16le enum Version {42 = tiff, 43 = bigtiff}
+              ifd_offset: u32le
+              ifd: at(ifd_offset from window) tiff.Ifd.le
+              body: bytes[remaining]
+            }
+            'MM' => Header {
+              version: u16be enum Version {42 = tiff, 43 = bigtiff}
+              ifd_offset: u32be
+              ifd: at(ifd_offset from window) tiff.Ifd.be
+              body: bytes[remaining]
+            }
+            _ => bytes[remaining]
+          }
+        }
+      }
+      'cICP' => cICP {
+        color_primaries: u8be enum ColourPrimaries {
+          1 = BT.709, sRGB, 2 = unspecified, 4 = BT.470 System M,
+          5 = BT.470 System B, G (BT.601 625-line), 6 = SMPTE 170M (BT.601 525-line),
+          7 = SMPTE 240M, 8 = generic film (illuminant C), 9 = BT.2020, BT.2100,
+          10 = SMPTE ST 428-1 (CIE 1931 XYZ), 11 = SMPTE RP 431-2 (DCI-P3),
+          12 = SMPTE EG 432-1 (Display P3), 22 = EBU Tech. 3213-E
+        }
+        transfer_function: u8be enum TransferCharacteristics {
+          1 = BT.709, 2 = unspecified, 4 = gamma 2.2 (BT.470 System M),
+          5 = gamma 2.8 (BT.470 System B, G), 6 = SMPTE 170M (BT.601), 7 = SMPTE 240M,
+          8 = linear, 9 = logarithmic, 100:1 range, 10 = logarithmic, 100√10:1 range,
+          11 = IEC 61966-2-4 (xvYCC), 12 = BT.1361 extended colour gamut,
+          13 = IEC 61966-2-1 (sRGB), 14 = BT.2020, 10-bit, 15 = BT.2020, 12-bit,
+          16 = SMPTE ST 2084 (PQ), 17 = SMPTE ST 428-1, 18 = ARIB STD-B67 (HLG)
+        }
+        // Always 0 in a PNG, which holds RGB only.
+        matrix_coefficients: u8be enum MatrixCoefficients {
+          0 = identity (RGB), 1 = BT.709, 2 = unspecified, 4 = FCC 73.682,
+          5 = BT.470 System B, G (BT.601 625-line), 6 = SMPTE 170M (BT.601 525-line),
+          7 = SMPTE 240M, 8 = YCgCo, 9 = BT.2020 non-constant luminance,
+          10 = BT.2020 constant luminance, 11 = SMPTE ST 2085 (Y'D'zD'x),
+          12 = chromaticity-derived non-constant luminance,
+          13 = chromaticity-derived constant luminance, 14 = ICtCp (BT.2100),
+          15 = IPT-C2 (SMPTE ST 2128), 16 = YCgCo-R, even, 17 = YCgCo-R, odd
+        }
+        video_full_range_flag: u8be enum VideoFullRange {0 = narrow range, 1 = full range}
+      }
+      'mDCV' => mDCV {
+        red_x: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        red_y: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        green_x: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        green_y: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        blue_x: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        blue_y: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        white_x: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        white_y: Scaled (inline, payload stored) {
+          stored: u16be
+          worth: computed real stored / 50000.0
+        }
+        // The display's maximum luminance in cd/m², stored in units of 0.0001 cd/m².
+        max_luminance: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 10000.0
+        }
+        // The display's minimum luminance in cd/m², stored in units of 0.0001 cd/m².
+        min_luminance: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 10000.0
+        }
+      }
+      'cLLI' => cLLI {
+        // MaxCLL, the luminance of the brightest pixel in the image or any of its frames, in
+            cd/m². 0 means unknown.
+        max_cll: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 10000.0
+        }
+        // MaxFALL, the average luminance of the brightest frame, in cd/m². 0 means unknown.
+        max_fall: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 10000.0
+        }
+      }
+      'oFFs' => oFFs {
+        x_position: i32be
+        y_position: i32be
+        unit: u8be enum OffsetUnit {0 = pixel, 1 = micrometre}
+      }
+      'pCAL' => pCAL {
+        calibration_name: text until 0x00 latin1
+        // x0, the stored sample value that maps to one end of the range.
+        original_zero: i32be
+        // x1, the stored sample value that maps to the other end of the range.
+        original_max: i32be
+        equation_type: u8be enum EquationType {
+          0 = linear, 1 = base-e exponential, 2 = arbitrary-base exponential, 3 = hyperbolic
+        }
+        parameter_count: u8be
+        unit_name: text until 0x00 or end latin1
+        parameters: (text until 0x00 or end latin1)[parameter_count]
+      }
+      'sCAL' => sCAL {
+        unit: u8be enum ScaleUnit {1 = metre, 2 = radian}
+        pixel_width: text until 0x00 latin1
+        pixel_height: text[remaining] latin1
+      }
+      'sTER' => sTER {
+        mode: u8be enum StereoMode {0 = cross-fuse, 1 = diverging-fuse}
+      }
+      'gIFg' => gIFg {
+        disposal_method: u8be enum Disposal {
+          0 = unspecified, 1 = leave in place, 2 = restore background, 3 = restore previous
+        }
+        user_input_flag: u8be
+        // How long to wait before going on, in hundredths of a second.
+        delay_time: u16be
+        delay_seconds: computed real delay_time / 100.0
+      }
+      'gIFx' => gIFx {
+        application_identifier: text[8] latin1
+        authentication_code: text[3] latin1
+        application_data: bytes[remaining]
+      }
+      'gIFt' => gIFt {
+        grid_left: i32be
+        grid_top: i32be
+        grid_width: u32be
+        grid_height: u32be
+        cell_width: u8be
+        cell_height: u8be
+        foreground: Foreground (inline, colour red green blue) {
+          red: u8be
+          green: u8be
+          blue: u8be
+        }
+        background: Background (inline, colour red green blue) {
+          red: u8be
+          green: u8be
+          blue: u8be
+        }
+        text: text[remaining] latin1
+      }
+      'dSIG' => dSIG (contents signature) {
+        signature: bytes[remaining]
       }
       _ => bytes[length]
     }
@@ -484,4 +2249,1360 @@ root PNG {
     }
     adler32: u32be  check adler32 over unpacked compressed
   }
+}
+
+type tiff.ExifIfd.be = ExifIfd {
+  count: u16be
+  entries: Entry (named by tag, unit entry) {
+    tag: u16be enum Tag {
+      33434 = exposure time, 33437 = f number, 34850 = exposure program,
+      34852 = spectral sensitivity, 34855 = iso speed, 34864 = sensitivity type,
+      34866 = recommended exposure index, 36864 = exif version, 36867 = date taken,
+      36868 = date digitised, 36880 = offset from utc, 36881 = offset from utc, taken,
+      36882 = offset from utc, digitised, 37121 = components configuration,
+      37122 = compressed bits per pixel, 37377 = shutter speed, 37378 = aperture,
+      37379 = brightness, 37380 = exposure bias, 37381 = widest aperture,
+      37382 = subject distance, 37383 = metering mode, 37384 = light source, 37385 = flash,
+      37386 = focal length, 37396 = subject area, 37500 = maker note, 37510 = comment,
+      37520 = subsecond, 37521 = subsecond, taken, 37522 = subsecond, digitised,
+      40960 = flashpix version, 40961 = colour space, 40962 = width, 40963 = height,
+      40964 = related sound file, 40965 = interoperability ifd,
+      41486 = focal plane x resolution, 41487 = focal plane y resolution,
+      41488 = focal plane resolution unit, 41492 = subject position, 41493 = exposure index,
+      41495 = sensing method, 41728 = file source, 41729 = scene type,
+      41730 = colour filter pattern, 41985 = custom rendered, 41986 = exposure mode,
+      41987 = white balance, 41988 = digital zoom, 41989 = focal length in 35mm,
+      41990 = scene capture type, 41991 = gain control, 41992 = contrast, 41993 = saturation,
+      41994 = sharpness, 41996 = subject distance range, 42016 = image id,
+      42032 = camera owner, 42033 = body serial number, 42034 = lens specification,
+      42035 = lens make, 42036 = lens model, 42037 = lens serial number
+    }
+    type: u16be enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32be
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch room / 5 {
+      0 => sized(4) Here (inline) {
+        values: switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16be, _ => u16be[count]}
+          4 => switch count {1 => u32be, _ => u32be[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }
+            _ => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }[count]
+          }
+          6 => switch count {1 => i8be, _ => i8be[count]}
+          8 => switch count {1 => i16be, _ => i16be[count]}
+          9 => switch count {1 => i32be, _ => i32be[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }
+            _ => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }[count]
+          }
+          11 => switch count {1 => f32be, _ => f32be[count]}
+          12 => switch count {1 => f64be, _ => f64be[count]}
+          13 => switch count {1 => u32be, _ => u32be[count]}
+          16 => switch count {1 => u64be, _ => u64be[count]}
+          17 => switch count {1 => i64be, _ => i64be[count]}
+          18 => switch count {1 => u64be, _ => u64be[count]}
+          _ => bytes[remaining]
+        }
+        padding: bytes[remaining]
+      }
+      _ => Elsewhere (inline) {
+        offset: u32be
+        values: at(offset from window) switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16be, _ => u16be[count]}
+          4 => switch count {1 => u32be, _ => u32be[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }
+            _ => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }[count]
+          }
+          6 => switch count {1 => i8be, _ => i8be[count]}
+          8 => switch count {1 => i16be, _ => i16be[count]}
+          9 => switch count {1 => i32be, _ => i32be[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }
+            _ => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }[count]
+          }
+          11 => switch count {1 => f32be, _ => f32be[count]}
+          12 => switch count {1 => f64be, _ => f64be[count]}
+          13 => switch count {1 => u32be, _ => u32be[count]}
+          16 => switch count {1 => u64be, _ => u64be[count]}
+          17 => switch count {1 => i64be, _ => i64be[count]}
+          18 => switch count {1 => u64be, _ => u64be[count]}
+          _ => bytes[remaining]
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32be
+}
+
+type tiff.ExifIfd.le = ExifIfd {
+  count: u16le
+  entries: Entry (named by tag, unit entry) {
+    tag: u16le enum Tag {
+      33434 = exposure time, 33437 = f number, 34850 = exposure program,
+      34852 = spectral sensitivity, 34855 = iso speed, 34864 = sensitivity type,
+      34866 = recommended exposure index, 36864 = exif version, 36867 = date taken,
+      36868 = date digitised, 36880 = offset from utc, 36881 = offset from utc, taken,
+      36882 = offset from utc, digitised, 37121 = components configuration,
+      37122 = compressed bits per pixel, 37377 = shutter speed, 37378 = aperture,
+      37379 = brightness, 37380 = exposure bias, 37381 = widest aperture,
+      37382 = subject distance, 37383 = metering mode, 37384 = light source, 37385 = flash,
+      37386 = focal length, 37396 = subject area, 37500 = maker note, 37510 = comment,
+      37520 = subsecond, 37521 = subsecond, taken, 37522 = subsecond, digitised,
+      40960 = flashpix version, 40961 = colour space, 40962 = width, 40963 = height,
+      40964 = related sound file, 40965 = interoperability ifd,
+      41486 = focal plane x resolution, 41487 = focal plane y resolution,
+      41488 = focal plane resolution unit, 41492 = subject position, 41493 = exposure index,
+      41495 = sensing method, 41728 = file source, 41729 = scene type,
+      41730 = colour filter pattern, 41985 = custom rendered, 41986 = exposure mode,
+      41987 = white balance, 41988 = digital zoom, 41989 = focal length in 35mm,
+      41990 = scene capture type, 41991 = gain control, 41992 = contrast, 41993 = saturation,
+      41994 = sharpness, 41996 = subject distance range, 42016 = image id,
+      42032 = camera owner, 42033 = body serial number, 42034 = lens specification,
+      42035 = lens make, 42036 = lens model, 42037 = lens serial number
+    }
+    type: u16le enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32le
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch room / 5 {
+      0 => sized(4) Here (inline) {
+        values: switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16le, _ => u16le[count]}
+          4 => switch count {1 => u32le, _ => u32le[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }
+            _ => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }[count]
+          }
+          6 => switch count {1 => i8le, _ => i8le[count]}
+          8 => switch count {1 => i16le, _ => i16le[count]}
+          9 => switch count {1 => i32le, _ => i32le[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }
+            _ => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }[count]
+          }
+          11 => switch count {1 => f32le, _ => f32le[count]}
+          12 => switch count {1 => f64le, _ => f64le[count]}
+          13 => switch count {1 => u32le, _ => u32le[count]}
+          16 => switch count {1 => u64le, _ => u64le[count]}
+          17 => switch count {1 => i64le, _ => i64le[count]}
+          18 => switch count {1 => u64le, _ => u64le[count]}
+          _ => bytes[remaining]
+        }
+        padding: bytes[remaining]
+      }
+      _ => Elsewhere (inline) {
+        offset: u32le
+        values: at(offset from window) switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16le, _ => u16le[count]}
+          4 => switch count {1 => u32le, _ => u32le[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }
+            _ => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }[count]
+          }
+          6 => switch count {1 => i8le, _ => i8le[count]}
+          8 => switch count {1 => i16le, _ => i16le[count]}
+          9 => switch count {1 => i32le, _ => i32le[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }
+            _ => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }[count]
+          }
+          11 => switch count {1 => f32le, _ => f32le[count]}
+          12 => switch count {1 => f64le, _ => f64le[count]}
+          13 => switch count {1 => u32le, _ => u32le[count]}
+          16 => switch count {1 => u64le, _ => u64le[count]}
+          17 => switch count {1 => i64le, _ => i64le[count]}
+          18 => switch count {1 => u64le, _ => u64le[count]}
+          _ => bytes[remaining]
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32le
+}
+
+type tiff.GpsIfd.be = GpsIfd {
+  count: u16be
+  entries: Entry (named by tag, unit entry) {
+    tag: u16be enum Tag {
+      0 = version id, 1 = latitude ref, 2 = latitude, 3 = longitude ref, 4 = longitude,
+      5 = altitude ref, 6 = altitude, 7 = time, 8 = satellites, 9 = status, 10 = measure mode,
+      11 = precision, 12 = speed ref, 13 = speed, 14 = track ref, 15 = track,
+      16 = direction ref, 17 = direction, 18 = map datum, 19 = destination latitude ref,
+      20 = destination latitude, 21 = destination longitude ref, 22 = destination longitude,
+      23 = destination bearing ref, 24 = destination bearing, 25 = destination distance ref,
+      26 = destination distance, 27 = processing method, 28 = area information, 29 = date,
+      30 = differential, 31 = horizontal error
+    }
+    type: u16be enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32be
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch room / 5 {
+      0 => sized(4) Here (inline) {
+        values: switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16be, _ => u16be[count]}
+          4 => switch count {1 => u32be, _ => u32be[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }
+            _ => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }[count]
+          }
+          6 => switch count {1 => i8be, _ => i8be[count]}
+          8 => switch count {1 => i16be, _ => i16be[count]}
+          9 => switch count {1 => i32be, _ => i32be[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }
+            _ => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }[count]
+          }
+          11 => switch count {1 => f32be, _ => f32be[count]}
+          12 => switch count {1 => f64be, _ => f64be[count]}
+          13 => switch count {1 => u32be, _ => u32be[count]}
+          16 => switch count {1 => u64be, _ => u64be[count]}
+          17 => switch count {1 => i64be, _ => i64be[count]}
+          18 => switch count {1 => u64be, _ => u64be[count]}
+          _ => bytes[remaining]
+        }
+        padding: bytes[remaining]
+      }
+      _ => Elsewhere (inline) {
+        offset: u32be
+        values: at(offset from window) switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16be, _ => u16be[count]}
+          4 => switch count {1 => u32be, _ => u32be[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }
+            _ => Rational (inline) {
+              numerator: u32be
+              denominator: u32be
+            }[count]
+          }
+          6 => switch count {1 => i8be, _ => i8be[count]}
+          8 => switch count {1 => i16be, _ => i16be[count]}
+          9 => switch count {1 => i32be, _ => i32be[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }
+            _ => Rational (inline) {
+              numerator: i32be
+              denominator: i32be
+            }[count]
+          }
+          11 => switch count {1 => f32be, _ => f32be[count]}
+          12 => switch count {1 => f64be, _ => f64be[count]}
+          13 => switch count {1 => u32be, _ => u32be[count]}
+          16 => switch count {1 => u64be, _ => u64be[count]}
+          17 => switch count {1 => i64be, _ => i64be[count]}
+          18 => switch count {1 => u64be, _ => u64be[count]}
+          _ => bytes[remaining]
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32be
+}
+
+type tiff.GpsIfd.le = GpsIfd {
+  count: u16le
+  entries: Entry (named by tag, unit entry) {
+    tag: u16le enum Tag {
+      0 = version id, 1 = latitude ref, 2 = latitude, 3 = longitude ref, 4 = longitude,
+      5 = altitude ref, 6 = altitude, 7 = time, 8 = satellites, 9 = status, 10 = measure mode,
+      11 = precision, 12 = speed ref, 13 = speed, 14 = track ref, 15 = track,
+      16 = direction ref, 17 = direction, 18 = map datum, 19 = destination latitude ref,
+      20 = destination latitude, 21 = destination longitude ref, 22 = destination longitude,
+      23 = destination bearing ref, 24 = destination bearing, 25 = destination distance ref,
+      26 = destination distance, 27 = processing method, 28 = area information, 29 = date,
+      30 = differential, 31 = horizontal error
+    }
+    type: u16le enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32le
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch room / 5 {
+      0 => sized(4) Here (inline) {
+        values: switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16le, _ => u16le[count]}
+          4 => switch count {1 => u32le, _ => u32le[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }
+            _ => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }[count]
+          }
+          6 => switch count {1 => i8le, _ => i8le[count]}
+          8 => switch count {1 => i16le, _ => i16le[count]}
+          9 => switch count {1 => i32le, _ => i32le[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }
+            _ => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }[count]
+          }
+          11 => switch count {1 => f32le, _ => f32le[count]}
+          12 => switch count {1 => f64le, _ => f64le[count]}
+          13 => switch count {1 => u32le, _ => u32le[count]}
+          16 => switch count {1 => u64le, _ => u64le[count]}
+          17 => switch count {1 => i64le, _ => i64le[count]}
+          18 => switch count {1 => u64le, _ => u64le[count]}
+          _ => bytes[remaining]
+        }
+        padding: bytes[remaining]
+      }
+      _ => Elsewhere (inline) {
+        offset: u32le
+        values: at(offset from window) switch type {
+          2 => text[count] padded with 0x00 ascii
+          7 => bytes[count]
+          1 => switch count {1 => u8be, _ => u8be[count]}
+          3 => switch count {1 => u16le, _ => u16le[count]}
+          4 => switch count {1 => u32le, _ => u32le[count]}
+          5 => switch count {
+            1 => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }
+            _ => Rational (inline) {
+              numerator: u32le
+              denominator: u32le
+            }[count]
+          }
+          6 => switch count {1 => i8le, _ => i8le[count]}
+          8 => switch count {1 => i16le, _ => i16le[count]}
+          9 => switch count {1 => i32le, _ => i32le[count]}
+          10 => switch count {
+            1 => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }
+            _ => Rational (inline) {
+              numerator: i32le
+              denominator: i32le
+            }[count]
+          }
+          11 => switch count {1 => f32le, _ => f32le[count]}
+          12 => switch count {1 => f64le, _ => f64le[count]}
+          13 => switch count {1 => u32le, _ => u32le[count]}
+          16 => switch count {1 => u64le, _ => u64le[count]}
+          17 => switch count {1 => i64le, _ => i64le[count]}
+          18 => switch count {1 => u64le, _ => u64le[count]}
+          _ => bytes[remaining]
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32le
+}
+
+type tiff.Ifd.be = Ifd {
+  count: u16be
+  entries: Entry (named by tag, unit entry) {
+    tag: u16be enum Tag {
+      254 = new subfile type, 255 = subfile type, 256 = image width, 257 = image height,
+      258 = bits per sample, 259 = compression, 262 = photometric interpretation,
+      263 = thresholding, 266 = fill order, 269 = document name, 270 = image description,
+      271 = make, 272 = model, 273 = strip offsets, 274 = orientation, 277 = samples per pixel,
+      278 = rows per strip, 279 = strip byte counts, 280 = min sample value,
+      281 = max sample value, 282 = x resolution, 283 = y resolution,
+      284 = planar configuration, 288 = free offsets, 289 = free byte counts,
+      290 = grey response unit, 291 = grey response curve, 296 = resolution unit,
+      297 = page number, 305 = software, 306 = date time, 315 = artist, 316 = host computer,
+      317 = predictor, 318 = white point, 319 = primary chromaticities, 320 = colour map,
+      321 = halftone hints, 322 = tile width, 323 = tile length, 324 = tile offsets,
+      325 = tile byte counts, 330 = sub ifds, 338 = extra samples, 339 = sample format,
+      513 = jpeg interchange format, 514 = jpeg interchange format length,
+      529 = ycbcr coefficients, 530 = ycbcr subsampling, 531 = ycbcr positioning,
+      532 = reference black white, 700 = xmp, 33421 = cfa repeat pattern dimensions,
+      33422 = cfa pattern, 33432 = copyright, 33723 = iptc, 34665 = exif ifd,
+      34675 = icc profile, 34713 = nikon nef info, 34853 = gps ifd,
+      50341 = print image matching, 37398 = tiff/ep standard id, 50706 = dng version,
+      50707 = dng backward version, 50708 = unique camera model,
+      50709 = localised camera model, 50710 = cfa plane colour, 50711 = cfa layout,
+      50712 = linearisation table, 50713 = black level repeat dimensions, 50714 = black level,
+      50715 = black level delta h, 50716 = black level delta v, 50717 = white level,
+      50718 = default scale, 50719 = default crop origin, 50720 = default crop size,
+      50721 = colour matrix 1, 50722 = colour matrix 2, 50723 = camera calibration 1,
+      50724 = camera calibration 2, 50725 = reduction matrix 1, 50726 = reduction matrix 2,
+      50727 = analogue balance, 50728 = as shot neutral, 50729 = as shot white xy,
+      50730 = baseline exposure, 50731 = baseline noise, 50732 = baseline sharpness,
+      50733 = bayer green split, 50734 = linear response limit, 50735 = camera serial number,
+      50736 = lens info, 50737 = chroma blur radius, 50738 = anti alias strength,
+      50739 = shadow scale, 50740 = dng private data, 50741 = maker note safety,
+      50778 = calibration illuminant 1, 50779 = calibration illuminant 2,
+      50780 = best quality scale, 50781 = raw data unique id, 50827 = original raw file name,
+      50828 = original raw file data, 50829 = active area, 50830 = masked areas,
+      50831 = as shot icc profile, 50832 = as shot pre-profile matrix,
+      50833 = current icc profile, 50834 = current pre-profile matrix
+    }
+    type: u16be enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32be
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch tag {
+      0x014a => switch count {
+        1 => SubIfd (inline) {
+          offset: u32be
+          directory: at(offset from window) tiff.Ifd.be
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32be
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      0x8769 => switch count {
+        1 => SubIfd (inline) {
+          offset: u32be
+          directory: at(offset from window) tiff.ExifIfd.be
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32be
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      0x8825 => switch count {
+        1 => SubIfd (inline) {
+          offset: u32be
+          directory: at(offset from window) tiff.GpsIfd.be
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32be
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16be, _ => u16be[count]}
+              4 => switch count {1 => u32be, _ => u32be[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                _ => Rational (inline) {
+                  numerator: u32be
+                  denominator: u32be
+                }[count]
+              }
+              6 => switch count {1 => i8be, _ => i8be[count]}
+              8 => switch count {1 => i16be, _ => i16be[count]}
+              9 => switch count {1 => i32be, _ => i32be[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }
+                _ => Rational (inline) {
+                  numerator: i32be
+                  denominator: i32be
+                }[count]
+              }
+              11 => switch count {1 => f32be, _ => f32be[count]}
+              12 => switch count {1 => f64be, _ => f64be[count]}
+              13 => switch count {1 => u32be, _ => u32be[count]}
+              16 => switch count {1 => u64be, _ => u64be[count]}
+              17 => switch count {1 => i64be, _ => i64be[count]}
+              18 => switch count {1 => u64be, _ => u64be[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      _ => switch room / 5 {
+        0 => sized(4) Here (inline) {
+          values: switch type {
+            2 => text[count] padded with 0x00 ascii
+            7 => bytes[count]
+            1 => switch count {1 => u8be, _ => u8be[count]}
+            3 => switch count {1 => u16be, _ => u16be[count]}
+            4 => switch count {1 => u32be, _ => u32be[count]}
+            5 => switch count {
+              1 => Rational (inline) {
+                numerator: u32be
+                denominator: u32be
+              }
+              _ => Rational (inline) {
+                numerator: u32be
+                denominator: u32be
+              }[count]
+            }
+            6 => switch count {1 => i8be, _ => i8be[count]}
+            8 => switch count {1 => i16be, _ => i16be[count]}
+            9 => switch count {1 => i32be, _ => i32be[count]}
+            10 => switch count {
+              1 => Rational (inline) {
+                numerator: i32be
+                denominator: i32be
+              }
+              _ => Rational (inline) {
+                numerator: i32be
+                denominator: i32be
+              }[count]
+            }
+            11 => switch count {1 => f32be, _ => f32be[count]}
+            12 => switch count {1 => f64be, _ => f64be[count]}
+            13 => switch count {1 => u32be, _ => u32be[count]}
+            16 => switch count {1 => u64be, _ => u64be[count]}
+            17 => switch count {1 => i64be, _ => i64be[count]}
+            18 => switch count {1 => u64be, _ => u64be[count]}
+            _ => bytes[remaining]
+          }
+          padding: bytes[remaining]
+        }
+        _ => Elsewhere (inline) {
+          offset: u32be
+          values: at(offset from window) switch type {
+            2 => text[count] padded with 0x00 ascii
+            7 => bytes[count]
+            1 => switch count {1 => u8be, _ => u8be[count]}
+            3 => switch count {1 => u16be, _ => u16be[count]}
+            4 => switch count {1 => u32be, _ => u32be[count]}
+            5 => switch count {
+              1 => Rational (inline) {
+                numerator: u32be
+                denominator: u32be
+              }
+              _ => Rational (inline) {
+                numerator: u32be
+                denominator: u32be
+              }[count]
+            }
+            6 => switch count {1 => i8be, _ => i8be[count]}
+            8 => switch count {1 => i16be, _ => i16be[count]}
+            9 => switch count {1 => i32be, _ => i32be[count]}
+            10 => switch count {
+              1 => Rational (inline) {
+                numerator: i32be
+                denominator: i32be
+              }
+              _ => Rational (inline) {
+                numerator: i32be
+                denominator: i32be
+              }[count]
+            }
+            11 => switch count {1 => f32be, _ => f32be[count]}
+            12 => switch count {1 => f64be, _ => f64be[count]}
+            13 => switch count {1 => u32be, _ => u32be[count]}
+            16 => switch count {1 => u64be, _ => u64be[count]}
+            17 => switch count {1 => i64be, _ => i64be[count]}
+            18 => switch count {1 => u64be, _ => u64be[count]}
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32be
+}
+
+type tiff.Ifd.le = Ifd {
+  count: u16le
+  entries: Entry (named by tag, unit entry) {
+    tag: u16le enum Tag {
+      254 = new subfile type, 255 = subfile type, 256 = image width, 257 = image height,
+      258 = bits per sample, 259 = compression, 262 = photometric interpretation,
+      263 = thresholding, 266 = fill order, 269 = document name, 270 = image description,
+      271 = make, 272 = model, 273 = strip offsets, 274 = orientation, 277 = samples per pixel,
+      278 = rows per strip, 279 = strip byte counts, 280 = min sample value,
+      281 = max sample value, 282 = x resolution, 283 = y resolution,
+      284 = planar configuration, 288 = free offsets, 289 = free byte counts,
+      290 = grey response unit, 291 = grey response curve, 296 = resolution unit,
+      297 = page number, 305 = software, 306 = date time, 315 = artist, 316 = host computer,
+      317 = predictor, 318 = white point, 319 = primary chromaticities, 320 = colour map,
+      321 = halftone hints, 322 = tile width, 323 = tile length, 324 = tile offsets,
+      325 = tile byte counts, 330 = sub ifds, 338 = extra samples, 339 = sample format,
+      513 = jpeg interchange format, 514 = jpeg interchange format length,
+      529 = ycbcr coefficients, 530 = ycbcr subsampling, 531 = ycbcr positioning,
+      532 = reference black white, 700 = xmp, 33421 = cfa repeat pattern dimensions,
+      33422 = cfa pattern, 33432 = copyright, 33723 = iptc, 34665 = exif ifd,
+      34675 = icc profile, 34713 = nikon nef info, 34853 = gps ifd,
+      50341 = print image matching, 37398 = tiff/ep standard id, 50706 = dng version,
+      50707 = dng backward version, 50708 = unique camera model,
+      50709 = localised camera model, 50710 = cfa plane colour, 50711 = cfa layout,
+      50712 = linearisation table, 50713 = black level repeat dimensions, 50714 = black level,
+      50715 = black level delta h, 50716 = black level delta v, 50717 = white level,
+      50718 = default scale, 50719 = default crop origin, 50720 = default crop size,
+      50721 = colour matrix 1, 50722 = colour matrix 2, 50723 = camera calibration 1,
+      50724 = camera calibration 2, 50725 = reduction matrix 1, 50726 = reduction matrix 2,
+      50727 = analogue balance, 50728 = as shot neutral, 50729 = as shot white xy,
+      50730 = baseline exposure, 50731 = baseline noise, 50732 = baseline sharpness,
+      50733 = bayer green split, 50734 = linear response limit, 50735 = camera serial number,
+      50736 = lens info, 50737 = chroma blur radius, 50738 = anti alias strength,
+      50739 = shadow scale, 50740 = dng private data, 50741 = maker note safety,
+      50778 = calibration illuminant 1, 50779 = calibration illuminant 2,
+      50780 = best quality scale, 50781 = raw data unique id, 50827 = original raw file name,
+      50828 = original raw file data, 50829 = active area, 50830 = masked areas,
+      50831 = as shot icc profile, 50832 = as shot pre-profile matrix,
+      50833 = current icc profile, 50834 = current pre-profile matrix
+    }
+    type: u16le enum FieldType {
+      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
+      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
+      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
+    }
+    count: u32le
+    room: switch type {
+      1 => computed 1 * count
+      2 => computed 1 * count
+      3 => computed 2 * count
+      4 => computed 4 * count
+      5 => computed 8 * count
+      6 => computed 1 * count
+      7 => computed 1 * count
+      8 => computed 2 * count
+      9 => computed 4 * count
+      10 => computed 8 * count
+      11 => computed 4 * count
+      12 => computed 8 * count
+      13 => computed 4 * count
+      16 => computed 8 * count
+      17 => computed 8 * count
+      18 => computed 8 * count
+      _ => computed 0
+    }
+    value: switch tag {
+      0x014a => switch count {
+        1 => SubIfd (inline) {
+          offset: u32le
+          directory: at(offset from window) tiff.Ifd.le
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32le
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      0x8769 => switch count {
+        1 => SubIfd (inline) {
+          offset: u32le
+          directory: at(offset from window) tiff.ExifIfd.le
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32le
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      0x8825 => switch count {
+        1 => SubIfd (inline) {
+          offset: u32le
+          directory: at(offset from window) tiff.GpsIfd.le
+        }
+        _ => switch room / 5 {
+          0 => sized(4) Here (inline) {
+            values: switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+            padding: bytes[remaining]
+          }
+          _ => Elsewhere (inline) {
+            offset: u32le
+            values: at(offset from window) switch type {
+              2 => text[count] padded with 0x00 ascii
+              7 => bytes[count]
+              1 => switch count {1 => u8be, _ => u8be[count]}
+              3 => switch count {1 => u16le, _ => u16le[count]}
+              4 => switch count {1 => u32le, _ => u32le[count]}
+              5 => switch count {
+                1 => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }
+                _ => Rational (inline) {
+                  numerator: u32le
+                  denominator: u32le
+                }[count]
+              }
+              6 => switch count {1 => i8le, _ => i8le[count]}
+              8 => switch count {1 => i16le, _ => i16le[count]}
+              9 => switch count {1 => i32le, _ => i32le[count]}
+              10 => switch count {
+                1 => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }
+                _ => Rational (inline) {
+                  numerator: i32le
+                  denominator: i32le
+                }[count]
+              }
+              11 => switch count {1 => f32le, _ => f32le[count]}
+              12 => switch count {1 => f64le, _ => f64le[count]}
+              13 => switch count {1 => u32le, _ => u32le[count]}
+              16 => switch count {1 => u64le, _ => u64le[count]}
+              17 => switch count {1 => i64le, _ => i64le[count]}
+              18 => switch count {1 => u64le, _ => u64le[count]}
+              _ => bytes[remaining]
+            }
+          }
+        }
+      }
+      _ => switch room / 5 {
+        0 => sized(4) Here (inline) {
+          values: switch type {
+            2 => text[count] padded with 0x00 ascii
+            7 => bytes[count]
+            1 => switch count {1 => u8be, _ => u8be[count]}
+            3 => switch count {1 => u16le, _ => u16le[count]}
+            4 => switch count {1 => u32le, _ => u32le[count]}
+            5 => switch count {
+              1 => Rational (inline) {
+                numerator: u32le
+                denominator: u32le
+              }
+              _ => Rational (inline) {
+                numerator: u32le
+                denominator: u32le
+              }[count]
+            }
+            6 => switch count {1 => i8le, _ => i8le[count]}
+            8 => switch count {1 => i16le, _ => i16le[count]}
+            9 => switch count {1 => i32le, _ => i32le[count]}
+            10 => switch count {
+              1 => Rational (inline) {
+                numerator: i32le
+                denominator: i32le
+              }
+              _ => Rational (inline) {
+                numerator: i32le
+                denominator: i32le
+              }[count]
+            }
+            11 => switch count {1 => f32le, _ => f32le[count]}
+            12 => switch count {1 => f64le, _ => f64le[count]}
+            13 => switch count {1 => u32le, _ => u32le[count]}
+            16 => switch count {1 => u64le, _ => u64le[count]}
+            17 => switch count {1 => i64le, _ => i64le[count]}
+            18 => switch count {1 => u64le, _ => u64le[count]}
+            _ => bytes[remaining]
+          }
+          padding: bytes[remaining]
+        }
+        _ => Elsewhere (inline) {
+          offset: u32le
+          values: at(offset from window) switch type {
+            2 => text[count] padded with 0x00 ascii
+            7 => bytes[count]
+            1 => switch count {1 => u8be, _ => u8be[count]}
+            3 => switch count {1 => u16le, _ => u16le[count]}
+            4 => switch count {1 => u32le, _ => u32le[count]}
+            5 => switch count {
+              1 => Rational (inline) {
+                numerator: u32le
+                denominator: u32le
+              }
+              _ => Rational (inline) {
+                numerator: u32le
+                denominator: u32le
+              }[count]
+            }
+            6 => switch count {1 => i8le, _ => i8le[count]}
+            8 => switch count {1 => i16le, _ => i16le[count]}
+            9 => switch count {1 => i32le, _ => i32le[count]}
+            10 => switch count {
+              1 => Rational (inline) {
+                numerator: i32le
+                denominator: i32le
+              }
+              _ => Rational (inline) {
+                numerator: i32le
+                denominator: i32le
+              }[count]
+            }
+            11 => switch count {1 => f32le, _ => f32le[count]}
+            12 => switch count {1 => f64le, _ => f64le[count]}
+            13 => switch count {1 => u32le, _ => u32le[count]}
+            16 => switch count {1 => u64le, _ => u64le[count]}
+            17 => switch count {1 => i64le, _ => i64le[count]}
+            18 => switch count {1 => u64le, _ => u64le[count]}
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+  }[count]
+  next_ifd_offset: u32le
 }

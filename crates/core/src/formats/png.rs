@@ -1,8 +1,8 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
 use crate::template::{
-    Check, Checksum, Colour, Covers, Encoding, Endian::*, Expr as E, Packing, PngHeader, RasterOrder, Step, StrLen, Template, Ty as T, Until,
-    Valid,
+    Check, Checksum, Colour, Covers, Encoding, Endian::*, Expr as E, Packing, Part, PngHeader, RasterOrder, Step, StrLen, Template, Ty as T,
+    Until, Valid,
 };
 
 /// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
@@ -192,12 +192,23 @@ fn dword(head: &[u8], at: usize) -> Option<u32> {
 }
 
 pub fn png() -> Template {
-    Template::new("png", image())
+    let part = part();
+    Template::new("png", part.root.clone()).with_part(&part)
 }
 
-/// The image on its own, so a format that carries a whole PNG can place it. A
-/// PNG refers to nothing by name, so the type is the whole of it and there is
-/// no vocabulary to hand over with it.
+/// The image and the names it refers to, for a format that carries a whole
+/// PNG. An eXIf chunk is a TIFF file, and a TIFF's directories refer to each
+/// other by name, so a template that places [`image`] takes these names too.
+pub(crate) fn part() -> Part {
+    let mut part = Part::new(image());
+    for borrowed in [super::tiff::tiff_part(), super::icc::icc_part()] {
+        part.types.extend(borrowed.types);
+    }
+    part
+}
+
+/// The image on its own, so a format that carries a whole PNG can place it,
+/// with the names in [`part`].
 ///
 /// Every step from the bytes to the pixels is a field. The chunks are read as
 /// the file keeps them; then `image` joins every IDAT chunk's data, in order,
@@ -359,6 +370,18 @@ fn chunk_kinds() -> Vec<(i128, T)> {
         (kind(b"acTL"), actl()),
         (kind(b"fcTL"), fctl()),
         (kind(b"fdAT"), fdat()),
+        (kind(b"eXIf"), exif()),
+        (kind(b"cICP"), cicp()),
+        (kind(b"mDCV"), mdcv()),
+        (kind(b"cLLI"), clli()),
+        (kind(b"oFFs"), offs()),
+        (kind(b"pCAL"), pcal()),
+        (kind(b"sCAL"), scal()),
+        (kind(b"sTER"), ster()),
+        (kind(b"gIFg"), gifg()),
+        (kind(b"gIFx"), gifx()),
+        (kind(b"gIFt"), gift()),
+        (kind(b"dSIG"), dsig()),
     ]
 }
 
@@ -416,15 +439,16 @@ fn trns() -> T {
     )
 }
 
-/// A number the file stores as a whole number times 100,000, beside what it
-/// is worth, the way GRIB's and NIfTI's scaled values read. gAMA and cHRM
-/// write every value this way.
+/// A number the file stores as a whole number times `divisor`, beside what it
+/// is worth, the way GRIB's and NIfTI's scaled values read.
+fn scaled(stored: T, divisor: f64) -> T {
+    T::inline_structure("Scaled", vec![("stored", stored), ("worth", T::computed_real(E::field("stored").div(E::real(divisor))))])
+        .payload(&["stored"])
+}
+
+/// A number stored times 100,000, which is how gAMA and cHRM write every value.
 fn hundred_thousandths() -> T {
-    T::inline_structure(
-        "Scaled",
-        vec![("stored", T::u32(Big)), ("worth", T::computed_real(E::field("stored").div(E::real(100_000.0))))],
-    )
-    .payload(&["stored"])
+    scaled(T::u32(Big), 100_000.0)
 }
 
 /// gAMA: the image's gamma, stored times 100,000. 45455 is 1/2.2, the gamma
@@ -463,15 +487,15 @@ fn keyword() -> T {
 }
 
 /// iCCP: an embedded ICC profile, named, and compressed as a zlib stream. The
-/// profile is read as its bytes; opened on its own it is recognised as the
-/// ICC profile it is.
+/// inflated stream is the profile, read as an `.icc` file is, with its tag
+/// offsets counted from the stream's first byte.
 fn iccp() -> T {
     T::structure(
         "iCCP",
         vec![
             ("profile_name", keyword()),
             ("compression_method", compression_method()),
-            ("profile", super::zlib::part(super::decoded_object()).root),
+            ("profile", super::zlib::part(super::icc::icc_part().root).root),
         ],
     )
 }
@@ -626,8 +650,170 @@ fn fctl() -> T {
 /// fdAT: a piece of one animation frame's zlib stream, behind a sequence
 /// number. Not joined into anything: which frame a piece belongs to is which
 /// fcTL came before it, and a walk over the chunks cannot say that.
+///
+/// The IDAT pieces are joined by a `Stitched` whose steps go to every chunk
+/// and land on `image_data`, which only an IDAT has. A frame's pieces are the
+/// fdAT chunks between its fcTL and the next one, and no step selects part of
+/// a list by what comes before it: `Step::Tagged` finds the first match only,
+/// and `Step::elements` takes indices the template would have to know before
+/// reading the file. Joining them needs the chunk list grouped by fcTL, or a
+/// step that takes the elements after one match up to the next.
 fn fdat() -> T {
     T::structure("fdAT", vec![("sequence_number", T::u32(Big)), ("frame_data", T::bytes(E::Remaining))])
+}
+
+/// eXIf: Exif data, which is a whole TIFF file from its byte order mark on,
+/// without the `Exif` identifier a JPEG puts in front. Read as the same TIFF a
+/// JPEG's Exif block is, with its offsets counted from the chunk's first byte.
+fn exif() -> T {
+    T::structure_named("eXIf", "", "tiff", vec![("tiff", super::tiff::tiff_part().root)])
+}
+
+/// cICP: the image's colour space as four ITU-T H.273 code points. A decoder
+/// that understands it uses it ahead of iCCP, sRGB, gAMA and cHRM.
+fn cicp() -> T {
+    use super::icc::{H273_MATRIX, H273_PRIMARIES, H273_RANGE, H273_TRANSFER};
+    T::structure(
+        "cICP",
+        vec![
+            ("color_primaries", T::enumeration("ColourPrimaries", T::u8(), H273_PRIMARIES)),
+            ("transfer_function", T::enumeration("TransferCharacteristics", T::u8(), H273_TRANSFER)),
+            ("matrix_coefficients", T::enumeration("MatrixCoefficients", T::u8(), H273_MATRIX)),
+            ("video_full_range_flag", T::enumeration("VideoFullRange", T::u8(), H273_RANGE)),
+        ],
+    )
+    .field_doc("matrix_coefficients", "Always 0 in a PNG, which holds RGB only.")
+}
+
+/// mDCV: the colour volume of the display the image was mastered on. The
+/// three primaries come in order of largest x, then largest y, then the
+/// third, which for an RGB display is red, green and blue. Chromaticities are
+/// stored times 50,000 and luminances times 10,000.
+fn mdcv() -> T {
+    let xy = || scaled(T::u16(Big), 50_000.0);
+    let nits = || scaled(T::u32(Big), 10_000.0);
+    let names = ["red_x", "red_y", "green_x", "green_y", "blue_x", "blue_y", "white_x", "white_y"];
+    let mut fields: Vec<(&str, T)> = names.iter().map(|n| (*n, xy())).collect();
+    fields.push(("max_luminance", nits()));
+    fields.push(("min_luminance", nits()));
+    T::structure("mDCV", fields)
+        .field_doc("max_luminance", "The display's maximum luminance in cd/m², stored in units of 0.0001 cd/m².")
+        .field_doc("min_luminance", "The display's minimum luminance in cd/m², stored in units of 0.0001 cd/m².")
+}
+
+/// cLLI: how bright the content gets, stored in units of 0.0001 cd/m².
+fn clli() -> T {
+    let nits = || scaled(T::u32(Big), 10_000.0);
+    T::structure("cLLI", vec![("max_cll", nits()), ("max_fall", nits())])
+        .field_doc("max_cll", "MaxCLL, the luminance of the brightest pixel in the image or any of its frames, in cd/m². 0 means unknown.")
+        .field_doc("max_fall", "MaxFALL, the average luminance of the brightest frame, in cd/m². 0 means unknown.")
+}
+
+/// oFFs: where the image sits on the page, from its top left corner.
+fn offs() -> T {
+    T::structure(
+        "oFFs",
+        vec![
+            ("x_position", T::i32(Big)),
+            ("y_position", T::i32(Big)),
+            ("unit", T::enumeration("OffsetUnit", T::u8(), &[(0, "pixel"), (1, "micrometre")])),
+        ],
+    )
+}
+
+/// pCAL: what the stored sample values mean as physical values. The
+/// parameters are numbers written as ASCII text, with a nul between each and
+/// none after the last.
+fn pcal() -> T {
+    let to_nul_or_end = || T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1);
+    let equation = &[(0, "linear"), (1, "base-e exponential"), (2, "arbitrary-base exponential"), (3, "hyperbolic")];
+    T::structure(
+        "pCAL",
+        vec![
+            ("calibration_name", keyword()),
+            ("original_zero", T::i32(Big)),
+            ("original_max", T::i32(Big)),
+            ("equation_type", T::enumeration("EquationType", T::u8(), equation)),
+            ("parameter_count", T::u8()),
+            ("unit_name", to_nul_or_end()),
+            ("parameters", T::array(to_nul_or_end(), E::field("parameter_count"))),
+        ],
+    )
+    .field_doc("original_zero", "x0, the stored sample value that maps to one end of the range.")
+    .field_doc("original_max", "x1, the stored sample value that maps to the other end of the range.")
+}
+
+/// sCAL: the physical size of one pixel, as two ASCII floating-point numbers
+/// with a nul between them.
+fn scal() -> T {
+    T::structure(
+        "sCAL",
+        vec![
+            ("unit", T::enumeration("ScaleUnit", T::u8(), &[(1, "metre"), (2, "radian")])),
+            ("pixel_width", T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1)),
+            ("pixel_height", T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1)),
+        ],
+    )
+}
+
+/// sTER: the image is a stereo pair side by side, and which way to fuse it.
+fn ster() -> T {
+    T::structure("sTER", vec![("mode", T::enumeration("StereoMode", T::u8(), &[(0, "cross-fuse"), (1, "diverging-fuse")]))])
+}
+
+/// gIFg: a GIF Graphic Control Extension kept from a GIF the image was
+/// converted from, without its transparency fields.
+fn gifg() -> T {
+    T::structure(
+        "gIFg",
+        vec![
+            ("disposal_method", T::enumeration("Disposal", T::u8(), super::gif::DISPOSAL)),
+            ("user_input_flag", T::u8()),
+            ("delay_time", T::u16(Big)),
+            ("delay_seconds", T::computed_real(E::field("delay_time").div(E::real(100.0)))),
+        ],
+    )
+    .field_doc("delay_time", "How long to wait before going on, in hundredths of a second.")
+}
+
+/// gIFx: a GIF Application Extension kept from a GIF the image was converted
+/// from. What the data means is up to the application that wrote it.
+fn gifx() -> T {
+    T::structure(
+        "gIFx",
+        vec![
+            ("application_identifier", T::text(StrLen::Fixed(E::lit(8)), Encoding::Latin1)),
+            ("authentication_code", T::text(StrLen::Fixed(E::lit(3)), Encoding::Latin1)),
+            ("application_data", T::bytes(E::Remaining)),
+        ],
+    )
+}
+
+/// gIFt: a GIF Plain Text Extension, deprecated. The grid's position and size
+/// are four bytes each here, where the GIF has two.
+fn gift() -> T {
+    let rgb = |name: &str| T::inline_structure(name, vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())]).colour(Colour::rgb());
+    T::structure(
+        "gIFt",
+        vec![
+            ("grid_left", T::i32(Big)),
+            ("grid_top", T::i32(Big)),
+            ("grid_width", T::u32(Big)),
+            ("grid_height", T::u32(Big)),
+            ("cell_width", T::u8()),
+            ("cell_height", T::u8()),
+            ("foreground", rgb("Foreground")),
+            ("background", rgb("Background")),
+            ("text", T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1)),
+        ],
+    )
+}
+
+/// dSIG: a digital signature over the chunks between a pair of these, as the
+/// PNG digital signature extension writes it. That extension says what is
+/// inside; here it is bytes.
+fn dsig() -> T {
+    T::structure_named("dSIG", "", "signature", vec![("signature", T::bytes(E::Remaining))])
 }
 
 #[cfg(test)]
@@ -828,5 +1014,157 @@ mod tests {
         let mut ev = Evaluator::new(png());
         assert_eq!(ev.node(&d, &[1, 1, 2, 9]).unwrap().value, Value::Float(0.1));
         assert_eq!(ev.node(&d, &[1, 2, 2, 9]).unwrap().value, Value::Float(0.07));
+    }
+
+    /// The node at `names` under chunk `i`'s data.
+    fn in_chunk(ev: &mut Evaluator, d: &Document<MemSource>, i: usize, names: &[&str]) -> crate::eval::NodeInfo {
+        let at = down(ev, d, &[1, i, 2], names);
+        ev.node(d, &at).unwrap_or_else(|e| panic!("{names:?}: {e:?}"))
+    }
+
+    fn worth(ev: &mut Evaluator, d: &Document<MemSource>, i: usize, names: &[&str]) -> f64 {
+        match in_chunk(ev, d, i, names).value {
+            Value::Float(f) => f,
+            other => panic!("{names:?} is {other:?}"),
+        }
+    }
+
+    fn label(ev: &mut Evaluator, d: &Document<MemSource>, i: usize, names: &[&str]) -> String {
+        match in_chunk(ev, d, i, names).value {
+            Value::Enum { name: Some(n), .. } => n,
+            other => panic!("{names:?} is {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_iccp_profile_is_read_as_a_profile_counted_from_the_stream() {
+        use crate::formats::icc::tests::{profile_bytes, tag};
+        let mut xyz = Vec::new();
+        for v in [0x0000_f6d6u32, 0x0001_0000, 0x0000_d32d] {
+            xyz.extend_from_slice(&v.to_be_bytes());
+        }
+        let profile = profile_bytes(2, &[(b"wtpt", Some(tag(b"XYZ ", &xyz)))]);
+        let mut data = b"ICC Profile\0\0".to_vec();
+        data.extend_from_slice(&stored(&profile));
+        let d = file(&[ihdr(1, 1, 8, 2), chunk(b"iCCP", &data)]);
+        let mut ev = Evaluator::new(png());
+        let inside = ["profile", "compressed", "", "tags", "0"];
+        assert_eq!(label(&mut ev, &d, 1, &[&inside[..], &["tag"]].concat()), "wtpt, media white point");
+        let tag = in_chunk(&mut ev, &d, 1, &[&inside[..], &["data", "", "type"]].concat());
+        // The tag is 144 bytes into the profile, which is the inflated stream.
+        assert_ne!(tag.space, 0);
+        assert_eq!(tag.offset_bits, 144 * 8);
+        let y = worth(&mut ev, &d, 1, &[&inside[..], &["data", "", "contents", "xyz", "y", "worth"]].concat());
+        assert_eq!(y, 1.0);
+    }
+
+    #[test]
+    fn an_exif_chunk_is_read_as_the_tiff_it_is() {
+        let mut tiff = b"MM".to_vec();
+        tiff.extend_from_slice(&42u16.to_be_bytes());
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        tiff.extend_from_slice(&271u16.to_be_bytes()); // make
+        tiff.extend_from_slice(&2u16.to_be_bytes()); // ascii
+        tiff.extend_from_slice(&6u32.to_be_bytes());
+        tiff.extend_from_slice(&26u32.to_be_bytes()); // from the TIFF's first byte
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        tiff.extend_from_slice(b"Canon\0");
+        let d = file(&[ihdr(1, 1, 8, 2), chunk(b"eXIf", &tiff)]);
+        let mut ev = Evaluator::new(png());
+        let entry = ["tiff", "file", "ifd", "", "entries", "0"];
+        assert_eq!(label(&mut ev, &d, 1, &[&entry[..], &["tag"]].concat()), "make");
+        let make = in_chunk(&mut ev, &d, 1, &[&entry[..], &["value", "values", ""]].concat());
+        assert_eq!(make.value, Value::Str("Canon".into()));
+        // The signature, the IHDR chunk, the eXIf chunk's length and type,
+        // and 26 bytes into the TIFF.
+        assert_eq!(make.offset_bits, (8 + 25 + 8 + 26) * 8);
+    }
+
+    /// A template that places a PNG somewhere inside it needs the names an
+    /// eXIf chunk's TIFF refers to, or the chunk fails when it is read.
+    #[test]
+    fn templates_holding_a_png_carry_the_tiff_names() {
+        for t in [png(), super::super::picotron::p64rom(), super::super::picotron::p64png()] {
+            for e in ["tiff.Ifd.le", "tiff.Ifd.be", "tiff.ExifIfd.le", "tiff.GpsIfd.be"] {
+                assert!(t.types.contains_key(e), "{} has no {e}", t.name);
+            }
+        }
+    }
+
+    #[test]
+    fn the_hdr_chunks_read_their_code_points_and_luminances() {
+        let mut mdcv = Vec::new();
+        for v in [34000u16, 16000, 13250, 34500, 7500, 3000, 15635, 16450] {
+            mdcv.extend_from_slice(&v.to_be_bytes());
+        }
+        mdcv.extend_from_slice(&10_000_000u32.to_be_bytes());
+        mdcv.extend_from_slice(&50u32.to_be_bytes());
+        let mut clli = 10_000_000u32.to_be_bytes().to_vec();
+        clli.extend_from_slice(&4_000_000u32.to_be_bytes());
+        let d = file(&[ihdr(1, 1, 16, 2), chunk(b"cICP", &[9, 16, 0, 1]), chunk(b"mDCV", &mdcv), chunk(b"cLLI", &clli)]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(label(&mut ev, &d, 1, &["color_primaries"]), "BT.2020, BT.2100");
+        assert_eq!(label(&mut ev, &d, 1, &["transfer_function"]), "SMPTE ST 2084 (PQ)");
+        assert_eq!(label(&mut ev, &d, 1, &["matrix_coefficients"]), "identity (RGB)");
+        assert_eq!(label(&mut ev, &d, 1, &["video_full_range_flag"]), "full range");
+        assert_eq!(worth(&mut ev, &d, 2, &["red_x", "worth"]), 0.68);
+        assert_eq!(worth(&mut ev, &d, 2, &["white_x", "worth"]), 0.3127);
+        assert_eq!(worth(&mut ev, &d, 2, &["max_luminance", "worth"]), 1000.0);
+        assert_eq!(worth(&mut ev, &d, 2, &["min_luminance", "worth"]), 0.005);
+        assert_eq!(worth(&mut ev, &d, 3, &["max_cll", "worth"]), 1000.0);
+        assert_eq!(worth(&mut ev, &d, 3, &["max_fall", "worth"]), 400.0);
+    }
+
+    #[test]
+    fn the_extension_chunks_read_their_fields() {
+        let mut offs = (-20i32).to_be_bytes().to_vec();
+        offs.extend_from_slice(&300i32.to_be_bytes());
+        offs.push(1);
+        let mut pcal = b"temperature\0".to_vec();
+        pcal.extend_from_slice(&0i32.to_be_bytes());
+        pcal.extend_from_slice(&255i32.to_be_bytes());
+        pcal.extend_from_slice(&[0, 2]);
+        pcal.extend_from_slice(b"K\0-40\x00100.5");
+        let mut gifg = vec![2, 0];
+        gifg.extend_from_slice(&25u16.to_be_bytes());
+        let mut gift = Vec::new();
+        for v in [1i32, 2, 64, 16] {
+            gift.extend_from_slice(&v.to_be_bytes());
+        }
+        gift.extend_from_slice(&[8, 16, 0xff, 0xff, 0xff, 0, 0, 0x80]);
+        gift.extend_from_slice(b"Hello");
+        let d = file(&[
+            ihdr(1, 1, 8, 2),
+            chunk(b"oFFs", &offs),
+            chunk(b"pCAL", &pcal),
+            chunk(b"sCAL", b"\x010.0254\x000.0508"),
+            chunk(b"sTER", &[1]),
+            chunk(b"gIFg", &gifg),
+            chunk(b"gIFx", b"NETSCAPE2.0\x01\x00\x00"),
+            chunk(b"gIFt", &gift),
+            chunk(b"dSIG", &[0x30, 0x82, 0x01]),
+        ]);
+        let mut ev = Evaluator::new(png());
+        assert_eq!(in_chunk(&mut ev, &d, 1, &["x_position"]).value, Value::Int(-20));
+        assert_eq!(label(&mut ev, &d, 1, &["unit"]), "micrometre");
+        assert_eq!(in_chunk(&mut ev, &d, 2, &["calibration_name"]).value, Value::Str("temperature".into()));
+        assert_eq!(label(&mut ev, &d, 2, &["equation_type"]), "linear");
+        assert_eq!(in_chunk(&mut ev, &d, 2, &["unit_name"]).value, Value::Str("K".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 2, &["parameters", "0"]).value, Value::Str("-40".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 2, &["parameters", "1"]).value, Value::Str("100.5".into()));
+        assert_eq!(label(&mut ev, &d, 3, &["unit"]), "metre");
+        assert_eq!(in_chunk(&mut ev, &d, 3, &["pixel_width"]).value, Value::Str("0.0254".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 3, &["pixel_height"]).value, Value::Str("0.0508".into()));
+        assert_eq!(label(&mut ev, &d, 4, &["mode"]), "diverging-fuse");
+        assert_eq!(label(&mut ev, &d, 5, &["disposal_method"]), "restore background");
+        assert_eq!(in_chunk(&mut ev, &d, 5, &["delay_seconds"]).value, Value::Float(0.25));
+        assert_eq!(in_chunk(&mut ev, &d, 6, &["application_identifier"]).value, Value::Str("NETSCAPE".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 6, &["authentication_code"]).value, Value::Str("2.0".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 6, &["application_data"]).size_bits, 3 * 8);
+        assert_eq!(in_chunk(&mut ev, &d, 7, &["grid_width"]).value, Value::UInt(64));
+        assert_eq!(in_chunk(&mut ev, &d, 7, &["background"]).colour.as_deref(), Some("#000080"));
+        assert_eq!(in_chunk(&mut ev, &d, 7, &["text"]).value, Value::Str("Hello".into()));
+        assert_eq!(in_chunk(&mut ev, &d, 8, &["signature"]).size_bits, 3 * 8);
     }
 }

@@ -62,7 +62,9 @@ const WIDTH: u32 = 512;
 const HEIGHT: u32 = 384;
 
 pub fn p64rom() -> Template {
-    Template::new("p64rom", rom(false))
+    // The cartridge may hold PNG images, and a PNG brings the names its eXIf
+    // chunk needs.
+    Template::new("p64rom", rom(false)).with_part(&super::png::part())
 }
 
 /// The ROM: eight bytes of header and the LZ4 block the header measures.
@@ -95,7 +97,7 @@ pub fn p64png() -> Template {
     let bits = T::decoded(E::Remaining, Codec::LowBitsRgba11, rom(true));
     let scanlines = T::decoded(E::Remaining, Codec::PngUnfilter { stride: WIDTH * 4, bpp: 4 }, bits);
     let idat = T::decoded(E::field("length"), Codec::Zlib, scanlines);
-    Template::new("p64png", super::png::cart_png("PicotronCart", idat))
+    Template::new("p64png", super::png::cart_png("PicotronCart", idat)).with_part(&super::png::part())
 }
 
 /// How much a Picotron image holds: 512 by 384 pixels at eleven bits each.
