@@ -210,7 +210,19 @@ impl Evaluator {
                 if *len > crate::codec::CAP_BYTES as u64 {
                     return fail(too_large(*len));
                 }
-                self.covered_bytes(doc, &c, *at, *len)?
+                // The sum written in the file first, which is a short read:
+                // the covered run may be read a window at a time across
+                // calls, and its copy is handed over once it is complete.
+                let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
+                let bytes = match self.gather_run(doc, 0, at * 8, len * 8)? {
+                    Ok(mut bytes) => {
+                        blank(&c, *at, &mut bytes);
+                        bytes
+                    }
+                    Err(why) => return fail(refused(why)),
+                };
+                let computed = c.algorithm.over(&bytes);
+                return Ok(Some(Verdict { ok: computed == stored, computed, stored }));
             }
             (None, Some(u)) => {
                 let (at, member) = (u.at.clone(), u.member.clone());
@@ -291,19 +303,12 @@ impl Evaluator {
         Ok(Some(Verdict { ok: computed == stored, computed, stored }))
     }
 
-    /// The covered bytes of a check that is over a run of the file.
-    ///
-    /// Blanked where the format seals a record the checksum is part of, so the
-    /// sum is taken over what the writer summed rather than over its own answer
-    /// written back into the middle of it. `coverage` has already made sure the
-    /// blanked run lands inside what is read, so the slice cannot be out of
-    /// bounds.
+    /// The covered bytes of a check that is over a run of the file, read in
+    /// one call. Only for a check taken on the way past, which reads at most
+    /// [`EAGER_CHECK_BYTES`]; `run_check` reads a long run a window at a time.
     fn covered_bytes<S: Source>(&self, doc: &Document<S>, c: &Coverage, at: u64, len: u64) -> R<Vec<u8>> {
         let mut bytes = self.read_in(doc, 0, at * 8, len * 8)?;
-        if let Some(b) = c.blanked {
-            let from = (b.at - at) as usize;
-            bytes[from..from + b.len as usize].fill(b.byte);
-        }
+        blank(c, at, &mut bytes);
         Ok(bytes)
     }
 
@@ -761,6 +766,18 @@ fn member_out(members: &[crate::codec::Member], packed: &std::ops::Range<u64>) -
 /// being accused of anything. See
 /// [`Covers::UnpackedMember`](crate::template::Covers::UnpackedMember).
 const UNMAPPED_MEMBER: &str = "Can't check this: nothing says which unpacked bytes belong to this block.";
+
+/// `bytes`, the run a check covers from byte `at`, blanked where the format
+/// seals a record the checksum is part of, so the sum is taken over what the
+/// writer summed rather than over its own answer written back into the
+/// middle of it. `coverage` has already made sure the blanked run lands
+/// inside what is read, so the slice cannot be out of bounds.
+fn blank(c: &Coverage, at: u64, bytes: &mut [u8]) {
+    if let Some(b) = c.blanked {
+        let from = (b.at - at) as usize;
+        bytes[from..from + b.len as usize].fill(b.byte);
+    }
+}
 
 fn too_large(len: u64) -> String {
     format!(

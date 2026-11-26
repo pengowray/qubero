@@ -152,7 +152,8 @@ impl Evaluator {
     /// which [`Self::read_stitched`] reads one after another in the same
     /// call. Nothing for a space whose bytes are in memory, and nothing for a
     /// packed part, which is unpacked by a read of its own and kept once it
-    /// is.
+    /// is. What decides whether a whole run is read a window at a time:
+    /// see [`Self::gathers`].
     pub(super) fn file_bytes_at_once(&self, space: u32, at: u64, n: u64) -> u64 {
         if n == 0 {
             return 0;
@@ -172,16 +173,6 @@ impl Evaluator {
             }
         }
         total
-    }
-
-    /// Whether a read of `n` bits at bit `at` of `space`, made in one call,
-    /// needs more of the file at once than the document's source keeps (see
-    /// [`Source::resident_limit`]). Such a read would wait for ever, so a
-    /// caller about to read a whole run that way refuses the run with
-    /// [`Refusal::TooMuchAtOnce`](crate::codec::Refusal::TooMuchAtOnce)
-    /// instead. Always false outside the browser.
-    pub(super) fn cannot_fit<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> bool {
-        doc.resident_limit().is_some_and(|limit| self.file_bytes_at_once(space, at, n) > limit)
     }
 
     /// Where the value sits inside a text field, and how the bytes read.
