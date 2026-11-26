@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use qubero_core::codec::lazy::{decode_or_index_with, Decoded, Limits, Seekable};
-use qubero_core::codec::{decode_traced, Codec, Refusal, Trace};
+use qubero_core::codec::{decode_traced, Codec, Refusal, SpanUnit, Trace};
 
 fn sample(name: &str) -> Option<Vec<u8>> {
     let path = qubero_samples::dir("compressed")?.join(name);
@@ -119,7 +119,7 @@ fn an_xz_t0_file_reads_back_a_block_at_a_time() {
 }
 
 /// `zstd -T0 -B` writes one frame, which no span can hold under these limits,
-/// so it is refused as too large. Decoded whole it is the same text the
+/// so it is refused as a frame too large. Decoded whole it is the same text the
 /// other two files hold, which puts our zstd reading of both files beside
 /// our xz reading of the third.
 #[test]
@@ -128,7 +128,7 @@ fn a_zstd_file_of_one_frame_stays_refused() {
         eprintln!("{}", qubero_samples::missing());
         return;
     };
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one.clone()), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one.clone()), small()).err(), Some(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)));
     let text = decode_traced(Codec::Xz, &blocks).expect("decodes").0;
     assert!(decode_traced(Codec::Zstd, &one).expect("decodes").0 == text);
     assert!(decode_traced(Codec::Zstd, &frames).expect("decodes").0 == text);

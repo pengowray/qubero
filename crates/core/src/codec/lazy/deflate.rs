@@ -11,9 +11,9 @@ use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
 /// A deflate, zlib or gzip run's index pass, done a step at a time: each
-/// [`DeflatePass::step`] decodes about as much output as it is told to, stops
-/// at a place the decoder can carry on from, and the next step carries on
-/// from exactly there. See [`super::Indexing`].
+/// [`DeflatePass::step`] decodes about as much output, or reads about as many
+/// bits, as it is told to, stops at a place the decoder can carry on from,
+/// and the next step carries on from exactly there. See [`super::Indexing`].
 ///
 /// Holds what the pass would hold if it ran in one go: up to the cap of output
 /// and its trace while the run might still come to a whole one, and after
@@ -110,11 +110,12 @@ impl DeflatePass {
         Progress { read_bits: self.furthest, run_bits, unpacked: self.most.max(unpacked) }
     }
 
-    /// Decode about `out_bytes` more output and stop at the next code, or
-    /// finish. A stored block is not stopped in, so a step can overrun by up
-    /// to one stored block, 64 KiB.
-    pub(super) fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
-        let stepped = self.step_on(out_bytes);
+    /// Decode about `out_bytes` more output, or read about `in_bits` more
+    /// bits of the run, whichever comes first, and stop at the next code or
+    /// block; or finish. A stored block is not stopped in, so a step can
+    /// overrun by up to one stored block, 64 KiB.
+    pub(super) fn step(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
+        let stepped = self.step_on(out_bytes, in_bits);
         let (at, out) = match &self.phase {
             Phase::Whole { sink, from, .. } => (from.map_or(0, |r| r.in_bit), sink.len()),
             Phase::Index { sink, from } => (from.in_bit, sink.len()),
@@ -125,12 +126,17 @@ impl DeflatePass {
         stepped
     }
 
-    fn step_on(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+    fn step_on(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
         let data = &self.packed[..];
         let f = self.framing;
+        // Counted from where the step starts, not from the header of the
+        // block it starts in, which it reads again: a step has to get past
+        // its first code however long the block's tables are.
+        let bits_end = |from: u64| from.saturating_add(in_bits.max(1));
         match std::mem::replace(&mut self.phase, Phase::Over) {
             Phase::Whole { mut sink, mut trace, from } => {
                 sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
+                sink.slice_bits = bits_end(from.map_or(f.start, |r| r.in_bit));
                 match inflate::run(data, f.start, f.end, &mut sink, &mut trace, from) {
                     Ok(Ended::Stopped(_)) => {
                         let from = sink.stopped.take();
@@ -167,6 +173,7 @@ impl DeflatePass {
             }
             Phase::Index { mut sink, from } => {
                 sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
+                sink.slice_bits = bits_end(from.in_bit);
                 match inflate::run(data, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(from)) {
                     Ok(Ended::Stopped(_)) => {
                         let from = sink.stopped.take().expect("only a step's end stops this decode");
@@ -299,6 +306,9 @@ pub(super) struct WindowSink {
     /// Stop at the first boundary once the output has come to this, which is
     /// where a step of a [`DeflatePass`] ends, and say where in `stopped`.
     slice_end: u64,
+    /// The same, at the first boundary at or past this bit of the run, so
+    /// that a step over blocks that make no output still ends.
+    slice_bits: u64,
     /// Whether that may be between two codes of a block, or only at the start
     /// of one.
     mid_block: bool,
@@ -307,7 +317,7 @@ pub(super) struct WindowSink {
 
 impl WindowSink {
     pub(super) fn new(hist: Vec<u8>, base: u64, cap: u64, slide: bool) -> WindowSink {
-        WindowSink { hist, base, cap, slide, marks: None, blocks: None, sums: None, stop_at: None, slice_end: u64::MAX, mid_block: false, stopped: None }
+        WindowSink { hist, base, cap, slide, marks: None, blocks: None, sums: None, stop_at: None, slice_end: u64::MAX, slice_bits: u64::MAX, mid_block: false, stopped: None }
     }
 
     /// Bring the sums up to `upto`, from what `hist` still holds.
@@ -390,7 +400,7 @@ impl Sink for WindowSink {
         // After the checkpoint, so that a step ending here takes the one a
         // pass in one go would have taken, and the step after does not take
         // it again.
-        if out >= self.slice_end && (block.is_none() || self.mid_block) {
+        if (out >= self.slice_end || in_bit >= self.slice_bits) && (block.is_none() || self.mid_block) {
             self.stopped = Some(Resume { in_bit, block });
             return ControlFlow::Break(());
         }

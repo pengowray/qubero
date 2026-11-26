@@ -368,12 +368,17 @@ fn block_starts_thin_out_and_the_rest_are_found_again() {
 
 /// Run `pass` to the end in steps of `out_bytes`, checking on the way that
 /// it only ever moves forward.
-fn in_steps(mut pass: Indexing, out_bytes: u64) -> (Result<Decoded, Refusal>, usize) {
+fn in_steps(pass: Indexing, out_bytes: u64) -> (Result<Decoded, Refusal>, usize) {
+    in_steps_of(pass, out_bytes, u64::MAX)
+}
+
+/// The same, with each step also stopped after about `in_bits` bits.
+fn in_steps_of(mut pass: Indexing, out_bytes: u64, in_bits: u64) -> (Result<Decoded, Refusal>, usize) {
     let mut steps = 0;
     let mut was = pass.progress();
     loop {
         steps += 1;
-        let stepped = pass.step(out_bytes);
+        let stepped = pass.step(out_bytes, in_bits);
         let now = pass.progress();
         match stepped {
             Ok(Stepped::Working) => {
@@ -405,10 +410,12 @@ fn a_pass_in_steps_comes_to_what_one_pass_does() {
         for codec in [Codec::Deflate, Codec::Gzip, Codec::Zlib] {
             let packed = Arc::new(wrapped(codec, &raw, data));
             let one = decode_or_index_with(codec, packed.clone(), small()).expect("decodes");
-            for out_bytes in [100u64, 4096, 70_000, u64::MAX] {
-                let (got, steps) = in_steps(Indexing::new(codec, packed.clone(), small()).expect("starts"), out_bytes);
-                let at = format!("{codec:?}, {} bytes, steps of {out_bytes}", data.len());
-                if out_bytes == 4096 {
+            // Steps of 200 bits also stop at the first code of a block whose
+            // tables are longer than that, before any of its codes is read.
+            for (out_bytes, in_bits) in [(100u64, u64::MAX), (4096, u64::MAX), (70_000, u64::MAX), (u64::MAX, u64::MAX), (u64::MAX, 200), (u64::MAX, 5000)] {
+                let (got, steps) = in_steps_of(Indexing::new(codec, packed.clone(), small()).expect("starts"), out_bytes, in_bits);
+                let at = format!("{codec:?}, {} bytes, steps of {out_bytes} bytes or {in_bits} bits", data.len());
+                if out_bytes == 4096 || in_bits == 5000 {
                     assert!(steps > 5, "{at}: {steps} steps");
                 }
                 match (&one, got.expect("decodes in steps")) {
@@ -466,7 +473,7 @@ fn a_pass_in_steps_records_each_block_once() {
                     let mut stops = [[0usize; 2]; 2];
                     let mut pass = start();
                     let ours = loop {
-                        match pass.step(100) {
+                        match pass.step(100, u64::MAX) {
                             Ok(Stepped::Working) => {}
                             Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
                             Ok(Stepped::Done(Decoded::Whole(..))) => panic!("{at}: came back whole"),
@@ -525,6 +532,113 @@ fn a_trace_that_names_blocks_still_does_after_a_step() {
         assert!(t.coarse());
         assert!(t.steps().eq(trace.steps()), "the steps differ");
         assert_eq!(t.blocks(), trace.blocks());
+    }
+}
+
+/// `n` empty fixed-Huffman blocks, none of them the last. Each is ten bits,
+/// the three bits of its header and the seven-bit end of block code, and
+/// makes no output. Four of them come to five bytes, so with `n` a multiple
+/// of four whatever follows them starts on a byte, as a deflate block after
+/// a sync flush does.
+fn empty_blocks(n: usize) -> Vec<u8> {
+    assert_eq!(n % 4, 0);
+    let mut out = vec![0u8; n / 4 * 5];
+    for k in 0..n {
+        // BTYPE is 01, read low bit first, after the BFINAL bit.
+        let bit = 10 * k + 1;
+        out[bit / 8] |= 1 << (bit % 8);
+    }
+    out
+}
+
+/// Raw deflate of `pieces`, one after another, with `between` after each
+/// piece but the last. Each piece but the last ends with a sync flush, which
+/// ends on a byte, so the blocks in `between` are part of the same stream.
+fn deflate_around(pieces: &[&[u8]], between: &[u8]) -> Vec<u8> {
+    use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus};
+    let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(6, -15, 0));
+    let mut out = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        let last = i + 1 == pieces.len();
+        let mut buf = vec![0u8; 4 * piece.len() + 1024];
+        let (status, read, written) = compress(&mut c, piece, &mut buf, if last { TDEFLFlush::Finish } else { TDEFLFlush::Sync });
+        assert!(read == piece.len() && matches!(status, TDEFLStatus::Okay | TDEFLStatus::Done), "{status:?}");
+        out.extend_from_slice(&buf[..written]);
+        if !last {
+            out.extend_from_slice(between);
+        }
+    }
+    out
+}
+
+/// A run of empty blocks makes no output, so only the bits a step reads end
+/// it. Two runs of 40,000 empty blocks, one before the cap and one after it,
+/// are indexed in steps of 10,000 bits, dozens of which make no output, and
+/// come to the index one pass makes: the same checkpoints, block starts and
+/// sums, with the block starts thinned or not, and told the run is large or
+/// not.
+#[test]
+fn a_run_of_empty_blocks_is_indexed_in_many_steps() {
+    let data = mixed(300_000, 83);
+    let raw = deflate_around(&[&data[..20_000], &data[20_000..200_000], &data[200_000..]], &empty_blocks(40_000));
+    for codec in [Codec::Deflate, Codec::Zlib, Codec::Gzip] {
+        let packed = Arc::new(wrapped(codec, &raw, &data));
+        for limits in [small(), Limits { block_marks: 4, ..small() }] {
+            for told in [false, true] {
+                let at = format!("{codec:?}, at most {} block starts kept, told {told}", limits.block_marks);
+                let start = || {
+                    let pass = Indexing::new(codec, packed.clone(), limits).expect("starts");
+                    if told { pass.known_large() } else { pass }
+                };
+                let Ok(Decoded::Indexed(one)) = in_steps(start(), u64::MAX).0 else { panic!("{at}: not indexed in one go") };
+                let mut pass = start();
+                let (mut steps, mut idle, mut was) = (0, 0, pass.progress());
+                let ours = loop {
+                    steps += 1;
+                    match pass.step(u64::MAX, 10_000) {
+                        Ok(Stepped::Working) => {}
+                        Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
+                        Ok(Stepped::Done(Decoded::Whole(..))) => panic!("{at}: came back whole"),
+                        Err(why) => panic!("{at}: refused: {why:?}"),
+                    }
+                    let now = pass.progress();
+                    if now.unpacked == was.unpacked && now.read_bits > was.read_bits {
+                        idle += 1;
+                    }
+                    was = now;
+                };
+                assert!(idle >= 70 && steps > idle, "{at}: {steps} steps, {idle} of them with no output");
+                assert_eq!(ours.marks(), one.marks(), "{at}");
+                assert_eq!((&ours.blocks, ours.blocks_end), (&one.blocks, one.blocks_end), "{at}");
+                assert_eq!((ours.len(), ours.crc32(), ours.adler32()), (one.len(), one.crc32(), one.adler32()), "{at}");
+                assert!(ours.blocks() > 80_000, "{at}: {} blocks", ours.blocks());
+                let mut all = vec![0u8; data.len()];
+                ours.read(0, &mut all).expect("reads");
+                assert!(all == data, "{at}: the output differs");
+            }
+        }
+    }
+}
+
+/// Under the cap, a run of empty blocks in front of the data is held whole
+/// after steps of a few bits as after one pass, with the same trace step for
+/// step, a step of one bit included.
+#[test]
+fn a_run_of_empty_blocks_under_the_cap_comes_back_whole_in_steps_of_bits() {
+    let data = mixed(30_000, 89);
+    let raw = deflate_around(&[&data[..10_000], &data[10_000..]], &empty_blocks(2_000));
+    let packed = Arc::new([empty_blocks(2_000), raw].concat());
+    let Ok(Decoded::Whole(bytes, trace)) = decode_or_index_with(Codec::Deflate, packed.clone(), small()) else { panic!("not whole") };
+    assert!(bytes == data);
+    for in_bits in [1u64, 64, 999] {
+        let (got, steps) = in_steps_of(Indexing::new(Codec::Deflate, packed.clone(), small()).expect("starts"), u64::MAX, in_bits);
+        let Ok(Decoded::Whole(ours, t)) = got else { panic!("steps of {in_bits} bits: not whole") };
+        // An empty block has two places to stop at, its start and its end
+        // of block code, three bits apart.
+        assert!(steps as u64 > 40_000 / in_bits.max(10), "steps of {in_bits} bits: {steps} steps");
+        assert!(ours == bytes, "steps of {in_bits} bits: the bytes differ");
+        assert!(t.steps().eq(trace.steps()), "steps of {in_bits} bits: the steps differ");
+        assert_eq!(t.blocks(), trace.blocks(), "steps of {in_bits} bits");
     }
 }
 
@@ -715,18 +829,36 @@ fn a_zstd_run_under_the_cap_comes_back_whole_with_every_frame() {
     assert!(t.steps().eq(trace.steps()));
 }
 
-/// A frame past the most one span may come to is refused as too large,
-/// which is what a file of one frame is. Past the limit for a run read a
-/// piece at a time, a run of small frames is refused with the refusal that
-/// says so.
+/// A frame past the most one span may come to is refused as a frame too
+/// large, which is what a file of one frame is, and so is a frame past it
+/// after the cap, held to the span limit when the cap is larger, and in a
+/// pass told the run is large. A frame that asks for a window over 128 MiB
+/// is refused as too large, since nothing says how large the frame is. Past
+/// the limit for a run read a piece at a time, a run of small frames is
+/// refused with the refusal that says so.
 #[test]
 fn a_zstd_frame_past_the_span_limit_is_refused() {
+    let frame = Some(Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame));
     let data = mixed(300_000, 43);
     let one = zstd_of(&data, data.len(), false);
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(one), small()).err(), frame);
+    // A frame of 150 KB is finished while the run may still be held whole,
+    // under 200 KB, and found past the span limit once it may not.
+    let held = Limits { whole: 200_000, span: 100_000, ..small() };
+    let first_large = [zstd_of(&data[..150_000], 150_000, false), zstd_of(&data[150_000..], 30_000, false)].concat();
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(first_large), held).err(), frame);
     let mut sizes = zstd_of(&data, 30_000, false);
     sizes.extend(zstd_of(&data[..100_000], 100_000, false));
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(sizes), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(sizes.clone()), small()).err(), frame);
+    let told = Indexing::new(Codec::Zstd, Arc::new(sizes), small()).expect("starts").known_large();
+    assert_eq!(in_steps(told, u64::MAX).0.err(), frame);
+    // Past the cap, then a frame of one raw block whose header asks for a
+    // window of 1 TiB.
+    let mut wide = zstd_of(&data, 30_000, false);
+    wide.extend_from_slice(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, (40 - 10) << 3]);
+    wide.extend_from_slice(&(1u32 | 4 << 3).to_le_bytes()[..3]);
+    wide.extend_from_slice(b"tiny");
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(wide), small()).err(), Some(Refusal::TooLarge));
     let many = zstd_of(&data, 30_000, true);
     let limits = Limits { lazy: 200_000, ..small() };
     assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(many), limits).err(), Some(Refusal::TooLargeLazy));
@@ -790,7 +922,7 @@ fn a_zstd_step_stops_inside_a_frame() {
     let (mut was, mut steps) = (pass.progress().unpacked, 0);
     loop {
         steps += 1;
-        let done = matches!(pass.step(16 << 10).expect("steps"), Stepped::Done(_));
+        let done = matches!(pass.step(16 << 10, u64::MAX).expect("steps"), Stepped::Done(_));
         let now = pass.progress().unpacked;
         assert!(now - was <= (16 + 128 + 128) << 10, "step {steps}: {} bytes", now - was);
         was = now;
@@ -799,6 +931,77 @@ fn a_zstd_step_stops_inside_a_frame() {
         }
     }
     assert!(steps > 3 * 400_000 / (128 << 10), "{steps} steps");
+}
+
+/// `n` skippable frames, and then `n` zstd frames of no output. The first
+/// of those frames counts the skippable frames as its own, so a checkpoint
+/// taken there starts at the first skippable frame, however many steps
+/// stopped among them.
+fn empty_zstd_frames(n: usize) -> Vec<u8> {
+    let empty = ruzstd::encoding::compress_to_vec(&[][..], ruzstd::encoding::CompressionLevel::Fastest);
+    let skip = [&0x184d_2a50u32.to_le_bytes()[..], &0u32.to_le_bytes()].concat();
+    [skip.repeat(n), empty.repeat(n)].concat()
+}
+
+/// Frames that make no output, and skippable frames, end a zstd step by the
+/// bytes it reads, as deflate's empty blocks do. Runs of them before the cap
+/// and after it are indexed in steps of 1,000 bytes, dozens of which make no
+/// output, and come to the index one pass makes; under the cap, to the same
+/// bytes and trace step for step.
+#[test]
+fn a_run_of_empty_zstd_frames_is_indexed_in_many_steps() {
+    let data = mixed(300_000, 97);
+    let empty = empty_zstd_frames(2_000);
+    let packed = [
+        zstd_of(&data[..20_000], 20_000, false),
+        empty.clone(),
+        zstd_of(&data[20_000..200_000], 30_000, true),
+        empty.clone(),
+        zstd_of(&data[200_000..], 30_000, false),
+    ]
+    .concat();
+    let packed = Arc::new(packed);
+    for told in [false, true] {
+        let start = || {
+            let pass = Indexing::new(Codec::Zstd, packed.clone(), small()).expect("starts");
+            if told { pass.known_large() } else { pass }
+        };
+        let Ok(Decoded::Indexed(one)) = in_steps(start(), u64::MAX).0 else { panic!("told {told}: not indexed in one go") };
+        let skips_at = zstd_of(&data[..20_000], 20_000, false).len() as u64 * 8;
+        assert!(one.marks().iter().any(|m| m.0 == skips_at), "told {told}: no checkpoint at the first skippable frame");
+        let mut pass = start();
+        let (mut steps, mut idle, mut was) = (0, 0, pass.progress());
+        let ours = loop {
+            steps += 1;
+            match pass.step(u64::MAX, 8 * 1000) {
+                Ok(Stepped::Working) => {}
+                Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
+                Ok(Stepped::Done(Decoded::Whole(..))) => panic!("told {told}: came back whole"),
+                Err(why) => panic!("told {told}: refused: {why:?}"),
+            }
+            let now = pass.progress();
+            if now.unpacked == was.unpacked && now.read_bits > was.read_bits {
+                idle += 1;
+            }
+            was = now;
+        };
+        let per_run = empty.len() / 1000;
+        assert!(idle >= per_run && steps > idle, "told {told}: {steps} steps, {idle} of them with no output");
+        assert_eq!(ours.marks(), one.marks(), "told {told}");
+        assert_eq!(ours.len(), one.len(), "told {told}");
+        reads_back(&ours, &data, 101);
+    }
+
+    let short = Arc::new([zstd_of(&data[..10_000], 10_000, true), empty, zstd_of(&data[10_000..40_000], 10_000, true)].concat());
+    let Ok(Decoded::Whole(bytes, trace)) = decode_or_index_with(Codec::Zstd, short.clone(), small()) else { panic!("not whole") };
+    assert!(bytes == data[..40_000]);
+    for in_bits in [8u64, 8 * 100, 8 * 5000] {
+        let (got, steps) = in_steps_of(Indexing::new(Codec::Zstd, short.clone(), small()).expect("starts"), u64::MAX, in_bits);
+        let Ok(Decoded::Whole(ours, t)) = got else { panic!("steps of {in_bits} bits: not whole") };
+        assert!(steps > 4_000 / (in_bits as usize / 8).max(8), "steps of {in_bits} bits: {steps} steps");
+        assert!(ours == bytes, "steps of {in_bits} bits: the bytes differ");
+        assert!(t.steps().eq(trace.steps()), "steps of {in_bits} bits: the steps differ");
+    }
 }
 
 /// A zstd pass told the run is large starts with the trace off and comes to
@@ -830,7 +1033,7 @@ fn a_zstd_pass_in_steps_refuses_what_one_pass_does() {
     let one = Arc::new(zstd_of(&data, data.len(), false));
     let many = Arc::new(zstd_of(&data, 30_000, true));
     let lazy = Limits { lazy: 200_000, ..small() };
-    for (packed, limits, why) in [(one, small(), Refusal::TooLarge), (many, lazy, Refusal::TooLargeLazy)] {
+    for (packed, limits, why) in [(one, small(), Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame)), (many, lazy, Refusal::TooLargeLazy)] {
         for told in [false, true] {
             let pass = Indexing::new(Codec::Zstd, packed.clone(), limits).expect("starts");
             let pass = if told { pass.known_large() } else { pass };
@@ -897,15 +1100,15 @@ fn an_xz_stream_of_several_blocks_reads_back_from_anywhere() {
     assert_eq!(s.members(), whole.members());
 }
 
-/// One block past the most one span may come to is refused as too large,
-/// which is what a file of one block is; past the limit for a run read a
-/// piece at a time, so is a stream of small blocks, with the refusal that
-/// says so. Under the cap the stream comes back whole as it always did.
+/// One block past the most one span may come to is refused as a block too
+/// large, which is what a file of one block is; past the limit for a run
+/// read a piece at a time, so is a stream of small blocks, with the refusal
+/// that says so. Under the cap the stream comes back whole as it always did.
 #[test]
 fn an_xz_block_past_the_span_limit_is_refused() {
     let data = mixed(300_000, 61);
     let one = xz_of(&data, data.len());
-    assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(one), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(one), small()).err(), Some(Refusal::TooLargeUnit(crate::codec::SpanUnit::XzBlock)));
     let limits = Limits { lazy: 200_000, ..small() };
     assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(xz_of(&data, 30_000)), limits).err(), Some(Refusal::TooLargeLazy));
     let under = xz_of(&data[..50_000], 20_000);

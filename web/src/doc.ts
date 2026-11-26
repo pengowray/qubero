@@ -277,8 +277,9 @@ export type TemplateNode = {
    *  else is the bytes a compressed stream came to, and the offset is counted
    *  from the front of those rather than from the front of the file. */
   readonly space: number;
-  /** For a compressed run that would not open, why not: `too-large`,
-   *  `failed` or `unaligned`. Null for every other field. */
+  /** For a compressed run that would not open, why not, as a key of
+   *  `DECODED_REFUSED`: `too-large`, `failed` and the rest. Null for every
+   *  other field. */
   readonly refused: string | null;
   /** True for a compressed run. One that opened can be opened as a document of
    *  its own; one that did not says why in `refused` instead. */
