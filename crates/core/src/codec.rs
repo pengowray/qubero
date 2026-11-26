@@ -50,6 +50,81 @@ use std::ops::Range;
 /// hex editor.
 pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 
+/// Some of a run's compressed bytes, given to a decoder at once: bytes
+/// `start()..end()` of a run `run_len()` bytes long.
+///
+/// A decoder given a window counts every position it records from the run's
+/// front, as it does when given the whole run, so what it records from a
+/// window is what it records from the run. [`Window::reaches_end`] says
+/// whether the window holds the run's last byte, which tells a window that
+/// ends early from a run that is cut short. See
+/// `docs/DESIGN-lazy-compressed-input.md`, "The decoders read a window".
+#[derive(Debug, Clone, Copy)]
+pub struct Window<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    run_len: usize,
+}
+
+impl<'a> Window<'a> {
+    /// All of a run.
+    pub fn whole(run: &'a [u8]) -> Window<'a> {
+        Window { bytes: run, at: 0, run_len: run.len() }
+    }
+
+    /// `bytes`, which are bytes `at..at + bytes.len()` of a run `run_len`
+    /// bytes long. Nothing when they would reach past the run's end.
+    pub fn of(bytes: &'a [u8], at: usize, run_len: usize) -> Option<Window<'a>> {
+        (at.checked_add(bytes.len())? <= run_len).then_some(Window { bytes, at, run_len })
+    }
+
+    /// The bytes the window holds.
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The byte of the run the window starts at.
+    pub fn start(&self) -> usize {
+        self.at
+    }
+
+    /// One past the last byte of the run the window holds.
+    pub fn end(&self) -> usize {
+        self.at + self.bytes.len()
+    }
+
+    /// How long the whole run is.
+    pub fn run_len(&self) -> usize {
+        self.run_len
+    }
+
+    /// Whether the window holds the run's last byte, so that running out of
+    /// it is running out of the run.
+    pub fn reaches_end(&self) -> bool {
+        self.end() >= self.run_len
+    }
+
+    /// Bytes `range` of the run, when the window holds all of them.
+    pub fn get(&self, range: Range<usize>) -> Option<&'a [u8]> {
+        let from = range.start.checked_sub(self.at)?;
+        let to = range.end.checked_sub(self.at)?;
+        self.bytes.get(from..to)
+    }
+
+    /// The window over a run that is bytes `range` of this one, such as the
+    /// LZMA2 data of an xz block, with its positions counted from that run's
+    /// front: what this window holds of `range`. When it holds none of it,
+    /// an empty window at that run's first byte.
+    pub fn within(&self, range: Range<usize>) -> Window<'a> {
+        let run_len = range.len();
+        let (from, to) = (range.start.max(self.at), range.end.min(self.end()));
+        match self.bytes.get(from.wrapping_sub(self.at)..to.wrapping_sub(self.at)) {
+            Some(bytes) if from < to => Window { bytes, at: from - range.start, run_len },
+            _ => Window { bytes: &[], at: 0, run_len },
+        }
+    }
+}
+
 /// What a run is compressed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Codec {
@@ -426,6 +501,14 @@ pub enum Refusal {
     /// say [`Refusal::TooLarge`] for the same frame, since there the whole
     /// run is past the cap.
     TooLargeUnit(SpanUnit),
+    /// The run has to be read in one call, and it takes up more of the file
+    /// than the file's source keeps at once (see
+    /// [`Source::resident_limit`](crate::source::Source::resident_limit)): in
+    /// the browser, more chunks than the chunk store keeps. Asking for it
+    /// would push out the chunks it had to have, and the read would wait for
+    /// ever, so it is refused instead. Only the browser says this, and only
+    /// for a run in the file.
+    TooMuchAtOnce,
     /// The decoder would not read it.
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
@@ -498,6 +581,7 @@ impl Refusal {
             Refusal::TooLargeLazy => "too-large-lazy",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
+            Refusal::TooMuchAtOnce => "too-much-at-once",
             Refusal::Failed => "failed",
             Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
@@ -521,6 +605,7 @@ impl Refusal {
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB)",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB)",
+            Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
             Refusal::Unaligned => "not on a byte boundary",
             Refusal::Settings => "the file doesn't say how this was packed",
@@ -1803,6 +1888,32 @@ mod tests {
         assert_eq!(decode(Codec::Zstd, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Xz, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Lzip, b"not compressed at all, not even a bit"), Err(Refusal::Failed));
+    }
+
+    /// A window gives the bytes of the run it holds by their place in the
+    /// run, and nothing for bytes it does not hold; over part of the run it
+    /// counts from that part's front, and holds what it held of it.
+    #[test]
+    fn a_window_reads_by_place_in_the_run() {
+        let run: Vec<u8> = (0..100).collect();
+        let w = Window::of(&run[20..60], 20, run.len()).expect("inside the run");
+        assert!(Window::of(&run[20..60], 70, run.len()).is_none());
+        assert_eq!((w.start(), w.end(), w.reaches_end()), (20, 60, false));
+        assert!(Window::whole(&run).reaches_end());
+        assert_eq!(w.get(25..30), Some(&run[25..30]));
+        assert_eq!(w.get(19..30), None);
+        assert_eq!(w.get(55..61), None);
+        // A part that starts before the window and ends inside it.
+        let part = w.within(10..40);
+        assert_eq!((part.start(), part.end(), part.run_len()), (10, 30, 30));
+        assert_eq!(part.get(10..30), Some(&run[20..40]));
+        assert!(part.reaches_end());
+        // A part inside it, and parts it holds none of.
+        assert_eq!(w.within(30..50).get(0..20), Some(&run[30..50]));
+        for outside in [0..10, 60..90, 70..80] {
+            let p = w.within(outside.clone());
+            assert_eq!((p.start(), p.bytes().len(), p.run_len()), (0, 0, outside.len()), "{outside:?}");
+        }
     }
 
 }

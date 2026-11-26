@@ -14,6 +14,13 @@ pub trait Source {
     /// Read bytes into `out`. Any chunk that is not loaded is zero-filled and
     /// reported in the returned list (deduplicated, ascending).
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing>;
+    /// The most bytes this source holds at once, for a source that holds only
+    /// some of the file and drops what was read longest ago to make room. A
+    /// read longer than this can never find all its bytes there together.
+    /// `None` for a source that answers any read whole.
+    fn resident_limit(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// A borrowed source is a source. This is what lets one file be read both as
@@ -26,6 +33,9 @@ impl<S: Source> Source for &S {
     }
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
         (*self).read_bytes(offset, out)
+    }
+    fn resident_limit(&self) -> Option<u64> {
+        (*self).resident_limit()
     }
 }
 
@@ -163,5 +173,14 @@ impl Source for ChunkStore {
             cur += take as u64;
         }
         missing
+    }
+
+    /// Every chunk it keeps. A store with a source behind it reads that
+    /// source and keeps nothing, so it has no limit.
+    fn resident_limit(&self) -> Option<u64> {
+        match self.behind {
+            Some(_) => None,
+            None => Some(self.capacity as u64 * self.chunk_size),
+        }
     }
 }

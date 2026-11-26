@@ -174,6 +174,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   wav: "WAVE audio",
   w4v: "W4V audio",
   aiff: "AIFF audio",
+  flac: "FLAC audio",
   au: "Sun AU audio",
   midi: "MIDI",
   id3: "ID3 tag",

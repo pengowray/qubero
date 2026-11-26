@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::deflate::{BlockMarks, WindowSink};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, CountSink, Ended, Framing, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
 use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
 
 /// A compressed run that comes to more than can be held whole, read through
@@ -186,7 +186,7 @@ impl Seekable {
             let dst = &mut out[to..to + take];
             match &self.kind {
                 // Decoded only as far as this read reaches.
-                Kind::Xz(l) => super::xz::read_span(&self.prefixes, &self.packed, l, self.span_units(k, l), k, from, dst)?,
+                Kind::Xz(l) => super::xz::read_span(&self.prefixes, self.whole().code(), l, self.span_units(k, l), k, from, dst)?,
                 _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
             }
             pos += take as u64;
@@ -196,13 +196,13 @@ impl Seekable {
 
     /// The bytes of the run span `k` reads, for a span that starts on a byte:
     /// from its checkpoint's bit to the next one's, and the last to the end.
-    fn span_in(&self, k: usize) -> std::ops::Range<usize> {
+    pub(super) fn span_in(&self, k: usize) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(self.packed.len(), |c| (c.in_bit / 8) as usize);
         (self.checkpoints[k].in_bit / 8) as usize..end
     }
 
     /// The xz blocks span `k` holds, as numbers in the stream's index.
-    fn span_units(&self, k: usize, l: &xz::Layout) -> std::ops::Range<usize> {
+    pub(super) fn span_units(&self, k: usize, l: &xz::Layout) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(l.blocks.len(), |c| c.unit());
         self.checkpoints[k].unit()..end
     }
@@ -225,32 +225,47 @@ impl Seekable {
     /// An xz span is never decoded whole: a read of one decodes only as far
     /// as the read reaches, through `prefixes`. See [`super::xz::read_span`].
     fn decode_span(&self, k: usize) -> Result<Vec<u8>, Refusal> {
-        let c = &self.checkpoints[k];
         let range = self.span_bytes(k);
         let want = (range.end - range.start) as usize;
         let bytes = match &self.kind {
-            Kind::Deflate(f) => {
-                let window = c.window();
-                let mut hist = Vec::with_capacity(window.len() + want);
-                hist.extend_from_slice(window);
-                let mut sink = WindowSink::new(hist, c.out - window.len() as u64, range.end, false);
-                sink.stop_at = self.checkpoints.get(k + 1).map(|n| n.in_bit);
-                inflate::run(&self.packed, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(c.resume()))?;
-                if sink.len() != range.end {
-                    return Err(Refusal::Failed);
-                }
-                let mut bytes = sink.hist;
-                bytes.drain(..window.len());
-                bytes
-            }
+            Kind::Deflate(_) => self.deflate_span(k, self.whole())?,
             Kind::Zstd => {
-                super::zstd::decode_span(&self.packed, self.span_in(k), c.out, want, self.limits.span)?
+                let out = self.checkpoints[k].out;
+                super::zstd::decode_span(self.whole().code(), self.span_in(k), out, want, self.limits.span)?
             }
             Kind::Xz(_) => return Err(Refusal::Failed),
         };
         if bytes.len() != want {
             return Err(Refusal::Failed);
         }
+        Ok(bytes)
+    }
+
+    /// The run's compressed bytes, which every read decodes from: all of
+    /// them, held in memory.
+    fn whole(&self) -> Input<'_> {
+        Input::whole(&self.packed)
+    }
+
+    /// Deflate span `k`, decoded from `input`: from checkpoint `k`'s bit to
+    /// the next checkpoint's, and the header of the block the checkpoint is
+    /// inside. See [`inflate::run`] for what `input` has to hold.
+    pub(super) fn deflate_span(&self, k: usize, input: Input<'_>) -> Result<Vec<u8>, Refusal> {
+        let f = self.framing()?;
+        let c = &self.checkpoints[k];
+        let range = self.span_bytes(k);
+        let want = (range.end - range.start) as usize;
+        let window = c.window();
+        let mut hist = Vec::with_capacity(window.len() + want);
+        hist.extend_from_slice(window);
+        let mut sink = WindowSink::new(hist, c.out - window.len() as u64, range.end, false);
+        sink.stop_at = self.checkpoints.get(k + 1).map(|n| n.in_bit);
+        inflate::run(input, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(c.resume()))?;
+        if sink.len() != range.end {
+            return Err(Refusal::Failed);
+        }
+        let mut bytes = sink.hist;
+        bytes.drain(..window.len());
         Ok(bytes)
     }
 
@@ -274,19 +289,23 @@ impl Seekable {
         }
         let c = self.checkpoints.get(k).ok_or(Refusal::Failed)?;
         let t = Arc::new(match &self.kind {
-            Kind::Deflate(f) => self.deflate_span_trace(k, c, f)?,
+            Kind::Deflate(_) => self.deflate_span_trace(k, self.whole())?,
             Kind::Zstd => {
-                super::zstd::span_trace(&self.packed, self.span_in(k), c.out, self.limits.span)?
+                super::zstd::span_trace(self.whole().code(), self.span_in(k), c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
-                super::xz::span_trace(&self.packed, l, k, self.span_in(k), self.span_units(k, l), c.out)?
+                super::xz::span_trace(self.whole().code(), l, k, self.span_in(k), self.span_units(k, l), c.out)?
             }
         });
         *lock(&self.traced) = Some((k, t.clone()));
         Ok(t)
     }
 
-    fn deflate_span_trace(&self, k: usize, c: &Checkpoint, f: &Framing) -> Result<Trace, Refusal> {
+    /// The trace of deflate span `k`, decoded from `input`, which holds what
+    /// [`Seekable::deflate_span`] needs.
+    pub(super) fn deflate_span_trace(&self, k: usize, input: Input<'_>) -> Result<Trace, Refusal> {
+        let f = self.framing()?;
+        let c = &self.checkpoints[k];
         let wrapped = f.wrapper != Wrapper::Raw;
         let first = match (k, wrapped) {
             (0, true) => 0,
@@ -297,10 +316,10 @@ impl Seekable {
             b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
         let mut sink = CountSink { len: c.out, cap: u64::MAX, stop_at: self.checkpoints.get(k + 1).map(|n| n.in_bit), starts: None, stopped: None };
-        let ended = inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(c.resume()))?;
+        let ended = inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(c.resume()))?;
         if matches!(ended, Ended::Stream(_)) && wrapped {
             b.push(f.end, sink.len, StepKind::Header(StepField::Wrapper, 0));
-            b.finish_at(self.packed.len() as u64 * 8, sink.len);
+            b.finish_at(input.code().run_len() as u64 * 8, sink.len);
         }
         Ok(b.done())
     }
@@ -402,18 +421,25 @@ impl Seekable {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
         }
+        let starts: Arc<[(u64, u64)]> = self.group_from(g, self.whole())?.into();
+        lock(&self.groups).put(g as u64, starts.clone(), 1);
+        Ok(starts)
+    }
+
+    /// [`Seekable::group`] decoded from `input`, which has to hold the run
+    /// from kept start `g` to the next kept start. The list is not cached.
+    pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<(u64, u64)>, Refusal> {
         let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
         let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()), stopped: None };
         let f = self.framing()?;
-        inflate::run(&self.packed, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
-        let starts: Arc<[(u64, u64)]> = sink.starts.take().unwrap_or_default().into();
+        inflate::run(input, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
+        let starts = sink.starts.take().unwrap_or_default();
         // The same decoder read these bits on the index pass, so a different
         // count is the decoder disagreeing with itself.
         let want = self.blocks.stride.min(self.blocks.count - g as u64 * self.blocks.stride);
         if starts.len() as u64 != want || starts.first() != Some(&(in_bit, out)) {
             return Err(Refusal::Failed);
         }
-        lock(&self.groups).put(g as u64, starts.clone(), 1);
         Ok(starts)
     }
 
@@ -430,21 +456,26 @@ impl Seekable {
         if let Some(t) = lock(&self.block_traces).get(i) {
             return Ok(t);
         }
+        let t = Arc::new(self.block_trace_from(i, self.whole())?);
+        lock(&self.block_traces).put(i, t.clone(), t.len());
+        Ok(t)
+    }
+
+    /// [`Seekable::block_trace`] decoded from `input`, which has to hold
+    /// block `i`. The trace is not cached.
+    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, Refusal> {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
         let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
         let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: next, starts: None, stopped: None };
         let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(in_bit, out);
         let f = self.framing()?;
-        inflate::run(&self.packed, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;
+        inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;
         let t = b.done();
         match t.blocks() {
-            [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => {}
-            _ => return Err(Refusal::Failed),
+            [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => Ok(t),
+            _ => Err(Refusal::Failed),
         }
-        let t = Arc::new(t);
-        lock(&self.block_traces).put(i, t.clone(), t.len());
-        Ok(t)
     }
 
     /// How many bytes the checkpoints' windows, the block starts and the span

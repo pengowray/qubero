@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use super::seekable::{lock, seekable, Kind, Recent};
 use super::{whole, Checkpoints, Decoded, Limits, Start};
 use crate::codec::lzma::{self, Lzma2, LZMA2_CHUNK_MAX};
-use crate::codec::{xz, Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBuilder, MAX_STEPS};
+use crate::codec::{xz, Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBuilder, Window, MAX_STEPS};
 
 /// An xz stream, indexed from the index at its end without decoding any of
 /// it: that index lists every block's packed and unpacked size, and an xz
@@ -62,9 +62,12 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
 ///
 /// A read that fails drops what was decoded of its span, and the next read of
 /// the span starts again from the span's first block.
+///
+/// The blocks are read from `window`, a window of the stream that holds the
+/// LZMA2 data of every block the read decodes.
 pub(super) fn read_span(
     cache: &Mutex<Recent<Prefix>>,
-    packed: &[u8],
+    window: Window<'_>,
     l: &xz::Layout,
     units: Range<usize>,
     k: usize,
@@ -73,7 +76,7 @@ pub(super) fn read_span(
 ) -> Result<(), Refusal> {
     let held = lock(cache).take(k as u64);
     let mut p = held.unwrap_or_else(|| Prefix::new(l, units.clone()));
-    p.reach(packed, l, units, from + dst.len())?;
+    p.reach(window, l, units, from + dst.len())?;
     p.copy(from, dst);
     let weight = p.weight();
     lock(cache).put(k as u64, p, weight);
@@ -135,7 +138,7 @@ impl Prefix {
     /// index says the block comes to. So a block the index is wrong about is
     /// refused before any of it is read. A chunk whose data is damaged is
     /// found only by a read that reaches it.
-    fn reach(&mut self, packed: &[u8], l: &xz::Layout, units: Range<usize>, upto: usize) -> Result<(), Refusal> {
+    fn reach(&mut self, window: Window<'_>, l: &xz::Layout, units: Range<usize>, upto: usize) -> Result<(), Refusal> {
         let mut off = TraceBuilder::off();
         while self.decoded < upto || upto >= self.len {
             if self.decoder.is_none() {
@@ -144,24 +147,24 @@ impl Prefix {
                     break;
                 }
                 let blk = &l.blocks[next];
-                if lzma::lzma2_len(packed.get(blk.lzma2()).ok_or(Refusal::Failed)?)? != blk.unpacked {
+                if lzma::lzma2_len_in(lzma2_of(window, blk)?)? != blk.unpacked {
                     return Err(Refusal::Failed);
                 }
                 self.blocks.push(Vec::new());
                 self.decoder = Some(Lzma2::new());
             }
             let blk = &l.blocks[self.first + self.blocks.len() - 1];
-            let data = packed.get(blk.lzma2()).ok_or(Refusal::Failed)?;
+            let data = lzma2_of(window, blk)?;
             let size = blk.unpacked as usize;
             let (Some(dec), Some(out)) = (self.decoder.as_mut(), self.blocks.last_mut()) else { return Err(Refusal::Failed) };
             let before = out.len();
             grow(out, before + LZMA2_CHUNK_MAX, size);
-            let mut ended = dec.chunk(data, out, &mut off)?;
+            let mut ended = dec.chunk_in(data, out, &mut off)?;
             // At the block's last byte, read the byte that ends its LZMA2, which
             // the headers said comes next, so that a block read to its end is
             // finished and its decoder let go.
             if !ended && out.len() == size {
-                ended = dec.chunk(data, out, &mut off)?;
+                ended = dec.chunk_in(data, out, &mut off)?;
             }
             if ended != (out.len() == size) || out.len() > size {
                 return Err(Refusal::Failed);
@@ -198,6 +201,17 @@ impl Prefix {
     }
 }
 
+/// The window over block `blk`'s LZMA2 data, with positions counted from that
+/// data's first byte, as an LZMA2 decoder counts them: as much of it as
+/// `window` holds. Refused for a block whose data runs past the stream's end.
+fn lzma2_of<'a>(window: Window<'a>, blk: &xz::BlockAt) -> Result<Window<'a>, Refusal> {
+    let data = blk.lzma2();
+    match data.end <= window.run_len() {
+        true => Ok(window.within(data)),
+        false => Err(Refusal::Failed),
+    }
+}
+
 /// Make room in `v` for `need` bytes, but never for more than `most`, which
 /// is what it holds once it is done. Room grows by doubling, so a vector
 /// filled a chunk at a time is copied a few times rather than once a chunk.
@@ -213,13 +227,13 @@ fn grow(v: &mut Vec<u8>, need: usize, most: usize) {
 /// `units` and whose output starts at byte `out`: the trace a whole stream has
 /// over the same blocks, with the stream's header in span 0 and its index and
 /// footer in the last span.
-pub(super) fn span_trace(packed: &[u8], l: &xz::Layout, k: usize, range: Range<usize>, units: Range<usize>, out: u64) -> Result<Trace, Refusal> {
+pub(super) fn span_trace(window: Window<'_>, l: &xz::Layout, k: usize, range: Range<usize>, units: Range<usize>, out: u64) -> Result<Trace, Refusal> {
     let last = units.end == l.blocks.len();
     let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, out);
     if k == 0 {
         b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
     }
-    let end = out + xz::blocks(packed, l, units, out, MAX_STEPS, &mut b)?.len() as u64;
+    let end = out + xz::blocks(window, l, units, out, MAX_STEPS, &mut b)?.len() as u64;
     if last {
         xz::push_index(l, &mut b, end);
     }

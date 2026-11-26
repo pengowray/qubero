@@ -76,6 +76,16 @@ export function formatBytes(n: number): string {
   return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
 }
 
+/** A limit, which is usually a whole number of the largest unit it reaches
+ *  and is then written without decimals: `32 MiB`, where `formatBytes`
+ *  writes `32.0 MiB`. Any other size is written as `formatBytes` writes
+ *  it. */
+export function formatLimit(n: number): string {
+  const units: readonly (readonly [string, number])[] = [["GiB", 2 ** 30], ["MiB", 2 ** 20], ["KiB", 2 ** 10]];
+  const unit = units.find(([, size]) => n >= size);
+  return unit !== undefined && n % unit[1] === 0 ? `${n / unit[1]} ${unit[0]}` : formatBytes(n);
+}
+
 /** A share of the whole: `48%`, or `<1%` rather than a zero that reads as
  *  nothing at all. Here rather than in the panel that first wanted it, since
  *  the treemap asks the same question about the same numbers. */

@@ -43,7 +43,7 @@
 //! answer it, and the fallback writes them too: a stream read by the crate has
 //! blocks whether or not anybody read inside them.
 
-use crate::codec::{frames, lzma, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES, MAX_STEPS};
+use crate::codec::{frames, lzma, Refusal, StepField, StepKind, Trace, TraceBuilder, Window, CAP_BYTES, MAX_STEPS};
 
 /// What a stream starts with, and how long its header is: the magic, two
 /// bytes of flags, and a CRC32 of the flags.
@@ -200,7 +200,7 @@ fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Re
     let mut b = TraceBuilder::default();
     // The stream header, which the next step's start gives the width of.
     b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
-    let out = blocks(data, l, 0..l.blocks.len(), 0, budget, &mut b)?;
+    let out = blocks(Window::whole(data), l, 0..l.blocks.len(), 0, budget, &mut b)?;
     if out.len() as u64 != l.total_out {
         return Err(Refusal::Failed);
     }
@@ -213,10 +213,12 @@ fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Re
 /// their steps pushed onto `b` after `before` bytes of the stream's output.
 /// What [`unpack`] reads a whole stream with, and what a stream too large to
 /// hold whole reads a few of its blocks with: see [`crate::codec::lazy`].
+/// The blocks are read from `window`, which has to hold their LZMA2 data;
+/// the steps count from the stream's front whatever part of it that is.
 ///
 /// `budget` is how many steps `b` may hold in all, as [`unpack`] says.
 pub(super) fn blocks(
-    data: &[u8],
+    window: Window<'_>,
     l: &Layout,
     which: std::ops::Range<usize>,
     before: u64,
@@ -227,7 +229,7 @@ pub(super) fn blocks(
     for blk in &l.blocks[which] {
         let from = blk.at + blk.header;
         let end = from + blk.packed;
-        let Some(chunk) = data.get(from..end) else { return Err(Refusal::Failed) };
+        let Some(chunk) = window.get(from..end) else { return Err(Refusal::Failed) };
         let here = before + out.len() as u64;
         b.push(blk.at as u64 * 8, here, StepKind::Header(StepField::BlockHeader, blk.header as u32));
 

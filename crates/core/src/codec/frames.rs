@@ -21,7 +21,7 @@
 //! over all of it. A map nobody can draw is better than a stream nobody can
 //! open.
 
-use crate::codec::{Refusal, StepField, StepKind, Trace, TraceBuilder};
+use crate::codec::{Refusal, StepField, StepKind, Trace, TraceBuilder, Window};
 
 /// A trace of one step over the whole run, for a decoder that gave the bytes
 /// but not the shape.
@@ -81,7 +81,7 @@ pub fn zstd(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let cap = super::CAP_BYTES as u64;
     let mut out = Vec::new();
     let mut b = TraceBuilder::default();
-    let end = zstd_walk(data, 0..data.len(), 0, cap, &mut b, &mut |_, _| {}, &mut |bytes| {
+    let end = zstd_walk(Window::whole(data), 0..data.len(), 0, cap, &mut b, &mut |_, _| {}, &mut |bytes| {
         if out.len() + bytes.len() > cap as usize {
             return Err(Refusal::TooLarge);
         }
@@ -103,10 +103,11 @@ pub(super) fn zstd_done(mut b: TraceBuilder, input: usize, output: u64) -> Trace
     }
 }
 
-/// Decode the frames of `data[span]` in one go: a [`ZstdWalk`] that does not
-/// stop until the end of `span`. Returns how much output there is there.
+/// Decode the frames of bytes `span` of the run in one go, from `window`,
+/// which holds all of them: a [`ZstdWalk`] that does not stop until the end
+/// of `span`. Returns how much output there is there.
 pub(super) fn zstd_walk(
-    data: &[u8],
+    window: Window<'_>,
     span: std::ops::Range<usize>,
     out: u64,
     frame_cap: u64,
@@ -114,12 +115,63 @@ pub(super) fn zstd_walk(
     on_frame: &mut dyn FnMut(usize, u64),
     sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
 ) -> Result<u64, Refusal> {
-    ZstdWalk::new(span, out, frame_cap).run(data, u64::MAX, usize::MAX, b, on_frame, sink)?.ok_or(Refusal::Failed)
+    match ZstdWalk::new(span, out, frame_cap).run(window, u64::MAX, usize::MAX, b, on_frame, sink)? {
+        Walked::Ended(end) => Ok(end),
+        // A walk with no limit stops only at the end, and one given its whole
+        // span never runs out of window.
+        Walked::Stopped | Walked::Needs(_) => Err(Refusal::Failed),
+    }
 }
 
 /// The most output one zstd block may make: 128 KiB, or the frame's window
 /// when that is smaller.
 const BLOCK_MAX: u64 = 128 << 10;
+
+/// The longest a zstd frame header can be: four bytes of magic, the frame
+/// header descriptor, the window descriptor, four of dictionary ID and eight
+/// of content size. A skippable frame's header, eight bytes, is shorter.
+const FRAME_HEADER_MAX: usize = 18;
+
+/// How long a zstd block header is.
+const BLOCK_HEADER: usize = 3;
+
+/// How long a frame's checksum is, after its last block.
+const FRAME_CHECKSUM: usize = 4;
+
+/// How far past where a zstd walk stops its window has to reach for the next
+/// step to make progress: one block of at most 128 KiB, its header, the
+/// frame's checksum after it, and the next frame's header.
+pub const ZSTD_MARGIN: usize = (128 << 10) + BLOCK_HEADER + FRAME_CHECKSUM + FRAME_HEADER_MAX;
+
+/// What one [`ZstdWalk::run`] came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Walked {
+    /// The end of the span, with the output there.
+    Ended(u64),
+    /// Stopped between two blocks, two frames or two skippable frames, its
+    /// share decoded or its reach read. Run again to carry on.
+    Stopped,
+    /// The window ends before the next thing the walk reads does, or starts
+    /// after it: a frame header, a skippable frame's header, or a block with
+    /// the frame's checksum when the block is the last. Bytes `range` of the
+    /// run, at least, are needed to carry on from where the walk stopped,
+    /// which is `range.start`. Nothing of it was read.
+    Needs(std::ops::Range<usize>),
+}
+
+impl Walked {
+    /// What a walk over a window that holds its whole span came to: the
+    /// output at the span's end, or nothing when it stopped to be carried on.
+    /// Such a window never runs out, so [`Walked::Needs`] is the walk
+    /// disagreeing with itself.
+    pub(super) fn of_whole(self) -> Result<Option<u64>, Refusal> {
+        match self {
+            Walked::Ended(end) => Ok(Some(end)),
+            Walked::Stopped => Ok(None),
+            Walked::Needs(_) => Err(Refusal::Failed),
+        }
+    }
+}
 
 /// A walk over the frames of `data[span]`, which decodes them and says which
 /// bits of each made which bytes: a step for each frame header, each block
@@ -147,6 +199,14 @@ const BLOCK_MAX: u64 = 128 << 10;
 /// on, each block's output is what the decoder lets go of after it, and each
 /// block is its own step. A frame of no more than its window, which is any
 /// frame whose header gives its size in place of a window, is one step.
+///
+/// The walk reads the run from a window of it, which need not hold the whole
+/// span: before each frame header, skippable frame header and block it checks
+/// that the window holds it, the block's checksum too when the block is the
+/// last of its frame, and when the window does not, it stops there and says
+/// which bytes it needs ([`Walked::Needs`]). A skippable frame's contents are
+/// skipped without being read. So a walk needs a window reaching at most
+/// [`ZSTD_MARGIN`] past where it stops.
 pub(super) struct ZstdWalk {
     end: usize,
     /// Where the next frame, or the skippable frames in front of it, start,
@@ -231,50 +291,80 @@ impl ZstdWalk {
     /// run, between two blocks, two frames or two skippable frames, so that a
     /// walk over frames that make no output still stops. A block is at most
     /// 128 KiB of the run, so the walk goes past `reach` by at most that.
+    ///
+    /// `window` is the part of the run the walk reads from; positions count
+    /// from the run's front whatever part it is. See [`ZstdWalk`] for what the
+    /// walk does when the window runs out.
     pub(super) fn run(
         &mut self,
-        data: &[u8],
+        window: Window<'_>,
         share: u64,
         reach: usize,
         b: &mut TraceBuilder,
         on_frame: &mut dyn FnMut(usize, u64),
         sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
-    ) -> Result<Option<u64>, Refusal> {
+    ) -> Result<Walked, Refusal> {
         use ruzstd::decoding::BlockDecodingStrategy;
 
         let until = ZstdWalk::decoded(self.out, self.frame.as_ref()).saturating_add(share.max(1));
         let read_until = self.reached().saturating_add(reach.max(1));
+        let end = self.end;
         loop {
             let f = match &mut self.frame {
                 Some(f) => f,
-                None if self.out >= until || self.at >= read_until => return Ok(None),
+                None if self.out >= until || self.at >= read_until => return Ok(Walked::Stopped),
                 None => {
                     let starts = *self.front.get_or_insert(self.at);
-                    // A skippable frame: a magic in `0x184d2a50..=0x184d2a5f`,
-                    // a length, and bytes an application put there that no
-                    // decoder reads.
-                    while let Some(size) = skippable(&data[self.at..self.end]) {
+                    loop {
+                        if let Some(need) = lacks(window, self.at, self.at + FRAME_HEADER_MAX, end) {
+                            return Ok(Walked::Needs(need));
+                        }
+                        // A skippable frame: a magic in
+                        // `0x184d2a50..=0x184d2a5f`, a length, and bytes an
+                        // application put there that no decoder reads.
+                        let Some(size) = skippable(held(window, self.at, end)?, end - self.at) else { break };
                         if self.at >= read_until {
-                            return Ok(None);
+                            return Ok(Walked::Stopped);
                         }
                         b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
                         self.at += size;
                     }
                     self.front = None;
                     if self.at == self.end {
-                        return Ok(Some(self.out));
+                        return Ok(Walked::Ended(self.out));
                     }
                     on_frame(starts, self.out);
-                    let frame = self.start_frame(data)?;
+                    let frame = self.start_frame(held(window, self.at, end)?)?;
                     b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
                     self.frame.insert(frame)
                 }
             };
             while !f.dec.is_finished() {
                 if ZstdWalk::decoded(self.out, Some(&*f)) >= until || f.at + f.read >= read_until {
-                    return Ok(None);
+                    return Ok(Walked::Stopped);
                 }
-                let block_at = (f.at + f.read) as u64 * 8;
+                let at = f.at + f.read;
+                if let Some(need) = lacks(window, at, at + BLOCK_HEADER, end) {
+                    return Ok(Walked::Needs(need));
+                }
+                // The block's header says how much of the run the block
+                // takes: its size, or one byte for a block of one byte
+                // repeated. The last block of a frame has the checksum after
+                // it, which the decoder reads with it.
+                let head = held(window, at, end)?;
+                // A span that ends inside a block header is refused, as the
+                // decoder would refuse it.
+                let [h0, h1, h2, ..] = *head else { return Err(Refusal::Failed) };
+                let header = u32::from_le_bytes([h0, h1, h2, 0]);
+                let body = match (header >> 1) & 3 {
+                    1 => 1,
+                    _ => (header >> 3) as usize,
+                };
+                let sum = if header & 1 == 1 && f.checksum { FRAME_CHECKSUM } else { 0 };
+                if let Some(need) = lacks(window, at, at + BLOCK_HEADER + body + sum, end) {
+                    return Ok(Walked::Needs(need));
+                }
+                let block_at = at as u64 * 8;
                 match f.next {
                     Some(_) if b.over_budget() => b.coarsen(),
                     Some(o) => {
@@ -284,7 +374,7 @@ impl ZstdWalk {
                     }
                     None => {}
                 }
-                let mut src = &data[f.at + f.read..self.end];
+                let mut src = head;
                 f.dec.decode_blocks(&mut src, BlockDecodingStrategy::UptoBlocks(1)).map_err(|_| Refusal::Failed)?;
                 let now = f.dec.bytes_read_from_source() as usize;
                 if now == f.read {
@@ -324,9 +414,9 @@ impl ZstdWalk {
         }
     }
 
-    /// Read the header of the frame at `self.at` and set up its decoder.
-    fn start_frame(&self, data: &[u8]) -> Result<Frame, Refusal> {
-        let frame = &data[self.at..self.end];
+    /// Read the header of the frame at `self.at`, which `frame` starts with,
+    /// and set up its decoder.
+    fn start_frame(&self, frame: &[u8]) -> Result<Frame, Refusal> {
         let checksum = frame_has_checksum(frame).ok_or(Refusal::Failed)?;
         let mut src = frame;
         // A decoder of its own for every frame. `ruzstd` refuses a window
@@ -359,14 +449,30 @@ fn window_size(frame: &[u8], content_size: u64) -> Option<u64> {
     Some(base + base / 8 * u64::from(w & 7))
 }
 
-/// How long a skippable frame is, if these bytes start one.
-fn skippable(data: &[u8]) -> Option<usize> {
-    let magic = u32::from_le_bytes(data.get(..4)?.try_into().ok()?);
+/// The bytes of the run `window` holds from `at` up to `end`, the end of the
+/// span a walk is over. Refused for a byte the window does not hold, which
+/// [`lacks`] has already ruled out wherever the walk calls this.
+fn held<'a>(window: Window<'a>, at: usize, end: usize) -> Result<&'a [u8], Refusal> {
+    window.get(at..end.min(window.end()).max(at)).ok_or(Refusal::Failed)
+}
+
+/// Bytes `from..to` of the run, cut off at `end`, the end of the span a walk
+/// is over, when `window` does not hold all of them; nothing when it does.
+fn lacks(window: Window<'_>, from: usize, to: usize, end: usize) -> Option<std::ops::Range<usize>> {
+    let to = to.min(end).max(from);
+    (window.start() > from || window.end() < to).then_some(from..to)
+}
+
+/// How long a skippable frame is, if `head`, the bytes at hand from where it
+/// would start, starts one. `left` is how much of the span is left from
+/// there, which its length has to fit in.
+fn skippable(head: &[u8], left: usize) -> Option<usize> {
+    let magic = u32::from_le_bytes(head.get(..4)?.try_into().ok()?);
     if !(0x184d_2a50..=0x184d_2a5f).contains(&magic) {
         return None;
     }
-    let size = u32::from_le_bytes(data.get(4..8)?.try_into().ok()?) as usize;
-    size.checked_add(8).filter(|&n| n <= data.len())
+    let size = u32::from_le_bytes(head.get(4..8)?.try_into().ok()?) as usize;
+    size.checked_add(8).filter(|&n| n <= left)
 }
 
 /// Whether a zstd frame ends with a checksum of what it decoded, which the

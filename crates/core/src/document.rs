@@ -218,6 +218,10 @@ impl<S: Source> Source for Document<S> {
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
         Document::read_bytes(self, offset, out)
     }
+
+    fn resident_limit(&self) -> Option<u64> {
+        self.source.resident_limit()
+    }
 }
 
 #[cfg(test)]

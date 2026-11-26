@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode, type Unpacking } from "./doc.ts";
+import { Doc, EditorMissing, RESIDENT_BYTES, bytesSource, formatBytes, formatLimit, formatOffset, glyphColumn, percentText, prefetchMagic, type DiagramBox, type MapStep, type TemplateNode, type Unpacking } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -814,7 +814,7 @@ function buildDocument(tab: Tab): Page {
       },
       lost: () => {
         waiting = null;
-        waitSays(UNPACKED.tooMuchAtOnce(wouldBeTitle(path, node)), true);
+        waitSays(UNPACKED.tooMuchAtOnce(wouldBeTitle(path, node), formatLimit(RESIDENT_BYTES)), true);
       },
       failed: (error) => {
         waiting = null;
@@ -840,7 +840,7 @@ function buildDocument(tab: Tab): Page {
     // much or will not read, is found out only now, so this is where it is
     // said, for the listing's button and the inspector's alike.
     if ("refused" in unpacked) {
-      if (joinedAt(path)) say(JOINED.refused(unpacked.refused, JOINED.tabTitle(node.name, doc.name)), true);
+      if (joinedAt(path)) say(JOINED.refused(unpacked.refused, JOINED.tabTitle(node.name, doc.name), formatLimit(RESIDENT_BYTES)), true);
       return null;
     }
     const already = tabs.forSpace(unpacked.space);

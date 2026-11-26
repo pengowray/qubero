@@ -172,13 +172,19 @@ export const RV = {
    *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and
    *  `too-large-zstd-frame` and `too-large-xz-block` one with a frame or
    *  block that unpacks to more than 64 MiB. All read the same as
-   *  `too-large`. */
-  refused: (why: string): string =>
+   *  `too-large`. `too-much-at-once` is a stream read from the file in one
+   *  piece that takes up more of it than the editor keeps in memory,
+   *  `resident` (`Doc.residentBytes`, as `formatLimit` writes it). It says
+   *  the limit, since the line has no hover and a stream of another kind
+   *  that takes up more still may have unpacked. */
+  refused: (why: string, resident: string): string =>
     why === "too-large" || why === "too-large-lazy" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
       ? "Too large to unpack here"
-      : why === "unaligned"
-        ? "Does not start on a byte boundary, so it was not unpacked"
-        : "Did not unpack",
+      : why === "too-much-at-once"
+        ? `Takes up over ${resident} of the file, more than the editor keeps in memory at once, so it was not unpacked`
+        : why === "unaligned"
+          ? "Does not start on a byte boundary, so it was not unpacked"
+          : "Did not unpack",
   stored: "Stored",
 
   // Text inside a list of numbers. "List of numbers" throughout, for what
@@ -574,13 +580,18 @@ export const RV = {
   /** Why the IDAT data did not inflate, by the core's refusal word. A zlib
    *  stream is `too-large` when the compressed stream itself is past 64 MiB,
    *  and `too-large-lazy` when it inflates to more than 1 GiB. A stream that
-   *  inflates to between 64 MiB and 1 GiB is inflated a piece at a time. */
-  pngNotInflated: (why: string): string =>
+   *  inflates to between 64 MiB and 1 GiB is inflated a piece at a time. It
+   *  is `too-much-at-once` when the IDAT chunks it is joined from take up
+   *  more of the file than the editor keeps in memory, `resident`
+   *  (`Doc.residentBytes`, as `formatLimit` writes it). */
+  pngNotInflated: (why: string, resident: string): string =>
     why === "too-large"
       ? "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large."
       : why === "too-large-lazy"
         ? "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB."
-        : "The image data did not inflate: the zlib stream is damaged or cut short.",
+        : why === "too-much-at-once"
+          ? `The zlib stream takes up over ${resident} in the file, and the editor keeps at most ${resident} of the file in memory at once, so this view cannot inflate the stream.`
+          : "The image data did not inflate: the zlib stream is damaged or cut short.",
   /** Why the inflated bytes were not unfiltered, by the core's refusal word. */
   pngNotUnfiltered: (why: string): string =>
     why === "settings"

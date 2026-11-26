@@ -85,6 +85,7 @@ pub mod elf_disasm;
 mod eps;
 mod fits;
 mod fits_cards;
+mod flac;
 mod fits_afw;
 pub mod fits_tile;
 mod ggml;
@@ -258,6 +259,7 @@ pub use dv::dv;
 pub use eml::eml;
 pub use eps::eps;
 pub use fits::{fits, fits_contents};
+pub use flac::flac;
 pub use elf::{bpf, elf};
 pub use ne::ne;
 pub use macho::macho;
@@ -466,6 +468,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("dbf", |_| dbf()),
     ("tga", |_| tga()),
     ("au", |_| au()),
+    ("flac", |_| flac()),
     ("pi1", |_| pi1()),
     ("nes", |_| nes()),
     ("p64rom", |_| p64rom()),

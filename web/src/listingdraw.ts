@@ -8,7 +8,7 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatAddress, formatBytes, formatOffset, percentText } from "./doc.ts";
+import { formatAddress, formatBytes, formatLimit, formatOffset, percentText, RESIDENT_BYTES } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { CodecKind, Doc, TemplateNode } from "./doc.ts";
 import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
@@ -30,7 +30,7 @@ import { rowGlyphsFor } from "./viz/rowglyphs.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -99,12 +99,30 @@ export function spaceOf(item: Item): number {
  *  anything. Under a per cent, the number says less than the range does. */
 /** What a stretch of the listing still being read says: how far the core has
  *  got unpacking the large stream its fields wait on, while they wait on one;
- *  and otherwise that bytes are on their way. The stream is the one this
- *  stretch's own fields were asked for, which is not always the one unpacked
- *  most recently: Open unpacked may be carrying on another. */
+ *  that the fields are being read, while the core works on them with no
+ *  progress to give; and otherwise that bytes are on their way. The stream is
+ *  the one this stretch's own fields were asked for, which is not always the
+ *  one unpacked most recently: Open unpacked may be carrying on another. */
 export function pendingText(item: Extract<Item, { kind: "pending" }>): string {
   const u = item.unpacking;
-  return u === null ? REPORT.reading : REPORT.unpacking(percentText(u.read_bits, u.run_bits));
+  if (u !== null) return REPORT.unpacking(percentText(u.read_bits, u.run_bits));
+  return item.working ? REPORT.working : REPORT.reading;
+}
+
+/** Write a pending stretch's words into its element, marking whether they
+ *  give the unpacking's progress, for `keepsProgress`. */
+export function writePending(node: HTMLElement, item: Extract<Item, { kind: "pending" }>): void {
+  node.textContent = pendingText(item);
+  node.toggleAttribute("data-progress", item.unpacking !== null);
+}
+
+/** Whether a pending stretch already drawn keeps what it says rather than
+ *  being written again: it shows the progress of an unpacking, and the core is
+ *  still working with none to give this go, as when the go ran out before it
+ *  reached the stream's pass. Going back to words with no percentage for one
+ *  go would flicker. Words with no percentage are written over either way. */
+export function keepsProgress(node: HTMLElement, item: Extract<Item, { kind: "pending" }>): boolean {
+  return item.working && item.unpacking === null && node.hasAttribute("data-progress");
 }
 
 export function shareText(sizeBits: number, fileBits: number): string {
@@ -164,8 +182,11 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
       return drawRecord(c, item);
     case "more":
       return drawMore(c, item);
-    case "pending":
-      return el("div", "rp-item rp-block rp-pending", pendingText(item));
+    case "pending": {
+      const node = el("div", "rp-item rp-block rp-pending");
+      writePending(node, item);
+      return node;
+    }
     case "card":
       return drawCard(c.doc, item, c.shown);
     case "switch":
@@ -324,6 +345,10 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
             ? countText(item.shownChildren ?? n.child_count, childWord(n))
             : n.value;
   const value = el("span", "rp-value", said);
+  // The limit a reason leaves out, such as how much of the file the editor
+  // keeps in memory, on hover.
+  const limit = n.refused === null ? undefined : DECODED_REFUSED_TITLE[n.refused];
+  if (limit !== undefined) value.title = limit(formatLimit(RESIDENT_BYTES));
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
   // square says what it is. Only where the template called the field or the
   // structure a colour, so nothing guesses at text that happens to look like

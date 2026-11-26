@@ -1,12 +1,14 @@
 # Design: reading the compressed input of large runs a piece at a time
 
-Written 2026-11-26, for developers. This is a proposal, and nothing in it is
-built yet. It follows `docs/DESIGN-lazy-unpacking.md`, which describes how a
-compressed run whose output is past `codec::CAP_BYTES` (64 MiB) is indexed in
-steps and its output read a span at a time. This design does the same for the
-compressed input, so that memory no longer grows with the compressed size and
-the browser can open a run whose compressed bytes do not fit in its chunk
-store.
+Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
+built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
+window at a time (part 2)" and "Built (part 3)" say where the code differs
+from this text), and parts 4 to 11 are not. It follows
+`docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
+output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
+read a span at a time. This design does the same for the compressed input, so
+that memory no longer grows with the compressed size and the browser can open
+a run whose compressed bytes do not fit in its chunk store.
 
 "Still to do" and "Open questions" at the end list what this leaves open.
 "What was checked" lists the code read to write it.
@@ -341,6 +343,95 @@ crate's `decode_step` reads the run from byte `in_bits.start / 8` to byte
 `in_bits.end.div_ceil(8)`, at most 7 bytes, instead of reading with
 `field_bytes` from the run's front.
 
+### Built (part 3)
+
+**Built on 2026-11-26.** Every caller still passes the whole run, so the
+bytes, traces and refusals are the same as before. Where the code differs
+from the text above:
+
+- **One window type.** `codec::Window` serves all three decoders: the bytes,
+  the byte of the run they start at, and the run's length, so that
+  `reaches_end` can tell a window that ends early from a run that does.
+  `within` gives the window over part of the run, such as an xz block's LZMA2
+  data, with positions counted from that part's front.
+- **Deflate.** `Bits::with_base` sets the base; `pos`, `seek`, `end_at` and
+  `end_pos` count from the run's front, and `slice` takes a stored block's
+  payload. `inflate::Input` holds the code window and the optional head
+  window (`Input::whole`, `Input::new`). `DEFLATE_MARGIN` and
+  `MAX_HEAD_BYTES` are public constants in `inflate`. A decode that runs out
+  of a window that ends before the deflate data does is refused as `Failed`,
+  like a stream cut short: keeping the margin is the caller's job.
+- **The wrapper.** `framing(wrapper, head, run_len)` answers `Framed::At`, or
+  `Framed::NeedsHead(n)` when the header goes on past the head. A head that
+  is the whole run never gets `NeedsHead`, and `Framed::found` turns the
+  answer into a `Result` for callers that pass the whole run.
+  `trailer_agrees` takes the bytes `Framing::trailer` names.
+- **`Seekable`'s deflate reads take their input** as a parameter, so that
+  part 7 can pass windows: `deflate_span`, `deflate_span_trace`, `group_from`
+  and `block_trace_from`. Today each is passed `Input::whole`.
+- **`decode_step` keeps its signature**, the whole run from the front, so the
+  wasm crate and the evaluator's test did not change. The windowed form is
+  `decode_step_at(data, at, trace, step)`, for part 4 to call.
+- **zstd.** `ZstdWalk::run` takes a `Window` and answers `Walked::Ended`,
+  `Walked::Stopped` or `Walked::Needs(range)`. The range starts where the
+  walk stopped and ends where the thing it reads next ends. Before a frame
+  or skippable frame the walk needs 18 bytes, or up to the span's end if that
+  comes first. Before a block it needs the 3-byte header, and then the block
+  with the frame's checksum when the block is the last. A window that holds
+  one byte less gets the same `Needs` again, and the walk has not changed.
+  `ZSTD_MARGIN` (128 KiB + 25 bytes) is a public constant in `frames`.
+  `lazy::zstd::decode_span` and `span_trace` take a window.
+- **LZMA2 and xz.** The range coder has a base, which `bit_pos` and
+  `byte_pos` add; reading a byte costs the same. `Lzma2::chunk_in` and
+  `lzma2_len_in` read from a window. A window that does not hold the next
+  chunk is refused as `Failed`, before the decoder changes, rather than
+  answering that it needs more input as the zstd walk does: this design gives
+  that answer only to zstd, and a later part can call again with a larger
+  window. `Lzma2::chunk` still takes the whole stream, and `lzma2_len` is
+  now used only by tests. `xz::blocks`, `lazy::xz::read_span` and
+  `lazy::xz::span_trace` take a window of the stream, which has to hold the
+  LZMA2 data of every block they decode.
+- **Tests**, each from copies of only the bytes the decode needs: every
+  deflate span and its trace from its checkpoint's byte to the next
+  checkpoint's, with the block header in a head window of `MAX_HEAD_BYTES`
+  (stored, fixed and dynamic blocks, every wrapper, the last span with the
+  trailer); every block trace and every group of dropped block starts;
+  `decode_step_at` from the step's own bytes; a gzip header read from heads
+  of every length; a zstd walk given windows from 1 byte to the whole run,
+  with and without skippable frames; every zstd span; an LZMA2 stream read a
+  chunk at a time from windows that hold exactly the next chunk; every xz
+  span's trace and reads.
+- **Speed.** The span traces of a stream of short codes are about 2% slower;
+  everything else measured is the same within the noise. Measured on
+  2026-11-26 in release builds, native, with harnesses outside `cargo test`,
+  pinned to one core. "Before" is built from the commit this part started
+  from. Before and after runs alternated, and the table gives the fastest of
+  each. The machine was loaded by other sessions (a load average of 4 to 14
+  on 12 cores), and single runs varied by 10% or more, so the tables compare
+  the fastest runs, and differences under about 2% are noise. The files were
+  generated for the measurement: rows of CSV-like text packed by Python's
+  `zlib` at level 6, and bytes that are nine tenths one letter packed with
+  Huffman coding only, whose codes are mostly one bit long.
+
+  | What | File | Runs | Before | After | Change |
+  |---|---|---|---|---|---|
+  | `decode_or_index` | 190 MB of CSV, 61 MB packed | 6 | 1,952 ms | 1,909 ms | -2.2% |
+  | Reading all of it through the index, 4 MiB at a time | the same | 6 | 1,562 ms | 1,527 ms | -2.2% |
+  | Every span's trace | the same | 6 | 1,277 ms | 1,275 ms | -0.2% |
+  | `decode_or_index` | 100 MB of literals, 18.5 MB packed | 6 of 4 | 1,227 ms | 1,204 ms | -1.9% |
+  | Reading all of it through the index | the same | 6 of 4 | 950 ms | 956 ms | +0.7% |
+  | Every span's trace | the same | 6 of 4 | 858 ms | 878 ms | +2.3% |
+  | `inflate::gzip`, traced | 60 MB of CSV, 19 MB packed | 8 of 5 | 620 ms | 619 ms | -0.1% |
+  | `inflate_len` | the same | 8 of 5 | 350 ms | 353 ms | +0.8% |
+
+  "6 of 4" is six runs of a harness that takes the fastest of four tries.
+  The span traces of the literals were slower after in each of the six runs,
+  by 0.2% to 2.6%; that is the one difference the measurements show. The
+  likely cause: each code there makes a step, and each step's bit is now the
+  reader's base plus its place in the window, one addition more. Earlier comparisons on 300 MB of literals, one
+  try a run under a load of 12, ranged from -2% to +4% for the same three
+  rows.
+
 ## The index pass reads through a `RunInput`
 
 Part 7 for deflate and zstd. xz follows in part 8.
@@ -585,7 +676,9 @@ Part 2 gathers that read in stretches that double, from 1 MiB up to 64 MiB,
 and runs `inflate_len` after each stretch; a stream that ends inside a
 stretch is measured there. So a small member costs a small read, and a large
 one is decoded at most about twice over, in total, before it is measured.
-This fixes a .gz of up to 64 MiB compressed. Part 9
+This fixes a .gz of up to 64 MiB compressed. As built, part 2 grows the
+walk's bytes a window at a time instead of in doubling stretches; see
+"Gathering a run a window at a time (part 2)". Part 9
 replaces the gathered copy with a pass of its own, `lazy::Measuring`: the
 `CountSink` decode that `inflate_len` makes, done a window at a time through
 a `RunInput` over the stretch `stream_len_at` measures in, from the run's
@@ -616,7 +709,8 @@ Part 10, after part 7.
 - `JoinedBytes::Indexed` keeps its `Seekable`, which reads its own input.
 - The 64 MiB limit on what `join_lazily` reads is removed.
 
-Three changes need no handle and come earlier, in part 2. Without them a
+Three changes need no handle and come earlier, in part 2 (built; see
+"Gathering a run a window at a time (part 2)"). Without them a
 joined stream whose parts come to more than the store keeps asks for chunks
 for ever, since both joins start again from the first part on every
 `Pending`, and each part's own read fits.
@@ -656,7 +750,8 @@ for ever, since both joins start again from the first part on every
 | `STEP_INPUT` (new) | 256 KiB of compressed input | How far past its start a step may stop; its window reaches `DEFLATE_MARGIN` further. Beside `INDEX_STEP_BYTES`, 256 KiB of output. |
 | `DEFLATE_MARGIN`, and the zstd margin (new) | 65,541 bytes; 128 KiB + 25 bytes | How far past where a step stops its window has to reach. |
 | `MAX_HEAD_BYTES` (new) | 287 bytes | A deflate block header and its tables, from the header's first byte. |
-| `GATHER_WINDOW` (new) | 1 MiB, or a quarter of what the store keeps when that is less, and at least one chunk | Part 2. |
+| `GATHER_WINDOW` (new) | 1 MiB, or a quarter of what the store keeps when that is less | Part 2, built without the floor of one chunk the proposal had. |
+| `GATHER_BYTES` (new) | 64 MiB | Part 2: the most the copies in `Gathers` may set aside between them. |
 
 **The zip-bomb guard.** Memory stays bounded by the table above and
 DESIGN-lazy-unpacking's, so a hostile run can only cost time. That time is
@@ -752,6 +847,56 @@ so its refusal becomes rare, and that is fine.
   other chunks a go needs, can still ask for the same chunks for ever.
   `waitToOpen`'s rule stays for that.
 
+**Built on 2026-11-26.** Where the code differs from the list above:
+
+- **Runs in a stitched space are counted too.** A run inside a joined stream,
+  such as a PNG's zlib stream over its IDAT chunks, is read with
+  `read_in` on the stitched space, which `read_stitched` turns into one
+  space-0 read per stored part. Each of those fits, so the guard in `read_in`
+  never fires, and the run asked for the same chunks for ever. The three
+  refusals ask `Evaluator::cannot_fit`, which adds up what
+  `file_bytes_at_once` says the read needs of the file: the bytes for space
+  0, the stored parts in the file for a stitched space, nothing for a space in
+  memory. The joins use the same sum (`parts_cannot_fit`). The guard in
+  `read_in` stays space 0 only.
+- **A join past the cap is refused as too large, before reading.** Without
+  that, `join_lazily` would read parts up to the 64 MiB cap before refusing,
+  and in the browser that read waits for ever. So when the parts cannot fit,
+  a stream whose runs pass the cap (or, in `join_whole`, one with a packed run
+  past 64 MiB or runs past what a trace can count) is refused with
+  `TooLarge`, as it is natively, and any other with `TooMuchAtOnce`.
+- **`stream_len_at` still reads in one call**, through `stream_end`, which now
+  measures a deflate stream a step at a time with `inflate::Measuring` and
+  keeps the walk in `Measures`. The walk's bytes are still one `read_in` of
+  the whole stretch, so the cap is applied where the stretch is chosen, in
+  `stream_len_at`, for space 0 only.
+- **Bytes, not chunks.** The checks compare bytes against
+  `resident_limit()`. A read within one chunk of the limit that does not start
+  on a chunk can still touch one chunk more than the store keeps, and waits
+  as before. `waitToOpen`'s rule covers it.
+- **What is still wrong, and expected.** A .gz of several members, one of
+  them over 16 MiB compressed, now reads in the browser as one member running
+  to the last trailer, even when the file fits in the store; part 2's
+  doubling stretches fix it. And listing a joined stream whose part is
+  refused, such as a large .gz's `decoded`, fails the read with the part's
+  name (`members[0].compressed is too large for the editor to keep in memory
+  at once`), which `flatten.ts` draws as nothing under the stream, as for any
+  part that fails. Part 2 fixed both: the member is sized as itself, and a
+  part of 64 MiB or less is read a window at a time instead of refused.
+- **Strings.** Beyond the two below: the joined stream's status-bar message
+  reuses `UNPACKED.tooMuchAtOnce`, which now takes the limit; the report's
+  finding (`RV.refused`) and its PNG paragraph (`RV.pngNotInflated`) have
+  words of their own; a check over a refused stream says "the data it covers
+  is too large for the editor to keep in memory at once". The 32 MiB comes
+  from `RESIDENT_BYTES` in `doc.ts`, made from the numbers the store is made
+  with, and in the core from `resident_limit()`. The listing and the
+  inspector carry it in the hover.
+- **Tests.** `crates/wasm/tests/open_space_waits.rs` reproduced the zip entry
+  and the .gz asking for chunk 0 again before the fix, and asserts the
+  refusal after it; the test that asserted the old behaviour is now
+  `a_run_longer_than_the_store_is_refused_as_too_much_at_once`. The core's
+  are in `eval/tests/resident.rs`.
+
 **Proposed strings.** Drafted by a fresh agent from a brief, with no code in
 its context, and checked against the code since. They are proposals for
 sign-off.
@@ -767,6 +912,159 @@ phrase it can read as one limit with two values. Today `Refusal::TooLarge` is
 given both for a compressed run over 64 MiB and for an output over 64 MiB,
 and with this design also for a run over 512 MiB compressed. See "Open
 questions".
+
+### Gathering a run a window at a time (part 2)
+
+**Built on 2026-11-26.** Where the code differs from "Recommendation",
+"Measuring a gzip member", "Joined streams", "Memory" and the part 2 item in
+"Order of work". A **place** below is one of the two slots that
+`Unfinished` keeps for index passes, as in DESIGN-lazy-unpacking's "Waiting
+for a place"; `Measures` and `Spaces::joins` have two places each as well.
+
+- **Which reads are gathered.** A read of a whole run is made a window at a
+  time only when the file's source keeps part of the file
+  (`resident_limit()` answers a number) and the read needs more of the file
+  at once than one window (`Evaluator::gathers`, from `file_bytes_at_once`).
+  Every other read of a whole run, including every read natively and every
+  read of a space held in memory, is still one `read_in`. The window size is
+  `GATHER_WINDOW`, 1 MiB, or a quarter of `resident_limit()` when that is
+  less. The proposal's floor of one chunk is not built, since the core does
+  not know the chunk size. Each window ends on a multiple of the window
+  size, counted from the start of the space the run is in: the file, or a
+  stitched stream for a run joined from parts. In the browser the window is
+  1 MiB, so each window of the file is 16 whole chunks of 64 KiB. Each window
+  is charged to the go before it is read, one element for each 16 KiB
+  (`GATHER_BYTES_PER_ELEMENT`), so a go of 5,000 elements (5,000 × 16 KiB)
+  can copy up to 78 MiB of chunks that are already loaded.
+- **An index pass reads its run into its own place.** A pass that is
+  stepped across goes first takes a place (`wait_for_a_place`, as before),
+  and then reads its run into that place (`Held::Gathering`). The pass
+  starts in the same place once the run is complete. So no run is read to
+  the end with no place for its pass. The partial copy is in the place, and
+  the finished copy stays there as the pass's own copy of the run. A call
+  waiting for a place steps a run being read in the same way as it steps a
+  pass. An xz run, and any run in a go with no allowance, is read through
+  `gather_run` rather than into a place.
+- **`gather_run` and `Gathers`.** The other reads of a whole run use
+  `Evaluator::gather_run`, which keeps its copies in `Spaces::gathers`:
+  `open_space_at` for a codec that cannot be indexed, `unpack_run`,
+  `run_check` over a run of the file, and a joined stream's parts. A gather
+  sets the run's whole length aside against `GATHER_BYTES` (64 MiB) when it
+  starts. A gather that has started and not finished is never let go of; the
+  proposal's "drops the one read longest ago first" is not built. A gather
+  that would take the total past 64 MiB waits, as a pass waits for a place:
+  it reads on into the unfinished copy with the fewest bytes left. A copy
+  finished by a waiting call stays in `Gathers` until the call that started
+  it takes it. When every copy in `Gathers` is finished and none has been
+  taken, the copy put back in `Gathers` longest ago is let go of.
+  `gather_run` hands a finished copy to its caller and keeps nothing, so a
+  caller reads anything else that may wait for bytes before it gathers the
+  run: `open_space_at` reads a JPEG scan's settings first, and `run_check`
+  the sum written in the file. Otherwise a wait after the gather would lose
+  the copy.
+- **Where `TooMuchAtOnce` is still given.** `gather_run` refuses a run as
+  `Refusal::TooMuchAtOnce` when it cannot set the run's length aside and
+  nothing in `Gathers` can be read on or let go of. That happens only for a
+  run longer than 64 MiB, which every caller refuses as too large before it
+  calls `gather_run`, or for a run gathered while another gather in the same
+  call is under way and has set aside the rest of the 64 MiB. No run of
+  64 MiB or less is refused this way on its own. The check in `read_in`
+  stays, for the reads still made in one call: the code panel's read of a
+  run from its front to a trace step (`decode_step`, which part 4 changes), a
+  JPEG scan's settings, and a template field read whole. The tests are
+  `copies_past_what_they_may_come_to_wait_for_room_and_a_run_past_it_is_refused`
+  (with the 64 MiB lowered to 2 KiB) and
+  `a_read_longer_than_the_store_fails_with_the_reason_and_a_shorter_one_waits`
+  in `eval/tests/resident.rs`, and the `decode_step` call at the end of
+  `a_zip_entry_longer_than_the_store_lists_a_window_at_a_time` in
+  `crates/wasm/tests/open_space_waits.rs`.
+- **A gzip member's bytes are read as far as its stream goes.** Since this
+  document was written, `inflate::Measuring` keeps where it stopped between
+  steps, so the walk that measures a member does not read stretches of
+  doubling length and run `inflate_len` again over each. Before each
+  measuring step, `measure_steps` reads more of the walk's bytes, a window at
+  a time and each window charged, until they reach `MEASURE_AHEAD_BYTES` past
+  where the step starts. That is 128 KiB for the step's 1 Mibit, 65,541
+  bytes for a stored block the step may not stop in, and 1 KiB for one more
+  code: about 193 KiB. Those bytes are always enough for the step. As a
+  guard, a step refused as failed while there are bytes left to read is
+  taken once more with one window more: a step that ran out of bytes would
+  then succeed, and a step over a damaged stream fails again. Any other
+  refusal is final at once, such as output past `Limits::measure` (64 MiB),
+  which more bytes would not change. So each member is decoded once, and its
+  walk reads about one step past the end of its stream, or past where its
+  output passed 64 MiB. The bytes stay in `Measures` with the walk, so each of its two
+  places holds at most 64 MiB, as before. This applies natively too:
+  measuring a short member now reads about 193 KiB, where it read everything
+  to the end of the container, up to 64 MiB. Part 1's cap of half the store
+  is removed, and the walk's key again covers everything from the member's
+  start to the end of the container or 64 MiB on. This undoes the regression part 1 recorded: a member
+  longer than half the store is sized as itself.
+- **Joins are walks.** `join_whole` and `join_lazily` are now one walk,
+  `JoinWalk` in `stitch.rs`, which either holds the joined stream whole or
+  makes it ready to read a part at a time, as the two functions did. The
+  walk is kept in `Spaces::joins` by the path of the stitched node, and waits
+  for one of its two places as a pass does. Before a part is read, the walk
+  checks that the go has allowance left. After the part is read, the go is
+  charged one element, plus one for each 512 bytes the part unpacks to (the
+  rate an index step is charged at) or for each 16 KiB copied. A part that
+  waits for bytes is charged nothing, so it cannot spend each go's allowance
+  before it is read. When a part short enough to be read in one call waits
+  for bytes, the walk also asks for the chunks of the parts after it, up to a
+  window of the file, so a BAM loads about a window of BGZF blocks in each
+  round rather than one block. A go that runs out in a walk reports how far
+  the walk has got through `Evaluator::unpacking`: the bits of the parts'
+  runs read so far, out of the bits of all of them, with the bit where the
+  first part's run starts as the run's place in the file. A stream too large
+  to join is refused before any part is read (`too_large_to_join`), since
+  the sizes it is refused for are all in the part table. Part 1's
+  `parts_cannot_fit` is removed. `join_lazily`'s check that each packed part
+  unpacks to the length its run claimed is kept, and charged per part.
+- **`unpacked_part` goes through `index_run`** only for a packed part, of a
+  codec that can be indexed, whose run needs more of the file than one
+  window. With no `resident_limit()`, as natively, that is a run longer than
+  1 MiB. A shorter run is read and decoded in one call, as before. A BGZF
+  block is under 64 KiB, and an index pass for it would wait for a place
+  behind the passes over other runs.
+- **The web.** The inspector's checksum check asks `runCheck` again until it
+  answers (`Doc.runCheckLoaded`, through `waitToOpen`). A check over a run
+  longer than a window can now answer "working", when the go ran out, or
+  "pending", when chunks are not loaded. A run that fits in the store is
+  loaded before the first ask, as before. `waitToOpen` is unchanged. No
+  string was added or changed, and no percentage is shown while a run is
+  gathered (see "Open questions").
+- **What may still go wrong in the browser.** A .gz member longer than the
+  store has its run read twice, once to measure it and once to unpack it, so
+  the core asks again for chunks it read earlier. `waitToOpen` gives up when
+  the core asks again for a chunk that `waitToOpen` loaded with no "working"
+  reply in between. If Open unpacked is pressed while such a member is still
+  being measured, its wait sees both reads. Measuring answers "working"
+  between its rounds, but reading a run a window at a time answers only
+  "pending" while its chunks load. So the second read, reaching chunks the
+  end of the first read loaded and the store has since pushed out, can make
+  `waitToOpen` give up with `UNPACKED.tooMuchAtOnce`. Pressing Open unpacked
+  again then carries on from where the core stopped. The tests do not meet
+  this, and it was not tried in a browser. Part 7's change to `waitToOpen`
+  removes the risk.
+- **Tests.** In `eval/tests/resident.rs`, over a store of four chunks of
+  1 KiB, the six tests that asserted part 1's refusals, and the one that
+  asserted its regression for gzip members, now assert that the same runs
+  open or are sized as themselves. Four tests are new. The first checks
+  that a run gathered across goes and waits comes to the same bytes as one
+  read. The second asks for three runs longer than the store by turns, and
+  checks that all three open and no pass starts twice. The third checks that
+  copies past what `Gathers` may set aside wait for room, and that a run
+  longer than that on its own is refused. The fourth checks that a gzip
+  member whose output passes a lowered `Limits::measure` (64 KiB) is
+  measured from under 300 KiB of the file, not all 1 MiB of it. In
+  `crates/wasm/tests/open_space_waits.rs`, the store keeps 3 chunks of
+  64 KiB in `a_run_longer_than_the_store_opens_a_window_at_a_time`, where a
+  gzip file of 7 chunks opens, and 16 chunks in the other new tests. A zip
+  entry and a gzip member of about 3 MiB compressed each list and open, with
+  no reply naming more than the 4 chunks of one window and no chunk asked
+  for more than 3 times. The gzip member is followed by a short second
+  member, and is sized as itself. A BGZF file of 140 blocks, over 3 MiB,
+  opens as a tab.
 
 ## Memory
 
@@ -784,9 +1082,10 @@ For an indexed run, besides DESIGN-lazy-unpacking's table:
 The compressed bytes otherwise stay in the file's chunk store, 32 MiB in the
 browser, which the file's tab keeps anyway. A run that falls back to a copy
 (an edited run, a run in a stitched space, a run in a `MemSource`) holds that
-copy, at most 64 MiB, as every run does today. Gathering (part 2) holds at
-most 64 MiB of partial copies in total, and drops the one read longest ago
-first.
+copy, at most 64 MiB, as every run does today. Gathering (part 2) sets aside
+at most 64 MiB for the copies in `Gathers`, and never lets go of a copy it
+has started. An index pass reads its run into its own place in `Unfinished`,
+which holds the same copy once the pass starts.
 
 ## Order of work
 
@@ -798,7 +1097,8 @@ order. Each part needs only the parts before it.
    for joins whose parts add up to more than the store keeps,
    `stream_len_at`'s read capped at half the store, the web strings. Fixes:
    the endless wait, wherever one call needs more chunks than the store
-   keeps.
+   keeps. **Done 2026-11-26**; see the end of "The smaller fix first
+   (part 1)".
 2. **Gather a run a window at a time.** `Evaluator::gather_run`: a run read in
    one call today is read `GATHER_WINDOW` at a time through `read_in`, into a
    copy kept in `Spaces` from one go to the next (at most 64 MiB of partial
@@ -808,11 +1108,13 @@ order. Each part needs only the parts before it.
    the next, and `unpacked_part` steps through `index_run` for codecs that can
    be indexed. Fixes, in the browser and with memory as today: the 34 MiB zip
    entry, a .gz of up to 64 MiB compressed, and a joined stream such as a BAM
-   whose parts come to up to 64 MiB.
+   whose parts come to up to 64 MiB. **Done 2026-11-26**; see "Gathering a
+   run a window at a time (part 2)".
 3. **Decoders read a window.** `Bits` with a base, `inflate::run` taking an
    `Input`, `framing` and `trailer_agrees` taking pieces of the run,
    `ZstdWalk`, `Lzma2` and `decode_step` on windows. Every caller passes the
-   whole run. Nothing a reader sees changes.
+   whole run. Nothing a reader sees changes. **Done 2026-11-26**; see "Built
+   (part 3)" under "The decoders read a window".
 4. **`decode_step` reads only its trace step.** The wasm crate reads at most
    7 bytes of the run. Fixes: the code panel on a trace step deep in a long
    run.

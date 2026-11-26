@@ -10,11 +10,26 @@
  * one.
  *
  * "The field" is the deepest one at the cursor: the same field the inspector
- * shows and the chip beside the bytes names.
+ * shows and the chip beside the bytes names. With Shift held the same two
+ * keys step by the list or structure around it; see `stepDepth`.
  *
  * Kept apart from the view so it can be tested without a page: the view hands
  * in a function that finds the deepest field covering a bit.
  */
+
+/**
+ * How deep Alt+Shift+↑ and Alt+Shift+↓ step, as a path length, for the field
+ * at `path`: one level up from it. For an element of a list that is the list,
+ * so a million-element list is stepped over in one press; for a field of a
+ * PNG chunk it is the chunk, so the keys go from chunk to chunk. Never the
+ * whole file, which there is nothing before or after.
+ *
+ * The nearest list around the field was tried first and went too far: from
+ * the CRC of one PNG chunk it stepped over every chunk at once.
+ */
+export function stepDepth(path: readonly number[]): number {
+  return Math.max(1, path.length - 1);
+}
 
 /** The deepest field covering a bit: where it starts and where it ends, in
  *  bits. Null where no field covers it, or where the answer is not known yet. */

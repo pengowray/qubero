@@ -55,9 +55,13 @@ test("the heading and the counts say how many use which filter, most first", () 
 });
 
 test("image data left compressed says which limit it passed, or that the stream is damaged", () => {
-  assert.equal(RV.pngNotInflated("too-large"), "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large.");
-  assert.equal(RV.pngNotInflated("too-large-lazy"), "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB.");
-  assert.equal(RV.pngNotInflated("failed"), "The image data did not inflate: the zlib stream is damaged or cut short.");
+  assert.equal(RV.pngNotInflated("too-large", "32 MiB"), "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large.");
+  assert.equal(RV.pngNotInflated("too-large-lazy", "32 MiB"), "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB.");
+  assert.equal(
+    RV.pngNotInflated("too-much-at-once", "32 MiB"),
+    "The zlib stream takes up over 32 MiB in the file, and the editor keeps at most 32 MiB of the file in memory at once, so this view cannot inflate the stream.",
+  );
+  assert.equal(RV.pngNotInflated("failed", "32 MiB"), "The image data did not inflate: the zlib stream is damaged or cut short.");
 });
 
 test("an enum's number is read from the brackets its value ends with", () => {

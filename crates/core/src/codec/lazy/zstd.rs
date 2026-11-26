@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use super::seekable::{seekable, Kind};
 use super::{Checkpoints, Decoded, Limits, Progress, Start, Stepped};
-use crate::codec::frames::{self, ZstdWalk};
-use crate::codec::{Codec, Refusal, SpanUnit, Trace, TraceBuilder, MAX_STEPS};
+use crate::codec::frames::{self, Walked, ZstdWalk};
+use crate::codec::{Codec, Refusal, SpanUnit, Trace, TraceBuilder, Window, MAX_STEPS};
 
 /// A zstd run's index pass, done a step at a time as deflate's is. Frames
 /// copy nothing from the ones before them, so a checkpoint is the start of a
@@ -99,7 +99,7 @@ impl ZstdPass {
             Phase::Whole { mut walk, mut out, mut trace, mut last, mut largest } => {
                 let mut over = false;
                 let walked = walk.run(
-                    data,
+                    Window::whole(data),
                     out_bytes,
                     reach,
                     &mut trace,
@@ -117,7 +117,7 @@ impl ZstdPass {
                         Ok(())
                     },
                 );
-                match walked {
+                match walked.and_then(Walked::of_whole) {
                     Ok(None) => {
                         self.phase = Phase::Whole { walk, out, trace, last, largest };
                         Ok(Stepped::Working)
@@ -143,14 +143,14 @@ impl ZstdPass {
                 }
             }
             Phase::Index { mut walk, mut count } => {
-                let walked = walk.run(data, out_bytes, reach, &mut TraceBuilder::off(), &mut |at, o| mark(at, o, marks), &mut |bytes| {
+                let walked = walk.run(Window::whole(data), out_bytes, reach, &mut TraceBuilder::off(), &mut |at, o| mark(at, o, marks), &mut |bytes| {
                     count += bytes.len() as u64;
                     match count > limits.lazy {
                         true => Err(Refusal::TooLargeLazy),
                         false => Ok(()),
                     }
                 });
-                let walked = match walked {
+                let walked = match walked.and_then(Walked::of_whole) {
                     // A frame past the walk's cap, which is the span limit.
                     Err(Refusal::TooLarge) if walk.frame_too_large() => return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
                     w => w?,
@@ -171,13 +171,14 @@ impl ZstdPass {
     }
 }
 
-/// The output of the frames in `data[range]`, which come after `out` bytes
-/// of output and come to `want` bytes. The same walk over the same bytes as
-/// the pass that indexed them, so a span that comes out another length is the
-/// decoder disagreeing with itself.
-pub(super) fn decode_span(data: &[u8], range: std::ops::Range<usize>, out: u64, want: usize, frame_cap: usize) -> Result<Vec<u8>, Refusal> {
+/// The output of the frames in bytes `range` of the run, read from `window`,
+/// which holds them, and which come after `out` bytes of output and come to
+/// `want` bytes. The same walk over the same bytes as the pass that indexed
+/// them, so a span that comes out another length is the decoder disagreeing
+/// with itself.
+pub(super) fn decode_span(window: Window<'_>, range: std::ops::Range<usize>, out: u64, want: usize, frame_cap: usize) -> Result<Vec<u8>, Refusal> {
     let mut bytes = Vec::with_capacity(want);
-    frames::zstd_walk(data, range, out, frame_cap as u64, &mut TraceBuilder::off(), &mut |_, _| {}, &mut |b| {
+    frames::zstd_walk(window, range, out, frame_cap as u64, &mut TraceBuilder::off(), &mut |_, _| {}, &mut |b| {
         if bytes.len() + b.len() > want {
             return Err(Refusal::Failed);
         }
@@ -187,12 +188,12 @@ pub(super) fn decode_span(data: &[u8], range: std::ops::Range<usize>, out: u64, 
     Ok(bytes)
 }
 
-/// The trace of the frames in `data[range]`, which come after `out` bytes of
-/// output: the steps a whole run's trace has over the same frames, counted
-/// from the front of the run and of the output.
-pub(super) fn span_trace(data: &[u8], range: std::ops::Range<usize>, out: u64, frame_cap: usize) -> Result<Trace, Refusal> {
+/// The trace of the frames in bytes `range` of the run, read from `window`,
+/// which come after `out` bytes of output: the steps a whole run's trace has
+/// over the same frames, counted from the front of the run and of the output.
+pub(super) fn span_trace(window: Window<'_>, range: std::ops::Range<usize>, out: u64, frame_cap: usize) -> Result<Trace, Refusal> {
     let mut b = TraceBuilder::with_budget(MAX_STEPS).starting_at(range.start as u64 * 8, out);
-    let end = frames::zstd_walk(data, range.clone(), out, frame_cap as u64, &mut b, &mut |_, _| {}, &mut |_| Ok(()))?;
+    let end = frames::zstd_walk(window, range.clone(), out, frame_cap as u64, &mut b, &mut |_, _| {}, &mut |_| Ok(()))?;
     b.finish_at(range.end as u64 * 8, end);
     Ok(b.done())
 }

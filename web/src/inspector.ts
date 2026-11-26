@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { formatAddress, formatBytes, formatLimit, formatOffset, RESIDENT_BYTES } from "./doc.ts";
 import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
@@ -15,7 +15,7 @@ import { docPlaces } from "./tableplace.ts";
 import type { CodecKind, DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -124,6 +124,7 @@ function overUnpacked(what: string, at: number, bytes: number, exact: boolean, k
 const ALGORITHM: Readonly<Record<string, string>> = {
   crc32: "CRC-32",
   crc16: "CRC-16",
+  crc8: "CRC-8",
   /** LHA's header check: every byte added up, kept to eight bits. Shares its
    *  name with `sum` below; see there. */
   sum8: "Checksum",
@@ -1105,8 +1106,10 @@ export class Inspector {
     }
     // A compressed run nothing could open says so where its value would be.
     if (n.refused !== null) {
-      const why = DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
-      this.detail.append(` · ${why}`);
+      const why = el("span", "", DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER);
+      const limit = DECODED_REFUSED_TITLE[n.refused];
+      if (limit !== undefined) why.title = limit(formatLimit(RESIDENT_BYTES));
+      this.detail.append(" · ", why);
     }
     // Whether this field is one of a compressed block's codes decides three
     // things below, so it is settled once here: what the box holds, whether
@@ -1646,11 +1649,13 @@ export class Inspector {
                 : { at: check.blanked[0], bytes: check.blanked[1], byte: check.blanked[2] },
             ),
       check: async () => {
-        // Loaded here rather than in the core: the core refuses a run whose
-        // bytes have not arrived, and what a reader wants is for them to
-        // arrive. Asking for them and then asking again is the whole fix.
-        await this.doc.ensureRange(over[0], over[1]);
-        const verdict = this.doc.runCheck(path);
+        // Loaded here rather than in the core: the core answers "pending"
+        // for a run whose bytes have not arrived, and what a reader wants is
+        // for them to arrive. A run that fits in the chunk store is loaded in
+        // one go first. A longer one is read by the core a window at a time,
+        // loading each window's chunks as it asks for them.
+        if (over[1] <= RESIDENT_BYTES) await this.doc.ensureRange(over[0], over[1]);
+        const verdict = await this.doc.runCheckLoaded(path);
         if (verdict.status === "error") throw new Error(verdict.message);
         if (verdict.status !== "ok" || verdict.node === null) throw new Error(CHECKED.missingBytes);
         // Taking the sum over one member of an xz stream just opened that
