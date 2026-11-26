@@ -7,7 +7,7 @@
 //!
 //! What is here: the box tree, the movie, track and media headers in both
 //! their 32-bit and 64-bit versions, edit lists, data references, QuickTime and
-//! iTunes metadata, and Blackmagic RAW's per-frame metadata. The sample
+//! iTunes metadata, Nero chapters, and Blackmagic RAW's per-frame metadata. The sample
 //! descriptions and the decoder configurations inside them are in
 //! [`entries`], the sample tables in [`tables`], movie fragments in
 //! [`fragments`], HEIF and AVIF items in [`items`], what a sample holds in
@@ -199,6 +199,12 @@ fn payload() -> T {
         (cc("keys"), metadata_keys()),
         (cc("ilst"), metadata_items()),
         (cc("cprt"), copyright()),
+        (cc("chpl"), chapter_list()),
+        (
+            cc("encd"),
+            T::structure("TextEncoding", vec![("encoding", u32be())])
+                .field_doc("encoding", "Which text encoding the sample's text is in. ffmpeg writes 0x00000100 here to mark its chapter titles as UTF-8."),
+        ),
         (cc("iods"), entries::iods()),
         (cc("uuid"), uuid()),
         (cc("mogy"), motion_vector("Gyroscope")),
@@ -538,6 +544,30 @@ fn user_data_text() -> T {
         .field_doc("language", "Below 0x400: a Macintosh language code (0 is English). From 0x400: an ISO 639-2/T code packed as three five-bit letters."),
         Until::End,
     )
+}
+
+/// Nero's chapter list, `chpl` in `moov/udta`: each chapter's start time and
+/// title. ffmpeg writes it, with version 1, whenever a file has chapters, and
+/// a QuickTime chapter track beside it for players that read only that.
+fn chapter_list() -> T {
+    let chapter = T::structure(
+        "Chapter",
+        vec![
+            ("start", T::u64(Big)),
+            ("start_seconds", T::computed_real(E::field("start").div(E::real(10_000_000.0)))),
+            ("title_length", T::u8()),
+            ("title", T::utf8(E::field("title_length").at_most(E::Remaining))),
+        ],
+    )
+    .named_by("title")
+    .field_doc("start", "When the chapter starts, in units of 100 nanoseconds from the start of playback.");
+    let mut fields = full_box();
+    fields.extend(vec![
+        ("reserved", by_version(T::bytes(E::lit(0)), u32be())),
+        ("chapter_count", T::u8()),
+        ("chapters", T::array(chapter, E::field("chapter_count"))),
+    ]);
+    T::structure("ChapterList", fields).field_doc("reserved", "Four bytes in version 1, written as 0. Version 0 has none.")
 }
 
 fn copyright() -> T {
@@ -1085,6 +1115,35 @@ pub(super) mod tests {
         assert_eq!(value(&mut ev, &d, &["0", "body", "1", "values", "0", "body", "value", "track"]), Value::UInt(3));
         assert_eq!(value(&mut ev, &d, &["0", "body", "1", "values", "0", "body", "value", "track_count"]), Value::UInt(12));
         assert_eq!(value(&mut ev, &d, &["1", "body", "0", "body", "0", "text"]), Value::Str("+37.7749-122.4194/".into()));
+    }
+
+    /// A Nero chapter list as ffmpeg writes it: version 1, four reserved
+    /// bytes, a one-byte count, then each chapter's start and title.
+    #[test]
+    fn nero_chapters_read_start_and_title() {
+        let mut body = 0u32.to_be_bytes().to_vec(); // reserved
+        body.push(2);
+        body.extend_from_slice(&0u64.to_be_bytes());
+        body.push(9);
+        body.extend_from_slice(b"Emergence");
+        body.extend_from_slice(&15_000_000u64.to_be_bytes());
+        body.push(12);
+        body.extend_from_slice(b"Feeding buzz");
+        let udta = boxed(b"udta", &full(b"chpl", 1, 0, &body));
+        let d = Document::new(MemSource(udta));
+        let mut ev = Evaluator::new(mp4());
+        let chpl = ["0", "body", "0", "body"];
+        assert_eq!(value(&mut ev, &d, &[&chpl[..], &["chapter_count"]].concat()), Value::UInt(2));
+        let second = [&chpl[..], &["chapters", "1"]].concat();
+        assert_eq!(value(&mut ev, &d, &[&second[..], &["title"]].concat()), Value::Str("Feeding buzz".into()));
+        assert_eq!(value(&mut ev, &d, &[&second[..], &["start"]].concat()), Value::UInt(15_000_000));
+        assert_eq!(value(&mut ev, &d, &[&second[..], &["start_seconds"]].concat()), Value::Float(1.5));
+
+        // Version 0 has no reserved bytes.
+        let d = Document::new(MemSource(boxed(b"udta", &full(b"chpl", 0, 0, &body[4..]))));
+        let mut ev = Evaluator::new(mp4());
+        assert_eq!(value(&mut ev, &d, &[&chpl[..], &["chapter_count"]].concat()), Value::UInt(2));
+        assert_eq!(value(&mut ev, &d, &[&chpl[..], &["chapters", "0", "title"]].concat()), Value::Str("Emergence".into()));
     }
 
     #[test]

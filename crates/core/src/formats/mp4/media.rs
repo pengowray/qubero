@@ -136,9 +136,22 @@ fn pcm(endian: Endian) -> T {
 fn text_sample() -> T {
     T::structure(
         "TextSample",
-        vec![("length", u16be()), ("text", T::utf8(E::field("length").at_most(E::Remaining))), ("modifiers", T::bytes(E::Remaining))],
+        vec![("length", u16be()), ("text", T::utf8(E::field("length").at_most(E::Remaining))), ("modifiers", modifiers())],
     )
     .named_by("text")
+}
+
+/// What follows a text sample's text: boxes that style it or say how it is
+/// encoded, such as the `encd` box ffmpeg puts after each chapter title.
+/// Read as boxes only while each one's size fits in the sample; anything
+/// else stays bytes.
+fn modifiers() -> T {
+    let size = || E::peek(32, Big);
+    let fits = E::lit(8)
+        .less_or_equal(E::Remaining)
+        .both(E::lit(8).less_or_equal(size()))
+        .both(size().less_or_equal(E::Remaining));
+    T::switch(fits, vec![(1, T::repeat(T::Named("Box".into()), Until::End))], T::bytes(E::Remaining))
 }
 
 /// An H.264 sample: NAL units, each with its length in front.

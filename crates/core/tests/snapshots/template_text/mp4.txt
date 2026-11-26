@@ -940,6 +940,25 @@ type BoxBody = switch type {
     language: u5be[3]
     notice: text[remaining] padded with 0x00 utf8
   }
+  'chpl' => ChapterList {
+    version: u8be
+    flags: u24be
+    // Four bytes in version 1, written as 0. Version 0 has none.
+    reserved: switch version {1 => u32be, _ => bytes[0]}
+    chapter_count: u8be
+    chapters: Chapter (named by title) {
+      // When the chapter starts, in units of 100 nanoseconds from the start of playback.
+      start: u64be
+      start_seconds: computed real start / 10000000.0
+      title_length: u8be
+      title: text[min(title_length, remaining)] utf8
+    }[chapter_count]
+  }
+  'encd' => TextEncoding {
+    // Which text encoding the sample's text is in. ffmpeg writes 0x00000100 here to mark its
+        chapter titles as UTF-8.
+    encoding: u32be
+  }
   'iods' => InitialObjectDescriptor {
     version: u8be
     flags: u24be
@@ -3665,12 +3684,18 @@ type SampleContent = switch format {
   'tx3g' => TextSample (named by text) {
     length: u16be
     text: text[min(length, remaining)] utf8
-    modifiers: bytes[remaining]
+    modifiers: switch 8 <= remaining and 8 <= peek(u32be) and peek(u32be) <= remaining {
+      1 => repeat(until end) Box
+      _ => bytes[remaining]
+    }
   }
   'text' => TextSample (named by text) {
     length: u16be
     text: text[min(length, remaining)] utf8
-    modifiers: bytes[remaining]
+    modifiers: switch 8 <= remaining and 8 <= peek(u32be) and peek(u32be) <= remaining {
+      1 => repeat(until end) Box
+      _ => bytes[remaining]
+    }
   }
   'tmcd' => TimecodeSample {
     frame_number: u32be

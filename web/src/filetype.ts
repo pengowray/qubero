@@ -173,6 +173,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   dv: "DV video",
   wav: "WAVE audio",
   w4v: "W4V audio",
+  zc: "Anabat zero-crossing recording",
   aiff: "AIFF audio",
   flac: "FLAC audio",
   au: "Sun AU audio",
