@@ -348,6 +348,12 @@ impl State {
     pub(super) fn props(&self) -> Props {
         self.props
     }
+
+    /// How much memory the models take outside the struct: the table of
+    /// literal models, whose size the properties set.
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.lit.capacity() * std::mem::size_of::<u16>()
+    }
 }
 
 /// Why a run of symbols stopped.

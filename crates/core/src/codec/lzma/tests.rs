@@ -311,6 +311,44 @@ fn a_stream_that_will_not_pack_holds_stored_chunks_and_a_reset() {
     }
 }
 
+/// Streams read a chunk at a time, by two decoders taking turns, come to the
+/// bytes each stream comes to read whole, and the chunk headers alone say how
+/// many bytes that is. A stream cut short anywhere has headers that run past
+/// its end, so its length is refused.
+#[test]
+fn a_stream_read_a_chunk_at_a_time_comes_to_the_same_bytes() {
+    let streams = [
+        pack2(&mixed(300_000), 3, 0, 2, 1 << 16, Some(1 << 14)),
+        pack2(&noise(200_000), 3, 0, 2, 1 << 12, Some(1 << 12)),
+        pack2(&mixed(2_200_000), 3, 0, 2, 1 << 16, None),
+        pack2(&[], 3, 0, 2, 1 << 16, None),
+    ];
+    let whole: Vec<Vec<u8>> = streams.iter().map(|s| lzma2(s).expect("reads").0).collect();
+    for (s, w) in streams.iter().zip(&whole) {
+        assert_eq!(lzma2_len(s), Ok(w.len() as u64));
+    }
+    for pair in [[0, 1], [2, 0], [1, 3]] {
+        let mut decoders = [Lzma2::new(), Lzma2::new()];
+        let mut outs = [Vec::new(), Vec::new()];
+        let mut ended = [false, false];
+        let mut turns = 0;
+        while ended != [true, true] {
+            for i in 0..2 {
+                if !ended[i] {
+                    ended[i] = decoders[i].chunk(&streams[pair[i]], &mut outs[i], &mut TraceBuilder::off()).expect("reads");
+                    turns += 1;
+                }
+            }
+        }
+        assert!(turns > 4, "{turns} chunks, so the streams did not take turns");
+        assert!(outs[0] == whole[pair[0]] && outs[1] == whole[pair[1]], "streams {pair:?} differ read a chunk at a time");
+    }
+    let s = &streams[0];
+    for n in (0..s.len()).step_by(7).chain([s.len() - 1]) {
+        assert_eq!(lzma2_len(&s[..n]), Err(Refusal::Failed), "cut to {n} of {}", s.len());
+    }
+}
+
 /// An LZMA chunk that starts over in the middle of a stream: new properties, a
 /// fresh state, and a dictionary the matches after it may not reach back past.
 ///
