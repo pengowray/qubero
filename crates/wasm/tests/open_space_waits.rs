@@ -323,6 +323,19 @@ fn a_gzip_member_longer_than_the_store_is_refused_as_too_much_at_once() {
     // same of the joined stream.
     let reply = parse(&ed.open_space(0, &[1]));
     assert_eq!(reply["node"]["refused"], "too-much-at-once", "{reply}");
+    // And listing `decoded` where it is declared reads the member's run as
+    // the joined stream's one part, which fails the same way, naming the part,
+    // instead of waiting.
+    let inside = match children(&mut ed, &file, &mut fed, &[1]) {
+        Ok(inside) => inside,
+        Err(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert_eq!(inside.len(), 1, "{inside:?}");
+    let reply = match ask_feeding(&mut ed, &file, &mut fed, |ed| ed.template_children(0, &[1, 0], 0.0, 1e9)) {
+        Asked::Answered(reply) => reply,
+        Asked::Again(c) => panic!("chunk {c} asked for again after it was fed"),
+    };
+    assert_eq!(reply["message"], "members[0].compressed is too large for the editor to keep in memory at once", "{reply}");
 }
 
 /// Bits in the order deflate packs them, from the low bit of each byte up.

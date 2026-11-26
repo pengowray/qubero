@@ -242,7 +242,7 @@ fn gzip_member(content: &[u8]) -> Vec<u8> {
 /// read, which in the browser reads at most half the store. A member that
 /// ends inside that is measured as anywhere; one that does not is taken to
 /// run up to the trailer at the end of the file, which is right for a file of
-/// one member.
+/// one member and wrong for a member followed by others.
 #[test]
 fn a_gzip_member_is_measured_from_at_most_half_the_store() {
     // Three small members, each measured where it ends.
@@ -259,13 +259,17 @@ fn a_gzip_member_is_measured_from_at_most_half_the_store() {
         at += len + 18;
     }
 
-    // One member longer than half the store: measured as nothing, and the
-    // template's fallback takes it to the trailer.
-    let bytes = gzip_member(&noise(3 * 1024));
+    // One member longer than half the store and then a short one, the whole
+    // file well inside the store: the first is measured as nothing, and the
+    // template's fallback takes it to the last trailer, so the file reads as
+    // one member. The same file in memory is measured as two.
+    let bytes: Vec<u8> = [gzip_member(&noise(2560)), gzip_member(&noise(300))].concat();
+    assert!(bytes.len() < 3 * 1024, "{} bytes", bytes.len());
     let mut d = stored(&bytes, 4);
     let mut ev = Evaluator::new(crate::formats::gzip());
+    assert_eq!(fed(&mut d, &bytes, |d| ev.node(d, &[0])).unwrap().child_count, 1);
     let run = fed(&mut d, &bytes, |d| ev.node(d, &[0, 0, 10])).unwrap();
     assert_eq!(run.size_bits / 8, bytes.len() as u64 - 18);
-    // Within the store, it is still opened.
-    assert_eq!(fed(&mut d, &bytes, |d| ev.node(d, &[0, 0, 10, 0])).unwrap().size_bits, 3 * 1024 * 8);
+    let mut ev = Evaluator::new(crate::formats::gzip());
+    assert_eq!(ev.node(&doc(&bytes), &[0]).unwrap().child_count, 2);
 }

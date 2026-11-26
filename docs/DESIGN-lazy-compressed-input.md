@@ -780,6 +780,14 @@ so its refusal becomes rare, and that is fine.
   `resident_limit()`. A read within one chunk of the limit that does not start
   on a chunk can still touch one chunk more than the store keeps, and waits
   as before. `waitToOpen`'s rule covers it.
+- **What is still wrong, and expected.** A .gz of several members, one of
+  them over 16 MiB compressed, now reads in the browser as one member running
+  to the last trailer, even when the file fits in the store; part 2's
+  doubling stretches fix it. And listing a joined stream whose part is
+  refused, such as a large .gz's `decoded`, fails the read with the part's
+  name (`members[0].compressed is too large for the editor to keep in memory
+  at once`), which `flatten.ts` draws as nothing under the stream, as for any
+  part that fails.
 - **Strings.** Beyond the two below: the joined stream's status-bar message
   reuses `UNPACKED.tooMuchAtOnce`, which now takes the limit; the report's
   finding (`RV.refused`) and its PNG paragraph (`RV.pngNotInflated`) have
