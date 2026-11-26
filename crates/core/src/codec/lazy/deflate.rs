@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::seekable::{seekable, Kind};
 use super::{wrapper, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
-use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, Ended, Framing, Input, Resume, Sink, Wrapper};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
 /// A deflate, zlib or gzip run's index pass, done a step at a time: each
@@ -59,7 +59,7 @@ impl DeflatePass {
         if packed.len() > CAP_BYTES {
             return Err(Refusal::TooLarge);
         }
-        let framing = inflate::framing(wrapper, &packed)?;
+        let framing = inflate::framing(wrapper, &packed, packed.len())?.found()?;
         let mut trace = TraceBuilder::with_budget(limits.whole_steps).carried_on();
         if wrapper != Wrapper::Raw {
             trace.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
@@ -137,7 +137,7 @@ impl DeflatePass {
             Phase::Whole { mut sink, mut trace, from } => {
                 sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
                 sink.slice_bits = bits_end(from.map_or(f.start, |r| r.in_bit));
-                match inflate::run(data, f.start, f.end, &mut sink, &mut trace, from) {
+                match inflate::run(Input::whole(data), f.start, f.end, &mut sink, &mut trace, from) {
                     Ok(Ended::Stopped(_)) => {
                         let from = sink.stopped.take();
                         // Summed this far and no further: past the cap the
@@ -155,7 +155,7 @@ impl DeflatePass {
                         let rest = &out[sums.upto as usize..];
                         let crc = || crc32_update(sums.crc, rest);
                         let adler = || adler32_update(sums.adler, rest);
-                        if !inflate::trailer_agrees(&f, data, out.len() as u64, crc, adler) {
+                        if !inflate::trailer_agrees(&f, &data[f.trailer()], out.len() as u64, crc, adler) {
                             return Err(Refusal::Failed);
                         }
                         if f.wrapper != Wrapper::Raw {
@@ -174,7 +174,7 @@ impl DeflatePass {
             Phase::Index { mut sink, from } => {
                 sink.slice_end = sink.len().saturating_add(out_bytes.max(1));
                 sink.slice_bits = bits_end(from.in_bit);
-                match inflate::run(data, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(from)) {
+                match inflate::run(Input::whole(data), f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(from)) {
                     Ok(Ended::Stopped(_)) => {
                         let from = sink.stopped.take().expect("only a step's end stops this decode");
                         self.phase = Phase::Index { sink, from };
@@ -218,7 +218,7 @@ impl DeflatePass {
         let len = sink.len();
         sink.sum_to(len);
         let sums = sink.sums.expect("set when the pass started");
-        if !inflate::trailer_agrees(&self.framing, &self.packed, len, || sums.crc, || sums.adler) {
+        if !inflate::trailer_agrees(&self.framing, &self.packed[self.framing.trailer()], len, || sums.crc, || sums.adler) {
             return Err(Refusal::Failed);
         }
         let checkpoints = sink.marks.take().expect("set when the pass started").list;

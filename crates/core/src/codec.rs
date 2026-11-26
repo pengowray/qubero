@@ -50,6 +50,87 @@ use std::ops::Range;
 /// hex editor.
 pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 
+/// Some of a run's compressed bytes, given to a decoder at once: bytes
+/// `start()..end()` of a run `run_len()` bytes long.
+///
+/// A decoder given a window counts every position it records from the run's
+/// front, as it does when given the whole run, so what it records from a
+/// window is what it records from the run. A window that ends before the run
+/// does is not the run being cut short: [`Window::reaches_end`] tells the
+/// two apart. See `docs/DESIGN-lazy-compressed-input.md`, "The decoders read
+/// a window".
+#[derive(Debug, Clone, Copy)]
+pub struct Window<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    run_len: usize,
+}
+
+impl<'a> Window<'a> {
+    /// All of a run.
+    pub fn whole(run: &'a [u8]) -> Window<'a> {
+        Window { bytes: run, at: 0, run_len: run.len() }
+    }
+
+    /// `bytes`, which are bytes `at..at + bytes.len()` of a run `run_len`
+    /// bytes long. Nothing when they would reach past the run's end.
+    pub fn of(bytes: &'a [u8], at: usize, run_len: usize) -> Option<Window<'a>> {
+        (at.checked_add(bytes.len())? <= run_len).then_some(Window { bytes, at, run_len })
+    }
+
+    /// The bytes the window holds.
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The byte of the run the window starts at.
+    pub fn start(&self) -> usize {
+        self.at
+    }
+
+    /// One past the last byte of the run the window holds.
+    pub fn end(&self) -> usize {
+        self.at + self.bytes.len()
+    }
+
+    /// How long the whole run is.
+    pub fn run_len(&self) -> usize {
+        self.run_len
+    }
+
+    /// Whether the window holds the run's last byte, so that running out of
+    /// it is running out of the run.
+    pub fn reaches_end(&self) -> bool {
+        self.end() >= self.run_len
+    }
+
+    /// Bytes `range` of the run, when the window holds all of them.
+    pub fn get(&self, range: Range<usize>) -> Option<&'a [u8]> {
+        let from = range.start.checked_sub(self.at)?;
+        let to = range.end.checked_sub(self.at)?;
+        self.bytes.get(from..to)
+    }
+
+    /// Bytes of the run from `at` to the end of the window. Nothing for a
+    /// byte before the window starts or past its end.
+    pub fn from(&self, at: usize) -> Option<&'a [u8]> {
+        self.bytes.get(at.checked_sub(self.at)?..)
+    }
+
+    /// The window over a run that is bytes `range` of this one, such as the
+    /// LZMA2 data of an xz block, with its positions counted from that run's
+    /// front: what this window holds of `range`. When it holds none of it,
+    /// an empty window at that run's first byte.
+    pub fn within(&self, range: Range<usize>) -> Window<'a> {
+        let run_len = range.len();
+        let (from, to) = (range.start.max(self.at), range.end.min(self.end()));
+        match self.bytes.get(from.wrapping_sub(self.at)..to.wrapping_sub(self.at)) {
+            Some(bytes) if from < to => Window { bytes, at: from - range.start, run_len },
+            _ => Window { bytes: &[], at: 0, run_len },
+        }
+    }
+}
+
 /// What a run is compressed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Codec {

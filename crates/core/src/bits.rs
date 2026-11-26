@@ -71,10 +71,18 @@ pub fn bytes_for(bits: u64) -> usize {
 /// highest first. That is [`Self::bit`] called in a loop, which reads the bits
 /// in the reader's order and leaves the building to the caller.
 ///
-/// `at` is how many bits have been taken, which a BUFR reading keeps as where
-/// each value starts and a codec's trace records as where each step starts.
-/// It may be set outright to move the reader, and may run past the end: what
-/// is past the end reads as nothing, or as nought where [`Self::peek`] says so.
+/// `at` is how many bits of `buf` have been taken, which a BUFR reading keeps
+/// as where each value starts and a codec's trace records as where each step
+/// starts. It may be set outright to move the reader, and may run past the
+/// end: what is past the end reads as nothing, or as nought where
+/// [`Self::peek`] says so.
+///
+/// **A buffer that is part of a longer run.** A decoder may be given only
+/// some of a run's bytes, with the positions it records still counted from
+/// the run's front. [`Self::with_base`] says how many bits of the run come
+/// before `buf`. `at` and the end stay counted from `buf`, so taking bits
+/// costs the same; [`Self::pos`], [`Self::seek`], [`Self::end_at`] and
+/// [`Self::end_pos`] are the ones that count from the run's front.
 #[derive(Clone, Copy)]
 pub(crate) struct Bits<'a, const LOW_FIRST: bool = false> {
     buf: &'a [u8],
@@ -82,6 +90,9 @@ pub(crate) struct Bits<'a, const LOW_FIRST: bool = false> {
     /// One past the last bit that may be taken: the end of `buf`, unless
     /// [`Self::until`] brought it in.
     end: usize,
+    /// How many bits of the run come before `buf[0]`. Nought for a reader
+    /// given the whole run.
+    base: u64,
 }
 
 /// Bits taken from the low end of each byte first. See [`Bits`].
@@ -91,7 +102,7 @@ impl<'a> Bits<'a> {
     /// A reader at the first bit of `buf`, taking the high bit of each byte
     /// first.
     pub(crate) fn new(buf: &'a [u8]) -> Self {
-        Bits { buf, at: 0, end: buf.len() * 8 }
+        Bits { buf, at: 0, end: buf.len() * 8, base: 0 }
     }
 }
 
@@ -99,7 +110,7 @@ impl<'a> LowBits<'a> {
     /// A reader at the first bit of `buf`, taking the low bit of each byte
     /// first.
     pub(crate) fn low_first(buf: &'a [u8]) -> Self {
-        Bits { buf, at: 0, end: buf.len() * 8 }
+        Bits { buf, at: 0, end: buf.len() * 8, base: 0 }
     }
 }
 
@@ -111,6 +122,38 @@ impl<'a, const LOW_FIRST: bool> Bits<'a, LOW_FIRST> {
     pub(crate) fn until(mut self, end: usize) -> Self {
         self.end = end.min(self.buf.len() * 8);
         self
+    }
+
+    /// The same reader over a `buf` that starts at bit `base` of a longer
+    /// run, so that [`Self::pos`] and the other positions count from the
+    /// run's front. `base` is a multiple of 8 wherever `buf` is a slice of
+    /// the run's bytes.
+    pub(crate) fn with_base(mut self, base: u64) -> Self {
+        self.base = base;
+        self
+    }
+
+    /// [`Self::until`] with `end` counted from the run's front: the reader
+    /// stops at bit `end` of the run, or at the end of `buf` if that comes
+    /// first.
+    pub(crate) fn end_at(self, end: u64) -> Self {
+        let end = usize::try_from(end.saturating_sub(self.base)).unwrap_or(usize::MAX);
+        self.until(end)
+    }
+
+    /// One past the last bit that may be taken, counted from the run's
+    /// front.
+    pub(crate) fn end_pos(&self) -> u64 {
+        self.base + self.end as u64
+    }
+
+    /// Move to bit `pos` of the run. Refused for a bit before `buf` starts,
+    /// which this reader does not hold. A bit past the end is allowed, as it
+    /// is for `at`.
+    pub(crate) fn seek(&mut self, pos: u64) -> Result<(), Refusal> {
+        let at = pos.checked_sub(self.base).ok_or(Refusal::Failed)?;
+        self.at = usize::try_from(at).map_err(|_| Refusal::Failed)?;
+        Ok(())
     }
 
     /// The bytes the bits are in, all of them, from the first.
@@ -215,9 +258,24 @@ impl<'a, const LOW_FIRST: bool> Bits<'a, LOW_FIRST> {
         (0..n).map(|_| self.take(8).map(|b| b as u8)).collect()
     }
 
-    /// Where the reader is, as the bit a codec's trace records a step at.
+    /// The next `n` bytes as they are in the buffer, taken, for a reader
+    /// that is on a byte boundary: a deflate stored block's payload. Nothing
+    /// when the reader is not on a boundary or there are not that many left.
+    pub(crate) fn slice(&mut self, n: usize) -> Option<&'a [u8]> {
+        if self.at % 8 != 0 || self.left() < n.checked_mul(8)? {
+            return None;
+        }
+        let from = self.at / 8;
+        self.at += n * 8;
+        Some(&self.buf[from..from + n])
+    }
+
+    /// Where the reader is, as the bit a codec's trace records a step at:
+    /// counted from the front of the run, which is the front of `buf` unless
+    /// [`Self::with_base`] said otherwise.
+    #[inline]
     pub(crate) fn pos(&self) -> u64 {
-        self.at as u64
+        self.base + self.at as u64
     }
 
     /// The next bit as a number, or the refusal a decoder gives when its
@@ -349,6 +407,41 @@ mod tests {
         assert_eq!(low.peek(16), 0x07ff);
         let past = Bits { at: 20, ..Bits::new(&buf) };
         assert_eq!((past.peek(8), past.left()), (0, 0));
+    }
+
+    /// A reader over a copy of some of a run's bytes, told where they start,
+    /// reads what a reader over the whole run reads from the same place, and
+    /// says the same positions, in both orders. A bit before the copy cannot
+    /// be moved to, and the end can be given as a bit of the run.
+    #[test]
+    fn a_reader_over_part_of_a_run_counts_from_the_run_front() {
+        let run: Vec<u8> = (0..40u32).map(|i| (i.wrapping_mul(0x9e37_79b9) >> 11) as u8).collect();
+        let part = run[13..31].to_vec();
+        let base = 13 * 8;
+        for start in [104u64, 105, 111, 140, 200] {
+            let (mut whole, mut piece) = (Bits::new(&run), Bits::new(&part).with_base(base));
+            whole.at = start as usize;
+            piece.seek(start).expect("inside the part");
+            let (mut lw, mut lp) = (Bits::low_first(&run), Bits::low_first(&part).with_base(base).end_at(31 * 8));
+            lw.at = start as usize;
+            lp.seek(start).expect("inside the part");
+            for n in [1u32, 3, 8, 13] {
+                assert_eq!(piece.pos(), whole.pos());
+                assert_eq!(piece.take(n), whole.take(n), "high first, {n} bits from {start}");
+                assert_eq!(lp.pos(), lw.pos());
+                assert_eq!(lp.take(n), lw.take(n), "low first, {n} bits from {start}");
+            }
+        }
+        let mut piece = Bits::low_first(&part).with_base(base);
+        assert_eq!(piece.seek(base - 1), Err(Refusal::Failed));
+        assert_eq!(piece.end_pos(), 31 * 8);
+        let short = piece.end_at(20 * 8);
+        assert_eq!((short.end_pos(), short.left()), (20 * 8, 7 * 8));
+        piece.seek(16 * 8).expect("inside the part");
+        assert_eq!(piece.slice(3), Some(&run[16..19]));
+        assert_eq!(piece.pos(), 19 * 8);
+        piece.skip(1);
+        assert_eq!(piece.slice(1), None, "off a byte boundary");
     }
 
     #[test]

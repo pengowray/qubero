@@ -1346,3 +1346,149 @@ fn zstd_blocks_past_the_window_are_steps_of_their_own() {
     reads_back(&s, &data, 73);
     traces_agree(&s, &whole, 79);
 }
+
+// Decoding from a window: a decoder handed a copy of only some of the run's
+// bytes, told which byte of the run they start at, makes what it makes from
+// the whole run. Each copy holds no more than the decode needs, so a decode
+// that reads a byte outside it, or counts a position from the copy's front
+// rather than the run's, is refused or disagrees.
+
+/// What two traces of the same bits have to agree on.
+fn shape(t: &Trace) -> (Vec<Step>, Vec<crate::codec::Block>, Vec<crate::codec::Member>, (u64, u64), u64, u64, bool) {
+    (t.steps().collect(), t.blocks().to_vec(), t.members().to_vec(), t.start(), t.in_bits(), t.out_bytes(), t.coarse())
+}
+
+/// A copy of bytes `from..to` of `run`, and the byte it starts at.
+fn copy_of(run: &[u8], from: usize, to: usize) -> (Vec<u8>, usize) {
+    let to = to.min(run.len());
+    (run[from..to].to_vec(), from)
+}
+
+/// The window over a copy made by [`copy_of`], as a window of `run`.
+fn window<'a>(copy: &'a (Vec<u8>, usize), run: &[u8]) -> crate::codec::Window<'a> {
+    crate::codec::Window::of(&copy.0, copy.1, run.len()).expect("inside the run")
+}
+
+/// What a decode of deflate span `k` needs, copied out of the run: from the
+/// byte its checkpoint's bit is in to the byte holding the bit before the
+/// next checkpoint's (or the run's end, for the last span), and the header
+/// of the block the checkpoint is inside, [`inflate::MAX_HEAD_BYTES`] of it.
+fn span_copies(s: &Seekable, packed: &[u8], k: usize) -> ((Vec<u8>, usize), Option<(Vec<u8>, usize)>) {
+    let c = &s.checkpoints[k];
+    let to = s.checkpoints.get(k + 1).map_or(packed.len(), |n| n.in_bit.div_ceil(8) as usize);
+    let code = copy_of(packed, (c.in_bit / 8) as usize, to);
+    let head = c.block().map(|h| copy_of(packed, (h / 8) as usize, (h / 8) as usize + inflate::MAX_HEAD_BYTES));
+    (code, head)
+}
+
+/// Raw deflate of `data` in fixed-Huffman blocks only.
+fn fixed_only(data: &[u8]) -> Vec<u8> {
+    use miniz_oxide::deflate::core::deflate_flags::TDEFL_FORCE_ALL_STATIC_BLOCKS;
+    use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus};
+    let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(6, -15, 0) | TDEFL_FORCE_ALL_STATIC_BLOCKS);
+    let mut buf = vec![0u8; data.len() * 2 + 1024];
+    let (status, read, written) = compress(&mut c, data, &mut buf, TDEFLFlush::Finish);
+    assert!(read == data.len() && status == TDEFLStatus::Done, "{status:?}");
+    buf.truncate(written);
+    buf
+}
+
+/// Every deflate span, decoded and traced from copies of only the bytes it
+/// needs, comes to the bytes and the trace it comes to from the whole run:
+/// stored blocks, fixed and dynamic blocks with checkpoints inside them,
+/// every wrapper, and the last span with the trailer.
+#[test]
+fn a_deflate_span_from_a_window_is_the_span_from_the_whole_run() {
+    let data = mixed(300_000, 41);
+    let (mut inside, mut header_before, mut kinds) = (0, 0, [0usize; 3]);
+    for (codec, packed) in [
+        (Codec::Deflate, miniz_oxide::deflate::compress_to_vec(&data, 0)),
+        (Codec::Deflate, miniz_oxide::deflate::compress_to_vec(&data, 9)),
+        (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6)),
+        (Codec::Gzip, gzip_of(&data, 1)),
+        (Codec::Deflate, flushed(&data, 6, 300)),
+        (Codec::Gzip, gzip_around(&data, &fixed_only(&data))),
+    ] {
+        let s = indexed(codec, &packed, Limits { spacing: 4 << 10, checkpoints: 100, ..small() });
+        assert!(s.spans() > 4, "{codec:?}: {} spans", s.spans());
+        for k in 0..s.spans() {
+            let (code, head) = span_copies(&s, &packed, k);
+            let input = inflate::Input::new(window(&code, &packed), head.as_ref().map(|h| window(h, &packed)));
+            let want = s.span_bytes(k);
+            let mut bytes = vec![0u8; (want.end - want.start) as usize];
+            s.read(want.start, &mut bytes).expect("reads");
+            let got = s.deflate_span(k, input).unwrap_or_else(|e| panic!("{codec:?} span {k}: {e:?}"));
+            assert!(got == bytes, "{codec:?} span {k}: the bytes differ");
+            let t = s.deflate_span_trace(k, input).unwrap_or_else(|e| panic!("{codec:?} span {k}: {e:?}"));
+            assert!(shape(&t) == shape(&s.span_trace(k).expect("traces")), "{codec:?} span {k}: the traces differ");
+            if let Some(h) = s.checkpoints[k].block() {
+                inside += 1;
+                header_before += (h / 8 < code.1 as u64) as usize;
+                let at = (h / 8) as usize;
+                let bits = u16::from_le_bytes([packed[at], packed.get(at + 1).copied().unwrap_or(0)]) >> (h % 8);
+                kinds[((bits >> 1) & 3) as usize] += 1;
+            }
+        }
+        // A window that starts a byte late does not hold the checkpoint's
+        // bit, and one without the header of the block the checkpoint is in
+        // cannot rebuild its codes.
+        let k = (1..s.spans()).find(|&k| s.checkpoints[k].block().is_some_and(|h| h / 8 + 2 < s.checkpoints[k].in_bit / 8));
+        if let Some(k) = k {
+            let (code, head) = span_copies(&s, &packed, k);
+            let late = copy_of(&packed, code.1 + 1, code.1 + code.0.len());
+            assert!(s.deflate_span(k, inflate::Input::new(window(&late, &packed), head.as_ref().map(|h| window(h, &packed)))).is_err());
+            assert!(s.deflate_span(k, inflate::Input::new(window(&code, &packed), None)).is_err());
+        }
+    }
+    assert!(inside > 50 && header_before > 50, "{inside} checkpoints inside blocks, {header_before} with the header before the window");
+    assert!(kinds[1] > 0 && kinds[2] > 0, "checkpoints inside fixed and dynamic blocks: {kinds:?}");
+}
+
+/// Each block's trace, and the block starts found again between two kept
+/// ones, come out the same from a copy of only that block's or that group's
+/// bytes as from the whole run.
+#[test]
+fn deflate_blocks_from_a_window_are_the_blocks_from_the_whole_run() {
+    let data = mixed(300_000, 43);
+    let packed = flushed(&data, 1, 2000);
+    let s = indexed(Codec::Deflate, &packed, Limits { block_marks: 4, ..small() });
+    assert!(s.blocks.stride > 1 && s.blocks() > 16);
+    for i in 0..s.blocks() {
+        let b = s.block(i).expect("a block");
+        let to = if i + 1 < s.blocks() { b.in_bits.end.div_ceil(8) as usize } else { packed.len() };
+        let code = copy_of(&packed, (b.in_bits.start / 8) as usize, to);
+        let t = s.block_trace_from(i, inflate::Input::new(window(&code, &packed), None)).unwrap_or_else(|e| panic!("block {i}: {e:?}"));
+        assert!(shape(&t) == shape(&s.block_trace(i).expect("traces")), "block {i}: the traces differ");
+    }
+    for g in 0..s.blocks.list.len() {
+        let to = s.blocks.list.get(g + 1).map_or(packed.len(), |m| m.0.div_ceil(8) as usize);
+        let code = copy_of(&packed, (s.blocks.list[g].0 / 8) as usize, to);
+        let got = s.group_from(g, inflate::Input::new(window(&code, &packed), None)).expect("found again");
+        assert_eq!(got, s.group_from(g, inflate::Input::whole(&packed)).expect("found again"), "group {g}");
+    }
+}
+
+/// A code taken apart from the bytes its bits are in, at most 7 of them,
+/// reads as it does from the whole run; from a window that starts after the
+/// code does, or ends before it does, it does not read at all.
+#[test]
+fn a_code_taken_apart_from_its_own_bytes_reads_as_from_the_whole_run() {
+    let data = mixed(100_000, 47);
+    let mut compared = 0;
+    for (codec, packed) in [(Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6)), (Codec::Deflate, flushed(&data, 6, 300))] {
+        let (_, trace) = crate::codec::decode_traced(codec, &packed).expect("decodes whole");
+        for (k, step) in trace.steps().enumerate() {
+            let (from, to) = ((step.in_bits.start / 8) as usize, step.in_bits.end.div_ceil(8) as usize);
+            let whole = inflate::decode_step(&packed, &trace, k);
+            let Some(want) = whole else { continue };
+            assert!(to - from <= 7, "step {k} is in {} bytes", to - from);
+            assert_eq!(inflate::decode_step_at(&packed[from..to], from as u64, &trace, k), Some(want), "{codec:?} step {k}");
+            assert_eq!(inflate::decode_step_at(&packed[from + 1..to], from as u64 + 1, &trace, k), None, "{codec:?} step {k}, a byte late");
+            // Without the byte the step's last bit is in.
+            let short = ((step.in_bits.end - 1) / 8) as usize;
+            assert_eq!(inflate::decode_step_at(&packed[from..short], from as u64, &trace, k), None, "{codec:?} step {k}, cut short");
+            compared += 1;
+        }
+    }
+    assert!(compared > 10_000, "only {compared} codes compared");
+}
