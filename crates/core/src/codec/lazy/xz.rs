@@ -47,15 +47,6 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
     Ok(Decoded::Indexed(seekable(Codec::Xz, packed, Kind::Xz(l), len, marks.list, limits)))
 }
 
-/// Everything blocks `units` of the stream come to, one after another: a
-/// whole span's bytes, decoded the way [`read_span`] decodes the start of
-/// one.
-pub(super) fn decode_span(packed: &[u8], l: &xz::Layout, units: Range<usize>) -> Result<Vec<u8>, Refusal> {
-    let mut p = Prefix::new(l, units.clone());
-    p.reach(packed, l, units, p.len)?;
-    Ok(p.blocks.concat())
-}
-
 /// Bytes `from..from + dst.len()` of span `k`, whose blocks are `units`,
 /// decoded only as far as the read reaches.
 ///
@@ -138,9 +129,8 @@ impl Prefix {
     /// Before a block's first chunk is decoded, its chunk headers are read up
     /// to the byte that ends its LZMA2, and they have to add up to what the
     /// index says the block comes to. So a block the index is wrong about is
-    /// refused before any of it is read, as it was when a span was decoded
-    /// whole. A chunk whose data is damaged is found only by a read that
-    /// reaches it.
+    /// refused before any of it is read. A chunk whose data is damaged is
+    /// found only by a read that reaches it.
     fn reach(&mut self, packed: &[u8], l: &xz::Layout, units: Range<usize>, upto: usize) -> Result<(), Refusal> {
         let mut off = TraceBuilder::off();
         while self.decoded < upto || upto >= self.len {
