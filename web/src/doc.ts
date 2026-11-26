@@ -2229,8 +2229,8 @@ export type DecodedCode = {
   readonly entry_child?: number;
 };
 
-/** How far the core has got unpacking a deflate, zlib or gzip stream large
- *  enough to take more than one go. The compressed run is read once from front
+/** How far the core has got unpacking a deflate, zlib, gzip or zstd stream
+ *  large enough to take more than one go. The compressed run is read once from front
  *  to back, so `read_bits` of `run_bits` is the share done; `unpacked_bytes`
  *  is what it has come to so far. The total is not known until the end. */
 export type Unpacking = {
