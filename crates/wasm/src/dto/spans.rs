@@ -48,6 +48,44 @@ pub(crate) struct SpanDto {
     /// The colour this structure says it is. Absent for everything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) colour: Option<String>,
+    /// The list element whose bytes hold this field. Absent for a field in
+    /// no list, or one a pointer placed away from its element.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) element: Option<SpanElementDto>,
+    /// What holds the offset that placed this field, on the first field of
+    /// what was placed. Absent for everything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) placed_by: Option<SpanPointerDto>,
+    /// What the template works out from this field alone. Absent for nearly
+    /// every field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) worth: Option<SpanWorthDto>,
+}
+
+/// See `qubero_core::eval::SpanWorth`.
+#[derive(Serialize)]
+pub(crate) struct SpanWorthDto {
+    pub(crate) name: Option<String>,
+    pub(crate) value: String,
+}
+
+/// See `qubero_core::eval::SpanElement`.
+#[derive(Serialize)]
+pub(crate) struct SpanElementDto {
+    pub(crate) label: String,
+    pub(crate) path: Vec<usize>,
+    pub(crate) index: f64,
+    pub(crate) offset_bits: f64,
+    pub(crate) size_bits: f64,
+}
+
+/// See `qubero_core::eval::SpanPointer`.
+#[derive(Serialize)]
+pub(crate) struct SpanPointerDto {
+    pub(crate) label: String,
+    pub(crate) path: Vec<usize>,
+    pub(crate) offset_bits: f64,
+    pub(crate) size_bits: f64,
 }
 
 /// The bit split of one variable-length number, in the order it is stored.
@@ -147,6 +185,20 @@ pub(crate) fn span_dto(s: Span) -> SpanDto {
         opens: s.opens,
         colour: s.colour,
         inline: s.inline,
+        element: s.element.map(|e| SpanElementDto {
+            label: e.label,
+            path: e.path,
+            index: e.index as f64,
+            offset_bits: e.offset_bits as f64,
+            size_bits: e.size_bits as f64,
+        }),
+        worth: s.worth.map(|w| SpanWorthDto { name: w.name, value: w.value }),
+        placed_by: s.placed_by.map(|p| SpanPointerDto {
+            label: p.label,
+            path: p.path,
+            offset_bits: p.offset_bits as f64,
+            size_bits: p.size_bits as f64,
+        }),
         bits: s.bits.map(|b| BitRolesDto {
             rule: b.rule,
             groups: b

@@ -658,3 +658,29 @@ fn spans_step_over_fields_read_low_bit_first_without_a_gap() {
     let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["high", "low", "next"]);
 }
+
+#[test]
+fn a_span_carries_what_is_worked_out_from_it_alone() {
+    // `width` is worked out from `width_minus_one` alone, and `ratio` from two
+    // fields, so only the first stored field says what it is worth.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("width_minus_one", T::u8()),
+                ("width", T::computed(E::field("width_minus_one").add(E::lit(1)))),
+                ("a", T::u8()),
+                ("b", T::u8()),
+                ("ratio", T::computed(E::field("a").div(E::field("b")))),
+            ],
+        ),
+    );
+    let d = doc(&[23, 6, 3]);
+    let mut ev = Evaluator::new(t);
+    let all = ev.spans(&d, 0, 3 * 8, 100).unwrap();
+    let w = all[0].worth.as_ref().expect("a worked-out value");
+    assert_eq!((w.name.as_deref(), w.value.as_str()), (Some("width"), "24"));
+    assert!(all[1].worth.is_none());
+    assert!(all[2].worth.is_none());
+}

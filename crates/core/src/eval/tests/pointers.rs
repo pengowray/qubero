@@ -617,3 +617,29 @@ fn a_one_row_structure_does_not_stand_for_what_it_points_at() {
     assert_eq!(text.name, "text");
     assert_eq!(text.size_bits, 3 * 8);
 }
+
+#[test]
+fn a_span_names_its_list_element_and_what_placed_it() {
+    // Two entries of two bytes each, the second holding an offset to a word
+    // after the list. The first field of each entry names the entry, and the
+    // word names the entry whose offset placed it.
+    let entry = T::structure(
+        "Entry",
+        vec![("tag", T::u8()), ("offset", T::u8()), ("value", T::at(E::field("offset"), T::u16(Big)))],
+    );
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("entries", T::array(entry, E::lit(2))), ("rest", T::bytes(E::Remaining))]).field_aside("rest"),
+    );
+    let d = doc(&[1, 4, 2, 6, 0xaa, 0xbb, 0xcc, 0xdd]);
+    let mut ev = Evaluator::new(t);
+    let all = ev.spans(&d, 0, 8 * 8, 100).unwrap();
+    let tag1 = all.iter().find(|s| s.offset_bits == 2 * 8).unwrap();
+    let element = tag1.element.as_ref().expect("an element");
+    assert_eq!((element.index, element.offset_bits, element.size_bits), (1, 16, 16));
+    let word = all.iter().find(|s| s.offset_bits == 6 * 8).unwrap();
+    assert!(word.element.is_none(), "{word:?}");
+    let by = word.placed_by.as_ref().expect("a pointer");
+    assert_eq!(by.offset_bits, 3 * 8);
+    assert_eq!(by.label, "[1]");
+}

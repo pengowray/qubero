@@ -96,7 +96,7 @@ pub use ledger::{Ledger, LedgerRow};
 pub use extent::{ExtentAudit, ExtentCheck};
 pub use directory::{Directories, Directory, DirectoryEntry, DirectoryTarget};
 pub use survey::ReportWalk;
-pub use listing::{magic_reading, Span, SpanPart};
+pub use listing::{magic_reading, Span, SpanElement, SpanPart, SpanPointer, SpanWorth};
 pub use readas::{NotText, ReadAs};
 pub use textnum::{NumbersWithText, TextInNumbers, TextRun, TEXT_MIN_CHARS};
 pub use relate::write_expr;

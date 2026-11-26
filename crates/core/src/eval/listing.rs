@@ -68,6 +68,53 @@ pub struct Span {
     pub opens: bool,
     /// The colour this structure says it is. See `NodeInfo::colour`.
     pub colour: Option<String>,
+    /// The element of a list this field is part of, where its bytes hold the
+    /// field. The hex view names it in front of its first field and shades
+    /// every other one, so a reader can see where one TIFF entry ends and the
+    /// next begins without hovering over each chip.
+    pub element: Option<SpanElement>,
+    /// What points at this field, when it is the first field of something a
+    /// pointer placed: the hex view says so on the chip, so a value far from
+    /// the entry that locates it still names that entry.
+    pub placed_by: Option<SpanPointer>,
+    /// What the template works out from this field alone, where a field of
+    /// no bits beside it does: `red_x` is stored as 35400 and is worth 0.708.
+    /// The chip shows both, so a reader does not have to open the listing to
+    /// find the number the stored one stands for.
+    pub worth: Option<SpanWorth>,
+}
+
+/// A value worked out from one stored field. See [`Span::worth`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanWorth {
+    /// The worked-out field's name, or None where the template calls it only
+    /// `worth`, which says nothing the arrow does not.
+    pub name: Option<String>,
+    pub value: String,
+}
+
+/// The innermost list element whose own bytes hold a span. See
+/// [`Span::element`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanElement {
+    /// As the listing names it: `[1] orientation`.
+    pub label: String,
+    pub path: Vec<usize>,
+    /// Its place in its list, counted from 0.
+    pub index: u64,
+    pub offset_bits: u64,
+    pub size_bits: u64,
+}
+
+/// The field holding the offset that placed a span. See [`Span::placed_by`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanPointer {
+    /// What holds the offset, named the way a reader would look for it: the
+    /// list element it is in where there is one, `[0] image description`.
+    pub label: String,
+    pub path: Vec<usize>,
+    pub offset_bits: u64,
+    pub size_bits: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1182,7 +1229,135 @@ impl Evaluator {
             // show only its contents, so both spellings have to be caught.
             opens: (info.decoded && info.refused.is_none()) || info.space_root,
             colour: info.colour.clone(),
+            element: self.element_of(doc, path, info.offset_bits)?,
+            placed_by: self.pointer_placing(doc, path, info.offset_bits)?,
+            worth: self.worth_of(doc, path)?,
         })
+    }
+
+    /// The value a field of no bits works out from this field and nothing
+    /// else: a sibling of a stored field, or, for a structure drawn on one
+    /// row, a field of its own worked out from one of its stored fields.
+    fn worth_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<SpanWorth>> {
+        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
+        let inline = self.struct_of(&self.memo[path].ty.clone()).filter(|d| d.inline);
+        let (holder, def, stored) = match inline {
+            // A structure on one row, the way PNG writes a scaled number:
+            // which of its own fields is stored is settled below.
+            Some(def) => (path.to_vec(), def, None),
+            None => match self.struct_of(&self.memo[parent].ty.clone()) {
+                Some(def) if idx < def.fields.len() => {
+                    let name = def.fields[idx].name.clone();
+                    (parent.to_vec(), def, Some(name))
+                }
+                _ => return Ok(None),
+            },
+        };
+        for (j, f) in def.fields.iter().enumerate() {
+            let e = match f.ty.base() {
+                Ty::Computed(e) | Ty::ComputedReal(e) => e,
+                _ => continue,
+            };
+            let names = crate::machinery::names_in(e);
+            let [only] = names.as_slice() else { continue };
+            let reads_stored = match &stored {
+                Some(name) => **only == **name,
+                None => def.fields.iter().any(|g| *g.name == **only && !matches!(g.ty.base(), Ty::Computed(_) | Ty::ComputedReal(_))),
+            };
+            if !reads_stored {
+                continue;
+            }
+            let mut at = holder.clone();
+            at.push(j);
+            let Ok(node) = self.node(doc, &at) else { continue };
+            let value = brief(&node.value);
+            if value.is_empty() {
+                continue;
+            }
+            let name = (&*f.name != "worth").then(|| f.name.to_string());
+            return Ok(Some(SpanWorth { name, value }));
+        }
+        Ok(None)
+    }
+
+    /// The innermost element of a list that `path` is inside and whose own
+    /// bytes hold `bit`. None past a pointer: what a pointer placed is not
+    /// inside the element the pointer is in, whatever the tree says.
+    fn element_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<SpanElement>> {
+        let space = self.memo[path].space;
+        for k in (1..path.len()).rev() {
+            let p = &path[..k];
+            let r = self.memo[p].clone();
+            if matches!(r.ty, Ty::At { .. }) || r.space != space {
+                return Ok(None);
+            }
+            let in_list = matches!(
+                self.memo[&path[..k - 1]].ty,
+                Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            );
+            if !in_list || !holds_fields(r.ty.base()) {
+                continue;
+            }
+            let size = self.size_of(doc, p)?;
+            if bit < r.offset || bit >= r.offset + size {
+                return Ok(None);
+            }
+            let label = self.label(doc, p, &r)?;
+            return Ok(Some(SpanElement {
+                label,
+                path: p.to_vec(),
+                index: path[k - 1] as u64,
+                offset_bits: r.offset,
+                size_bits: size,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// What placed the thing `path` is the first field of, through the
+    /// nearest pointer above it. None for a field further into it, so that
+    /// the many fields of a placed directory do not all repeat it.
+    fn pointer_placing<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<SpanPointer>> {
+        for k in (1..path.len()).rev() {
+            let at = match &self.memo[&path[..k]].ty {
+                Ty::At { at, .. } => at.clone(),
+                _ => continue,
+            };
+            // The thing placed is the pointer's one child, next on the path.
+            let target = &path[..k + 1];
+            if self.memo.get(target).map(|t| t.offset) != Some(bit) {
+                return Ok(None);
+            }
+            let holder = path[..k - 1].to_vec();
+            // The offset itself, where it is a field beside the pointer: a
+            // TIFF entry's value is `offset` and the values it points at.
+            let mut pointer = holder.clone();
+            let def = self.struct_of(&self.memo[&holder].ty.clone());
+            if let (Expr::Ref(name), Some(def)) = (&at, def) {
+                if let Some(i) = def.fields.iter().position(|f| *f.name == **name) {
+                    pointer.push(i);
+                    self.resolve(doc, &pointer)?;
+                } else {
+                    pointer = holder.clone();
+                }
+            }
+            let offset_bits = self.memo[&pointer].offset;
+            let size_bits = self.size_of(doc, &pointer)?;
+            // The list element the offset is in, where the offset is one of
+            // its own few fields: a TIFF entry's offset is in its `value`,
+            // and the entry's name says which tag it is. An element further
+            // up, a whole JPEG segment, says less than the offset's own name.
+            let near = |e: &SpanElement| e.path.len() + 2 >= pointer.len();
+            let label = match self.element_of(doc, &pointer, offset_bits)? {
+                Some(e) if near(&e) => e.label,
+                _ => {
+                    let r = self.memo[&pointer].clone();
+                    self.label(doc, &pointer, &r)?
+                }
+            };
+            return Ok(Some(SpanPointer { label, path: pointer, offset_bits, size_bits }));
+        }
+        Ok(None)
     }
 
     /// The framing-and-value split of a field that stores a variable-length
