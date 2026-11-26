@@ -27,7 +27,7 @@ mod decoder;
 
 use decoder::{Coarsening, Limits, Props, Range, State, Stop};
 
-use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
+use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder, Window, CAP_BYTES};
 
 /// What an lzip member starts with.
 const MAGIC: &[u8] = b"LZIP";
@@ -127,7 +127,7 @@ fn stream(
 ) -> Result<(), Refusal> {
     let props = Props::new(props, false)?;
     let mut st = State::new(props);
-    let mut rc = Range::start(data, from, to)?;
+    let mut rc = Range::start(data, 0, from, to)?;
 
     // The block is opened before its own machinery is written down, so the
     // five bytes priming the coder belong to it. A block whose steps started
@@ -246,11 +246,14 @@ struct Header {
     end: usize,
 }
 
-/// The header of the chunk at byte `at` of the stream. Refused when the
-/// header or the chunk runs past the end of the stream, or when the control
-/// byte is one the format does not define.
-fn header(data: &[u8], at: usize) -> Result<Header, Refusal> {
-    let Some(&control) = data.get(at) else { return Err(Refusal::Failed) };
+/// The header of the chunk at byte `at` of the stream, read from `window`.
+/// Refused when the header or the chunk runs past the end of the stream, when
+/// the window does not hold the header, or when the control byte is one the
+/// format does not define.
+fn header(window: Window<'_>, at: usize) -> Result<Header, Refusal> {
+    let byte = |at: usize| window.get(at..at + 1).map(|b| b[0]).ok_or(Refusal::Failed);
+    let stream = window.run_len();
+    let control = byte(at)?;
     if control == 0x00 {
         return Ok(Header { control, unpacked: 0, props: None, from: at + 1, end: at + 1 });
     }
@@ -259,17 +262,16 @@ fn header(data: &[u8], at: usize) -> Result<Header, Refusal> {
         // bytes of it, and two bytes of how long the packed form is. Both
         // counts are written one less than they are, since a chunk of nothing
         // would say nothing.
-        let Some(head) = data.get(at + 1..at + 5) else { return Err(Refusal::Failed) };
+        let Some(head) = window.get(at + 1..at + 5) else { return Err(Refusal::Failed) };
         let unpacked = ((usize::from(control & 0x1f) << 16) | be16(&head[0..2])) + 1;
         let packed = be16(&head[2..4]) + 1;
         let mut from = at + 5;
         let mut props = None;
         if control >= 0xc0 {
-            let Some(&byte) = data.get(from) else { return Err(Refusal::Failed) };
-            props = Some(byte);
+            props = Some(byte(from)?);
             from += 1;
         }
-        let end = from.checked_add(packed).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
+        let end = from.checked_add(packed).filter(|&e| e <= stream).ok_or(Refusal::Failed)?;
         return Ok(Header { control, unpacked, props, from, end });
     }
     // 0x03 to 0x7f is nothing the format defines.
@@ -277,22 +279,32 @@ fn header(data: &[u8], at: usize) -> Result<Header, Refusal> {
         return Err(Refusal::Failed);
     }
     // A chunk stored as it is: two bytes of its length, then the bytes.
-    let Some(head) = data.get(at + 1..at + 3) else { return Err(Refusal::Failed) };
+    let Some(head) = window.get(at + 1..at + 3) else { return Err(Refusal::Failed) };
     let unpacked = be16(head) + 1;
     let from = at + 3;
-    let end = from.checked_add(unpacked).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
+    let end = from.checked_add(unpacked).filter(|&e| e <= stream).ok_or(Refusal::Failed)?;
     Ok(Header { control, unpacked, props: None, from, end })
 }
 
 /// How many bytes an LZMA2 stream comes to, from its chunk headers alone:
 /// each says how long it is and how much it makes, so nothing is decoded.
 /// Refused when the headers run past the end of `data` before the byte that
-/// ends the stream.
+/// ends the stream. Only the tests ask this of a whole stream; a read of an
+/// xz span asks [`lzma2_len_in`].
+#[cfg(test)]
 pub(super) fn lzma2_len(data: &[u8]) -> Result<u64, Refusal> {
+    lzma2_len_in(Window::whole(data))
+}
+
+/// How many bytes an LZMA2 stream comes to, from its chunk headers alone,
+/// read from `window`, which has to hold every one of them: refused when it
+/// does not, or when the headers run past the end of the stream before the
+/// byte that ends it.
+pub(super) fn lzma2_len_in(window: Window<'_>) -> Result<u64, Refusal> {
     let mut at = 0usize;
     let mut len = 0u64;
     loop {
-        let h = header(data, at)?;
+        let h = header(window, at)?;
         if h.control == 0x00 {
             return Ok(len);
         }
@@ -330,8 +342,20 @@ impl Lzma2 {
     /// refused rather than read against whatever happened to be left in the
     /// decoder.
     pub(super) fn chunk(&mut self, data: &[u8], out: &mut Vec<u8>, b: &mut TraceBuilder) -> Result<bool, Refusal> {
+        self.chunk_in(Window::whole(data), out, b)
+    }
+
+    /// [`Lzma2::chunk`] read from `window`, a window of the stream that holds
+    /// the whole of the next chunk, its header included: from the byte the
+    /// chunk starts at, at the least. Positions in the trace still count from
+    /// the stream's first byte. A window that does not hold the chunk is
+    /// refused before the decoder changes, as [`Refusal::Failed`].
+    pub(super) fn chunk_in(&mut self, window: Window<'_>, out: &mut Vec<u8>, b: &mut TraceBuilder) -> Result<bool, Refusal> {
         let at = self.at;
-        let h = header(data, at)?;
+        let h = header(window, at)?;
+        if window.get(at..h.end).is_none() {
+            return Err(Refusal::Failed);
+        }
         if h.control == 0x00 {
             b.push(at as u64 * 8, out.len() as u64, StepKind::EndOfBlock);
             self.at = h.end;
@@ -357,7 +381,7 @@ impl Lzma2 {
             b.open_block(at as u64 * 8, out.len() as u64);
             b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, h.unpacked as u32));
             b.push(h.from as u64 * 8, out.len() as u64, StepKind::Stored);
-            out.extend_from_slice(&data[h.from..h.end]);
+            out.extend_from_slice(window.get(h.from..h.end).ok_or(Refusal::Failed)?);
             b.close_block(h.end as u64 * 8, out.len() as u64, BlockKind::Stored, false);
             self.at = h.end;
             return Ok(false);
@@ -375,7 +399,7 @@ impl Lzma2 {
         if out.len() + h.unpacked > CAP_BYTES {
             return Err(Refusal::TooLarge);
         }
-        let mut rc = Range::start(data, h.from, h.end)?;
+        let mut rc = Range::start(window.bytes(), window.start(), h.from, h.end)?;
 
         // Opened first, so the chunk's own header is one of its steps rather
         // than bytes it covers and never names.

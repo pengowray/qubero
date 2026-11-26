@@ -349,6 +349,52 @@ fn a_stream_read_a_chunk_at_a_time_comes_to_the_same_bytes() {
     }
 }
 
+/// A stream read a chunk at a time from windows that start where the decoder
+/// is and end where its chunk does, each a copy of only those bytes, comes to
+/// the bytes and the trace it comes to read whole. A window a byte short of
+/// its chunk is refused before the decoder changes, so the same decoder then
+/// reads the chunk from the whole of it. The chunk headers say how long the
+/// stream is from a window that holds them all, and not from one that starts
+/// a byte late.
+#[test]
+fn a_stream_read_a_chunk_at_a_time_from_windows_is_the_stream_read_whole() {
+    // Text with every second 300 bytes of it noise packs to about half, so
+    // 500 kB of it fills several packed chunks of 64 KiB, which carry their
+    // state on; noise alone is stored chunks.
+    let (text, rand) = (mixed(500_000), noise(500_000));
+    let half: Vec<u8> = (0..text.len()).map(|i| if i / 300 % 2 == 0 { text[i] } else { rand[i] }).collect();
+    let streams = [
+        pack2(&half, 3, 0, 2, 1 << 16, None),
+        pack2(&noise(200_000), 3, 0, 2, 1 << 12, Some(1 << 12)),
+    ];
+    let mut packed_later = 0;
+    let mut chunks = 0;
+    for s in &streams {
+        let (want, whole) = lzma2(s).expect("reads");
+        let (mut dec, mut out, mut b) = (Lzma2::new(), Vec::new(), TraceBuilder::default());
+        loop {
+            let at = dec.at;
+            let end = header(Window::whole(s), at).expect("a header").end;
+            let short = s[at..end - 1].to_vec();
+            assert_eq!(dec.chunk_in(Window::of(&short, at, s.len()).unwrap(), &mut out, &mut b), Err(Refusal::Failed), "chunk at {at}, a byte short");
+            let copy = s[at..end].to_vec();
+            chunks += 1;
+            packed_later += (at > 0 && s[at] >= 0x80) as usize;
+            if dec.chunk_in(Window::of(&copy, at, s.len()).unwrap(), &mut out, &mut b).expect("reads") {
+                break;
+            }
+        }
+        decoder::padding(&mut b, dec.at, s.len(), out.len() as u64);
+        b.finish_at(s.len() as u64 * 8, out.len() as u64);
+        let t = b.done();
+        assert!(out == want, "the bytes differ");
+        assert!(t.steps().eq(whole.steps()) && t.blocks() == whole.blocks(), "the traces differ");
+        assert_eq!(lzma2_len_in(Window::of(s, 0, s.len()).unwrap()), Ok(want.len() as u64));
+        assert_eq!(lzma2_len_in(Window::of(&s[1..], 1, s.len()).unwrap()), Err(Refusal::Failed));
+    }
+    assert!(chunks > 4 && packed_later > 2, "{chunks} chunks, {packed_later} of them packed and not first");
+}
+
 /// An LZMA chunk that starts over in the middle of a stream: new properties, a
 /// fresh state, and a dictionary the matches after it may not reach back past.
 ///

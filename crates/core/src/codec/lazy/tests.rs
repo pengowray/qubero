@@ -1589,3 +1589,35 @@ fn a_zstd_span_from_a_window_is_the_span_from_the_whole_run() {
         }
     }
 }
+
+/// Every xz span, read and traced from a copy of only its own blocks, comes
+/// to what it comes to from the whole stream: blocks of one LZMA2 stream
+/// whose chunks carry its state on, blocks of many that start over, and
+/// stored chunks. A read part-way into a span from the copy, and one further
+/// on carrying on from where it stopped, read the same bytes too.
+#[test]
+fn an_xz_span_from_a_window_is_the_span_from_the_whole_stream() {
+    let mut spans = 0;
+    for (data, block, piece) in [(half_noise(), 200_000, None), (text_and_noise(), 90_000, Some(20_000))] {
+        let packed = xz_pieces(&data, block, piece);
+        let l = crate::codec::xz::layout(&packed).expect("lays out");
+        let s = indexed(Codec::Xz, &packed, Limits { span: 1 << 20, ..small() });
+        for k in 0..s.spans() {
+            let (range, units) = (s.span_in(k), s.span_units(k, &l));
+            let copy = copy_of(&packed, range.start, range.end);
+            let (c, want) = (&s.checkpoints[k], s.span_bytes(k));
+            let t = xz::span_trace(window(&copy, &packed), &l, k, range, units.clone(), c.out).expect("traces");
+            assert!(shape(&t) == shape(&s.span_trace(k).expect("traces")), "span {k}: the traces differ");
+            let len = (want.end - want.start) as usize;
+            let mut bytes = vec![0u8; len];
+            s.read(want.start, &mut bytes).expect("reads");
+            lock(&s.prefixes).take(k as u64);
+            let (mut first, mut rest) = (vec![0u8; len / 3], vec![0u8; len - len / 2]);
+            xz::read_span(&s.prefixes, window(&copy, &packed), &l, units.clone(), k, len / 5, &mut first).expect("reads");
+            xz::read_span(&s.prefixes, window(&copy, &packed), &l, units, k, len / 2, &mut rest).expect("reads");
+            assert!(first == bytes[len / 5..len / 5 + len / 3] && rest == bytes[len / 2..], "span {k}: the bytes differ");
+            spans += 1;
+        }
+    }
+    assert!(spans > 8, "{spans} spans");
+}

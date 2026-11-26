@@ -186,7 +186,7 @@ impl Seekable {
             let dst = &mut out[to..to + take];
             match &self.kind {
                 // Decoded only as far as this read reaches.
-                Kind::Xz(l) => super::xz::read_span(&self.prefixes, &self.packed, l, self.span_units(k, l), k, from, dst)?,
+                Kind::Xz(l) => super::xz::read_span(&self.prefixes, self.whole().code(), l, self.span_units(k, l), k, from, dst)?,
                 _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
             }
             pos += take as u64;
@@ -294,7 +294,7 @@ impl Seekable {
                 super::zstd::span_trace(self.whole().code(), self.span_in(k), c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
-                super::xz::span_trace(&self.packed, l, k, self.span_in(k), self.span_units(k, l), c.out)?
+                super::xz::span_trace(self.whole().code(), l, k, self.span_in(k), self.span_units(k, l), c.out)?
             }
         });
         *lock(&self.traced) = Some((k, t.clone()));

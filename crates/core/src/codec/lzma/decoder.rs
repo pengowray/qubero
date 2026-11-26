@@ -123,11 +123,16 @@ impl Props {
 /// The range decoder: an interval, the part of the stream that is inside it,
 /// and where the next byte comes from.
 ///
-/// `at` and `end` are absolute in the whole run, not in the stream handed to
-/// this, so that a step can be written down without anything having to add an
-/// offset back on. An LZMA2 chunk hands its own bounds and gets its own coder.
+/// The positions it says, [`Range::bit_pos`] and [`Range::byte_pos`], are
+/// absolute in the whole run, not in the stream handed to this, so that a
+/// step can be written down without anything having to add an offset back
+/// on. An LZMA2 chunk hands its own bounds and gets its own coder. `data` may
+/// be only part of the run, starting at byte `base` of it; `at` and `end`
+/// count from `data`'s first byte, so pulling a byte costs the same either
+/// way.
 pub(super) struct Range<'a> {
     data: &'a [u8],
+    base: usize,
     at: usize,
     end: usize,
     range: u32,
@@ -139,21 +144,26 @@ impl<'a> Range<'a> {
     /// the code. The first is zero in every stream an encoder wrote; the
     /// reference decoder notes a stream where it is not and reads on, so this
     /// does the same rather than turning away a file over a byte it ignores.
-    pub(super) fn start(data: &'a [u8], at: usize, end: usize) -> Result<Range<'a>, Refusal> {
+    ///
+    /// `data` is bytes of the run from byte `base` on, and the coder reads
+    /// bytes `at..end` of the run, which `data` has to hold.
+    pub(super) fn start(data: &'a [u8], base: usize, at: usize, end: usize) -> Result<Range<'a>, Refusal> {
+        let (Some(at), Some(end)) = (at.checked_sub(base), end.checked_sub(base)) else { return Err(Refusal::Failed) };
         if end > data.len() || at + 5 > end {
             return Err(Refusal::Failed);
         }
         let code = u32::from_be_bytes(data[at + 1..at + 5].try_into().expect("four bytes"));
-        Ok(Range { data, at: at + 5, end, range: u32::MAX, code })
+        Ok(Range { data, base, at: at + 5, end, range: u32::MAX, code })
     }
 
     /// Where the next byte would come from, as a bit of the run.
     pub(super) fn bit_pos(&self) -> u64 {
-        self.at as u64 * 8
+        self.byte_pos() as u64 * 8
     }
 
+    /// Where the next byte would come from, as a byte of the run.
     pub(super) fn byte_pos(&self) -> usize {
-        self.at
+        self.base + self.at
     }
 
     fn pull(&mut self) -> Result<u32, Refusal> {
