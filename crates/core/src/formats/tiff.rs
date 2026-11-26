@@ -359,7 +359,7 @@ pub fn tiff_part() -> Part {
             part = part.with_type(space.named(e), ifd(e, *space));
         }
     }
-    part
+    with_jpeg(part)
 }
 
 fn sony_arw_part() -> Part {
@@ -369,7 +369,43 @@ fn sony_arw_part() -> Part {
             part = part.with_type(space.named(e), ifd(e, space));
         }
     }
-    part
+    with_jpeg(part)
+}
+
+/// What the JPEG image a directory points at is read as: the JPEG template's
+/// root, by name. See [`with_jpeg`].
+const JPEG: &str = "tiff.Jpeg";
+
+thread_local! {
+    /// Set while [`with_jpeg`] is building the JPEG template.
+    static BUILDING_JPEG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `part`, with the JPEG template's root added as [`JPEG`], so that the
+/// thumbnail and preview images directories point at are read as JPEGs.
+///
+/// The JPEG template borrows this part for its EXIF block, so building it
+/// here calls `tiff_part` again. That inner call finds `BUILDING_JPEG` set and
+/// leaves the JPEG out, and this outer call adds it, so the name is there in
+/// the finished template whichever of the two was asked for first. Reading
+/// ends too: a thumbnail lies inside its TIFF, which lies inside the JPEG
+/// segment holding it, so each JPEG read this way is shorter than the one
+/// around it.
+///
+/// A guard here rather than a named type in `jpeg.rs`, because `jpeg()` builds
+/// its root in place and registers no name another part could borrow.
+fn with_jpeg(part: Part) -> Part {
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            BUILDING_JPEG.with(|b| b.set(false));
+        }
+    }
+    if BUILDING_JPEG.with(|b| b.replace(true)) {
+        return part;
+    }
+    let _done = Done;
+    part.with_type(JPEG, super::jpeg::jpeg().root)
 }
 
 /// The same for a JPEG XR, which is this directory read against another set of
@@ -447,7 +483,7 @@ fn file(e: Endian, space: Space) -> T {
     // where one covers a byte, the hex view names it rather than `body`.
     .field_aside("body")
     .field_elem_named_from("next_ifds", E::words("ifd {}", E::idx().add(E::lit(1))))
-    .field_doc("next_ifds", "The IFDs after IFD 0, each found at the next_ifd_offset of the one before. In an EXIF block, IFD 1 holds the thumbnail. In a multi-page TIFF, each page has its own IFD.")
+    .field_doc("next_ifds", "The IFDs after IFD 0, in the order they are linked. Each IFD starts at the offset in the next_ifd_offset field of the IFD before it, counted from the start of the TIFF. In an EXIF block, IFD 1 has the thumbnail. In a multi-page TIFF, each page has its own IFD.")
 }
 
 /// Every directory after the first, as one flat list: IFD 0 says where IFD 1
@@ -565,13 +601,13 @@ fn ifd(e: Endian, space: Space) -> T {
         // offset that placed it rather than by where it is in the list.
         .field_elem_named_from("strips", E::words("strip {}", E::placer(E::idx())))
         .field_elem_named_from("tiles", E::words("tile {}", E::placer(E::idx())))
-        .field_doc("strip_offsets", "The values of StripOffsets (273) read again, each with its strip's length from StripByteCounts. The strips are placed from this list.")
-        .field_doc("strip_byte_counts", "The values of StripByteCounts (279), read again as a list so that each strip's length can be looked up by its number.")
-        .field_doc("tile_offsets", "The values of TileOffsets (324) read again, each with its tile's length from TileByteCounts. The tiles are placed from this list.")
-        .field_doc("tile_byte_counts", "The values of TileByteCounts (325), read again as a list so that each tile's length can be looked up by its number.")
-        .field_doc("strips", "The image data, split into strips of whole rows. Each strip is at the offset given in StripOffsets and has the length given in StripByteCounts. Strips are numbered from 0.")
-        .field_doc("tiles", "The image data, split into tiles. Each tile is at the offset given in TileOffsets and has the length given in TileByteCounts. Tiles are numbered from 0, left to right and then top to bottom.")
-        .field_doc("thumbnail", "The JPEG image at the offset in JPEGInterchangeFormat (513), with the length in JPEGInterchangeFormatLength (514). In IFD 1 of an EXIF block, this is the thumbnail. In a raw file, it can be a full-size preview.")
+        .field_doc("strip_offsets", "The same bytes as StripOffsets (273), read a second time as a list. Each element holds a strip's offset and, beside it, that strip's length from StripByteCounts (279).")
+        .field_doc("strip_byte_counts", "The same bytes as StripByteCounts (279), read a second time as a list. Each strip's length is looked up here by the strip's number.")
+        .field_doc("tile_offsets", "The same bytes as TileOffsets (324), read a second time as a list. Each element holds a tile's offset and, beside it, that tile's length from TileByteCounts (325).")
+        .field_doc("tile_byte_counts", "The same bytes as TileByteCounts (325), read a second time as a list. Each tile's length is looked up here by the tile's number.")
+        .field_doc("strips", "The image data, split into strips of whole rows. Strip n starts at value n of StripOffsets (273), counted from the start of the TIFF, and its length is value n of StripByteCounts (279). Strips are numbered from 0. A strip whose offset is past the end of the TIFF is left out.")
+        .field_doc("tiles", "The image data, split into tiles. Tile n starts at value n of TileOffsets (324), counted from the start of the TIFF, and its length is value n of TileByteCounts (325). Tiles are numbered from 0, left to right and then top to bottom. A tile whose offset is past the end of the TIFF is left out.")
+        .field_doc("thumbnail", "The JPEG image at the offset in JPEGInterchangeFormat (513), counted from the start of the TIFF, with the length in JPEGInterchangeFormatLength (514). In IFD 1 of an EXIF block, this is the thumbnail. In a raw file, it can be a full-size preview.")
 }
 
 /// The image data a directory's entries point at: its strips or its tiles,
@@ -693,14 +729,16 @@ fn placed(offset: E, length: E, what: T) -> T {
 ///
 /// Each tag holds one LONG, so `values` is the number itself. An offset of 0
 /// is read as no image, since byte 0 is where the TIFF header is.
+///
+/// Read as a JPEG when it starts with the two bytes a JPEG starts with, and as
+/// bytes when it does not.
 fn thumbnail() -> T {
     let offset = entry_with(513, &["value", "values"]);
     let length = entry_with(514, &["value", "values"]);
     let one = |tag: i128| has(tag).both(entry_with(tag, &["count"]).equal_to(E::lit(1)));
-    T::when(
-        one(513).both(one(514)).both(offset.clone().greater_than(E::lit(0))),
-        placed(offset, length, T::bytes(E::Remaining)),
-    )
+    let starts_as_jpeg = E::lit(1).less_than(E::Remaining).both(E::peek(16, Big).equal_to(E::lit(0xffd8)));
+    let image = T::switch(starts_as_jpeg, vec![(1, T::Named(JPEG.into()))], T::bytes(E::Remaining));
+    T::when(one(513).both(one(514)).both(offset.clone().greater_than(E::lit(0))), placed(offset, length, image))
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
@@ -1417,6 +1455,30 @@ mod tests {
         let node = ev.node(&d, &thumbnail).unwrap();
         assert_eq!((node.offset_bits / 8, node.size_bits / 8), (12 + 56, 4));
         assert!(ev.locate(&d, (12 + 57) * 8).unwrap().starts_with(&thumbnail));
+    }
+
+    #[test]
+    fn a_thumbnail_is_read_as_a_jpeg_and_so_is_the_thumbnail_inside_it() {
+        // A JPEG whose thumbnail is a JPEG with a thumbnail of its own. The
+        // outer TIFF starts at 12 and its thumbnail at 12 + 56. That is a JPEG
+        // whose TIFF starts 12 further on, at 80, and whose thumbnail is the
+        // four bytes at 80 + 56.
+        let inner = in_exif(&with_ifd1(&[0xff, 0xd8, 0xff, 0xd9]));
+        let d = Document::new(MemSource(in_exif(&with_ifd1(&inner))));
+        let mut ev = Evaluator::new(crate::formats::jpeg());
+        let thumbnail = [&EXIF[..], &[1, NEXT_IFDS, 0, THUMBNAIL, 0]].concat();
+        let outer = ev.node(&d, &thumbnail).unwrap();
+        assert_eq!(outer.type_name, "JPEG");
+        assert_eq!(outer.offset_bits / 8, 68);
+        let p = ev.locate(&d, 136 * 8).unwrap();
+        let soi = ev.node(&d, &p).unwrap();
+        assert_eq!((soi.offset_bits / 8, soi.size_bits / 8, soi.name.as_str()), (136, 2, "soi"));
+        assert!(p.len() > thumbnail.len() * 2, "{p:?}");
+        // A thumbnail that does not start as a JPEG is read as its bytes.
+        let d = Document::new(MemSource(in_exif(&with_ifd1(&[1, 2, 3]))));
+        let mut ev = Evaluator::new(crate::formats::jpeg());
+        let bytes = ev.node(&d, &thumbnail).unwrap();
+        assert_eq!((bytes.offset_bits / 8, bytes.size_bits / 8), (68, 3));
     }
 
     #[test]
