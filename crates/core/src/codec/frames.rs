@@ -114,7 +114,7 @@ pub(super) fn zstd_walk(
     on_frame: &mut dyn FnMut(usize, u64),
     sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
 ) -> Result<u64, Refusal> {
-    ZstdWalk::new(span, out, frame_cap).run(data, u64::MAX, b, on_frame, sink)?.ok_or(Refusal::Failed)
+    ZstdWalk::new(span, out, frame_cap).run(data, u64::MAX, usize::MAX, b, on_frame, sink)?.ok_or(Refusal::Failed)
 }
 
 /// The most output one zstd block may make: 128 KiB, or the frame's window
@@ -150,8 +150,13 @@ const BLOCK_MAX: u64 = 128 << 10;
 pub(super) struct ZstdWalk {
     end: usize,
     /// Where the next frame, or the skippable frames in front of it, start,
-    /// while no frame is part of the way through.
+    /// while no frame is part of the way through. A walk that stopped among
+    /// those skippable frames is at the next one.
     at: usize,
+    /// Where the skippable frames in front of the next frame start, for a
+    /// walk that stopped among them: the next frame is announced as starting
+    /// there, as it would be by a walk that did not stop.
+    front: Option<usize>,
     /// How much output comes before `at`, or before the frame part of the way
     /// through. Where the steps' bytes count from.
     out: u64,
@@ -177,12 +182,19 @@ struct Frame {
 impl ZstdWalk {
     /// A walk over `span`, with `out` bytes of output before it.
     pub(super) fn new(span: std::ops::Range<usize>, out: u64, frame_cap: u64) -> ZstdWalk {
-        ZstdWalk { end: span.end, at: span.start, out, frame_cap, frame: None }
+        ZstdWalk { end: span.end, at: span.start, front: None, out, frame_cap, frame: None }
     }
 
     /// How far into the run the decoder has read.
     pub(super) fn reached(&self) -> usize {
         self.frame.as_ref().map_or(self.at, |f| f.at + f.read)
+    }
+
+    /// Whether the walk was refused as too large because the frame it is in
+    /// came to more than its `frame_cap`, rather than because a frame asked
+    /// for a window larger than [`MAX_WINDOW`].
+    pub(super) fn frame_too_large(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.collected > self.frame_cap)
     }
 
     /// How much output the decoder has let go of so far, which is what has
@@ -214,10 +226,16 @@ impl ZstdWalk {
     /// a block counts as 128 KiB, which is what a full block makes. A walk
     /// over smaller blocks there stops early, and the next one decodes the
     /// difference as well as its own share.
+    ///
+    /// The walk also stops at the first place past `reach` more bytes of the
+    /// run, between two blocks, two frames or two skippable frames, so that a
+    /// walk over frames that make no output still stops. A block is at most
+    /// 128 KiB of the run, so the walk goes past `reach` by at most that.
     pub(super) fn run(
         &mut self,
         data: &[u8],
         share: u64,
+        reach: usize,
         b: &mut TraceBuilder,
         on_frame: &mut dyn FnMut(usize, u64),
         sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
@@ -225,19 +243,24 @@ impl ZstdWalk {
         use ruzstd::decoding::BlockDecodingStrategy;
 
         let until = ZstdWalk::decoded(self.out, self.frame.as_ref()).saturating_add(share.max(1));
+        let read_until = self.reached().saturating_add(reach.max(1));
         loop {
             let f = match &mut self.frame {
                 Some(f) => f,
-                None if self.out >= until => return Ok(None),
+                None if self.out >= until || self.at >= read_until => return Ok(None),
                 None => {
-                    let starts = self.at;
+                    let starts = *self.front.get_or_insert(self.at);
                     // A skippable frame: a magic in `0x184d2a50..=0x184d2a5f`,
                     // a length, and bytes an application put there that no
                     // decoder reads.
                     while let Some(size) = skippable(&data[self.at..self.end]) {
+                        if self.at >= read_until {
+                            return Ok(None);
+                        }
                         b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
                         self.at += size;
                     }
+                    self.front = None;
                     if self.at == self.end {
                         return Ok(Some(self.out));
                     }
@@ -248,7 +271,7 @@ impl ZstdWalk {
                 }
             };
             while !f.dec.is_finished() {
-                if ZstdWalk::decoded(self.out, Some(&*f)) >= until {
+                if ZstdWalk::decoded(self.out, Some(&*f)) >= until || f.at + f.read >= read_until {
                     return Ok(None);
                 }
                 let block_at = (f.at + f.read) as u64 * 8;

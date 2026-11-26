@@ -210,6 +210,12 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB)",
+  /** A zstd run, or an xz stream, read a piece at a time: each frame or
+   *  block of it is unpacked whole, and one of them unpacks to more than
+   *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
+   *  write, is refused this way once it is past 64 MiB. */
+  "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB)",
+  "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB)",
   failed: "unpacking failed",
   unaligned: "not on a byte boundary",
   /**
@@ -653,6 +659,15 @@ export const JOINED = {
    */
   partTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts unpacks to over 1 GiB.`,
   /**
+   * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part has a zstd frame, or an xz block,
+   * that unpacks to more than 64 MiB (`too-large-zstd-frame`,
+   * `too-large-xz-block`): each frame or block is unpacked whole. The core
+   * does not say which part; a read of that part in the listing names it.
+   */
+  partZstdFrameTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has a zstd frame that unpacks to over 64 MiB.`,
+  partXzBlockTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has an xz block that unpacks to over 64 MiB.`,
+  /**
    * In the status bar, when Open joined stream was pressed and joining the
    * whole stream failed: a part would not read, would not unpack, or unpacked
    * to another length than its block said. The core does not say which part,
@@ -661,10 +676,22 @@ export const JOINED = {
    * what was pressed. Also said for any refusal this build has no words for.
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
-  /** Which of the three a refusal of Open joined stream is, by the core's
+  /** Which of the above a refusal of Open joined stream is, by the core's
    *  refusal word. */
-  refused: (refused: string, tab: string): string =>
-    refused === "too-large" ? JOINED.tooLarge(tab) : refused === "too-large-lazy" ? JOINED.partTooLarge(tab) : JOINED.failed(tab),
+  refused: (refused: string, tab: string): string => {
+    switch (refused) {
+      case "too-large":
+        return JOINED.tooLarge(tab);
+      case "too-large-lazy":
+        return JOINED.partTooLarge(tab);
+      case "too-large-zstd-frame":
+        return JOINED.partZstdFrameTooLarge(tab);
+      case "too-large-xz-block":
+        return JOINED.partXzBlockTooLarge(tab);
+      default:
+        return JOINED.failed(tab);
+    }
+  },
   /** Names the tab a joined stream opens in. The same shape as
    *  `UNPACKED.tabTitle`. */
   tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
