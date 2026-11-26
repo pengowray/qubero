@@ -782,14 +782,13 @@ function buildDocument(tab: Tab): Page {
     if (unpacked === null) return null;
     // A compressed run that will not open says why on its own row and is not
     // offered. A joined stream is offered whatever its length, and one whose
-    // parts take up too much of the file, or have one that will not read, is
-    // found out only now, so this is where it is said, for the listing's
-    // button and the inspector's alike.
+    // parts take up too much of the file, or have one that unpacks to too
+    // much or will not read, is found out only now, so this is where it is
+    // said, for the listing's button and the inspector's alike.
     if ("refused" in unpacked) {
       const first = doc.templateNode([...path, 0]);
       const joined = first.status === "ok" && first.node.joined && first.node.space_root;
-      const tab = JOINED.tabTitle(n.node.name, doc.name);
-      if (joined) say(unpacked.refused === "too-large" ? JOINED.tooLarge(tab) : JOINED.failed(tab), true);
+      if (joined) say(JOINED.refused(unpacked.refused, JOINED.tabTitle(n.node.name, doc.name)), true);
       return null;
     }
     const already = tabs.forSpace(unpacked.space);

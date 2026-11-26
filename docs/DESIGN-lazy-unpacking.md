@@ -393,6 +393,15 @@ today, and still reads a part at a time in the listing. A BAM larger than
 64 MiB compressed is in that case; a single-member gzip of any output size up
 to 1 GiB is not.
 
+A packed part that unpacks to more than 1 GiB refuses the joined stream as
+`TooLargeLazy`, and a read of that part in the listing says
+`blocks[0].compressed is too large to unpack (over 1 GiB)`. Any other refusal
+from a part's index pass refuses the stream as `Failed`. That includes a
+part's `TooLarge` (one zstd frame or xz block past 64 MiB), because the
+stream's own `TooLarge` means its parts take up too much of the file. A read
+of such a part says `is too large to unpack (over 64 MiB)`, and a read of a
+part that will not decode says `could not be unpacked`.
+
 **`Space` (the document of its own).** Its document becomes
 `Document<SpaceSource>`, where `SpaceSource` is an enum of `Whole(Arc<Vec<u8>>)`,
 `Lazy(Arc<Seekable>)` and `Joined(Arc<Joined>)`, all implementing `Source`
@@ -435,8 +444,9 @@ joined stream only for a joined stream under 64 MiB (`JOINED_WHOLE_CAP_BITS`
 in `joinedpart.ts`, and the same test in the `tab_probe` example). Whether
 one opens now depends on how much of the file its parts take up, which only
 the core knows, so every joined stream is offered and a refusal is said in the
-status bar when the button is pressed. `DECODED_REFUSED` has a string for
-`too-large-lazy`.
+status bar when the button is pressed (`JOINED.refused`: `tooLarge`,
+`partTooLarge` for `too-large-lazy`, and `failed`). `DECODED_REFUSED` has a
+string for `too-large-lazy`.
 
 ## The browser
 
@@ -643,8 +653,6 @@ blocks.
 - A run refused because one frame or block is past 64 MiB says "over 64 MiB"
   like any other run past the cap. It could say that one frame or block is
   too large.
-- A joined stream with a part past 1 GiB is refused as failed rather than as
-  too large, since the part's own refusal is not carried through.
 
 ## Tests
 
@@ -665,10 +673,12 @@ blocks.
   the column beside the bytes and the code panel's answer; and the Rubin raw
   lists its blocks under `members[0].compressed`.
 - Joined streams (`eval::stitch`), with the limits made small: a BGZF stream
-  past the cap read a part at a time, and a stream of stored and packed parts
+  past the cap read a part at a time; a stream of stored and packed parts
   past the cap, from a template of the test's own, whose bytes, `map_out` for
   every byte and `map_in` for every bit of the file match the same stream held
-  whole.
+  whole; and a part past `Limits::lazy` refusing the stream as `TooLargeLazy`,
+  with a read of it saying so, beside a damaged part of the same size refusing
+  it as `Failed`.
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
 - The pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,

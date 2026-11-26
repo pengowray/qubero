@@ -57,8 +57,21 @@ pub(super) enum Joining {
 enum PartTrouble {
     /// It unpacks to this many bytes, which is not what the file says.
     Length(u64),
-    /// It would not unpack at all.
-    Unpack,
+    /// The index pass refused it, for this reason: [`Refusal::TooLargeLazy`]
+    /// for a part that unpacks to more than [`lazy::LAZY_CAP_BYTES`], and
+    /// [`Refusal::Failed`] for one that will not decode.
+    Refused(Refusal),
+}
+
+/// What a read of a packed part says after the part's name when the part's
+/// decoder refused it. The words a compressed run's own row has for the same
+/// refusal (`DECODED_REFUSED` in the web's `strings.ts`).
+fn part_refused(why: Refusal) -> &'static str {
+    match why {
+        Refusal::TooLarge => "is too large to unpack (over 64 MiB)",
+        Refusal::TooLargeLazy => "is too large to unpack (over 1 GiB)",
+        _ => "could not be unpacked",
+    }
 }
 
 /// What the walk to a stitched stream's parts has found so far.
@@ -302,7 +315,7 @@ impl Evaluator {
                     // Small enough to hold whole after all, which a part the
                     // file says is larger than the cap is not.
                     Ok(lazy::Decoded::Whole(bytes, _)) => return Ok(Err(PartTrouble::Length(bytes.len() as u64))),
-                    Err(_) => return Ok(Err(PartTrouble::Unpack)),
+                    Err(why) => return Ok(Err(PartTrouble::Refused(why))),
                 }
             }
         };
@@ -323,7 +336,7 @@ impl Evaluator {
                 n,
                 stitch.parts[i].len
             )),
-            Err(PartTrouble::Unpack) => fail(format!("{} could not be unpacked", self.part_label(stitch, i))),
+            Err(PartTrouble::Refused(why)) => fail(format!("{} {}", self.part_label(stitch, i), part_refused(why))),
         }
     }
 
@@ -555,10 +568,12 @@ impl Evaluator {
     /// between them as the stream would have had to fit under whole, and a
     /// packed part too large to decode whole is read through its index.
     ///
-    /// Refused as too large when what it is read from passes the cap, and as
-    /// failed when a part will not read or unpacks to another length than its
-    /// run claimed. Every packed part small enough to decode whole is decoded
-    /// once here to check that, and its bytes are not kept.
+    /// Refused as too large when what it is read from passes the cap, as
+    /// [`Refusal::TooLargeLazy`] when a part unpacks to more than
+    /// [`lazy::LAZY_CAP_BYTES`], and as failed when a part will not read or
+    /// unpacks to another length than its run claimed. Every packed part small
+    /// enough to decode whole is decoded once here to check that, and its
+    /// bytes are not kept.
     fn join_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch) -> R<Result<Joining, Refusal>> {
         macro_rules! read {
             ($space:expr, $at:expr, $bits:expr) => {
@@ -595,6 +610,12 @@ impl Evaluator {
                     }
                     let bytes = match self.index_part(doc, stitch, i)? {
                         Ok(Some(index)) => JoinedBytes::Indexed(index),
+                        // A part past `LAZY_CAP_BYTES` refuses the stream for
+                        // that. A part's `TooLarge`, one zstd frame or xz
+                        // block past the cap, is not passed on: the stream's
+                        // `TooLarge` says its parts take up too much of the
+                        // file.
+                        Err(PartTrouble::Refused(Refusal::TooLargeLazy)) => return Ok(Err(Refusal::TooLargeLazy)),
                         Err(_) => return Ok(Err(Refusal::Failed)),
                         Ok(None) => {
                             let run = read!(*space, *at_bits, *size_bits);
@@ -1564,6 +1585,52 @@ mod tests {
         let mut e = Evaluator::new(crate::formats::bgzf());
         assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
         assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::Failed));
+    }
+
+    /// A joined stream past the cap with a part that unpacks to more than
+    /// `Limits::lazy` is refused as too large for that, and a read of the part
+    /// says so. A part that large which will not unpack at all is refused as
+    /// failed, as before.
+    #[test]
+    fn a_joined_stream_with_a_part_past_the_lazy_cap_is_refused_as_too_large() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::Refusal;
+        use crate::eval::EvalError;
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let limits = Limits { whole: 4096, lazy: 20_000, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() };
+        let open = |file: Vec<u8>| {
+            let d = Document::new(MemSource(file));
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            e.spaces.set_whole_cap(10_000);
+            e.spaces.set_lazy_limits(limits);
+            let opened = e.open_space(&d, 0, &[1]).unwrap();
+            let space = match e.spaces.get(&[1]) {
+                Some(super::Opened::Space(id)) => id,
+                other => panic!("the stream did not open: {other:?}"),
+            };
+            (d, e, opened, space)
+        };
+
+        let (d, e, opened, space) = open(bgzf_of(&[&big, b"and a short block after it"]));
+        assert_eq!(opened, None);
+        assert_eq!(e.open_refusal(&[1]), Some(Refusal::TooLargeLazy));
+        // Where it is declared, the first block's bytes say why they are not
+        // there, and the block after it still reads.
+        let why = |e: &Evaluator, d: &Document<MemSource>, space| match e.read_in(d, space, 0, 8) {
+            Err(EvalError::Failed(why)) => why,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(why(&e, &d, space), "blocks[0].compressed is too large to unpack (over 1 GiB)");
+        assert_eq!(e.read_in(&d, space, 30_000 * 8, 24).unwrap(), b"and");
+
+        // The same first block, its deflate made a block type that does not
+        // exist.
+        let mut file = bgzf_of(&[&big, b"and a short block after it"]);
+        file[18] = 0xff;
+        let (d, e, opened, space) = open(file);
+        assert_eq!(opened, None);
+        assert_eq!(e.open_refusal(&[1]), Some(Refusal::Failed));
+        assert_eq!(why(&e, &d, space), "blocks[0].compressed could not be unpacked");
     }
 
     #[test]
