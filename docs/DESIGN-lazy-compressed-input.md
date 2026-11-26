@@ -897,11 +897,14 @@ for a place"; `Measures` and `Spaces::joins` have two places each as well.
   a time and each window charged, until they reach `MEASURE_AHEAD_BYTES` past
   where the step starts. That is 128 KiB for the step's 1 Mibit, 65,541
   bytes for a stored block the step may not stop in, and 1 KiB for one more
-  code: about 193 KiB. A step that fails while there are bytes left to read
-  is taken again with one window more. A step that ran out of bytes succeeds
-  then, and a step over a damaged stream fails again. So each member is
-  decoded once, and its walk reads about one step past the end of its
-  stream. The bytes stay in `Measures` with the walk, so each of its two
+  code: about 193 KiB. Those bytes are always enough for the step. As a
+  guard, a step refused as failed while there are bytes left to read is
+  taken once more with one window more: a step that ran out of bytes would
+  then succeed, and a step over a damaged stream fails again. Any other
+  refusal is final at once, such as output past `Limits::measure` (64 MiB),
+  which more bytes would not change. So each member is decoded once, and its
+  walk reads about one step past the end of its stream, or past where its
+  output passed 64 MiB. The bytes stay in `Measures` with the walk, so each of its two
   places holds at most 64 MiB, as before. This applies natively too:
   measuring a short member now reads about 193 KiB, where it read everything
   to the end of the container, up to 64 MiB. Part 1's cap of half the store
@@ -941,23 +944,30 @@ for a place"; `Measures` and `Spaces::joins` have two places each as well.
   loaded before the first ask, as before. `waitToOpen` is unchanged. No
   string was added or changed, and no percentage is shown while a run is
   gathered (see "Open questions").
-- **What may still go wrong in the browser.** Open unpacked on a .gz whose
-  member is longer than the store reads the member's run twice, once to
-  measure it and once to unpack it. So the core asks again for chunks that
-  `waitToOpen` loaded for it earlier. `waitToOpen` gives up when the core
-  asks again for a chunk it loaded with no "working" reply in between. The
-  walk that measures such a member answers "working" many times before the
-  second read, so the tests never meet this, but it was not tried in a
-  browser. Part 7's change to `waitToOpen` removes the risk.
+- **What may still go wrong in the browser.** A .gz member longer than the
+  store has its run read twice, once to measure it and once to unpack it, so
+  the core asks again for chunks it read earlier. `waitToOpen` gives up when
+  the core asks again for a chunk that `waitToOpen` loaded with no "working"
+  reply in between. If Open unpacked is pressed while such a member is still
+  being measured, its wait sees both reads. Measuring answers "working"
+  between its rounds, but reading a run a window at a time answers only
+  "pending" while its chunks load. So the second read, reaching chunks the
+  end of the first read loaded and the store has since pushed out, can make
+  `waitToOpen` give up with `UNPACKED.tooMuchAtOnce`. Pressing Open unpacked
+  again then carries on from where the core stopped. The tests do not meet
+  this, and it was not tried in a browser. Part 7's change to `waitToOpen`
+  removes the risk.
 - **Tests.** In `eval/tests/resident.rs`, over a store of four chunks of
   1 KiB, the six tests that asserted part 1's refusals, and the one that
   asserted its regression for gzip members, now assert that the same runs
-  open or are sized as themselves. Three tests are new. The first checks
+  open or are sized as themselves. Four tests are new. The first checks
   that a run gathered across goes and waits comes to the same bytes as one
   read. The second asks for three runs longer than the store by turns, and
   checks that all three open and no pass starts twice. The third checks that
   copies past what `Gathers` may set aside wait for room, and that a run
-  longer than that on its own is refused. In
+  longer than that on its own is refused. The fourth checks that a gzip
+  member whose output passes a lowered `Limits::measure` (64 KiB) is
+  measured from under 300 KiB of the file, not all 1 MiB of it. In
   `crates/wasm/tests/open_space_waits.rs`, the store keeps 3 chunks of
   64 KiB in `a_run_longer_than_the_store_opens_a_window_at_a_time`, where a
   gzip file of 7 chunks opens, and 16 chunks in the other new tests. A zip

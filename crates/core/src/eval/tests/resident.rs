@@ -376,6 +376,30 @@ fn a_gzip_member_longer_than_the_store_is_measured() {
     }
 }
 
+/// A gzip member whose output passes the cap on what a measuring walk counts
+/// is refused at the step that passes it, and the walk reads about a step
+/// past there, not the rest of the file. The template then takes the member
+/// to run to the trailer, and its stream opens. Here the cap is 64 KiB of
+/// output, and the member is 1 MiB of bytes that do not pack.
+#[test]
+fn a_gzip_member_past_the_measuring_cap_is_refused_where_it_passes_the_cap() {
+    let content = noise(1 << 20);
+    let bytes = gzip_member(&content);
+    let mut d = stored(&bytes, 4);
+    let mut ev = Evaluator::new(crate::formats::gzip());
+    ev.spaces.set_lazy_limits(crate::codec::lazy::Limits { measure: 64 << 10, ..Default::default() });
+    let mut asked = Vec::new();
+    assert_eq!(fed_noting(&mut d, &bytes, &mut asked, |d| ev.node(d, &[0])).unwrap().child_count, 1);
+    let chunks: usize = asked.iter().map(Vec::len).sum();
+    // The header, the first step's 193 KiB ahead, and the trailer, of the
+    // 1,025 chunks of the file.
+    assert!(chunks < 300, "measuring asked for {chunks} chunks");
+    let run = fed(&mut d, &bytes, |d| ev.node(d, &[0, 0, 10])).unwrap();
+    assert_eq!(run.size_bits / 8, bytes.len() as u64 - 18);
+    assert_eq!(run.refused, None);
+    assert_eq!(unpacked(&ev, &[0, 0, 10]), content);
+}
+
 /// Three runs longer than the store, each asked for in turn in goes, the way
 /// a listing showing all three asks. Only two passes are kept unfinished,
 /// and a pass reads its run into its place, so the third waits for a place,

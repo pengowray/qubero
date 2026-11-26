@@ -1710,11 +1710,13 @@ impl super::Evaluator {
     /// `data` is the bytes from the stream's start read so far. Before each
     /// step they are read on, a window at a time and each window charged,
     /// until they reach [`MEASURE_AHEAD_BYTES`] past where the step starts,
-    /// or the end of what is measured. A step that fails while there are
-    /// bytes still to read is taken again with a window more: a step that ran
-    /// out of bytes and one over a stream that will not decode both fail, and
-    /// only the second fails again. So a walk never reads further than about
-    /// a step past where its stream ends, unless the stream is damaged.
+    /// or the end of what is measured. Those bytes are always enough for the
+    /// step. As a guard, a step refused as failed while there are bytes still
+    /// to read is taken once more with a window more: a step that ran out of
+    /// bytes would then succeed, and one over a stream that will not decode
+    /// fails again. Any other refusal, such as output past the cap, is final
+    /// at once. So a walk reads about a step past where its stream ends, or
+    /// past where it was refused.
     fn measure_steps<S: Source>(&mut self, doc: &Document<S>, key: RunKey, codec: Codec, mut data: Vec<u8>, mut walk: inflate::Measuring, own: bool) -> super::R<Result<u64, Refusal>> {
         let total = key.2 / 8;
         let window = self.gather_window(doc);
@@ -1761,7 +1763,9 @@ impl super::Evaluator {
             let before = walk;
             let from = walk.read_bits();
             let stepped = walk.step(&data, MEASURE_STEP_BITS);
-            if stepped.is_err() && (data.len() as u64) < total {
+            // Taken again once, and only when the step failed: output past
+            // the cap is refused the same with any number of bytes more.
+            if stepped == Err(Refusal::Failed) && !short && (data.len() as u64) < total {
                 walk = before;
                 short = true;
                 continue;
