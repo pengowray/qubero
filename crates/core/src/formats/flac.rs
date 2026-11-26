@@ -785,6 +785,22 @@ mod tests {
         assert_eq!(e.node(&d, &data).unwrap().size_bits, png.len() as u64 * 8);
     }
 
+    /// The smallest JPEG the template reads: start of image, one comment
+    /// segment, end of image.
+    #[test]
+    fn a_picture_reads_its_data_as_the_jpeg_it_is() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xfe, 0x00, 0x04, b'h', b'i', 0xff, 0xd9];
+        let bytes = file(&[block(0, false, &stream_info_bytes(0)), block(6, true, &picture_bytes("image/jpeg", &jpeg))], &[]);
+        let (d, mut e) = open(bytes);
+        let pic = |rest: &[&'static str]| -> Vec<&'static str> { [&["metadata_blocks", "1", "data", "data"][..], rest].concat() };
+        let segments = path(&mut e, &d, &pic(&["segments"]));
+        assert_eq!(e.node(&d, &segments).unwrap().child_count, 2);
+        assert_eq!(int(&mut e, &d, &pic(&["segments", "0", "marker"])), 0xfffe);
+        assert_eq!(int(&mut e, &d, &pic(&["segments", "1", "marker"])), 0xffd9);
+        let data = path(&mut e, &d, &pic(&[]));
+        assert_eq!(e.node(&d, &data).unwrap().size_bits, jpeg.len() as u64 * 8);
+    }
+
     #[test]
     fn a_picture_that_is_not_an_image_stays_bytes_and_a_link_reads_as_text() {
         let bytes = file(

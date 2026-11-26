@@ -75,7 +75,9 @@ pub fn ogg() -> Template {
     // An Ogg FLAC stream's PICTURE block brings the PNG and JPEG readers, and
     // the names they refer to, with it.
     let flac = super::flac::part();
-    Template::new("ogg", T::structure("OggStream", vec![("pages", T::repeat(page(), Until::End))])).with_part(&flac)
+    Template::new("ogg", T::structure("OggStream", vec![("pages", T::repeat(page(), Until::End))]))
+        .with_part(&flac)
+        .with_type("OggPacket", packet())
 }
 
 fn page() -> T {
@@ -99,7 +101,9 @@ fn page() -> T {
             ("crc32", T::u32(Little)),
             ("page_segments", T::u8()),
             ("segment_table", T::sized(E::field("page_segments"), T::repeat(lacing(), Until::End))),
-            ("packets", T::array(packet(), E::len_of("segment_table"))),
+            // Named so that the list reads as packets rather than as the
+            // switch each one is read through.
+            ("packets", T::array(T::Named("OggPacket".into()), E::len_of("segment_table"))),
         ],
     )
     .counted_as("page")
@@ -605,6 +609,19 @@ mod tests {
         assert!(type_name(&mut e, &d, &["pages", "0", "packets", "0"]).starts_with("bytes"));
         assert!(type_name(&mut e, &d, &["pages", "1", "packets", "0"]).starts_with("bytes"));
         assert!(crc_ok(&mut e, &d, 0) && crc_ok(&mut e, &d, 1));
+    }
+
+    /// The first packet of a page with the continued flag is the end of a
+    /// packet from an earlier page, so it stays bytes even when its bytes
+    /// look like the start of a header. The whole packet after it is read.
+    #[test]
+    fn the_first_packet_of_a_continued_page_stays_bytes_and_the_next_is_read() {
+        let bytes = page_with(5, 3, 0x01, 0, &[(vorbis_id_bytes(), true), (vorbis_id_bytes(), true)]);
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(ogg());
+        assert!(type_name(&mut e, &d, &["pages", "0", "packets", "0"]).starts_with("bytes"));
+        assert_eq!(type_name(&mut e, &d, &["pages", "0", "packets", "1"]), "VorbisIdentification");
+        assert_eq!(type_name(&mut e, &d, &["pages", "0", "packets"]), "OggPacket[]");
     }
 
     #[test]
