@@ -16,6 +16,10 @@ built in four parts:
   See "The pass in steps" and "The browser".
 - 2026-10-26: zstd runs of several frames and xz streams of several blocks are
   indexed too. See "zstd frames and xz blocks".
+- 2026-11-26: one press of Open unpacked waits for the stream's bytes to load
+  as well as for the pass, and a tab over a recognised stream shows the
+  progress of its stream being unpacked again after an edit. See "The
+  browser".
 
 "Still to do" at the end lists what is left.
 
@@ -445,15 +449,42 @@ whatever reaches the stream first carries it on, a go at a time: the listing
 reading the stream's first bytes, or Open unpacked. `open_in` in the wasm
 crate runs with the usual `WORK_SLICE` now, and `open_space` answers
 "working" until the pass is done. `Editor::unpacking(space)` says how far the
-pass has got in the reading behind a tab.
+pass has got in the reading the tab's next call works in
+(`Editor::working_reading`): the tab's own reading, or its home's for a
+stream read where it was declared, except while the tab's stream, or one it
+was opened from, is being opened again after an edit. `ensure_open` opens
+those first, from the file down, each in its home's reading, so the pass is
+in the home of the first one still to open. A tab over a recognised stream
+asked its own reading before, and showed no progress while its stream was
+unpacked again after an edit.
+
+The wasm crate never runs a pass in the reading the core keeps inside a
+recognised `Space` (`Space::reading()`): each tab over a recognised stream
+has an evaluator of its own in its `Sheet`, and `open_in` always asks a
+sheet's evaluator for its space 0. The core's own way into those readings,
+`Evaluator::open_space` given a recognised space and `tab_node`, gives the
+inner evaluator no allowance (`set_slice` is never called on it), so a pass
+there runs in one go and never has progress to report.
 
 On the web side, `Doc.openSpace` comes back as `{working, unpacking}` until
-then. Open unpacked (`openUnpacked` in `main.ts`) writes the progress in the
-status bar and asks again after the page has drawn; the tab opens at the end.
+then, and as `{pending: chunks}` while the stream's compressed bytes are
+still to load from the file. Open unpacked (`openUnpacked` in `main.ts`)
+hands both to `waitToOpen` (`openwait.ts`), which writes the progress or
+"Loading" in the status bar, asks again after the page has drawn or once
+`Doc.fileChunks` has the chunks, and opens the tab at the end, all from one
+press. It gives up, and says so, when a chunk cannot be read, and when the
+core asks again for a chunk this wait loaded with no unpacking done since:
+the chunks were pushed out of the store before the core could use them (see
+below), which the `textWindow` rule of the same chunks twice running does
+not catch, since each load pushes out different ones. `MAX_ROUNDS` is a
+backstop. `fileChunks` waits on the reads `handleReply` already started
+(`Doc.inflight` keeps each chunk's read) and tests the file's store
+(`has_chunk(0, c)`), since a pending reply's chunks are the file's whichever
+tab asked. A press while a wait is under way puts a new wait in its place.
 The listing's placeholder row for fields it cannot show yet says how far the
 unpacking has got while one is under way (`pendingText` in `listingdraw.ts`),
 and is updated on each redraw. The report's streams section waits for it as
-it waits for bytes.
+it waits for bytes, and waits the same way while the bytes load.
 
 Measured on 2026-10-26 in Chromium, with a generated gzip of 500,007,092
 bytes of CSV-like text packed to 20,306,027 (`make_gz.py` in that session's
@@ -472,8 +503,9 @@ loop both carried the pass on, with the drawing around them.
 The compressed run is still read into memory whole, and in the browser the
 file's chunk cache holds 512 chunks of 64 KiB (`CHUNK_CAPACITY` in `doc.ts`),
 so a run larger than 32 MiB compressed cannot be read in one go there even
-under `CAP_BYTES`. Reading the compressed side a piece at a time as well is
-separate work.
+under `CAP_BYTES`. Open unpacked says so (`UNPACKED.tooMuchAtOnce`) after a
+round or two of loading. Reading the compressed side a piece at a time as
+well is separate work.
 
 ## zstd frames and xz blocks
 
@@ -622,11 +654,15 @@ blocks.
   member's run is sized; it is about 175 ms of the open in wasm for the test
   file above. It could be resumable the same way: its state is a bit, a block
   and a count.
-- Open unpacked stops waiting when the reply is "pending" rather than
-  "working" (bytes of the file still to load), as it did before, and has to
-  be pressed again.
-- `Evaluator::unpacking` reports only its own reading's passes, not those of
-  a stream opened inside a recognised stream's reading.
+- `Evaluator::unpacking` reports the pass stepped most recently, which while
+  the listing carries on one stream and Open unpacked another may be the
+  listing's, so the status bar can show the other stream's progress for a
+  go.
+- A stream opened through the core's own reading of a recognised space
+  (`Evaluator::open_space` given that space, or `tab_node`) is unpacked in
+  one go, since that reading has no allowance. The wasm crate does not go
+  that way (see "The browser"), but a caller of the core that does gets no
+  progress and a long call.
 - While the pass runs, the listing shows no rows for a structure whose
   children wait on it, even the ones before the stream (a gzip member's
   header fields), since a slice of children is answered whole.
@@ -694,3 +730,13 @@ blocks.
   `zstd -1 -T0 -B1MiB` and `xz -0 -T0` in the sample collection's
   `compressed` folder, made by its `tools/make_frame_samples.py`, read back
   byte for byte with `whole` at 256 KiB. The `zstd -B` file is refused.
+- `crates/wasm/tests/open_space_waits.rs`, on files made in the test: a gzip
+  whose chunks are fed only as `open_space` names them opens in a few rounds,
+  with no chunk asked for twice; a run longer than the editor's store asks
+  again for chunks it was fed; and a tar of 70 MiB of zeros packed by hand as
+  zlib, opened as a recognised tab and then opened again after an edit, says
+  how far that unpacking has got on every "working" reply about the tab.
+- `web/test/openwait.test.ts`: `waitToOpen` loads and asks again through
+  "pending" and "working" to the tab, and stops on the same chunks twice, on
+  chunks pushed out by their own load, on a read that fails, after
+  `MAX_ROUNDS`, and with nothing more said once the wait is no longer wanted.
