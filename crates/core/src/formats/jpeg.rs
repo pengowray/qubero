@@ -435,7 +435,7 @@ fn jfxx() -> T {
             ),
         ],
     )
-    .field_doc("extension_code", "Which form the thumbnail is in: 0x10 a JPEG, 0x11 one palette index a pixel after a 256-colour palette, 0x13 three bytes of RGB a pixel.")
+    .field_doc("extension_code", "The thumbnail's format: 0x10 is a JPEG, 0x11 is a 256-colour palette followed by one palette index per pixel, 0x13 is three bytes of RGB per pixel.")
 }
 
 /// `APP14`, which Adobe writes and which decoders read for one thing: what the
@@ -519,7 +519,7 @@ fn extended_xmp() -> T {
         ],
     )
     .field_doc("guid", "The MD5 of the whole extended XMP, as 32 hex digits. The main XMP packet names it in xmpNote:HasExtendedXMP.")
-    .field_doc("full_length", "How many bytes the whole extended XMP is, across every segment that holds a piece of it.")
+    .field_doc("full_length", "Length in bytes of the whole extended XMP, across all its segments.")
     .field_doc("offset", "Where this piece starts within the whole extended XMP.")
 }
 
@@ -552,7 +552,7 @@ fn app2() -> T {
                             ],
                         )
                         .field_doc("sequence_number", "Which piece of the profile this is, counting from 1.")
-                        .field_doc("piece_count", "How many APP2 segments the profile is cut into.")
+                        .field_doc("piece_count", "How many APP2 segments the profile is split across.")
                         .field_doc("piece", "This segment's piece of a profile split across several APP2 segments. The whole profile is read in icc_profile, from all the pieces joined in order."),
                     )],
                     T::bytes(E::Remaining),
