@@ -5,23 +5,20 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use super::seekable::{seekable, Kind};
-use super::{wrapper, Checkpoints, Decoded, Limits, Start, SLIDE_AT, WINDOW};
+use super::{wrapper, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
 use crate::codec::inflate::{self, Ended, Framing, Resume, Sink, Wrapper};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
-/// The pass [`decode_or_index`] makes, done a slice at a time: each
-/// [`Indexing::step`] decodes about as much output as it is told to, stops at
-/// a place the decoder can carry on from, and the next step carries on from
-/// exactly there. A browser calls it between frames, so that indexing 500 MB
-/// of output does not stop the page for seconds.
+/// A deflate, zlib or gzip run's index pass, done a step at a time: each
+/// [`DeflatePass::step`] decodes about as much output as it is told to, stops
+/// at a place the decoder can carry on from, and the next step carries on
+/// from exactly there. See [`super::Indexing`].
 ///
 /// Holds what the pass would hold if it ran in one go: up to the cap of output
 /// and its trace while the run might still come to a whole one, and after
 /// that the window, the checkpoints, the block starts and the running sums.
-///
-/// [`decode_or_index`]: super::decode_or_index
-pub struct Indexing {
+pub(super) struct DeflatePass {
     codec: Codec,
     packed: Arc<Vec<u8>>,
     framing: Framing,
@@ -34,7 +31,7 @@ pub struct Indexing {
     most: u64,
 }
 
-/// How far an [`Indexing`] has got.
+/// How far a [`DeflatePass`] has got.
 pub(super) enum Phase {
     /// Decoding as a run held whole is decoded, traced, with checkpoints
     /// taken in case it comes to more than the cap. `from` is where the step
@@ -48,25 +45,16 @@ pub(super) enum Phase {
     Over,
 }
 
-/// What one [`Indexing::step`] came to.
-pub enum Stepped {
-    /// Not finished yet. Step again to carry on.
-    Working,
-    Done(Decoded),
-}
-
-impl Indexing {
-    /// Start indexing `packed`. `codec` is one [`can_step`] says yes to; any
-    /// other, zstd and xz included, is refused as [`Refusal::Failed`]. Nothing
-    /// is decoded until the first step.
+impl DeflatePass {
+    /// Start indexing `packed`, packed with deflate, zlib or gzip; any other
+    /// codec is refused as [`Refusal::Failed`]. Nothing is decoded until the
+    /// first step.
     ///
     /// A gzip run whose trailer says it comes to more than the cap starts as
-    /// [`Indexing::known_large`] does. The trailer gives the size modulo
+    /// [`DeflatePass::known_large`] does. The trailer gives the size modulo
     /// 4 GiB, so a size past the cap there is past it in fact; a trailer that
     /// is wrong about it fails the check at the end either way.
-    ///
-    /// [`can_step`]: super::can_step
-    pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
+    pub(super) fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<DeflatePass, Refusal> {
         let wrapper = wrapper(codec).ok_or(Refusal::Failed)?;
         if packed.len() > CAP_BYTES {
             return Err(Refusal::TooLarge);
@@ -82,7 +70,7 @@ impl Indexing {
         sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
         sink.mid_block = true;
         let phase = Phase::Whole { sink, trace, from: None };
-        let pass = Indexing { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
+        let pass = DeflatePass { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
         let says = match pass.packed.len().checked_sub(4) {
             Some(at) if wrapper == Wrapper::Gzip => u32::from_le_bytes(pass.packed[at..].try_into().expect("four bytes")),
             _ => 0,
@@ -98,7 +86,7 @@ impl Indexing {
     /// index the pass would have made. A run that turns out to fit under the
     /// cap after all comes back indexed too, and a caller that knew its
     /// length finds it is not the one it was told.
-    pub fn known_large(mut self) -> Indexing {
+    pub(super) fn known_large(mut self) -> DeflatePass {
         if matches!(self.phase, Phase::Whole { from: None, .. }) {
             let mut sink = WindowSink::new(Vec::new(), 0, self.limits.lazy, true);
             sink.marks = Some(Checkpoints::new(self.limits.spacing, self.limits.checkpoints));
@@ -113,7 +101,7 @@ impl Indexing {
     /// How far the pass has got: the bits of the run read and the bytes of
     /// output written, at the furthest it has been, so that neither goes
     /// back when the pass does.
-    pub fn progress(&self) -> Progress {
+    pub(super) fn progress(&self) -> Progress {
         let run_bits = self.packed.len() as u64 * 8;
         let unpacked = match &self.phase {
             Phase::Whole { sink, .. } | Phase::Index { sink, .. } => sink.len(),
@@ -125,7 +113,7 @@ impl Indexing {
     /// Decode about `out_bytes` more output and stop at the next code, or
     /// finish. A stored block is not stopped in, so a step can overrun by up
     /// to one stored block, 64 KiB.
-    pub fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
+    pub(super) fn step(&mut self, out_bytes: u64) -> Result<Stepped, Refusal> {
         let stepped = self.step_on(out_bytes);
         let (at, out) = match &self.phase {
             Phase::Whole { sink, from, .. } => (from.map_or(0, |r| r.in_bit), sink.len()),
@@ -236,15 +224,6 @@ impl Indexing {
     }
 }
 
-/// How far an [`Indexing`] has got: `read_bits` of the run's `run_bits`, and
-/// `unpacked` bytes of output so far.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Progress {
-    pub read_bits: u64,
-    pub run_bits: u64,
-    pub unpacked: u64,
-}
-
 /// Where each block starts, as a bit of the run and a byte of the output,
 /// recorded by the index pass. Holds every block's start until there are more
 /// than `max`, and from then on the start of every `stride`th block. Block 0's
@@ -318,7 +297,7 @@ pub(super) struct WindowSink {
     /// Stop at the first boundary at or past this bit.
     pub(super) stop_at: Option<u64>,
     /// Stop at the first boundary once the output has come to this, which is
-    /// where a step of an [`Indexing`] ends, and say where in `stopped`.
+    /// where a step of a [`DeflatePass`] ends, and say where in `stopped`.
     slice_end: u64,
     /// Whether that may be between two codes of a block, or only at the start
     /// of one.

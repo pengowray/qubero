@@ -1027,8 +1027,8 @@ impl super::Evaluator {
     /// cap, which lets the pass skip the part that might have been a run held
     /// whole: see [`lazy::Indexing::known_large`].
     ///
-    /// Only deflate, zlib and gzip are indexed a step at a time. A zstd or xz
-    /// run is decoded or indexed in one go, with nothing charged, as
+    /// Deflate, zlib, gzip and zstd are indexed a step at a time. An xz run is
+    /// decoded or laid out in one go, with nothing charged, as
     /// [`lazy::decode_or_index`] does it: see [`lazy::can_step`].
     ///
     /// Takes the evaluator shared, since a read of a stitched stream reaches
@@ -1325,6 +1325,52 @@ mod tests {
         assert_eq!(e.unpacking(), None);
         let SpaceSource::Lazy(index) = e.space(id).unwrap().source().clone() else { panic!("held whole") };
         assert_eq!((index.len(), index.crc32(), index.spans()), (whole.len(), whole.crc32(), whole.spans()));
+        assert!((0..index.spans()).all(|k| index.span_bytes(k) == whole.span_bytes(k)));
+        let mut got = vec![0u8; text.len()];
+        assert!(index.read(0, &mut got).is_ok() && got == text);
+    }
+
+    /// The same for a zstd run of several frames, opened through the zstd
+    /// template: its pass is charged to the go too, says how far it has got
+    /// between goes, and comes to the index one go makes.
+    #[test]
+    fn a_zstd_run_past_the_cap_opens_a_go_at_a_time() {
+        use crate::codec::lazy::tests::zstd_of;
+        use crate::eval::EvalError;
+        let text = many_lines();
+        let d = Document::new(MemSource(zstd_of(&text, 100_000, true)));
+        let open = |e: &mut Evaluator| -> crate::eval::R<Option<crate::eval::SpaceId>> {
+            let decoded = e.child_named(&d, &[], "decoded")?.expect("a decoded field");
+            e.open_space(&d, 0, &[decoded[0], 0])
+        };
+        let mut one = Evaluator::new(formats::builtin("zstd").unwrap());
+        one.spaces.set_lazy_limits(small_limits());
+        let id = open(&mut one).unwrap().expect("opens in one go");
+        let SpaceSource::Lazy(whole) = one.space(id).unwrap().source().clone() else { panic!("held whole") };
+
+        let mut e = Evaluator::new(formats::builtin("zstd").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        let (mut goes, mut read, mut unpacked) = (0, 0, 0);
+        let id = loop {
+            e.begin_slice();
+            match open(&mut e) {
+                Ok(Some(id)) => break id,
+                Err(EvalError::Busy { .. }) => {
+                    goes += 1;
+                    let p = e.unpacking().expect("a pass is under way");
+                    assert!(p.read_bits >= read && p.read_bits <= p.run_bits, "{read} then {p:?}");
+                    assert!(p.unpacked_bytes >= unpacked, "{unpacked} then {p:?}");
+                    (read, unpacked) = (p.read_bits, p.unpacked_bytes);
+                    assert!(goes < 1000);
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(goes >= 5, "{goes} goes");
+        assert_eq!(e.unpacking(), None);
+        let SpaceSource::Lazy(index) = e.space(id).unwrap().source().clone() else { panic!("held whole") };
+        assert_eq!((index.len(), index.spans()), (whole.len(), whole.spans()));
         assert!((0..index.spans()).all(|k| index.span_bytes(k) == whole.span_bytes(k)));
         let mut got = vec![0u8; text.len()];
         assert!(index.read(0, &mut got).is_ok() && got == text);
