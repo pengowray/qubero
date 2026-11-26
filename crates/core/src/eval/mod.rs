@@ -139,8 +139,8 @@ impl EvalError {
 
 pub type R<T> = Result<T, EvalError>;
 
-/// How far the pass unpacking a deflate, zlib or gzip stream has got, for a
-/// stream large enough that the pass takes more than one go. The pass reads
+/// How far the pass unpacking a deflate, zlib, gzip or zstd stream has got,
+/// for a stream large enough that the pass takes more than one go. The pass reads
 /// the compressed run once from front to back, so `read_bits` of `run_bits`
 /// is how much of it is done.
 ///
