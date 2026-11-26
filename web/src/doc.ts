@@ -339,6 +339,10 @@ export type TableFact = {
   readonly value: string;
   /** The unit the value is in, as a UCUM code (`s`, `MHz`), or "". */
   readonly unit: string;
+  /** What the value means, where the template says so for this value: `2
+   *  pols, each real and imaginary` for a GUPPI `NPOL` of 4. Empty or absent
+   *  otherwise; absent from a core built before notes. */
+  readonly note?: string;
 };
 
 /**

@@ -917,6 +917,9 @@ export const TABLE = {
   /** The row's number. A bare `#` because the column beside it already says
    *  what the rows are. */
   index: "#",
+  /** The same line turned, where it is a line of numbers across the top with
+   *  nothing beside it saying what they count: `sample #`, above 0, 1, 2. */
+  turnedIndex: (rowWord: string): string => `${rowWord} #`,
   /** What the format calls the row, for a table whose rows have names: a
    *  TDMS channel's path. */
   rowName: "name",

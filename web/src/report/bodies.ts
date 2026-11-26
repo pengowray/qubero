@@ -8,7 +8,7 @@ import { problemGlyph } from "../dom.ts";
 import { fieldClass } from "../fieldstyle.ts";
 import { childWord, codecWords, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
 import { formatOffset } from "../format.ts";
-import { factText } from "../tablebar.ts";
+import { factShown } from "../tablebar.ts";
 import type { TablePlan } from "../tableplan.ts";
 import type { ReportData } from "./data.ts";
 import { byteRef, dumpRows, pointAt } from "./refs.ts";
@@ -188,7 +188,7 @@ export function factRows(facts: readonly TableFact[]): { readonly name: string; 
   const short = facts.map((f) => f.label.replace(/^.*\./, ""));
   return facts.map((f, i) => {
     const name = short[i] ?? f.label;
-    return { name: short.indexOf(name) === short.lastIndexOf(name) ? name : f.label, value: factText(f) };
+    return { name: short.indexOf(name) === short.lastIndexOf(name) ? name : f.label, value: factShown(f) };
   });
 }
 

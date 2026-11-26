@@ -73,6 +73,10 @@ pub struct TableFactInfo {
     pub value: String,
     /// The unit, as a UCUM code, or empty when the fact has none.
     pub unit: String,
+    /// What the value means, when the template gave a note for this value:
+    /// `2 pols, each real and imaginary` for a GUPPI `NPOL` of 4. Empty
+    /// otherwise.
+    pub note: String,
 }
 
 impl Evaluator {
@@ -120,11 +124,18 @@ impl Evaluator {
             // A name and a unit are said of one field. An expression that
             // reaches several keeps each of them under its own path.
             let one = sink.out.len() == 1;
-            facts.extend(sink.out.into_iter().map(|o| TableFactInfo {
-                label: fact.label.as_deref().filter(|_| one).map_or(o.label, str::to_string),
-                path: o.path,
-                value: o.value,
-                unit: if one { unit.clone() } else { String::new() },
+            facts.extend(sink.out.into_iter().map(|o| {
+                let note = match &fact.note {
+                    Some((when, note)) if one && o.value.trim().parse::<i128>().ok() == Some(*when) => note.to_string(),
+                    _ => String::new(),
+                };
+                TableFactInfo {
+                    label: fact.label.as_deref().filter(|_| one).map_or(o.label, str::to_string),
+                    path: o.path,
+                    value: o.value,
+                    unit: if one { unit.clone() } else { String::new() },
+                    note,
+                }
             }));
         }
         Ok(Some(TableShapeInfo {

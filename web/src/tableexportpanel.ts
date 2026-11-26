@@ -155,6 +155,7 @@ export class TableExportPanel {
     return {
       format,
       headings: this.source.headings(),
+      rowWord: this.source.rowWord,
       lead: this.source.lead(),
       count: this.source.count,
       ...scopeOf(this.source.turned(), this.source.count, selected),

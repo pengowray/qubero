@@ -96,10 +96,16 @@ export function turned(lines: readonly (readonly string[])[]): string[][] {
  * last columns; turned, they sit with the other headings at the top, where
  * they stay in view, so that is the order they are written in. Then a line
  * for each of `fields`.
+ *
+ * The line of record numbers is labelled with what a record is, `sample #`,
+ * rather than the bare `#` of the column the right way up, which has the
+ * word in the column beside it.
  */
-export function turnedLines(headings: readonly string[], records: readonly TableRow[], lead: Lead, fields: FieldRange): string[][] {
+export function turnedLines(headings: readonly string[], records: readonly TableRow[], lead: Lead, fields: FieldRange, rowWord: string): string[][] {
   const width = headings.length;
-  const all = turned([headerCells(headings, lead), ...records.map((row, i) => recordCells(i, row, width, lead))]);
+  const head = headerCells(headings, lead);
+  head[0] = TABLE.turnedIndex(rowWord);
+  const all = turned([head, ...records.map((row, i) => recordCells(i, row, width, lead))]);
   const before = leadBefore(lead);
   return [...all.slice(0, before), ...all.slice(before + width), ...all.slice(before + fields.from, before + fields.to)];
 }

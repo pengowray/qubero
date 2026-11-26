@@ -66,7 +66,7 @@ export function tableBar(opts: BarOpts): Bar {
     const button = el("button", {
       type: "button",
       className: "tbl-fact",
-      textContent: `${fact.label} ${factText(fact)}`,
+      textContent: `${fact.label} ${factShown(fact)}`,
     });
     const written = factAsWritten(fact);
     button.title = written === null ? TABLE.factTitle(fact.label) : TABLE.factTitleWritten(fact.label, written);
@@ -121,6 +121,14 @@ export function factText(fact: TableFact): string {
   if (seconds !== null) return seconds;
   const value = factValue(fact.value);
   return fact.unit === "" || value === "" ? value : `${value} ${fact.unit}`;
+}
+
+/** A fact's value as the bar and the report show it: `factText`, then the
+ *  template's note on that value in brackets, `4 (2 pols, each real and
+ *  imaginary)`. */
+export function factShown(fact: TableFact): string {
+  const text = factText(fact);
+  return fact.note === undefined || fact.note === "" ? text : `${text} (${fact.note})`;
 }
 
 /** The fact as the file writes it, when the bar says it another way: a FITS
