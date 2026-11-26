@@ -1492,3 +1492,100 @@ fn a_code_taken_apart_from_its_own_bytes_reads_as_from_the_whole_run() {
     }
     assert!(compared > 10_000, "only {compared} codes compared");
 }
+
+/// What a zstd walk over the whole of `packed` comes to when it is handed a
+/// window of `size` bytes from wherever it stopped, and on
+/// [`Walked::Needs`](crate::codec::frames::Walked) exactly the bytes it asked
+/// for, with how many times it asked for each kind of thing: a frame header,
+/// a skippable frame's header, a block, and a frame's last block with its
+/// checksum. A window one byte short of what it asked for has it ask again
+/// for the same and read nothing.
+fn zstd_walk_in_windows(packed: &[u8], size: usize) -> (Vec<u8>, Trace, [usize; 4]) {
+    use crate::codec::frames::{zstd_done, Walked, ZstdWalk};
+    let mut walk = ZstdWalk::new(0..packed.len(), 0, crate::codec::CAP_BYTES as u64);
+    let mut b = crate::codec::TraceBuilder::default();
+    let mut out = Vec::new();
+    let mut asked = [0usize; 4];
+    let (mut from, mut to) = (0, size);
+    loop {
+        let copy = copy_of(packed, from, to);
+        let mut sink = |bytes: &[u8]| {
+            out.extend_from_slice(bytes);
+            Ok(())
+        };
+        match walk.run(window(&copy, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut sink).expect("walks") {
+            Walked::Ended(end) => return (out, zstd_done(b, packed.len(), end), asked),
+            Walked::Stopped => (from, to) = (walk.reached(), walk.reached() + size),
+            Walked::Needs(need) => {
+                assert_eq!(need.start, walk.reached());
+                assert!(need.end > copy.1 + copy.0.len(), "asked for {need:?}, which {from}..{to} holds");
+                let magic = u32::from_le_bytes(packed[need.start..need.start + 4].try_into().unwrap());
+                asked[match magic {
+                    0xfd2f_b528 => 0,
+                    0x184d_2a50..=0x184d_2a5f => 1,
+                    _ if packed[need.start] & 1 == 1 => 3,
+                    _ => 2,
+                }] += 1;
+                if need.len() > 1 {
+                    let short = copy_of(packed, need.start, need.end - 1);
+                    let again = walk.run(window(&short, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut |_| panic!("decoded from a short window"));
+                    assert_eq!(again, Ok(Walked::Needs(need.clone())));
+                }
+                (from, to) = (need.start, need.end.max(need.start + size));
+            }
+        }
+    }
+}
+
+/// A zstd walk handed windows of the run, from a byte at a time to all of
+/// it, comes to the bytes and the trace a walk over the whole run comes to,
+/// with and without skippable frames, asking on the way for frame headers,
+/// skippable headers, blocks and blocks with their checksums.
+#[test]
+fn a_zstd_walk_in_windows_comes_to_what_one_walk_does() {
+    let data = mixed(400_000, 53);
+    // Frames of 30 kB are one block each; frames of 140 kB are two.
+    let mut asked_at_a_byte = [0usize; 4];
+    for (chunk, skippable) in [(30_000, false), (30_000, true), (140_000, false), (140_000, true)] {
+        let packed = zstd_of(&data, chunk, skippable);
+        let (bytes, whole) = crate::codec::frames::zstd(&packed).expect("decodes whole");
+        assert!(bytes == data);
+        for size in [1, 7, 1000, 70_000, packed.len()] {
+            let (got, trace, asked) = zstd_walk_in_windows(&packed, size);
+            let what = format!("frames of {chunk}, skippable {skippable}, windows of {size}");
+            assert!(got == data, "{what}: the bytes differ");
+            assert!(shape(&trace) == shape(&whole), "{what}: the traces differ");
+            if size == 1 {
+                assert_eq!(asked[1] > 0, skippable, "{what}: asked for {asked:?}");
+                asked_at_a_byte.iter_mut().zip(asked).for_each(|(n, a)| *n += a);
+            }
+            if size == packed.len() {
+                assert_eq!(asked, [0; 4], "{what}");
+            }
+        }
+    }
+    assert!(asked_at_a_byte.iter().all(|&n| n > 0), "asked for {asked_at_a_byte:?}");
+}
+
+/// Every zstd span, decoded and traced from a copy of only its own frames,
+/// comes to what it comes to from the whole run.
+#[test]
+fn a_zstd_span_from_a_window_is_the_span_from_the_whole_run() {
+    let data = mixed(400_000, 59);
+    for skippable in [false, true] {
+        let packed = zstd_of(&data, 30_000, skippable);
+        let s = indexed(Codec::Zstd, &packed, small());
+        assert!(s.spans() > 4);
+        for k in 0..s.spans() {
+            let range = s.span_in(k);
+            let copy = copy_of(&packed, range.start, range.end);
+            let (c, want) = (&s.checkpoints[k], s.span_bytes(k));
+            let got = zstd::decode_span(window(&copy, &packed), range.clone(), c.out, (want.end - want.start) as usize, small().span).expect("decodes");
+            let mut bytes = vec![0u8; got.len()];
+            s.read(want.start, &mut bytes).expect("reads");
+            assert!(got == bytes, "skippable {skippable}, span {k}: the bytes differ");
+            let t = zstd::span_trace(window(&copy, &packed), range, c.out, small().span).expect("traces");
+            assert!(shape(&t) == shape(&s.span_trace(k).expect("traces")), "skippable {skippable}, span {k}: the traces differ");
+        }
+    }
+}

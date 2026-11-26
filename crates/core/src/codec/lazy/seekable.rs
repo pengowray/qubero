@@ -196,13 +196,13 @@ impl Seekable {
 
     /// The bytes of the run span `k` reads, for a span that starts on a byte:
     /// from its checkpoint's bit to the next one's, and the last to the end.
-    fn span_in(&self, k: usize) -> std::ops::Range<usize> {
+    pub(super) fn span_in(&self, k: usize) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(self.packed.len(), |c| (c.in_bit / 8) as usize);
         (self.checkpoints[k].in_bit / 8) as usize..end
     }
 
     /// The xz blocks span `k` holds, as numbers in the stream's index.
-    fn span_units(&self, k: usize, l: &xz::Layout) -> std::ops::Range<usize> {
+    pub(super) fn span_units(&self, k: usize, l: &xz::Layout) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(l.blocks.len(), |c| c.unit());
         self.checkpoints[k].unit()..end
     }
@@ -231,7 +231,7 @@ impl Seekable {
             Kind::Deflate(_) => self.deflate_span(k, self.whole())?,
             Kind::Zstd => {
                 let out = self.checkpoints[k].out;
-                super::zstd::decode_span(&self.packed, self.span_in(k), out, want, self.limits.span)?
+                super::zstd::decode_span(self.whole().code(), self.span_in(k), out, want, self.limits.span)?
             }
             Kind::Xz(_) => return Err(Refusal::Failed),
         };
@@ -291,7 +291,7 @@ impl Seekable {
         let t = Arc::new(match &self.kind {
             Kind::Deflate(_) => self.deflate_span_trace(k, self.whole())?,
             Kind::Zstd => {
-                super::zstd::span_trace(&self.packed, self.span_in(k), c.out, self.limits.span)?
+                super::zstd::span_trace(self.whole().code(), self.span_in(k), c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
                 super::xz::span_trace(&self.packed, l, k, self.span_in(k), self.span_units(k, l), c.out)?
