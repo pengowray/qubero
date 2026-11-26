@@ -13,7 +13,8 @@ use crate::codec::{frames, xz, Block, BlockKind, Codec, Member, Refusal, Step, S
 ///
 /// Holds the run itself, which is at most [`CAP_BYTES`]; the checkpoints; where
 /// the blocks start; the spans decoded most recently, up to
-/// [`Limits::span_cache`]; the trace of the span asked about most recently;
+/// [`Limits::span_cache`] (for xz, as much of each as reads have reached);
+/// the trace of the span asked about most recently;
 /// and the traces of the blocks asked about most recently, up to
 /// [`Limits::span_steps`] steps between them. Reads take `&self`, as a
 /// [`Source`](crate::source::Source) is read, so the caches are behind locks.
@@ -33,6 +34,10 @@ pub struct Seekable {
     pub(super) adler32: Option<u32>,
     limits: Limits,
     pub(super) spans: Mutex<Recent<Arc<Vec<u8>>>>,
+    /// An xz run's spans, each decoded as far as reads have reached it, up to
+    /// [`Limits::span_cache`]. Empty for deflate and zstd, whose spans are
+    /// decoded whole into `spans`.
+    pub(super) prefixes: Mutex<Recent<super::xz::Prefix>>,
     traced: Mutex<Option<(usize, Arc<Trace>)>>,
     /// Block starts found again by decoding: one list for each kept start,
     /// keyed by that start's place in `blocks.list`.
@@ -65,6 +70,7 @@ pub(super) fn seekable(codec: Codec, packed: Arc<Vec<u8>>, kind: Kind, len: u64,
         adler32: None,
         limits,
         spans: Mutex::new(Recent::new(limits.span_cache)),
+        prefixes: Mutex::new(Recent::new(limits.span_cache)),
         traced: Mutex::new(None),
         groups: Mutex::new(Recent::new(GROUPS_KEPT)),
         block_traces: Mutex::new(Recent::new(limits.span_steps)),
@@ -174,11 +180,15 @@ impl Seekable {
         while pos < end {
             let k = self.span_of_byte(pos).ok_or(Refusal::Failed)?;
             let range = self.span_bytes(k);
-            let bytes = self.span(k)?;
             let take = (range.end.min(end) - pos) as usize;
             let from = (pos - range.start) as usize;
             let to = (pos - at) as usize;
-            out[to..to + take].copy_from_slice(&bytes[from..from + take]);
+            let dst = &mut out[to..to + take];
+            match &self.kind {
+                // Decoded only as far as this read reaches.
+                Kind::Xz(l) => super::xz::read_span(&self.prefixes, &self.packed, l, self.span_units(k, l), k, from, dst)?,
+                _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
+            }
             pos += take as u64;
         }
         Ok(())
@@ -213,7 +223,9 @@ impl Seekable {
     /// pass that indexed it, so a span that comes out another length is a
     /// decoder disagreeing with itself. For xz it is the first time the
     /// span's blocks have been decoded, and a block that does not come to
-    /// what the index says is refused here.
+    /// what the index says is refused here. A read of an xz span does not
+    /// come here: it decodes only as far as the read reaches, through
+    /// `prefixes`.
     fn decode_span(&self, k: usize) -> Result<Vec<u8>, Refusal> {
         let c = &self.checkpoints[k];
         let range = self.span_bytes(k);
@@ -245,7 +257,7 @@ impl Seekable {
                 })?;
                 bytes
             }
-            Kind::Xz(l) => super::xz::decode_span(&self.packed, l, self.span_units(k, l), c.out)?,
+            Kind::Xz(l) => super::xz::decode_span(&self.packed, l, self.span_units(k, l))?,
         };
         if bytes.len() != want {
             return Err(Refusal::Failed);
@@ -457,6 +469,7 @@ impl Seekable {
         self.checkpoints.iter().map(|c| c.window().len()).sum::<usize>()
             + self.blocks.list.len() * std::mem::size_of::<(u64, u64)>()
             + lock(&self.spans).weight
+            + lock(&self.prefixes).weight
     }
 
     /// Where each checkpoint is, as the bit of the run and the byte of the
@@ -481,6 +494,16 @@ pub(super) struct Recent<T> {
 }
 
 impl<T: Clone> Recent<T> {
+    fn get(&mut self, k: u64) -> Option<T> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.entries.iter_mut().find(|e| e.0 == k)?;
+        e.3 = clock;
+        Some(e.1.clone())
+    }
+}
+
+impl<T> Recent<T> {
     fn new(cap: usize) -> Recent<T> {
         Recent {
             entries: Vec::new(),
@@ -492,15 +515,17 @@ impl<T: Clone> Recent<T> {
         }
     }
 
-    fn get(&mut self, k: u64) -> Option<T> {
-        self.clock += 1;
-        let clock = self.clock;
-        let e = self.entries.iter_mut().find(|e| e.0 == k)?;
-        e.3 = clock;
-        Some(e.1.clone())
+    /// Take entry `k` out, to change it and put it back.
+    pub(super) fn take(&mut self, k: u64) -> Option<T> {
+        let i = self.entries.iter().position(|e| e.0 == k)?;
+        let gone = self.entries.swap_remove(i);
+        self.weight -= gone.2;
+        Some(gone.1)
     }
 
-    fn put(&mut self, k: u64, value: T, weight: usize) {
+    /// Keep `value` as entry `k`, in place of any entry `k` there is.
+    pub(super) fn put(&mut self, k: u64, value: T, weight: usize) {
+        self.take(k);
         while !self.entries.is_empty() && self.weight + weight > self.cap {
             let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
             let gone = self.entries.swap_remove(oldest);
