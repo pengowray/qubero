@@ -405,7 +405,17 @@ fn with_jpeg(part: Part) -> Part {
         return part;
     }
     let _done = Done;
-    part.with_type(JPEG, super::jpeg::jpeg().root)
+    let jpeg = super::jpeg::jpeg();
+    let mut part = part.with_type(JPEG, jpeg.root);
+    // The JPEG's EXIF block is a plain TIFF, so it names `tiff.Ifd`, which a
+    // Sony ARW's own part does not have. Take every name the JPEG brought
+    // that this part lacks, in a fixed order.
+    let mut brought: Vec<(String, T)> = jpeg.types.into_iter().filter(|(name, _)| !part.types.iter().any(|(had, _)| had == name)).collect();
+    brought.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, ty) in brought {
+        part = part.with_type(&name, ty);
+    }
+    part
 }
 
 /// The same for a JPEG XR, which is this directory read against another set of
@@ -1479,6 +1489,38 @@ mod tests {
         let mut ev = Evaluator::new(crate::formats::jpeg());
         let bytes = ev.node(&d, &thumbnail).unwrap();
         assert_eq!((bytes.offset_bits / 8, bytes.size_bits / 8), (68, 3));
+    }
+
+    #[test]
+    fn a_jpeg_inside_a_sony_arw_reads_its_own_exif_block() {
+        // The ARW template's own directories are Sony's, and the EXIF block
+        // inside the JPEG is a plain TIFF whose directory is `tiff.Ifd`.
+        let inner = in_exif(&with_ifd1(&[0xff, 0xd8, 0xff, 0xd9]));
+        let d = Document::new(MemSource(with_ifd1(&inner)));
+        let mut ev = Evaluator::new(camera_raw("arw"));
+        let jpeg = [1, NEXT_IFDS, 0, THUMBNAIL, 0];
+        assert_eq!(ev.node(&d, &jpeg).unwrap().type_name, "JPEG");
+        let ifd = ev.node(&d, &[&jpeg[..], &EXIF[..], &[1, 2, 0]].concat()).unwrap();
+        assert_eq!((ifd.type_name.as_str(), ifd.offset_bits / 8), ("Ifd", 56 + 12 + 8));
+    }
+
+    #[test]
+    fn the_last_of_twenty_thousand_strips_is_found_from_a_fresh_start() {
+        // One row per strip is a common way to write a TIFF, and each strip's
+        // offset and length are looked up from two lists of 20,000.
+        let n = 20_000u32;
+        let data = vec![0x5a; n as usize];
+        let offsets: Vec<u32> = (0..n).map(|i| 8 + i).collect();
+        let counts = vec![1u32; n as usize];
+        let file = le_tiff(&data, &[(273, 4, &offsets), (279, 3, &counts)], 0);
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(tiff());
+        let started = std::time::Instant::now();
+        let p = ev.locate(&d, (8 + n as u64 - 1) * 8).unwrap();
+        let strip = ev.node(&d, &p).unwrap();
+        assert!(strip.name.contains(&format!("strip {}", n - 1)), "{}", strip.name);
+        assert_eq!(strip.offset_bits / 8, 8 + n as u64 - 1);
+        assert!(started.elapsed().as_secs() < 10, "took {:?}", started.elapsed());
     }
 
     /// A file from the sample collection, or nothing when it is not there.
