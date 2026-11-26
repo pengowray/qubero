@@ -188,6 +188,13 @@ pub(super) struct Go {
     /// The last refusal for depth, until the outermost expression of its
     /// read takes it. See `Refused`.
     refused: Option<Refused>,
+    /// The pass this go ran out of allowance in, and how far it had got when
+    /// it was put back: an index pass or the walk measuring where a gzip
+    /// member's stream ends. That pass is what the call that handed back
+    /// `Busy` waits on. The first one only: a pass reached after the
+    /// allowance has gone is put back without having moved. A cell, since
+    /// passes are stepped from inside reads, which take the evaluator shared.
+    ran_out_in: std::cell::Cell<Option<super::Unpacking>>,
 }
 
 impl Go {
@@ -211,6 +218,20 @@ impl Go {
         self.trail.clear();
         self.held = false;
         self.refused = None;
+        self.ran_out_in.set(None);
+    }
+
+    /// Note that this go ran out of allowance in a pass, which was put back
+    /// having got as far as `at` says. Only the first pass of a go is kept.
+    pub(super) fn ran_out_in(&self, at: super::Unpacking) {
+        if self.ran_out_in.get().is_none() {
+            self.ran_out_in.set(Some(at));
+        }
+    }
+
+    /// The pass this go ran out of allowance in, if it ran out in one.
+    pub(super) fn waits_on(&self) -> Option<super::Unpacking> {
+        self.ran_out_in.get()
     }
 
     /// The same, and back to the start of the file, for when what was worked

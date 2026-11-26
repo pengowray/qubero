@@ -126,6 +126,18 @@ impl<'a, S: Source> Tab<'a, S> {
         found.into_iter().map(|n| self.node_out(n)).collect()
     }
 
+    /// The children that are ready and what the rest wait on, as
+    /// [`Evaluator::children_ready`] gives them.
+    pub fn children_ready(&mut self, path: &[usize], from: u64, to: u64) -> (Vec<NodeInfo>, R<()>) {
+        let (found, rest) = self.ev.children_ready(self.doc, &self.path_in(path), from, to);
+        let mapped: R<Vec<NodeInfo>> = found.into_iter().map(|n| self.node_out(n)).collect();
+        match (mapped, rest) {
+            (Ok(ready), rest) => (ready, rest),
+            (Err(e), Ok(())) => (Vec::new(), Err(e)),
+            (Err(_), rest) => (Vec::new(), rest),
+        }
+    }
+
     pub fn text_value(&mut self, path: &[usize]) -> R<(String, bool)> {
         self.ev.text_value(self.doc, &self.path_in(path))
     }

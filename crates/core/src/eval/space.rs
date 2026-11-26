@@ -673,11 +673,6 @@ impl Unfinished {
         }
         self.entries.push((key, codec, pass, stamp));
     }
-
-    /// How far the pass stepped most recently has got, and its stamp.
-    fn latest(&self) -> Option<(RunKey, lazy::Progress, u64)> {
-        self.entries.iter().max_by_key(|e| e.3).map(|e| (e.0, e.2.progress(), e.3))
-    }
 }
 
 /// Deflate streams being measured to find where they end, for
@@ -739,13 +734,6 @@ impl Measures {
             self.walking.swap_remove(oldest);
         }
         self.walking.push((key, codec, data, walk, stamp));
-    }
-
-    /// How far the walk stepped most recently has got, and its stamp.
-    fn latest(&self) -> Option<(RunKey, lazy::Progress, u64)> {
-        let e = self.walking.iter().max_by_key(|e| e.4)?;
-        let progress = lazy::Progress { read_bits: e.3.read_bits(), run_bits: e.2.len() as u64 * 8, unpacked: e.3.unpacked() };
-        Some((e.0, progress, e.4))
     }
 
     fn is_empty(&self) -> bool {
@@ -950,8 +938,8 @@ pub(super) struct Spaces {
     /// Deflate streams being measured to find where they end, and the ends
     /// found.
     measures: Measures,
-    /// A count of passes stepped, indexing and measuring both, so that
-    /// `unpacking` can say which was stepped most recently.
+    /// A count of passes put back, indexing and measuring both, so that a
+    /// table that is full lets go of the pass stepped longest ago.
     stamps: std::cell::Cell<u64>,
 }
 
@@ -1141,15 +1129,6 @@ impl Spaces {
         self.measures = Measures::default();
     }
 
-    /// The run being indexed or measured most recently, and how far its pass
-    /// has got, while it has not finished. A measuring walk's key is the bytes
-    /// it walks, which start where the run does.
-    pub(super) fn unpacking(&self) -> Option<(RunKey, lazy::Progress)> {
-        let indexing = self.unfinished.borrow().latest();
-        let measuring = self.measures.latest();
-        indexing.into_iter().chain(measuring).max_by_key(|e| e.2).map(|(key, progress, _)| (key, progress))
-    }
-
     /// A number larger than any handed out before, for the pass being put
     /// back now.
     fn stamp(&self) -> u64 {
@@ -1213,6 +1192,7 @@ impl super::Evaluator {
         };
         loop {
             if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
+                self.go.ran_out_in(super::Unpacking::of(key, pass.progress()));
                 let stamp = self.spaces.stamp();
                 self.spaces.unfinished.borrow_mut().put(key, codec, pass, stamp);
                 return Err(busy);
@@ -1252,6 +1232,11 @@ impl super::Evaluator {
         };
         loop {
             if let Err(busy) = self.go.charge(0) {
+                // The share read is of the bytes the walk measures, which run
+                // from the start of the stream to the end of the container or
+                // the cap.
+                let progress = lazy::Progress { read_bits: walk.read_bits(), run_bits: data.len() as u64 * 8, unpacked: walk.unpacked() };
+                self.go.ran_out_in(super::Unpacking::of(key, progress));
                 let stamp = self.spaces.stamp();
                 self.spaces.measures.put(key, codec, data, walk, stamp);
                 return Err(busy);
@@ -1749,6 +1734,120 @@ mod tests {
         let fresh = Evaluator::new(formats::builtin("gzip").unwrap()).node(&d, &[0]).unwrap().child_count;
         assert_eq!(fresh, 1, "the broken member's run takes in the second");
         assert_eq!(e.node(&d, &[0]).unwrap().child_count, fresh);
+    }
+
+    /// A field's name, where it starts and how long it is, for each node.
+    fn placed(nodes: Vec<crate::eval::NodeInfo>) -> Vec<(String, u64, u64)> {
+        nodes.into_iter().map(|n| (n.name, n.offset_bits, n.size_bits)).collect()
+    }
+
+    /// While a gzip member's stream is unpacked a go at a time, the member's
+    /// header fields are ready. A slice of the member's children gives them
+    /// and stops at the stream, which waits on the pass, and the go says how
+    /// far that pass over the member's run has got.
+    #[test]
+    fn a_gzip_members_header_is_ready_while_its_stream_is_unpacked() {
+        use crate::eval::EvalError;
+        let text = numbered_lines(300_000, 4);
+        let d = Document::new(MemSource(gzip_member(&text)));
+        let mut one = Evaluator::new(formats::builtin("gzip").unwrap());
+        one.spaces.set_lazy_limits(small_limits());
+        let all = placed(one.children(&d, &[0, 0], 0, 20).unwrap());
+        let stream = all.iter().position(|f| f.0 == "compressed").expect("a stream");
+        assert_eq!((stream, all.len()), (10, 13));
+
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.set_slice(Some(600));
+        let (mut goes, mut indexing) = (0, 0);
+        let got = loop {
+            e.begin_slice();
+            let (ready, rest) = e.children_ready(&d, &[0, 0], 0, 20);
+            let ready = placed(ready);
+            match rest {
+                Ok(()) => break ready,
+                Err(EvalError::Busy { .. }) => {
+                    assert!(ready.len() <= stream, "a field after the stream came before it: {ready:?}");
+                    assert_eq!(ready[..], all[..ready.len()]);
+                    if ready.len() == stream {
+                        let p = e.unpacking().expect("the stream waits on a pass");
+                        assert_eq!((p.run_space, p.run_offset_bits), (0, 80));
+                        // The index pass reads the run, which stops at the
+                        // trailer. The walk measuring it reads to the end of
+                        // the file.
+                        if p.run_bits == all[stream].2 {
+                            indexing += 1;
+                        }
+                    }
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+            goes += 1;
+            assert!(goes < 1000, "no end to the goes");
+        };
+        assert_eq!(got, all);
+        assert!(indexing >= 3, "the header was ready in {indexing} goes of the index pass, of {goes}");
+    }
+
+    /// Two streams carried on by turns, as a listing reading one member and
+    /// Open unpacked on the other do in the browser. Each call that runs out
+    /// says how far the pass it ran out in has got, which is its own
+    /// stream's. A go says nothing until it has run out in a pass, though the
+    /// other stream's is unfinished, and a go that runs out in one pass and
+    /// then reaches the other, with nothing left to step it with, says the
+    /// first.
+    #[test]
+    fn each_call_says_how_far_its_own_stream_has_got() {
+        use crate::eval::EvalError;
+        let (first, second) = (gzip_member(&numbered_lines(200_000, 5)), gzip_member(&numbered_lines(300_000, 6)));
+        let starts = (80, (first.len() as u64 + 10) * 8);
+        let d = Document::new(MemSource([first, second].concat()));
+        let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        // Both members measured, so what is left is the two streams' passes.
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 2);
+        e.set_slice(Some(600));
+        let at = |e: &Evaluator| e.unpacking().map(|p| (p.run_space, p.run_offset_bits));
+
+        e.begin_slice();
+        assert!(matches!(e.open_space(&d, 0, &[0, 1, 10]), Err(EvalError::Busy { .. })));
+        assert_eq!(at(&e), Some((0, starts.1)));
+        assert!(matches!(e.children_ready(&d, &[0, 0], 0, 20).1, Err(EvalError::Busy { .. })));
+        assert_eq!(at(&e), Some((0, starts.1)), "the first member's pass was reached with nothing left");
+
+        let (mut listed, mut opened) = (None, None);
+        let (mut listing, mut opening) = (0, 0);
+        while listed.is_none() || opened.is_none() {
+            if listed.is_none() {
+                e.begin_slice();
+                assert_eq!(e.unpacking(), None, "a go that has not run out waits on nothing");
+                match e.children_ready(&d, &[0, 0], 0, 20) {
+                    (ready, Ok(())) => listed = Some(ready.len()),
+                    (ready, Err(EvalError::Busy { .. })) => {
+                        listing += 1;
+                        assert_eq!(ready.len(), 10, "the header is ready");
+                        assert_eq!(at(&e), Some((0, starts.0)), "listing go {listing}");
+                    }
+                    (_, Err(other)) => panic!("{other:?}"),
+                }
+            }
+            if opened.is_none() {
+                e.begin_slice();
+                assert_eq!(e.unpacking(), None, "a go that has not run out waits on nothing");
+                match e.open_space(&d, 0, &[0, 1, 10]) {
+                    Ok(id) => opened = Some(id),
+                    Err(EvalError::Busy { .. }) => {
+                        opening += 1;
+                        assert_eq!(at(&e), Some((0, starts.1)), "opening go {opening}");
+                    }
+                    Err(other) => panic!("{other:?}"),
+                }
+            }
+            assert!(listing + opening < 2000, "no end to the goes");
+        }
+        assert!(listing >= 3 && opening >= 3, "{listing} goes listing, {opening} opening");
+        assert_eq!(listed, Some(13));
+        assert!(opened.flatten().is_some(), "the second member's stream opened");
     }
 
     /// An xz stream of several blocks and a zstd run of several frames, past
