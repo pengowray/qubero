@@ -7,7 +7,7 @@ other codecs are covered at the end.
 
 **State, 2026-10-26:** built as described below and merged into main, in
 `codec/lazy.rs`, `eval/space.rs`, `eval/stitch.rs` and the wasm crate. It was
-built in four parts:
+built in five parts:
 
 - 2026-10-21: the index, the spans and reading a run through them.
 - 2026-10-26: the `blocks` listing for these runs. See "Blocks".
@@ -557,10 +557,11 @@ it holds exactly one window, so the output so far is known. Before that it is
 not, since `ruzstd` does not say how much it holds, and each block counts as
 a full 128 KiB. If the blocks before a frame's window fills are smaller than
 that, a step stops early, and the next step decodes the difference as well as
-its own share. That is at most one window more: 512 KiB for `pzstd -1`,
-2 MiB for `pzstd -3`, and 128 MiB at most, the largest window a frame may
-ask for. On the generated `pzstd -1` file measured below, no step took longer
-than 14 ms native.
+its own share. That is at most one window more, and never more than the
+frame's own output: 512 KiB for `pzstd -1`, 2 MiB for `pzstd -3`, and at
+most 64 MiB, since a frame larger than `Limits::span` is refused. On the
+generated `pzstd -1` file measured below, no step took longer than 14 ms
+native.
 
 An unfinished pass holds what the pass in one go holds at the same point: in
 the traced part up to `Limits::whole` of output and its trace, and the
@@ -671,23 +672,24 @@ time and its checksums checked, in a release build, native. The file is
 another 500,000,000 bytes of generated CSV-like text (16 KB blocks of rows, a
 sixth of them new and the rest repeats of one of the 8 new blocks before it),
 packed by `pzstd -1` to 33,360,350 bytes: 239 frames of 2 MiB, each with its
-checksum. Other work was running on the machine, so each time is the range
-over two or three runs.
+checksum. Other work was running on the machine, so the before and after
+runs were made back to back, twice, and each cell gives the first pair's
+time, then the second pair's. A range is the two opens of one run.
 
 | | Before | After |
 |---|---|---|
-| Index pass in one go (`decode_or_index`) | 0.82 to 1.18 s | 0.86 to 1.09 s |
-| Opening `decoded` through the zstd template, in goes of 5,000 elements | 1 go, 0.70 to 1.04 s | 192 goes, 0.71 to 0.96 s in all |
-| Longest go | the one go | 94 to 139 ms, the first go |
+| Index pass in one go (`decode_or_index`), best of 3 | 817 ms; 1,041 ms | 863 ms; 1,087 ms |
+| Opening `decoded` through the zstd template in goes of 5,000 elements | 1 go: 695 to 727 ms; 819 to 909 ms | 192 goes: 729 to 792 ms; 946 to 963 ms |
+| Longest go | the one go | the first: 98 to 108 ms; 130 to 139 ms |
 | Every other go | | under 21 ms |
-| The pass in steps of 256 KiB (`Indexing::step`) | | 1,911 steps, the longest 8 to 14 ms |
-| XXH64 over all 500 MB of output | | 52 to 88 ms |
+| The pass in steps of 256 KiB (`Indexing::step`) | | 1,911 steps, the longest 8 to 11 ms; 10 to 14 ms |
+| XXH64 over all 500 MB of output | | 52 ms; 88 ms |
 
 The first go spends its time before the pass starts, and the pass reads only
 the first 8,709 bytes of the run in it. About 40 to 55 ms of it is `read_in`
-copying the 33 MB packed run out of the document in `index_run`; the rest is
-in `open_space` before `index_run` is reached. Both were inside the one go
-before, and a deflate run pays the same.
+copying the 33 MB packed run out of the document in `index_run`, which
+`index_run` does for every codec; the rest is in `open_space` before
+`index_run` is reached. Both were inside the one go before.
 
 In wasm, under Node 24, a loop that decodes the same file a block at a time
 with `ruzstd`, as the walk does, took 668 to 681 ms without the `hash`
@@ -767,14 +769,6 @@ The `hash` feature makes that module 2.3 KB larger.
   go at a time, with `unpacking` moving forward between goes and the index
   the same as one go's, and a gzip's joined stream read a go at a time
   through the listing's path, a read of its first bytes.
-- zstd and xz, in `codec::lazy` with the limits made small: runs of several
-  frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
-  streams of several blocks packed by `lzma-rust2`, read back from anywhere;
-  span traces that match the whole trace; one frame or block past
-  `Limits::span` refused; a frame's raw blocks traced to exactly their own
-  bytes once the frame is past its first window; an xz block that does not
-  match the index refused when read. In `eval::space`, both open through their
-  templates, and an xz block's CRC-32 is checked through the index.
 - zstd's pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,
   over frames shorter than their window and frames three windows long, with
   and without skippable frames, come to the same checkpoints and bytes as one
@@ -785,6 +779,14 @@ The `hash` feature makes that module 2.3 KB larger.
   frame of raw blocks, are refused whole, past the cap, and in steps. In
   `eval::space`, a zstd run past the cap opened through its template a go at
   a time, with `unpacking` moving forward, comes to the index of one go.
+- zstd and xz, in `codec::lazy` with the limits made small: runs of several
+  frames packed by `ruzstd`, with and without `pzstd`'s skippable frames, and
+  streams of several blocks packed by `lzma-rust2`, read back from anywhere;
+  span traces that match the whole trace; one frame or block past
+  `Limits::span` refused; a frame's raw blocks traced to exactly their own
+  bytes once the frame is past its first window; an xz block that does not
+  match the index refused when read. In `eval::space`, both open through their
+  templates, and an xz block's CRC-32 is checked through the index.
 - `crates/core/tests/lazy_frames_real.rs`: files from `pzstd -1`,
   `zstd -1 -T0 -B1MiB` and `xz -0 -T0` in the sample collection's
   `compressed` folder, made by its `tools/make_frame_samples.py`, read back
