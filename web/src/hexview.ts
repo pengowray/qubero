@@ -129,6 +129,7 @@ type Placed = {
   more: boolean;
   trouble: string | null;
   byteSpan: Int32Array;
+  band: Uint8Array;
   byRow: Chip[][];
 };
 
@@ -138,6 +139,7 @@ const NO_SPANS = (windowBytes: number): Placed => ({
   more: false,
   trouble: null,
   byteSpan: new Int32Array(windowBytes).fill(-1),
+  band: new Uint8Array(0),
   byRow: [],
 });
 
@@ -186,6 +188,8 @@ export type Frame = {
   readonly more: boolean;
   readonly trouble: string | null;
   readonly byteSpan: Int32Array;
+  /** 1 for a span whose bytes are shaded, by index into `spans`. */
+  readonly band: Uint8Array;
   readonly byRow: Chip[][];
   readonly headsByRow: OutlineHeading[][];
   /** The table of values each row draws under its chips, one per row on
@@ -1756,8 +1760,12 @@ export class HexView {
    *  left unexplained. */
   private placeSpans(start: number, windowBytes: number, bpr: number): Placed {
     const { spans, more, error: trouble } = this.fetch.spansForView(start, windowBytes);
-    const { byteSpan, byRow } = placeChips(spans, start, windowBytes, bpr, this.visibleRows);
-    return { spans, more, trouble, byteSpan, byRow };
+    // An element the view already heads, a PNG chunk or a JPEG segment, is
+    // not named again in front of its first field, nor shaded.
+    const heads = new Set(this.sections.map((h) => h.path.join(".")));
+    const isHeading = (path: readonly number[]): boolean => heads.has(path.join("."));
+    const { byteSpan, band, byRow } = placeChips(spans, start, windowBytes, bpr, this.visibleRows, isHeading);
+    return { spans, more, trouble, byteSpan, band, byRow };
   }
 
   /**
@@ -1842,7 +1850,7 @@ export class HexView {
     const { bytes, complete } = this.doc.read(start, windowBytes);
     const fields = this.showsFields;
     const templated = this.doc.template !== null;
-    const { spans, more, trouble, byteSpan, byRow } =
+    const { spans, more, trouble, byteSpan, band, byRow } =
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
     const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
     const runs = fields && templated ? this.fetch.runsForView(spans, start, windowBytes) : [];
@@ -1879,6 +1887,7 @@ export class HexView {
       more,
       trouble,
       byteSpan,
+      band,
       byRow,
       headsByRow: headingsByRow(this.sections, start, windowBytes, bpr),
       values: this.planValues(runs, start, bpr, maxLines, valsWidth),

@@ -158,7 +158,10 @@ export function markBits(runs: readonly Run[]): string {
 
 /** The span covering a byte, as much of it as a cell shows. Null where no
  *  field covers the byte, and for a gap, which is not tinted. */
-export type CellSpan = { readonly kind: string; readonly startsHere: boolean };
+/** The field a cell is in: what kind of field, whether it starts here, and
+ *  whether it is in a shaded list element (see `banded` in `chipplan.ts`).
+ *  `band` is optional so that a caller with no elements need not say. */
+export type CellSpan = { readonly kind: string; readonly startsHere: boolean; readonly band?: boolean };
 
 export type CellInput = {
   /** The byte this cell stands for, and the length of the file. */
@@ -268,6 +271,10 @@ export function cellDraw(c: CellInput): CellDraw {
   if (c.span !== null) {
     hc += ` hv-tint ${fieldClass(c.span.kind)}`;
     if (c.span.startsHere) hc += " hv-field-start";
+    if (c.span.band === true) {
+      hc += " hv-band";
+      ac += " hv-band";
+    }
   }
   if (c.hl.length > 0) {
     // The text column cannot show part of a byte, so a partly covered

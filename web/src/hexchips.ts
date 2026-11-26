@@ -14,6 +14,7 @@ import { fieldClass } from "./fieldstyle.ts";
 import { chipDetail, type ChipMeasure } from "./chipfit.ts";
 import { chipLabel, continuedDetail, type Chip, type ChipBlock, type ChipText } from "./chipplan.ts";
 import { setText } from "./hexcell.ts";
+import { formatOffset } from "./format.ts";
 
 /** How many entries one screenful of the annotation column may hold. */
 export const SPAN_LIMIT = 600;
@@ -101,6 +102,10 @@ export function fillPlain(el: ChipEl, cls: string, text: string, title: string):
  */
 export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isTable?: (path: readonly number[]) => boolean): void {
   const s = c.span;
+  if (c.lead !== undefined) {
+    fillLead(el, c, text);
+    return;
+  }
   const { name, detail } = text;
   let cls = "hv-chip";
   if (s.gap) cls += " hv-chip-gap";
@@ -202,6 +207,35 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
     if (el.title !== `${title}\n${OPENS_TABLE}`) el.title = `${title}\n${OPENS_TABLE}`;
   } else delete el.dataset["table"];
   el.disabled = s.gap;
+}
+
+/**
+ * A chip that names something in front of the field it is about: the list
+ * element the field starts (`[1] orientation`), or what holds the offset that
+ * placed it (`← [0] image description`). Pressing it selects that element, or
+ * goes to that offset.
+ */
+function fillLead(el: ChipEl, c: Chip, text: ChipText): void {
+  const s = c.span;
+  const cls = c.lead === "from" ? "hv-chip hv-chip-lead hv-chip-from" : "hv-chip hv-chip-lead";
+  if (el.className !== cls) el.className = cls;
+  el.style.removeProperty("--chip-colour");
+  setText(el.firstElementChild as HTMLElement, text.name);
+  setText(el.lastElementChild as HTMLElement, "");
+  const at = formatOffset(s.offset_bits);
+  const title =
+    c.lead === "from"
+      ? `The offset at ${at}, in ${s.name}, points here. Click to go to it.`
+      : `${s.name}: ${chipDetail({ ...s, kind: "bytes" })} from ${at}. Click to select it.`;
+  if (el.title !== title) el.title = title;
+  el.setAttribute("aria-label", c.lead === "from" ? `Pointed to from ${s.name}` : `Start of ${s.name}`);
+  el._path = s.path;
+  el._runEnd = undefined;
+  el._from = s.offset_bits;
+  el._to = s.offset_bits + s.size_bits;
+  delete el.dataset["opens"];
+  delete el.dataset["table"];
+  el.disabled = false;
 }
 
 /** What a chip marked as holding a file says on the end of its tooltip. Kept

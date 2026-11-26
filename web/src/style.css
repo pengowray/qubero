@@ -635,7 +635,13 @@ button.welcome-crystal {
 .hv-rows {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  /* `clip`, not `hidden`: a box that hides its overflow can still be
+     scrolled by the browser, and Tab moving focus onto a chip below the edge
+     did that. The view keeps its own scroll position and shifts the rows
+     itself, so the browser's shift on top of it put every arrow of the
+     Dependencies overlay, and every click, that far off, and fields in plain
+     sight were reported as off screen. */
+  overflow: clip;
   /* The strip naming the fields carried down from above the view is pinned to
      this box's top edge. */
   position: relative;
@@ -708,6 +714,13 @@ button.welcome-crystal {
   --tint: color-mix(in srgb, var(--field-color) 84%, var(--fg));
   color: var(--tint);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--field-color) 48%, transparent);
+}
+/* Every other element of a list, so that where one TIFF entry ends and the
+   next begins shows on the bytes. A neutral wash, far fainter than the accent
+   fills of the selection and the active field, which stay the only fills that
+   mean something is picked. */
+.hv-band {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 .hv-field-start {
   box-shadow:
@@ -1115,6 +1128,26 @@ button.welcome-crystal {
 }
 .hv-chip-el {
   background: color-mix(in srgb, var(--field-color) 6%, transparent);
+}
+/* The list element a run of chips belongs to, named in front of its first
+   field: `[1] orientation`. Plain muted text with a hairline rather than a
+   chip's fill, so it reads as a heading for the chips after it and not as one
+   more field. `from` is what holds the offset that placed the field after it. */
+.hv-chip-lead {
+  --field-color: var(--muted);
+  background: none;
+  border-left: 1px solid var(--muted);
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0 4px;
+}
+.hv-chip-lead:hover {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--fg);
+}
+.hv-chip-lead > b {
+  font-weight: 600;
 }
 /* A field that began above the top row: named here so nothing on screen is
    left unexplained. */

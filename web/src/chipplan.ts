@@ -17,7 +17,7 @@
 import type { Span } from "./doc.ts";
 import { isElementName } from "./elementname.ts";
 import { GAP_LABEL } from "./strings.ts";
-import { chipDetail, chipLayout, chipWidth, runDetail, type ChipMeasure } from "./chipfit.ts";
+import { chipDetail, chipLayout, chipWidth, runDetail, withWorth, type ChipMeasure } from "./chipfit.ts";
 
 /** A span named on a row, whether it started above the view, and the elements
  *  of its list it stands for when a run of them is drawn as one chip: empty
@@ -30,7 +30,68 @@ export type Chip = {
    *  only what it reads as: the chip before it has already named the list, and
    *  which element this is, is its place in the row. */
   element?: boolean;
+  /** A chip that names something rather than a field of its own, drawn in
+   *  front of the field it is about: `entry` is the list element that field
+   *  starts, so a TIFF entry's four chips are headed `[1] orientation`;
+   *  `from` is what holds the offset that placed the field. Its span stands
+   *  for the element or the offset, which is what a press selects. */
+  lead?: "entry" | "from";
+  /** The bit the chip is placed by in its row, where that is not its span's
+   *  own: a `from` chip's span is somewhere else in the file. */
+  at?: number;
 };
+
+/** The bit a chip is placed by within its row. */
+export function chipBit(c: Chip): number {
+  return c.at ?? c.span.offset_bits;
+}
+
+/** A span standing for an element or a pointer, for a lead chip. */
+function leadSpan(of: Span, name: string, path: readonly number[], offsetBits: number, sizeBits: number): Span {
+  // What the field itself says is not what its element or its pointer says,
+  // so none of it is carried over.
+  const { problem: _p, element: _e, placed_by: _b, colour: _c, ...rest } = of;
+  return {
+    ...rest,
+    path: [...path],
+    name,
+    offset_bits: offsetBits,
+    size_bits: sizeBits,
+    kind: "composite",
+    value: "",
+    count: 0,
+    line: null,
+    gap: false,
+    opens: false,
+    bits: null,
+    sample: [],
+    parts: [],
+  };
+}
+
+/** The lead chips a span gets in front of it, in order: what placed it, then
+ *  the list element it starts. Only for a span starting on screen, and never
+ *  for an element the view already heads, such as a PNG chunk. */
+export function leadsOf(s: Span, isHeading: (path: readonly number[]) => boolean): Chip[] {
+  if (s.gap) return [];
+  const out: Chip[] = [];
+  const by = s.placed_by;
+  if (by !== undefined) {
+    out.push({ span: leadSpan(s, by.label, by.path, by.offset_bits, by.size_bits), carried: false, run: [], lead: "from", at: s.offset_bits });
+  }
+  const e = s.element;
+  if (e !== undefined && e.offset_bits === s.offset_bits && !isHeading(e.path)) {
+    out.push({ span: leadSpan(s, e.label, e.path, e.offset_bits, e.size_bits), carried: false, run: [], lead: "entry" });
+  }
+  return out;
+}
+
+/** Whether the bytes of a span are in every other element of its list, the
+ *  ones the view shades so that one element's end is visible on the bytes. */
+export function banded(s: Span, isHeading: (path: readonly number[]) => boolean): boolean {
+  const e = s.element;
+  return !s.gap && e !== undefined && e.index % 2 === 1 && !isHeading(e.path);
+}
 
 /** What a chip says: the name in bold and the value after it. */
 export type ChipText = { readonly name: string; readonly detail: string };
@@ -103,10 +164,12 @@ export function pinnedText(t: ChipText, c: Chip, reading: Reading | null): ChipT
  *  date sitting over four bytes with nothing saying which field it was. */
 export function chipText(c: Chip): ChipText {
   const s = c.span;
+  if (c.lead === "entry") return { name: s.name, detail: "" };
+  if (c.lead === "from") return { name: `← ${s.name}`, detail: "" };
   if (c.run.length > 0) return { name: listName(s), detail: runDetail(c.run.length) };
   if (c.element === true) return { name: "", detail: chipDetail(s) };
   if (s.gap) return { name: GAP_LABEL, detail: chipDetail(s) };
-  if (s.line !== null) return isElementName(s.name) ? { name: s.line, detail: "" } : { name: s.name, detail: s.line };
+  if (s.line !== null) return isElementName(s.name) ? { name: withWorth(s.line, s), detail: "" } : { name: s.name, detail: withWorth(s.line, s) };
   return { name: s.name, detail: chipDetail(s) };
 }
 
@@ -146,6 +209,9 @@ export function expandRuns(chips: readonly Chip[]): Chip[] {
 export type Placement = {
   /** The span covering each byte of the window, by index into `spans`, or -1. */
   readonly byteSpan: Int32Array;
+  /** 1 for a span whose bytes the view shades, by index into `spans`. See
+   *  `banded`. */
+  readonly band: Uint8Array;
   /** The chips named on each row on screen. */
   readonly byRow: Chip[][];
 };
@@ -161,10 +227,13 @@ export function placeChips(
   windowBytes: number,
   bpr: number,
   rows: number,
+  isHeading: (path: readonly number[]) => boolean = () => false,
 ): Placement {
   const byteSpan = new Int32Array(windowBytes).fill(-1);
+  const band = new Uint8Array(spans.length);
   const byRow: Chip[][] = Array.from({ length: rows }, () => []);
   for (const [i, s] of spans.entries()) {
+    if (banded(s, isHeading)) band[i] = 1;
     const from = Math.floor(s.offset_bits / 8);
     const to = Math.ceil((s.offset_bits + s.size_bits) / 8);
     for (let b = Math.max(from, start); b < Math.min(to, start + windowBytes); b++) {
@@ -178,15 +247,17 @@ export function placeChips(
       // saying how many: `[0]`, `[1]`, `[2]` say less than `cell_pointers
       // 3 values`. A chip carried from above the view stays its own, since
       // its arrow is about where it started.
-      if (prev !== undefined && !prev.carried && from >= start && foldable(s) && foldable(prev.span) && sameList(prev.span, s)) {
+      const carried = from < start;
+      const leads = carried ? [] : leadsOf(s, isHeading);
+      if (leads.length === 0 && prev !== undefined && prev.lead === undefined && !prev.carried && !carried && foldable(s) && foldable(prev.span) && sameList(prev.span, s)) {
         if (prev.run.length === 0) prev.run.push(prev.span);
         prev.run.push(s);
       } else {
-        chips.push({ span: s, carried: from < start, run: [] });
+        chips.push(...leads, { span: s, carried, run: [] });
       }
     }
   }
-  return { byteSpan, byRow };
+  return { byteSpan, band, byRow };
 }
 
 /**
@@ -199,7 +270,7 @@ export function bucketChips(chips: readonly Chip[], segs: readonly number[], row
   for (const c of chips) {
     let j = 0;
     if (!c.carried) {
-      const at = Math.floor(c.span.offset_bits / 8) - rowStart;
+      const at = Math.floor(chipBit(c) / 8) - rowStart;
       while (j + 1 < segs.length && (segs[j + 1] as number) <= at) j++;
     }
     (buckets[j] as Chip[]).push(c);
@@ -424,7 +495,7 @@ function pieceHeight(o: RowChipOpts, blockHeight: number): number {
 export function valsBeforeChips(first: ChipBlock | undefined, valsEndBit: number | null): boolean {
   if (valsEndBit === null || first === undefined || first.shown === 0) return false;
   for (let i = 0; i < first.shown; i++) {
-    if ((first.entries[i] as Chip).span.offset_bits < valsEndBit) return false;
+    if (chipBit(first.entries[i] as Chip) < valsEndBit) return false;
   }
   return true;
 }
@@ -443,7 +514,7 @@ export function valsBeforeChips(first: ChipBlock | undefined, valsEndBit: number
  *  chip at its front and the chip for what is left after its last child, and
  *  a press on each puts the cursor on its own bytes. */
 function fieldKey(c: Chip | undefined): string {
-  return c === undefined ? "" : `${c.span.path.join(".")}@${c.span.offset_bits}|`;
+  return c === undefined ? "" : `${c.lead ?? ""}${c.span.path.join(".")}@${c.span.offset_bits}|`;
 }
 
 /** What a row's chips say, as one string, so they are written again only when

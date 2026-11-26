@@ -695,6 +695,18 @@ path and also carry where its span starts, since two chips for one path can
 stand for different bytes. A heading is the exception: it names where a part
 starts, and pressing it goes there, bringing that row on screen.
 
+Below the headings, a chip still says which part of a list it belongs to.
+Each span carries the innermost list element whose own bytes hold it
+(`Span::element`). The first field of an element is preceded by the element's
+name as a plain muted label (`[1] orientation`, a `hv-chip-lead`), and the
+bytes of every other element get a faint neutral wash (`hv-band`), so where one
+TIFF entry ends and the next begins shows on the bytes. An element the view
+already heads, a PNG chunk or a JPEG segment, gets neither. Something a
+pointer placed names what placed it on its first field, `← [0] image
+description` (`Span::placed_by`, a `hv-chip-from`), and pressing that label
+goes to the offset. A stored number that a field of no bits works out from it
+alone says both, `red_x 35400 → 0.708` (`Span::worth`).
+
 `Evaluator::spans` feeds it: one call per screenful rather than one per field.
 It walks `locate` forwards from the first bit on screen, and does two things
 that are not one field each. Slack inside a structure comes back as a gap,

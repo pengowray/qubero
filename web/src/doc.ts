@@ -487,6 +487,36 @@ export type Span = {
   readonly problem?: Problem;
   /** Wrong values found under this span so far. */
   readonly problems_within: ProblemCount;
+  /** The list element whose own bytes hold this field: a TIFF entry, say.
+   *  Absent for a field in no list, or one a pointer placed away from it. */
+  readonly element?: SpanElement;
+  /** What holds the offset that placed this field, on the first field of
+   *  what was placed. Absent for everything else. */
+  readonly placed_by?: SpanPointer;
+  /** What the template works out from this field alone: `red_x` is stored as
+   *  35400 and worth 0.708. `name` is null where the worked-out field is only
+   *  called `worth`. Absent for nearly every field. */
+  readonly worth?: { readonly name: string | null; readonly value: string };
+};
+
+/** See `Span.element`. */
+export type SpanElement = {
+  /** As the listing names it: `[1] orientation`. */
+  readonly label: string;
+  readonly path: number[];
+  /** Its place in its list, from 0. */
+  readonly index: number;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+};
+
+/** See `Span.placed_by`. */
+export type SpanPointer = {
+  /** The list element the offset is in, or what holds it. */
+  readonly label: string;
+  readonly path: number[];
+  readonly offset_bits: number;
+  readonly size_bits: number;
 };
 
 /** One element of a folded run, for the value table beside the bytes. A span

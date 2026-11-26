@@ -851,7 +851,7 @@ export class HexRows {
   /** Write one row's bytes, and their text, into the cells they are drawn
    *  in. */
   private drawCells(parts: RowParts, rowStart: number, moved: boolean, f: Frame): void {
-    const { bpr, len, start, binary, complete, bytes, fields, selection, windowBytes, spans, byteSpan } = f;
+    const { bpr, len, start, binary, complete, bytes, fields, selection, windowBytes, spans, byteSpan, band } = f;
     for (let i = 0; i < bpr; i++) {
       const off = rowStart + i;
       const h = parts.hexCells[i] as HTMLElement;
@@ -883,7 +883,7 @@ export class HexRows {
         binary,
         complete,
         byte: bytes[off - start] ?? 0,
-        span: s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8) },
+        span: s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8), band: band[si] === 1 },
         hl,
         sel: sb,
         link: f.linked,

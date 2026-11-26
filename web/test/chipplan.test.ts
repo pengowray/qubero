@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import type { Span } from "../src/doc.ts";
 import type { ChipMeasure } from "../src/chipfit.ts";
 import {
+  banded,
   bucketChips,
   carriedName,
   chipCursorBit,
@@ -20,6 +21,7 @@ import {
   listName,
   pinnedNoteKey,
   firstVisibleByte,
+  leadsOf,
   placeChips,
   planRowChips,
   rowNoteKey,
@@ -501,4 +503,45 @@ test("the strip's key follows what it shows", () => {
   const b = plan([carried("checksum")], { top: true }).pinned;
   assert.notEqual(pinnedNoteKey(a), pinnedNoteKey(b));
   assert.equal(pinnedNoteKey(a), pinnedNoteKey(plan([carried("payload")], { top: true }).pinned));
+});
+
+// ----- the element a field starts, and what placed it -----
+
+const entry = (index: number, offset: number) => ({ label: `[${index}] tag`, path: [1, 2, index], index, offset_bits: offset * 8, size_bits: 12 * 8 });
+const noHeadings = (): boolean => false;
+
+test("the first field of a list element is headed by the element's name", () => {
+  const first = span({ offset_bits: 12 * 8, size_bits: 16, name: "tag", element: entry(1, 12) });
+  const second = span({ offset_bits: 14 * 8, size_bits: 16, name: "type", element: entry(1, 12) });
+  assert.deepEqual(leadsOf(first, noHeadings).map((c) => [c.lead, chipText(c).name]), [["entry", "[1] tag"]]);
+  assert.deepEqual(leadsOf(second, noHeadings), []);
+  // An element the view already draws a heading for is not named twice.
+  assert.deepEqual(leadsOf(first, (p) => p.join(".") === "1.2.1"), []);
+});
+
+test("a placed field names what points at it, and is placed in its row by its own bytes", () => {
+  const placed = span({
+    offset_bits: 0x68 * 8,
+    size_bits: 51 * 8,
+    name: "values",
+    placed_by: { label: "[0] image description", path: [1, 2, 0, 4, 0], offset_bits: 0x30 * 8, size_bits: 32 },
+  });
+  const [lead] = leadsOf(placed, noHeadings);
+  assert.equal(lead?.lead, "from");
+  assert.equal(chipText(lead as Chip).name, "\u2190 [0] image description");
+  // The lead's span is the offset, which is what a press goes to; the row it
+  // is drawn in is the value's.
+  assert.equal(lead?.span.offset_bits, 0x30 * 8);
+  assert.equal(lead?.at, 0x68 * 8);
+  const { byRow } = placeChips([placed], 0x60, 32, 16, 2);
+  assert.deepEqual(byRow[0]?.map((c) => c.lead ?? c.span.name), ["from", "values"]);
+});
+
+test("every other element of a list is shaded, and a list's elements do not fold across an element's name", () => {
+  const a = span({ offset_bits: 0, size_bits: 8, name: "[0]", element: entry(0, 0) });
+  const b = span({ offset_bits: 8, size_bits: 8, name: "[1]", element: entry(1, 1) });
+  assert.equal(banded(a, noHeadings), false);
+  assert.equal(banded(b, noHeadings), true);
+  const { band } = placeChips([a, b], 0, 16, 16, 1);
+  assert.deepEqual([...band], [0, 1]);
 });
