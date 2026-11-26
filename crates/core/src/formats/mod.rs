@@ -131,6 +131,7 @@ mod jxl;
 mod jxr;
 mod jpeg;
 mod jpeg2000;
+mod icc;
 mod ico;
 mod lha;
 mod lnk;
@@ -288,6 +289,7 @@ pub use jpeg2000::jpeg2000;
 pub use journal::journal;
 pub use jxl::jxl;
 pub use jxr::jxr;
+pub use icc::icc;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
@@ -547,6 +549,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("gitindex", |_| git_index()),
     ("gitpackidx", |_| git_pack_index()),
     ("qoi", |_| qoi()),
+    ("icc", |_| icc()),
     ("tiff", |_| tiff()),
     ("jxr", |_| jxr()),
     ("dng", camera_raw),

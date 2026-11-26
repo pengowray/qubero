@@ -154,6 +154,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   dbf: "dBase table",
   tga: "Targa image",
   qoi: "QOI image",
+  icc: "ICC profile",
   pi1: "Degas PI1 image",
   ilbm: "IFF ILBM image",
   swf: "Flash SWF",
