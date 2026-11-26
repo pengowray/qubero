@@ -691,19 +691,28 @@ since the go has no allowance left to read the others. A child that answers
 need, as before, so that children placed by offsets are one wait and not one
 each. `Evaluator::children` is the same answered whole.
 
-`template_children` puts the ready children on its "pending" or "working"
-reply as `ready`, with the chunks their previews want as `wanted`. They are
-never sent under "ok", because a short array there reads as a page of a
-list: `drawn` would add an edge counting the rest, and the other callers of
-`templateChildren` would take it as the whole answer. The web's
+`template_children` puts the ready children on its "working" reply as
+`ready`, with the chunks their previews want as `wanted`. They are never sent
+under "ok", because a short array there reads as a page of a list: `drawn`
+would add an edge counting the rest, and the other callers of
+`templateChildren` would take it as the whole answer. A "pending" reply,
+which waits on bytes of the file, carries none, and the listing draws one
+placeholder for the structure as before: its walk over a file still loading
+was tuned to stop at such a structure, and reading on into the children it
+has would ask for more chunks at once (see `CHUNK_BUDGET`). The web's
 `TemplateReply` carries `ready` as children whatever its type, so that a reply
 that is not "ok" can still be handed on as the reply to another question.
+
 Only the listing's walk uses it (`Walk.kids`, which marks the slice with
 `waitsTo`). `drawn` puts the pending item after the ready rows, over the rest
-of the structure, with no gap and no edge for the children still to come;
-`sections` does the same for the root, where the parts still to come would
-otherwise be a gap of bytes nothing describes. A slice with none ready is a
-placeholder for the whole structure, as before.
+of the structure, and draws no edge counting the children still to come.
+`sections` does the same for the root. Neither draws a gap anywhere in a
+slice that waits: children placed by offsets need not be in the file in the
+order they are read, so a child still to come may land between two that are
+drawn, and calling that stretch bytes nothing describes would be false. A
+format card or a record table is drawn from the whole structure, so one whose
+children are still to come is a placeholder until they are all in. A slice
+with none ready is a placeholder for the whole structure, as before.
 
 While the member's stream is measured, this does not help: the listing has
 no rows at all (see "Still to do").
@@ -1005,13 +1014,13 @@ The `hash` feature makes that module 2.3 KB larger.
   the CSV-like text in "Measuring a member's stream in steps", measuring was
   about 35 of the 82 goes it took to open. Answering a list's node before its
   count is known would need the listing to cope with a count that grows.
-- `Walk.kids` gives a structure's ready children when the rest wait on bytes
-  as well as on work, so while a file loads, rows can arrive a few at a time
-  rather than a structure at a time. The rows drawn are a prefix in template
-  order. A structure whose children are placed by offsets, out of file order,
-  can then show a gap between two ready children where a child still to come
-  will go, until it arrives. The listing's pages of a long list have the same
-  problem today.
+- A slice whose children wait on bytes of the file is still answered whole on
+  the wire, though `Evaluator::children_ready` has the children before the
+  first that waits. Sending them too would let a ZIP entry's header show while
+  its data loads, but the listing's walk would then read on into those
+  children while their siblings' chunks load, which is what `CHUNK_BUDGET`
+  was tuned against. It would want a test of the chunk cache whose source
+  gives them, as `cachedSource` in `flatten.test.ts` does not.
 - Only two unfinished passes are kept (`UNFINISHED_PASSES`). Read from the
   code, not yet tried: a ZIP with three large entries arrives with all three
   open, so each frame of the listing steps three passes, and each one put back
@@ -1161,5 +1170,8 @@ The `hash` feature makes that module 2.3 KB larger.
   with six ready is six rows and one pending item over the rest of the
   member, with no gap and no edge; with none ready, one pending item over the
   member; two members waiting on two passes each keep their own progress; a
-  root whose second part waits has no gap after the first; a page of a list
-  that stops at a child that waits has no edge counting the rest.
+  root whose second part waits has no gap after the first; a structure whose
+  ready children have a child still to come between them in the file has no
+  gap, at the root and further in; a record table whose rows wait is one
+  pending item; a page of a list that stops at a child that waits has no edge
+  counting the rest.

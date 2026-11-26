@@ -14,22 +14,15 @@ pub(crate) enum Reply<T: Serialize> {
         wanted: Vec<f64>,
     },
     #[serde(rename = "pending")]
-    Pending {
-        chunks: Vec<f64>,
+    Pending { chunks: Vec<f64>, reached_bytes: f64 },
+    #[serde(rename = "working")]
+    Working {
         reached_bytes: f64,
         /// The part of the answer that did not wait: for a slice of children,
         /// the ones before the first that waits. See `slice_reply`.
         #[serde(skip_serializing_if = "Option::is_none")]
         ready: Option<T>,
         /// Chunks `ready` was given without, as for `Ok`.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        wanted: Vec<f64>,
-    },
-    #[serde(rename = "working")]
-    Working {
-        reached_bytes: f64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ready: Option<T>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         wanted: Vec<f64>,
         /// How far the pass this call ran out in has got, when it ran out in
@@ -59,12 +52,7 @@ pub(crate) fn unpacking_dto(p: Unpacking) -> UnpackingDto {
 pub(crate) fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64, wanted: Vec<f64>) -> String {
     let rep = match r {
         Ok(node) => Reply::Ok { node, wanted },
-        Err(EvalError::Pending(m)) => Reply::Pending {
-            chunks: m.into_iter().map(|m| m.chunk as f64).collect(),
-            reached_bytes,
-            ready: None,
-            wanted: Vec::new(),
-        },
+        Err(EvalError::Pending(m)) => Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes },
         Err(EvalError::Busy { reached_bits }) => {
             Reply::Working { reached_bytes: (reached_bits / 8) as f64, ready: None, wanted: Vec::new(), unpacking: None }
         }
@@ -73,22 +61,22 @@ pub(crate) fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f
     to_json(&rep)
 }
 
-/// A slice of children answered as far as it could be: all of them, or the
-/// ones before the first that waits, carried on the "pending" or "working"
-/// reply as `ready`, with `unpacking` saying how far the pass the slice
-/// waits on has got. A slice with none ready is answered as before.
+/// A slice of children answered as far as it could be. When the rest wait on
+/// more work, the "working" reply carries the ones before the first that
+/// waits as `ready`, and `unpacking` says how far the pass the slice waits on
+/// has got. A slice that waits on bytes of the file is answered whole, as
+/// before: the listing's walk over a file still loading was tuned to stop at
+/// such a slice, and reading on into the children it has would ask for more
+/// chunks at once.
 pub(crate) fn slice_reply<T: Serialize>(ready: Vec<T>, rest: Result<(), EvalError>, e: &Evaluator) -> String {
     let wanted = wanted(e);
-    let reached_bytes = (e.reached_bits() / 8) as f64;
-    let ready_part = |ready: Vec<T>, wanted: Vec<f64>| if ready.is_empty() { (None, Vec::new()) } else { (Some(ready), wanted) };
     let rep = match rest {
         Ok(()) => Reply::Ok { node: ready, wanted },
         Err(EvalError::Pending(m)) => {
-            let (ready, wanted) = ready_part(ready, wanted);
-            Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes, ready, wanted }
+            Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes: (e.reached_bits() / 8) as f64 }
         }
         Err(EvalError::Busy { reached_bits }) => {
-            let (ready, wanted) = ready_part(ready, wanted);
+            let (ready, wanted) = if ready.is_empty() { (None, Vec::new()) } else { (Some(ready), wanted) };
             Reply::Working { reached_bytes: (reached_bits / 8) as f64, ready, wanted, unpacking: e.unpacking().map(unpacking_dto) }
         }
         Err(EvalError::Failed(message)) => Reply::Error { message },

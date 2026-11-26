@@ -2047,7 +2047,7 @@ function signatureName(id: Identification): string {
 }
 
 /**
- * What the core said to one question. A "pending" or "working" answer to
+ * What the core said to one question. A "working" answer to
  * `templateChildren` may carry `ready`: the children before the first one
  * that waits, which a listing can draw above a placeholder for the rest. It
  * is never a whole answer, so it is never under "ok". It is children
@@ -2056,7 +2056,7 @@ function signatureName(id: Identification): string {
  */
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
-  | { readonly status: "pending"; readonly reachedBytes: number; readonly ready?: readonly TemplateNode[] }
+  | { readonly status: "pending"; readonly reachedBytes: number }
   /** Still being worked out. `reachedBytes` is how far into the file the
    * reading has got. Asking again carries on from there. `unpacking`, from
    * `templateChildren`, is how far the pass the rest of the answer waits on
@@ -2279,7 +2279,7 @@ export type ExtentEstimate = {
 
 type RawReply<T> =
   | { status: "ok"; node: T; wanted?: number[] }
-  | { status: "pending"; chunks: number[]; reached_bytes: number; ready?: TemplateNode[]; wanted?: number[] }
+  | { status: "pending"; chunks: number[]; reached_bytes: number }
   | { status: "working"; reached_bytes: number; ready?: TemplateNode[]; wanted?: number[]; unpacking?: Unpacking }
   | { status: "error"; message: string };
 
@@ -3035,10 +3035,7 @@ export class Doc {
           this.nextMiss = last + 1 + READ_AHEAD;
         } else this.nextMiss = last + 1;
       }
-      // The children that did not wait were answered without some previews,
-      // as an "ok" answer can be.
-      for (const c of r.wanted ?? []) this.fetchChunk(c);
-      return { status: "pending", reachedBytes: r.reached_bytes, ...(r.ready === undefined ? {} : { ready: r.ready }) };
+      return { status: "pending", reachedBytes: r.reached_bytes };
     }
     if (r.status === "ok" && r.wanted !== undefined && r.wanted.length > 0) {
       // Answered without some previews, so the rows are here and their first

@@ -2022,10 +2022,10 @@ impl Editor {
     }
 
     /// Same envelope as `template_node`, with `node` being an array of children.
-    /// A "pending" or "working" reply carries the children before the first
-    /// one that waits as `ready`, with the chunks their previews want as
-    /// `wanted`, and a "working" one says how far the pass the rest wait on
-    /// has got as `unpacking`. See `slice_reply`.
+    /// A "working" reply carries the children before the first one that waits
+    /// as `ready`, with the chunks their previews want as `wanted`, and says
+    /// how far the pass the rest wait on has got as `unpacking`. See
+    /// `slice_reply`.
     pub fn template_children(&mut self, space: u32, path: &[u32], from: f64, to: f64) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let mut tab = match self.tab(space) {

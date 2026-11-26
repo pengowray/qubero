@@ -511,9 +511,10 @@ class Walk {
   }
 
   /** Children of `path` the reader has asked to see. Returns null, having
-   *  noted that the walk waits, when none of them is there yet; and when
-   *  only the first few are, those, with `waitsTo` set. Either way the
-   *  caller puts a pending item where the rest go. */
+   *  noted that the walk waits, when none of them is there yet; and when the
+   *  core is still working on the rest and gave the first few, those, with
+   *  `waitsTo` set. Either way the caller puts a pending item where the rest
+   *  go. A slice waiting on bytes of the file comes whole or not at all. */
   kids(path: readonly number[], count: number): Slice | null {
     const { from, to } = this.window(path, count);
     const reply = this.src.children(path, from, to);
@@ -530,7 +531,7 @@ class Walk {
     if (this.opts.chunkBytes !== undefined) this.chunks.add(-1 - this.waits++);
     const working = reply.status === "working";
     this.waitedOn.set(pathKey(path), { working, unpacking: working ? (reply.unpacking ?? null) : null });
-    const ready = reply.ready ?? [];
+    const ready = working ? (reply.ready ?? []) : [];
     if (ready.length === 0) return null;
     this.count(ready);
     return { from, nodes: ready, waitsTo: to };
@@ -735,10 +736,11 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   const spans = parts.map((p) => p.extent).filter((e): e is Span => e !== null);
   const framed = parent.framed && spans.length > 0;
   const from = framed ? Math.min(...spans.map((s) => s.start)) : parent.offset_bits;
-  // Past the last part that arrived, nothing is known yet: the parts still
-  // to come cover it, so it is not a hole.
+  // While parts are still to come, no stretch of the parent is known to be a
+  // hole: a part placed by an offset may land before, between or after the
+  // ones that arrived. The pending item after the last part stands for them.
   const to = framed || waits ? Math.max(from, ...spans.map((s) => s.end)) : end;
-  const holes = uncovered(from, to, parts.map((p) => p.extent));
+  const holes = waits ? [] : uncovered(from, to, parts.map((p) => p.extent));
   // Every hole starts either where the parent does or where some part ends,
   // so each one has a place in the list without the parts being reordered.
   const drawnHoles = new Set<number>();
@@ -1012,6 +1014,13 @@ function body(
   depth: number,
 ): void {
   const card = w.opts.formatCard?.(node) ?? null;
+  // A card and a record table are drawn from the whole structure, not from
+  // the rows in hand, so one whose children are still to come waits whole,
+  // as it did before the first of them could be drawn on their own.
+  if (kids.waitsTo !== undefined && (card !== null || w.opts.isRecord?.(node) === true)) {
+    w.waiting(path, depth, node);
+    return;
+  }
   if (card !== null) {
     w.push({
       kind: "formatcard",
@@ -1108,8 +1117,12 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // parts. Asked once for the run, so a list is drawn one way the whole way
   // down rather than a band here and a row there.
   const how = w.opts.density?.(node, slice.nodes) ?? densityOf(slice.nodes);
-  rows(w, path, slice.nodes, slice.from, depth, bounds, node.child_count, slice.nodes, slice.from, how);
-  if (slice.waitsTo !== undefined) {
+  // Children placed by offsets need not be in the file in the order they are
+  // read, so a child still to come may sit between two that are drawn. Until
+  // they are all in, no stretch between them is known to be a gap.
+  const waits = slice.waitsTo !== undefined;
+  rows(w, path, slice.nodes, slice.from, depth, bounds, node.child_count, slice.nodes, slice.from, how, !waits);
+  if (waits) {
     // The children still to come go after the ones drawn, over the rest of
     // the structure. How much of it they cover is not known until they
     // arrive, so nothing there is a gap yet, and the list's end is not
@@ -1142,6 +1155,7 @@ function rows(
   siblings: readonly TemplateNode[] = kids,
   sibBase: number = base,
   how: Density = "headings",
+  gaps = true,
 ): void {
   const order = inFileOrder(kids);
   let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
@@ -1150,7 +1164,7 @@ function rows(
   // measured against an offset from another space is not.
   const space = order[0]?.space ?? 0;
   for (const kid of order) {
-    if (kid.offset_bits > cursor && kid.space === space) gap(w, path, cursor, kid.offset_bits, depth);
+    if (gaps && kid.offset_bits > cursor && kid.space === space) gap(w, path, cursor, kid.offset_bits, depth);
     cursor = Math.max(cursor, endBits(kid));
     // A row the reader has hidden. The cursor has already passed its bytes, so
     // they stay accounted for and no gap opens where the row was.
@@ -1165,7 +1179,7 @@ function rows(
     if (inner === null) w.waiting(kid.path, depth, kid);
     else drawn(w, kid.path, kid, inner, depth);
   }
-  if (bounds !== null && cursor < bounds.end) gap(w, path, cursor, bounds.end, depth);
+  if (gaps && bounds !== null && cursor < bounds.end) gap(w, path, cursor, bounds.end, depth);
 }
 
 function gap(w: Walk, path: readonly number[], from: number, to: number, depth: number, unmapped = false): void {

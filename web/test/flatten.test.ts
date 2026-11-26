@@ -1500,6 +1500,48 @@ test("parts of the file still to come are not bytes nothing describes", () => {
   assert.ok(done.items.some((i) => i.kind === "heading" && i.node?.name === "head"));
 });
 
+test("no stretch is called a gap while a child that may land in it is still to come", () => {
+  // A header, a table read from an offset at the far end, and then the
+  // objects between them, which wait. Drawing the stretch between the header
+  // and the table as bytes nothing describes would say something false.
+  const file: Spec = {
+    name: "file",
+    bytes: 1_000,
+    kids: [
+      { name: "header", bytes: 10, kids: [{ name: "magic", bytes: 10 }] },
+      { name: "table", bytes: 100, at: 900, kids: [{ name: "entry", bytes: 100 }] },
+      { name: "objects", bytes: 890, at: 10, kids: [{ name: "first", bytes: 890 }] },
+    ],
+  };
+  const root = build(file, [], 0);
+  // At the root, and inside a structure whose children wait the same way.
+  const atRoot = flatten(workingSource(root, new Map([[pathKey([]), { ready: 2 }]])), emptyState, { fileBits: 1_000 * 8 });
+  assert.ok(!atRoot.items.some((i) => i.kind === "gap"), JSON.stringify(shape(atRoot.items)));
+  const inside: Spec = { name: "outer", bytes: 1_000, kids: [file] };
+  const nested = flatten(workingSource(build(inside, [], 0), new Map([[pathKey([0]), { ready: 2 }]])), emptyState, { fileBits: 1_000 * 8 });
+  assert.ok(!nested.items.some((i) => i.kind === "gap"), JSON.stringify(shape(nested.items)));
+  assert.equal(nested.items.filter((i) => i.kind === "pending").length, 1);
+  // Once every child is in, the file is accounted for and has no gap either.
+  assert.ok(!run(file, emptyState, new Set(), { fileBits: 1_000 * 8 }).items.some((i) => i.kind === "gap"));
+});
+
+test("a record table whose rows are still to come waits whole", () => {
+  // A table is drawn from the whole structure, so the rows in hand are not
+  // a table of their own.
+  const table: Spec = {
+    name: "file",
+    bytes: 100,
+    kids: [{ name: "rows", bytes: 100, kids: Array.from({ length: 10 }, (_, n) => ({ name: `[${n}]`, bytes: 10, kids: [{ name: "x", bytes: 10 }] })) }],
+  };
+  const root = build(table, [], 0);
+  const opts: FlatOptions = { isRecord: (n) => n.name === "rows" };
+  const waiting = flatten(workingSource(root, new Map([[pathKey([0]), { ready: 4 }]])), emptyState, opts);
+  assert.ok(!waiting.items.some((i) => i.kind === "record"), JSON.stringify(shape(waiting.items)));
+  const wait = waiting.items.find((i) => i.kind === "pending");
+  assert.deepEqual(wait === undefined ? null : [wait.path, wait.offsetBits / 8, wait.sizeBits / 8], [[0], 0, 100]);
+  assert.ok(flatten(source(root), emptyState, opts).items.some((i) => i.kind === "record"));
+});
+
 test("a list whose page stops at a child that waits counts no more after it", () => {
   // A long list drawn a page at a time, whose page stops partway: an edge
   // for the elements after the page would count the ones still on it.
