@@ -328,3 +328,12 @@ test("the reader's choice is kept for the tables that arrive turned and no other
   assert.equal(startsTurned(records, "1"), false);
   assert.equal(startsTurned(records, null), false);
 });
+
+test("a fact's note follows its value, and a fact without one is unchanged", async () => {
+  const { factShown } = await import("../src/tablebar.ts");
+  const npol = { label: "NPOL", path: [], value: "4", unit: "" };
+  assert.equal(factShown({ ...npol, note: "2 pols, each real and imaginary" }), "4 (2 pols, each real and imaginary)");
+  assert.equal(factShown({ ...npol, note: "" }), "4");
+  assert.equal(factShown(npol), "4");
+  assert.equal(factShown({ label: "TBIN", path: [], value: "6.4E-05", unit: "s", note: "" }), "64 µs");
+});

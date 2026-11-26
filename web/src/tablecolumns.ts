@@ -294,8 +294,8 @@ export class TableColumns {
     const lead = this.of.lead();
     const lines =
       records === null
-        ? [[TABLE.index, ...Array.from({ length: this.of.plan.count }, (_, i) => String(i))]]
-        : turnedLines([], records, lead, { from: 0, to: 0 });
+        ? [[TABLE.turnedIndex(this.of.plan.rowWord), ...Array.from({ length: this.of.plan.count }, (_, i) => String(i))]]
+        : turnedLines([], records, lead, { from: 0, to: 0 }, this.of.plan.rowWord);
     const kinds = leadKinds(lead);
     // A column of numbers has its headings over the digits.
     const numeric = this.columns.every((column) => column.fit.numeric === true);

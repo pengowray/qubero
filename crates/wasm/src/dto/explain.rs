@@ -560,6 +560,9 @@ pub(crate) struct TableFactDto {
     /// The unit the value is in, as a UCUM code: `s`, `MHz`, `Hz`. Empty
     /// when the fact has none.
     pub(crate) unit: String,
+    /// A note on what the value means, shown after it: `2 pols, each real
+    /// and imaginary`. Empty when the template gave none for this value.
+    pub(crate) note: String,
 }
 
 /// The moment a field means, once the template's epoch has been applied to the

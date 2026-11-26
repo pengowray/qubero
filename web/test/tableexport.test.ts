@@ -22,7 +22,7 @@ const RECORDS: readonly TableRow[] = [
 ];
 
 function job(o: Partial<ExportJob>): ExportJob {
-  return { format: "csv", headings: ["ITEM", "TOTAL"], lead: PLAIN, count: RECORDS.length, records: { from: 0, to: RECORDS.length }, asShown: false, ...o };
+  return { format: "csv", headings: ["ITEM", "TOTAL"], rowWord: "record", lead: PLAIN, count: RECORDS.length, records: { from: 0, to: RECORDS.length }, asShown: false, ...o };
 }
 
 async function written(j: ExportJob, records: readonly TableRow[] = RECORDS): Promise<string> {
@@ -88,7 +88,8 @@ test("a file is a record to a row however the table is drawn, unless asked", asy
   const strip = [row([["1", "float"], ["2", "float"], ["3", "float"]]), row([["4", "float"], ["5", "float"], ["6", "float"]])];
   const base = job({ headings: ["0", "1", "2"], count: 2, records: { from: 0, to: 2 } });
   assert.equal(await written(base, strip), "#,0,1,2\r\n0,1,2,3\r\n1,4,5,6\r\n");
-  assert.equal(await written({ ...base, asShown: true }, strip), "#,0,1\r\n0,1,4\r\n1,2,5\r\n2,3,6\r\n");
+  // Turned, the line of record numbers says what it counts.
+  assert.equal(await written({ ...base, asShown: true }, strip), "record #,0,1\r\n0,1,4\r\n1,2,5\r\n2,3,6\r\n");
   // JSON has no way round.
   assert.equal(await written({ ...base, format: "json", asShown: true }, strip), await written({ ...base, format: "json" }, strip));
 });

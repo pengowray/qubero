@@ -698,7 +698,7 @@ export class TableView {
     if (this.turned) {
       const records = this.allRecords();
       if (records === null) return this.say(TABLE.copyPending);
-      lines = turnedLines(headings, records, this.lead, range);
+      lines = turnedLines(headings, records, this.lead, range, this.plan.rowWord);
     } else {
       lines = [headerCells(headings, this.lead)];
       for (let i = range.from; i < range.to; i++) {
