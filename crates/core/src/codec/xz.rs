@@ -79,6 +79,15 @@ pub(super) struct BlockAt {
     pub(super) unpacked: u64,
 }
 
+impl BlockAt {
+    /// The block's LZMA2 data, as bytes of the stream: after its header, and
+    /// before its padding and its check.
+    pub(super) fn lzma2(&self) -> std::ops::Range<usize> {
+        let from = self.at + self.header;
+        from..from + self.packed
+    }
+}
+
 /// A stream laid out from its index: every block placed, and the two numbers
 /// the blocks are measured against.
 #[derive(Debug, Clone)]

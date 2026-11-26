@@ -173,11 +173,8 @@ fn stream(
 /// here: a decoder that allocates what the stream turns out to need reads
 /// every stream a smaller one would, and refuses none it should not.
 ///
-/// The rules a chunk header obeys are the ones liblzma enforces. The first
-/// chunk has to reset the dictionary, and the first packed chunk after any
-/// dictionary reset has to carry its properties, because there would otherwise
-/// be nothing to read it with. A stream breaking either is refused rather than
-/// read against whatever happened to be left in the decoder.
+/// The rules a chunk header obeys are the ones liblzma enforces: see
+/// [`Lzma2::chunk`].
 pub fn lzma2(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     lzma2_over(data, TraceBuilder::default())
 }
@@ -200,119 +197,221 @@ pub(super) fn lzma2_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace
 
 fn lzma2_over(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut out: Vec<u8> = Vec::new();
-    let mut st = State::new(Props { lc: 0, lp: 0, pb: 0 });
-    let mut coarse = Coarsening { on: false, step: 0, in_bits: 0, out_bytes: 0 };
-
-    let mut at = 0usize;
-    let mut dict_start = 0usize;
-    let mut need_dict_reset = true;
-    let mut need_props = true;
-
-    loop {
-        let Some(&control) = data.get(at) else { return Err(Refusal::Failed) };
-        if control == 0x00 {
-            b.push(at as u64 * 8, out.len() as u64, StepKind::EndOfBlock);
-            at += 1;
-            break;
-        }
-        // Resetting everything is the only way to start, and the only way a
-        // reader jumping into the middle of a stream could ever begin.
-        if control >= 0xe0 || control == 0x01 {
-            dict_start = out.len();
-            need_dict_reset = false;
-            need_props = true;
-        } else if need_dict_reset {
-            return Err(Refusal::Failed);
-        }
-
-        if control >= 0x80 {
-            // A packed chunk: five bits of the size in the control byte, two
-            // more bytes of it, and two bytes of how long the packed form is.
-            // Both counts are written one less than they are, since a chunk of
-            // nothing would say nothing.
-            let Some(head) = data.get(at + 1..at + 5) else { return Err(Refusal::Failed) };
-            let unpacked = ((usize::from(control & 0x1f) << 16) | be16(&head[0..2])) + 1;
-            let packed = be16(&head[2..4]) + 1;
-            let mut props_at = at + 5;
-
-            if control >= 0xc0 {
-                let Some(&byte) = data.get(props_at) else { return Err(Refusal::Failed) };
-                st.reset(Props::new(byte, true)?);
-                props_at += 1;
-                need_props = false;
-            } else if need_props {
-                return Err(Refusal::Failed);
-            } else if control >= 0xa0 {
-                st.reset(st.props());
-            }
-
-            let end = props_at.checked_add(packed).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
-            if out.len() + unpacked > CAP_BYTES {
-                return Err(Refusal::TooLarge);
-            }
-            let mut rc = Range::start(data, props_at, end)?;
-
-            // Opened first, so the chunk's own header is one of its steps
-            // rather than bytes it covers and never names.
-            b.open_block(at as u64 * 8, out.len() as u64);
-            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
-            b.push((at + 5) as u64 * 8, out.len() as u64, StepKind::Header(StepField::LzmaProps, props_byte(st.props())));
-            b.push(props_at as u64 * 8, out.len() as u64, StepKind::Header(StepField::RangeInit, RANGE_INIT as u32));
-
-            coarse.step = b.steps();
-            coarse.in_bits = rc.bit_pos();
-            coarse.out_bytes = out.len() as u64;
-            let want = out.len() + unpacked;
-            let stop = decoder::run(
-                &mut st,
-                &mut rc,
-                &mut out,
-                Limits {
-                    dict_start,
-                    dict_size: u32::MAX,
-                    limit: Some(want),
-                    // A chunk says how long it is, so a marker inside one is
-                    // two answers to the same question.
-                    marker_allowed: false,
-                    steps_from: &mut coarse,
-                },
-                &mut b,
-            )?;
-            debug_assert_eq!(stop, Stop::Size);
-            if out.len() != want {
-                return Err(Refusal::Failed);
-            }
-            b.close_block(rc.bit_pos(), out.len() as u64, BlockKind::Sequences, false);
-            decoder::padding(&mut b, rc.byte_pos(), end, out.len() as u64);
-            at = end;
-        } else if control > 0x02 {
-            // 0x03 to 0x7f is nothing the format defines.
-            return Err(Refusal::Failed);
-        } else {
-            // A chunk stored as it is. It feeds the dictionary and leaves the
-            // decoder's state alone; a chunk that reset the dictionary has
-            // already said the next packed one must carry its properties.
-            let Some(head) = data.get(at + 1..at + 3) else { return Err(Refusal::Failed) };
-            let unpacked = be16(head) + 1;
-            let from = at + 3;
-            let end = from.checked_add(unpacked).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
-            if out.len() + unpacked > CAP_BYTES {
-                return Err(Refusal::TooLarge);
-            }
-            b.open_block(at as u64 * 8, out.len() as u64);
-            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
-            b.push(from as u64 * 8, out.len() as u64, StepKind::Stored);
-            out.extend_from_slice(&data[from..end]);
-            b.close_block(end as u64 * 8, out.len() as u64, BlockKind::Stored, false);
-            at = end;
-        }
-    }
+    let mut stream = Lzma2::new();
+    while !stream.chunk(data, &mut out, &mut b)? {}
 
     // Whatever is behind the chunk that ended the stream. An xz block pads its
     // LZMA2 out to a multiple of four bytes, so there usually is some.
-    decoder::padding(&mut b, at, data.len(), out.len() as u64);
+    decoder::padding(&mut b, stream.at, data.len(), out.len() as u64);
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
+}
+
+/// The most one LZMA2 chunk comes to: its size is 21 bits, written one less
+/// than it is.
+pub(super) const LZMA2_CHUNK_MAX: usize = 1 << 21;
+
+/// An LZMA2 stream part way through, between two chunks: what the decoder
+/// keeps from one chunk to the next.
+///
+/// [`lzma2`] reads a stream to its end with one of these. A reader that wants
+/// only the first part of a stream stops after any chunk, and carries on later
+/// with the same one. The output is the dictionary, so carrying on needs the
+/// same output vector and the same stream as the chunks before.
+pub(super) struct Lzma2 {
+    st: State,
+    coarse: Coarsening,
+    /// The byte of the stream the next chunk starts at.
+    at: usize,
+    /// Where the dictionary was last reset, in the output.
+    dict_start: usize,
+    need_dict_reset: bool,
+    need_props: bool,
+}
+
+/// What a chunk's header says, read without decoding the chunk.
+struct Header {
+    /// The first byte: 0x00 ends the stream, 0x01 and 0x02 are a stored
+    /// chunk, and from 0x80 on a packed chunk, whose top three bits say what
+    /// it resets.
+    control: u8,
+    /// How many bytes the chunk comes to. Nothing for the end of the stream.
+    unpacked: usize,
+    /// The properties byte, which a packed chunk resetting them carries.
+    props: Option<u8>,
+    /// Where the chunk's data starts: the stored bytes, or the five bytes that
+    /// prime the range coder.
+    from: usize,
+    /// Where the next chunk starts.
+    end: usize,
+}
+
+/// The header of the chunk at byte `at` of the stream. Refused when the
+/// header or the chunk runs past the end of the stream, or when the control
+/// byte is one the format does not define.
+fn header(data: &[u8], at: usize) -> Result<Header, Refusal> {
+    let Some(&control) = data.get(at) else { return Err(Refusal::Failed) };
+    if control == 0x00 {
+        return Ok(Header { control, unpacked: 0, props: None, from: at + 1, end: at + 1 });
+    }
+    if control >= 0x80 {
+        // A packed chunk: five bits of the size in the control byte, two more
+        // bytes of it, and two bytes of how long the packed form is. Both
+        // counts are written one less than they are, since a chunk of nothing
+        // would say nothing.
+        let Some(head) = data.get(at + 1..at + 5) else { return Err(Refusal::Failed) };
+        let unpacked = ((usize::from(control & 0x1f) << 16) | be16(&head[0..2])) + 1;
+        let packed = be16(&head[2..4]) + 1;
+        let mut from = at + 5;
+        let mut props = None;
+        if control >= 0xc0 {
+            let Some(&byte) = data.get(from) else { return Err(Refusal::Failed) };
+            props = Some(byte);
+            from += 1;
+        }
+        let end = from.checked_add(packed).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
+        return Ok(Header { control, unpacked, props, from, end });
+    }
+    // 0x03 to 0x7f is nothing the format defines.
+    if control > 0x02 {
+        return Err(Refusal::Failed);
+    }
+    // A chunk stored as it is: two bytes of its length, then the bytes.
+    let Some(head) = data.get(at + 1..at + 3) else { return Err(Refusal::Failed) };
+    let unpacked = be16(head) + 1;
+    let from = at + 3;
+    let end = from.checked_add(unpacked).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
+    Ok(Header { control, unpacked, props: None, from, end })
+}
+
+/// How many bytes an LZMA2 stream comes to, from its chunk headers alone:
+/// each says how long it is and how much it makes, so nothing is decoded.
+/// Refused when the headers run past the end of `data` before the byte that
+/// ends the stream.
+pub(super) fn lzma2_len(data: &[u8]) -> Result<u64, Refusal> {
+    let mut at = 0usize;
+    let mut len = 0u64;
+    loop {
+        let h = header(data, at)?;
+        if h.control == 0x00 {
+            return Ok(len);
+        }
+        len += h.unpacked as u64;
+        at = h.end;
+    }
+}
+
+impl Lzma2 {
+    pub(super) fn new() -> Lzma2 {
+        Lzma2 {
+            st: State::new(Props { lc: 0, lp: 0, pb: 0 }),
+            coarse: Coarsening { on: false, step: 0, in_bits: 0, out_bytes: 0 },
+            at: 0,
+            dict_start: 0,
+            need_dict_reset: true,
+            need_props: true,
+        }
+    }
+
+    /// How much memory the decoder holds, for a cache that weighs what it
+    /// keeps.
+    pub(super) fn held_bytes(&self) -> usize {
+        std::mem::size_of::<Lzma2>() + self.st.heap_bytes()
+    }
+
+    /// Read the next chunk of `data` onto the end of `out`: true when it was
+    /// the byte that ends the stream. `data` is the stream from its first
+    /// byte, and `out` holds everything the chunks before this one made.
+    ///
+    /// The rules a chunk header obeys are the ones liblzma enforces. The first
+    /// chunk has to reset the dictionary, and the first packed chunk after any
+    /// dictionary reset has to carry its properties, because there would
+    /// otherwise be nothing to read it with. A stream breaking either is
+    /// refused rather than read against whatever happened to be left in the
+    /// decoder.
+    pub(super) fn chunk(&mut self, data: &[u8], out: &mut Vec<u8>, b: &mut TraceBuilder) -> Result<bool, Refusal> {
+        let at = self.at;
+        let h = header(data, at)?;
+        if h.control == 0x00 {
+            b.push(at as u64 * 8, out.len() as u64, StepKind::EndOfBlock);
+            self.at = h.end;
+            return Ok(true);
+        }
+        // Resetting everything is the only way to start, and the only way a
+        // reader jumping into the middle of a stream could ever begin.
+        if h.control >= 0xe0 || h.control == 0x01 {
+            self.dict_start = out.len();
+            self.need_dict_reset = false;
+            self.need_props = true;
+        } else if self.need_dict_reset {
+            return Err(Refusal::Failed);
+        }
+
+        if h.control < 0x80 {
+            // A chunk stored as it is. It feeds the dictionary and leaves the
+            // decoder's state alone; a chunk that reset the dictionary has
+            // already said the next packed one must carry its properties.
+            if out.len() + h.unpacked > CAP_BYTES {
+                return Err(Refusal::TooLarge);
+            }
+            b.open_block(at as u64 * 8, out.len() as u64);
+            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, h.unpacked as u32));
+            b.push(h.from as u64 * 8, out.len() as u64, StepKind::Stored);
+            out.extend_from_slice(&data[h.from..h.end]);
+            b.close_block(h.end as u64 * 8, out.len() as u64, BlockKind::Stored, false);
+            self.at = h.end;
+            return Ok(false);
+        }
+
+        match h.props {
+            Some(byte) => {
+                self.st.reset(Props::new(byte, true)?);
+                self.need_props = false;
+            }
+            None if self.need_props => return Err(Refusal::Failed),
+            None if h.control >= 0xa0 => self.st.reset(self.st.props()),
+            None => {}
+        }
+        if out.len() + h.unpacked > CAP_BYTES {
+            return Err(Refusal::TooLarge);
+        }
+        let mut rc = Range::start(data, h.from, h.end)?;
+
+        // Opened first, so the chunk's own header is one of its steps rather
+        // than bytes it covers and never names.
+        b.open_block(at as u64 * 8, out.len() as u64);
+        b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, h.unpacked as u32));
+        b.push((at + 5) as u64 * 8, out.len() as u64, StepKind::Header(StepField::LzmaProps, props_byte(self.st.props())));
+        b.push(h.from as u64 * 8, out.len() as u64, StepKind::Header(StepField::RangeInit, RANGE_INIT as u32));
+
+        self.coarse.step = b.steps();
+        self.coarse.in_bits = rc.bit_pos();
+        self.coarse.out_bytes = out.len() as u64;
+        let want = out.len() + h.unpacked;
+        let stop = decoder::run(
+            &mut self.st,
+            &mut rc,
+            out,
+            Limits {
+                dict_start: self.dict_start,
+                dict_size: u32::MAX,
+                limit: Some(want),
+                // A chunk says how long it is, so a marker inside one is two
+                // answers to the same question.
+                marker_allowed: false,
+                steps_from: &mut self.coarse,
+            },
+            b,
+        )?;
+        debug_assert_eq!(stop, Stop::Size);
+        if out.len() != want {
+            return Err(Refusal::Failed);
+        }
+        b.close_block(rc.bit_pos(), out.len() as u64, BlockKind::Sequences, false);
+        decoder::padding(b, rc.byte_pos(), h.end, out.len() as u64);
+        self.at = h.end;
+        Ok(false)
+    }
 }
 
 /// Two bytes, most significant first, which is how LZMA2 writes its sizes and

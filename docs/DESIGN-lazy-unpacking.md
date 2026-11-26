@@ -79,7 +79,7 @@ A `Decoded` node opened directly (`open_space_at`) refuses the same way.
 | `SPAN_CACHE_BYTES` | 16 MiB | Decoded output kept per run. |
 | `SPAN_TRACE_STEPS` | 1,000,000 | Steps in one deflate span's trace before it names blocks instead of codes, as `MAX_STEPS` does for a whole run today. Also the steps in one deflate block's trace, and in all the block traces a run keeps. A zstd or xz span's trace may hold `MAX_STEPS` (4,000,000), since such a span can be as large as a run decoded whole: a 24 MiB `xz -T0` block of text takes 2.3 million steps, about 47 MB of trace. |
 | `MAX_BLOCK_MARKS` | 65,536 | Deflate block starts kept per run. 65,536 × 16 bytes = 1 MiB. |
-| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded whole, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
+| `Limits::span` | 64 MiB (`CAP_BYTES`) | Output of one zstd frame or one xz block. These are decoded from their start, so a larger one is refused as too large. A field of its own, not `whole`, so that tests can index real `pzstd` and `xz -T0` files with `whole` set small: those tools choose their own frame and block sizes, 2 MiB and 1 MiB at the smallest. |
 
 **Why an output limit and not a time limit.** Time depends on the machine, so
 a time limit makes the same file open on one computer and not on another, and
@@ -254,7 +254,9 @@ checkpoint and caches it. One decode per span: there is no decoding from an
 earlier checkpoint and throwing output away. Spans are at most twice the
 spacing plus 64 KiB, so a read costs at most one span decode per span it
 touches (about 15 ms native for a 1 MiB span of text). The cache drops the
-span read longest ago once it holds more than `SPAN_CACHE_BYTES`.
+span read longest ago once it holds more than `SPAN_CACHE_BYTES`. An xz span
+is decoded only as far as the read reaches instead: see "Reading an xz span"
+under "zstd frames and xz blocks".
 
 The reads come through `&self` (`Source::read_bytes` and `Evaluator::read_in`
 both take `&self`), so the cache sits behind a `Mutex`.
@@ -536,8 +538,9 @@ offset in the output, and what a decoder needs to start there: for deflate,
 the block header and the 32 KiB window, and how many deflate blocks start
 before it; for xz, the number of the xz block.
 `Seekable` also keeps the same span cache (decoded spans) and span trace cache
-(the trace of the span asked about most recently) for all three. Each codec
-has its own decoder for spans.
+(the trace of the span asked about most recently) for all three, except that
+an xz run keeps its spans part decoded in a cache of their own: see "Reading
+an xz span". Each codec has its own decoder for spans.
 
 Spans are built from these checkpoints with the same rules as deflate's. A
 frame start or an xz block start becomes a checkpoint when the output since
@@ -546,7 +549,7 @@ list grows past `MAX_CHECKPOINTS` (256), every second checkpoint is dropped
 and the spacing doubles. So one span can hold several small frames or blocks,
 and the number of spans stays at most 256 however small the frames are.
 
-A span is decoded whole, so a frame or an xz block whose output is larger
+A span is decoded from its start, so a frame or an xz block whose output is larger
 than `Limits::span` is refused with `Refusal::TooLarge`. This rule is what
 keeps refusing a file whose only frame or only xz block unpacks to more than
 64 MiB. A decoder can start inside a frame only if the checkpoint keeps the
@@ -582,15 +585,50 @@ runs those filters, reads only whole streams. A stream that `layout` cannot
 read (several streams joined end to end, or an index that does not match the
 blocks) goes to the whole decoder as before, which decodes it or refuses it.
 Because nothing is decoded when the stream is indexed, a block whose
-unpacked size differs from the index is found only when its span is read,
-and that read is refused.
+unpacked size differs from the index is found only when a read first
+reaches the block, and that read is refused.
+
+**Reading an xz span.** A read of an xz span decodes only as far as the
+read reaches, and a later read carries on from where it stopped. Since
+2026-11-26:
+
+- The LZMA2 decoder (`codec::lzma::Lzma2`) decodes one LZMA2 chunk per
+  call and keeps its state between calls. A read stops after the chunk that
+  holds its last byte. A chunk comes to at most 2 MiB, and `xz` also ends a
+  chunk at 64 KiB of packed data, so a read of text decodes at most about
+  2 MiB past its end.
+- `Seekable` keeps each xz span as far as reads have decoded it, with the
+  decoder of the block that the last read stopped in (`lazy::xz::Prefix`).
+  A read further into the span carries on from there, and a read of bytes
+  already decoded decodes nothing.
+- These spans are kept in a cache of their own (`Seekable::prefixes`) under
+  the same rule as the cache of whole spans: 16 MiB, plus the span read
+  most recently, whatever its size. A span counts as the memory it holds:
+  its decoded bytes, the room made for the next chunk (never more than the
+  block's size), and the decoder's state while a block is part way through:
+  about 16 KiB for the settings `xz` writes, and at most 28 KiB.
+- Each block decodes into its own vector, as when a whole stream is
+  decoded, because the LZMA2 decoder reads its dictionary from that vector
+  and counts its 64 MiB cap from the vector's start.
+- Before the first chunk of a block is decoded, the block's chunk headers
+  are read up to the byte that ends its LZMA2. Each header gives its chunk's
+  packed and unpacked sizes, so this decodes nothing. The unpacked sizes
+  have to add up to what the index says the block comes to, or the read is
+  refused, so a block the index is wrong about is still refused before any
+  of its bytes are returned.
+- Damage inside a chunk's packed data is found only by a read that reaches
+  that chunk. A read of the chunks in front of it returns their bytes, where
+  before this change any read of the span was refused. A read that is
+  refused drops what was decoded of its span, and the next read of the span
+  starts again from its first block.
 
 **Traces.** The trace of a zstd span is the same as the part of a whole
 run's trace that covers the same frames, starting at the span's first bit
 and byte. The trace of an xz span is the per-symbol LZMA2 trace that a whole
 stream has for the same blocks (`codec::xz::blocks`), with the stream header
-in span 0 and the index and footer in the last span. In both, every step is
-the same step that the whole trace has at that position.
+in span 0 and the index and footer in the last span. It is made by decoding
+every block of the span, however far reads have decoded it. In both, every
+step is the same step that the whole trace has at that position.
 
 **The zstd decoder, fixed on the way.** Before this change, `codec::zstd`
 read only the first frame of a run, so a file of two frames came back as the
@@ -646,15 +684,28 @@ and peak RSS are in MB (10^6 bytes); span sizes are output in MiB.
 |---|---|---|---|---|---|---|
 | `pzstd -1` | 37.5 MB | 239 spans of 2 MiB | 1.59 s | 0.36 s (7 ms each) | 1.76 s | 106 MB |
 | `pzstd -3` | 43.4 MB | 60 spans of 8 MiB | 1.63 s | 1.55 s (31 ms each) | 2.01 s | 117 MB |
-| `xz -6 -T0` | 17.4 MB | 20 spans of 24 MiB | 25 µs (no pass) | 7.63 s (153 ms each) | 3.22 s | 158 MB |
+| `xz -6 -T0` | 21.3 MB | 20 spans of 24 MiB | 35 µs (no pass) | 4.07 s (81 ms each) | 3.55 s | 103 MB |
 | `zstd -3 -T6` (one frame) | 43.1 MB | refused as too large, 0.31 s after the pass started | | | | 116 MB |
 
 The peak RSS of the zstd files comes from the first part of the index pass,
 which holds up to 64 MiB of output (`Limits::whole`) and its trace, as
-deflate's pass does. A random read of the xz file decodes the whole 24 MiB
-xz block it falls in. The span cache holds 16 MiB of spans but always keeps
-at least the most recent span, whatever its size, so it keeps one of these
-blocks.
+deflate's pass does.
+
+The `xz -6 -T0` row was measured again on 2026-11-26, after a read of an xz
+span stopped at the end of the read (see "Reading an xz span"). It is from a
+different 500,000,000 bytes of CSV-like text, which packs to 21.3 MB rather
+than 17.4 MB, so its packed size and peak RSS are not comparable with the
+earlier rows. Each figure is the median of three runs, with the bench built
+without LTO, on a machine running other builds at the same time. The same
+bench on the same file before the change took 8.77 s for the 50 random reads
+(175 ms each) and 3.94 s to read all of it, with a peak RSS of 102 MB.
+
+A random read of the xz file now decodes from the start of the 24 MiB block
+it falls in to the end of the LZMA2 chunk holding its last byte, which is
+half the block on average, and nothing when the cache already holds that far.
+The cache keeps 16 MiB of spans and always the most recent one, so it keeps
+one or two of these blocks part decoded. Reading the whole file 1 MiB at a
+time decodes each block once, a chunk or two per read.
 
 ## The other codecs
 
@@ -689,9 +740,10 @@ blocks.
   `-1`) with no progress shown. It could stop at frame starts, as deflate's
   pass stops between codes.
 - The other codecs, in the order of the table above: bzip2, then LZ4 frames.
-- A read of an xz span decodes every block in it to the end, even when the
-  read wants only the first bytes. Stopping at the end of the read would make
-  a random read of a 24 MiB block cost what reading up to that point costs.
+- A read of an xz span decodes to the end of the LZMA2 chunk that holds its
+  last byte, up to 2 MiB past the read. Stopping at the read's last byte
+  would need the range coder's state kept between reads, and a stop between
+  two symbols in `decoder::run`.
 - zstd frame checksums (XXH64) are not checked: `ruzstd` is built without its
   `hash` feature.
 - A run refused because one frame or block is past 64 MiB says "over 64 MiB"
@@ -747,6 +799,17 @@ blocks.
   bytes once the frame is past its first window; an xz block that does not
   match the index refused when read. In `eval::space`, both open through their
   templates, and an xz block's CRC-32 is checked through the index.
+- xz spans read part at a time (`codec::lazy`, small limits), over blocks of
+  many chunks that start over, blocks whose chunks carry the state on,
+  stored chunks, and spans of two blocks: after each read, the span is
+  decoded exactly to the end of the chunk holding the read's last byte; bytes
+  read front to back in pieces, in random order, and part early and the rest
+  later all match the stream's bytes; the cache stays under its limit plus
+  the largest span; the span traces match the whole trace. A damaged chunk
+  is refused by a read that reaches it, while the chunks in front of it and
+  the other blocks still read. In `codec::lzma`, two LZMA2 decoders taking
+  turns a chunk at a time give each stream's bytes, and the chunk headers
+  alone give each stream's length.
 - `crates/core/tests/lazy_frames_real.rs`: files from `pzstd -1`,
   `zstd -1 -T0 -B1MiB` and `xz -0 -T0` in the sample collection's
   `compressed` folder, made by its `tools/make_frame_samples.py`, read back

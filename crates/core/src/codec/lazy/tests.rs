@@ -6,7 +6,7 @@ use super::seekable::lock;
 use super::*;
 use crate::checksum::{adler32, crc32};
 use crate::codec::inflate;
-use crate::codec::{Step, StepField, StepKind};
+use crate::codec::{BlockKind, Step, StepField, StepKind};
 
 /// Small enough that a few hundred kilobytes reach every limit: the run is
 /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
@@ -790,6 +790,178 @@ fn an_xz_block_the_index_is_wrong_about_is_refused_when_read() {
     let mut first = vec![0u8; 30_000];
     s.read(0, &mut first).expect("the first block reads");
     assert!(first == data[..30_000]);
+}
+
+/// An xz stream of blocks of `block` bytes each, whose LZMA2 is a stream for
+/// every `piece` bytes of the block, run together: one block holds many
+/// chunks, each starting the dictionary over. With no `piece`, each block is
+/// one stream as `lzma-rust2` packs it, which ends a chunk at 64 KiB of
+/// packed data, and the chunks after the first carry its state on.
+fn xz_pieces(data: &[u8], block: usize, piece: Option<usize>) -> Vec<u8> {
+    use crate::codec::xz::tests::{pack, wrap};
+    let lzma2 = |c: &[u8]| {
+        let mut run = Vec::new();
+        for p in c.chunks(piece.unwrap_or(c.len()).max(1)) {
+            run.extend_from_slice(&pack(p, 3, 0, 2, 1 << 16, None));
+            assert_eq!(run.pop(), Some(0x00), "an LZMA2 stream ends with a zero byte");
+        }
+        run.push(0x00);
+        run
+    };
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.chunks(block).map(|c| (lzma2(c), c.to_vec())).collect();
+    wrap(&blocks, true)
+}
+
+/// How far span `k` of an xz run has been decoded, from the cache of what
+/// reads have reached. Nothing when no read has reached it, or the cache
+/// let it go.
+fn xz_decoded(s: &Seekable, k: usize) -> Option<usize> {
+    let mut cache = lock(&s.prefixes);
+    let p = cache.take(k as u64)?;
+    let (n, weight) = (p.decoded(), p.weight());
+    cache.put(k as u64, p, weight);
+    Some(n)
+}
+
+/// Text, then noise an encoder cannot pack, then text again: an xz stream
+/// of it holds stored chunks as well as packed ones.
+fn text_and_noise() -> Vec<u8> {
+    let mut rand = rand_from(89);
+    let mut data = mixed(300_000, 83);
+    data.extend((0..150_000).map(|_| rand() as u8));
+    data.extend(mixed(250_000, 97));
+    data
+}
+
+/// Text with every second 500 bytes of it noise, which packs to about half:
+/// enough that `lzma-rust2` fills more than one chunk of 64 KiB for a block
+/// of 200 kB, so the chunks after the first carry its state on.
+fn half_noise() -> Vec<u8> {
+    let mut rand = rand_from(103);
+    let text = mixed(700_000, 107);
+    text.chunks(500).enumerate().flat_map(|(i, c)| if i % 2 == 0 { c.to_vec() } else { c.iter().map(|_| rand() as u8).collect() }).collect()
+}
+
+/// A read of an xz span decodes up to the end of the LZMA2 chunk its last
+/// byte is in and no further, and a read further on carries on from there.
+/// Bytes read front to back, in random order, and partly early and partly
+/// later, are the stream's bytes, from blocks of many chunks that start over,
+/// of chunks that carry on, of stored chunks, and from spans of several
+/// blocks. The span traces are the whole trace's, and the cache holds no more
+/// than its limit and the newest span.
+#[test]
+fn an_xz_span_is_decoded_only_as_far_as_a_read_reaches() {
+    let (text, half) = (text_and_noise(), half_noise());
+    let limits = Limits { span: 256 << 10, span_cache: 200 << 10, ..small() };
+    for (data, block, piece) in [(&text, 150_000, Some(4096)), (&half, 200_000, None), (&text, 40_000, Some(10_000))] {
+        let packed = xz_pieces(data, block, piece);
+        let (bytes, whole) = crate::codec::decode_traced(Codec::Xz, &packed).expect("decodes whole");
+        assert!(bytes == *data);
+        // The whole trace's blocks are the LZMA2 chunks.
+        let chunks = whole.blocks();
+        let blocks = data.len().div_ceil(block);
+        assert!(chunks.len() >= blocks * 2, "{} chunks in {blocks} blocks", chunks.len());
+        match piece {
+            Some(_) => assert!(chunks.iter().any(|c| c.kind == BlockKind::Stored), "no stored chunks in blocks of {block}"),
+            // A packed chunk that resets neither the state nor the dictionary.
+            None => assert!(chunks.iter().any(|c| (0x80..0xa0).contains(&packed[(c.in_bits.start / 8) as usize])), "no chunk carries on"),
+        }
+        let chunk_end = |byte: u64| chunks.iter().find(|c| c.out_bytes.contains(&byte)).expect("a chunk made it").out_bytes.end;
+        let span_len = |s: &Seekable, k: usize| (s.span_bytes(k).end - s.span_bytes(k).start) as usize;
+        let check = |s: &Seekable, at: u64, n: usize| {
+            let mut got = vec![0u8; n];
+            s.read(at, &mut got).unwrap_or_else(|e| panic!("blocks of {block}: {n} bytes at {at}: {e:?}"));
+            assert!(got == data[at as usize..at as usize + n], "blocks of {block}: {n} bytes at {at} differ");
+        };
+        // How far the span holding the last byte of a read of `n` at `at`
+        // should be decoded once the read is done.
+        let reached = |s: &Seekable, at: u64, n: usize| {
+            let last = at + n as u64 - 1;
+            let k = s.span_of_byte(last).unwrap();
+            let start = s.span_bytes(k).start;
+            assert_eq!(xz_decoded(s, k), Some((chunk_end(last) - start) as usize), "blocks of {block}: {n} bytes at {at}, span {k}");
+        };
+
+        // The first bytes of a span decode the first chunk of it.
+        let s = indexed(Codec::Xz, &packed, limits);
+        if block == 40_000 {
+            assert!((0..s.spans()).any(|k| span_len(&s, k) > block), "no span of two blocks");
+        }
+        for k in 0..s.spans() {
+            let start = s.span_bytes(k).start;
+            check(&s, start, 10);
+            reached(&s, start, 10);
+        }
+
+        // Front to back in pieces, each carrying on from the one before.
+        let s = indexed(Codec::Xz, &packed, limits);
+        let mut rand = rand_from(block as u64);
+        let mut at = 0u64;
+        while at < s.len() {
+            let n = (1 + rand() % 20_000).min(s.len() - at) as usize;
+            check(&s, at, n);
+            reached(&s, at, n);
+            at += n as u64;
+        }
+
+        // In random order, on a run nothing has read yet.
+        let s = indexed(Codec::Xz, &packed, limits);
+        for _ in 0..200 {
+            let at = rand() % s.len();
+            check(&s, at, (1 + rand() % 30_000).min(s.len() - at) as usize);
+        }
+        let largest = (0..s.spans()).map(|k| span_len(&s, k)).max().unwrap();
+        let peak = lock(&s.prefixes).peak;
+        assert!(peak <= limits.span_cache + largest + (64 << 10), "blocks of {block}: the cache held {peak} bytes, spans up to {largest}");
+        assert!(s.held_bytes() <= limits.span_cache + largest + (64 << 10));
+
+        // Part of a span early and the rest later agrees with all of it at
+        // once and with the later part alone.
+        for k in 0..s.spans() {
+            let start = s.span_bytes(k).start;
+            let (a, b) = (span_len(&s, k) / 3, span_len(&s, k) * 2 / 3);
+            let early = indexed(Codec::Xz, &packed, limits);
+            check(&early, start, a);
+            check(&early, start + a as u64, b - a);
+            let alone = indexed(Codec::Xz, &packed, limits);
+            check(&alone, start + a as u64, b - a);
+            let once = indexed(Codec::Xz, &packed, limits);
+            check(&once, start, b);
+        }
+        traces_agree(&s, &whole, block as u64);
+    }
+}
+
+/// A chunk whose data is damaged is found by a read that reaches it, and not
+/// before: the chunks in front of it read, and so does every other block.
+/// A read that is refused drops what was decoded of its span, so the
+/// chunks in front still read after it.
+#[test]
+fn a_damaged_xz_chunk_is_refused_by_a_read_that_reaches_it() {
+    let data = mixed(300_000, 101);
+    let mut packed = xz_pieces(&data, 50_000, Some(4096));
+    let (_, whole) = crate::codec::decode_traced(Codec::Xz, &packed).expect("decodes whole");
+    // The fifth chunk of the third block starts the dictionary over, so a
+    // code of all ones reads a match with nothing in front of it to copy.
+    let primes: Vec<Step> = whole.steps().filter(|s| s.kind == StepKind::Header(StepField::RangeInit, 5)).collect();
+    let fifth = primes.iter().filter(|s| (100_000..150_000).contains(&s.out_bytes.start)).nth(4).expect("five chunks in the third block");
+    let at = (fifth.in_bits.start / 8) as usize;
+    packed[at + 1..at + 5].fill(0xff);
+    let damaged = fifth.out_bytes.start;
+
+    let s = indexed(Codec::Xz, &packed, Limits { spacing: 1, ..small() });
+    let k = s.span_of_byte(100_000).unwrap();
+    assert_eq!(s.span_bytes(k), 100_000..150_000);
+    let mut got = vec![0u8; 1000];
+    s.read(100_000, &mut got).expect("the chunks in front of the damage read");
+    assert!(got == data[100_000..101_000]);
+    assert_eq!(s.read(damaged, &mut [0u8; 10]).err(), Some(Refusal::Failed));
+    assert_eq!(s.read(149_990, &mut [0u8; 10]).err(), Some(Refusal::Failed));
+    s.read(100_000, &mut got).expect("the chunks in front of the damage read again");
+    assert!(got == data[100_000..101_000]);
+    let mut rest = vec![0u8; 150_000];
+    s.read(150_000, &mut rest).expect("the blocks after it read");
+    assert!(rest == data[150_000..]);
 }
 
 /// Past the first window of a frame each block is a step of its own, and
