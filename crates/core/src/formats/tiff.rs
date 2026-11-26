@@ -523,7 +523,9 @@ fn ifd(e: Endian, space: Space) -> T {
     if space == Space::Jxr {
         fields.extend(super::jxr::codestreams());
     }
-    T::structure(space.shown(), fields)
+    // The entries are what a directory is; `entries` is only the list's name,
+    // so the listing shows them beside the count rather than a level down.
+    T::structure(space.shown(), fields).contents("entries")
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
