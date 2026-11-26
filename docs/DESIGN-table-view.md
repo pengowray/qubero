@@ -77,7 +77,7 @@ pub struct TableShape {
     /// could validate these later; for now they are strings the view shows.
     pub units: Vec<Arc<str>>,
     /// What to call a column when `names` does not fit: "channel" gives
-    /// "channel 1", "channel 2", ...
+    /// "channel 0", "channel 1", ...
     pub column_word: Option<Arc<str>>,
     /// What one row is: "sample", "record".
     pub row_word: Option<Arc<str>>,
@@ -238,7 +238,9 @@ columns on screen, a copy and an exported file all have to say the same thing.
 | Row meaning, with rate only | `Each row is one {row}, {spacing} apart.` |
 | Index column | `#` |
 | Time column | `time (s)` |
-| Unnamed column | `{column word} {n}` |
+| Unnamed column | `{column word} {n}`, {n} from 0 with no thousands separator: `channel 0` |
+| Column in a group (SIGPROC `nifs`, PSRFITS `NPOL`) | `{group word} {g} {column word} {n}`, both from 0: `IF 1 channel 4`; hover `{group spelled} [{g}] (of {groups}), {column word} [{n}] (of {per group})`: `Intermediate frequency (IF) [1] (of 4), channel [4] (of 45,056)` |
+| GUPPI columns | `pol 0 real`, `pol 0 imaginary`, `pol 1 real`, `pol 1 imaginary`; hover `Polarisation [0] (of 2), real part` |
 | Address columns (data lens) | `Stored at`, `Size` |
 | Address checkbox | `Show byte addresses` |
 | Size, cells in several places | `per cell`; hover, on both columns `This row's cells are in different places. Hover a cell for its address.` |

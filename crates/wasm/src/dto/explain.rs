@@ -448,13 +448,13 @@ pub(crate) struct TableShapeDto {
     /// `names`. An empty string for a column with no unit.
     pub(crate) units: Vec<String>,
     /// What to call a column that `names` does not reach: "channel" gives
-    /// "channel 1", "channel 2". Null when the format has no word for one.
+    /// "channel 0", "channel 1". Null when the format has no word for one.
     pub(crate) column_word: Option<String>,
     /// What each of `names` means, for the column's hover, parallel to
     /// `names` or empty.
     pub(crate) titles: Vec<String>,
-    /// The groups the columns come in, when the file says how many: "IF 2
-    /// channel 5". Null for one run of columns.
+    /// The groups the columns come in, when the file says how many: "IF 1
+    /// channel 4". Null for one run of columns.
     pub(crate) groups: Option<ColumnGroupsDto>,
     /// What one row is: "sample", "record". Null when the format has no word.
     pub(crate) row_word: Option<String>,

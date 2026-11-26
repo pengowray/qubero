@@ -356,7 +356,7 @@ export type TableShape = {
   readonly names: readonly string[];
   /** UCUM codes beside those names, `""` where a column has no unit. */
   readonly units: readonly string[];
-  /** What to call a column the names do not cover: `channel 1`, `channel 2`. */
+  /** What to call a column the names do not cover: `channel 0`, `channel 1`. */
   readonly column_word: string | null;
   /** What each of `names` means, for the column's hover, or empty. */
   readonly titles: readonly string[];
