@@ -726,7 +726,18 @@ impl Evaluator {
             let path = self.traced_block(&path);
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
-            let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
+            // `at` counts each byte's bits from the top, and a field read
+            // low bit first counts them from the bottom: a nibble in the top
+            // half of a byte starts at bit 4 by its own count and at bit 0 by
+            // the column's. Asked in the column's count, it looked as though
+            // nothing covered the byte's first bit, and the gap that answered
+            // ran to the end of the file.
+            // Only a field inside one byte is asked this way. A longer run read
+            // low bit first, a deflate block, is a chain of stretches in its
+            // own count that the column already steps along end to end.
+            let in_one_byte = |offset: u64, size: u64| size > 0 && offset / 8 == (offset + size - 1) / 8;
+            let mine = if info.lsb_first && in_one_byte(info.offset_bits, info.size_bits) { crate::decode::mirror_in_byte(at) } else { at };
+            let span = if mine < info.offset_bits || mine >= info.offset_bits + info.size_bits {
                 self.gap_before_the_next_placement(doc, root, &path, &info, at)?
             } else if inline {
                 // A structure that reads on one row is still one of many when
@@ -753,7 +764,19 @@ impl Evaluator {
             } else {
                 self.field_or_its_run(doc, &path, &info, at)?
             };
-            let next = span.offset_bits + span.size_bits;
+            let next = if span.lsb_first && !span.gap && in_one_byte(span.offset_bits, span.size_bits) {
+                // The bits this span covers are not one stretch in the
+                // column's count, so the next bit to ask about is the first
+                // after `at` that the span does not hold.
+                let holds = |b: u64| (span.offset_bits..span.offset_bits + span.size_bits).contains(&crate::decode::mirror_in_byte(b));
+                let mut n = at + 1;
+                while n < end && holds(n) {
+                    n += 1;
+                }
+                n
+            } else {
+                span.offset_bits + span.size_bits
+            };
             at = if next > at { next } else { at + 8 };
             if span.size_bits > 0 {
                 out.push(span);

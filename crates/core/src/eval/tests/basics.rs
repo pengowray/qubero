@@ -634,3 +634,27 @@ fn a_brain_float_reads_as_the_float_it_is_the_top_half_of() {
     let w = ev.prepare_write(&d, &[0], "0.2121").unwrap();
     assert_eq!(w.data, 0x3e59u16.to_le_bytes().to_vec());
 }
+
+#[test]
+fn spans_step_over_fields_read_low_bit_first_without_a_gap() {
+    // A byte of two nibbles read from the bottom bit up, the high one first,
+    // and a byte after it. The column counts each byte's bits from the top,
+    // and still names every bit and nothing as a gap.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("low", T::UInt { bits: 4, endian: Little }),
+                ("high", T::UInt { bits: 4, endian: Little }),
+                ("next", T::u8()),
+            ],
+        ),
+    );
+    let d = doc(&[0x21, 0x07]);
+    let mut ev = Evaluator::new(t);
+    let all = ev.spans(&d, 0, 16, 100).unwrap();
+    assert!(all.iter().all(|s| !s.gap), "{all:?}");
+    let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["high", "low", "next"]);
+}
