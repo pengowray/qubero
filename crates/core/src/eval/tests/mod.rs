@@ -15,6 +15,7 @@ mod placement;
 mod pointers;
 mod reading;
 mod reals;
+mod resident;
 mod streams;
 mod tabs;
 mod walking;

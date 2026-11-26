@@ -415,6 +415,14 @@ pub enum Refusal {
     /// limit for a run read a piece at a time, which is larger than
     /// [`CAP_BYTES`]. Only a codec [`lazy`] can index says this.
     TooLargeLazy,
+    /// The run has to be read in one call, and it takes up more of the file
+    /// than the file's source keeps at once (see
+    /// [`Source::resident_limit`](crate::source::Source::resident_limit)): in
+    /// the browser, more chunks than the chunk store keeps. Asking for it
+    /// would push out the chunks it had to have, and the read would wait for
+    /// ever, so it is refused instead. Only the browser says this, and only
+    /// for a run in the file.
+    TooMuchAtOnce,
     /// The decoder would not read it.
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
@@ -477,6 +485,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too-large",
             Refusal::TooLargeLazy => "too-large-lazy",
+            Refusal::TooMuchAtOnce => "too-much-at-once",
             Refusal::Failed => "failed",
             Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
@@ -498,6 +507,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too large to unpack (over 64 MiB)",
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
+            Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
             Refusal::Unaligned => "not on a byte boundary",
             Refusal::Settings => "the file doesn't say how this was packed",

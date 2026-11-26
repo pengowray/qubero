@@ -1200,6 +1200,11 @@ impl super::Evaluator {
                 if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
                     return Ok(Err(Refusal::TooLarge));
                 }
+                // The whole run is read in the one call below, so a run longer
+                // than the file's chunk store keeps would wait for ever.
+                if self.cannot_fit(doc, key.0, key.1, key.2) {
+                    return Ok(Err(Refusal::TooMuchAtOnce));
+                }
                 let packed = Arc::new(self.read_in(doc, key.0, key.1, key.2)?);
                 if !lazy::can_step(codec) {
                     return Ok(lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits));

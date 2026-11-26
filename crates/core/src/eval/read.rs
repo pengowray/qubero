@@ -134,10 +134,54 @@ impl Evaluator {
         }
         let missing = doc.read_bits(at, n, &mut buf);
         if missing.is_empty() {
-            Ok(buf)
-        } else {
-            Err(EvalError::Pending(missing))
+            return Ok(buf);
         }
+        // A read longer than the file's source keeps can never find all its
+        // chunks there at once: every chunk fed for it pushes out one it
+        // needs, and asking again would ask for those for ever.
+        let needed = (at + n).div_ceil(8) - at / 8;
+        match doc.resident_limit() {
+            Some(limit) if needed > limit => too_much_at_once(needed, limit),
+            _ => Err(EvalError::Pending(missing)),
+        }
+    }
+
+    /// How many bytes of the file a read of `n` bits at bit `at` of `space`
+    /// needs at once. For the file, the bytes the read covers. For a
+    /// stitched space, the bytes of the file its stored parts give the read,
+    /// which [`Self::read_stitched`] reads one after another in the same
+    /// call. Nothing for a space whose bytes are in memory, and nothing for a
+    /// packed part, which is unpacked by a read of its own and kept once it
+    /// is.
+    pub(super) fn file_bytes_at_once(&self, space: u32, at: u64, n: u64) -> u64 {
+        if n == 0 {
+            return 0;
+        }
+        if space == 0 {
+            return (at + n).div_ceil(8) - at / 8;
+        }
+        let Some(stitch) = self.spaces.stitch(space) else { return 0 };
+        let (first, last) = (at / 8, (at + n).div_ceil(8));
+        let mut total = 0;
+        let from = stitch.parts.partition_point(|p| p.start + p.len <= first);
+        for part in stitch.parts[from..].iter().take_while(|p| p.start < last) {
+            if let super::space::PartSource::Stored { space, at_bits } = part.source {
+                let start = first.max(part.start) - part.start;
+                let end = last.min(part.start + part.len) - part.start;
+                total += self.file_bytes_at_once(space, at_bits + start * 8, end.saturating_sub(start) * 8);
+            }
+        }
+        total
+    }
+
+    /// Whether a read of `n` bits at bit `at` of `space`, made in one call,
+    /// needs more of the file at once than the document's source keeps (see
+    /// [`Source::resident_limit`]). Such a read would wait for ever, so a
+    /// caller about to read a whole run that way refuses the run with
+    /// [`Refusal::TooMuchAtOnce`](crate::codec::Refusal::TooMuchAtOnce)
+    /// instead. Always false outside the browser.
+    pub(super) fn cannot_fit<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> bool {
+        doc.resident_limit().is_some_and(|limit| self.file_bytes_at_once(space, at, n) > limit)
     }
 
     /// Where the value sits inside a text field, and how the bytes read.
@@ -730,9 +774,39 @@ fn ebml_vint_value(bytes: &[u8], strip_marker: bool) -> u128 {
     value
 }
 
+/// The failure of a read of the file that needs more of it at once than the
+/// file's source keeps: `needed` bytes against a `limit`. Out of line and
+/// cold, so that the `format!` adds nothing to the frame of `read_in`, which
+/// every read goes through.
+#[cold]
+#[inline(never)]
+fn too_much_at_once<T>(needed: u64, limit: u64) -> R<T> {
+    fail(format!("Can't load {} of the file at once: the editor keeps at most {} in memory", size_text(needed), size_text(limit)))
+}
+
+/// A size in MiB, or in KiB under 1 MiB, to a tenth, with a tenth of nought
+/// left off: `32 MiB`, `40.5 MiB`, `192 KiB`. Rounded up, so a read just past
+/// a limit never reads as the limit itself.
+fn size_text(bytes: u64) -> String {
+    let (unit, name) = if bytes >= 1 << 20 { (1u64 << 20, "MiB") } else { (1 << 10, "KiB") };
+    let tenths = (bytes * 10).div_ceil(unit);
+    match tenths % 10 {
+        0 => format!("{} {name}", tenths / 10),
+        t => format!("{}.{t} {name}", tenths / 10),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{code_string, ebml_vint_value};
+    use super::{code_string, ebml_vint_value, size_text};
+
+    #[test]
+    fn a_size_is_written_to_a_tenth_and_rounded_up() {
+        assert_eq!(size_text(32 << 20), "32 MiB");
+        assert_eq!(size_text((40 << 20) + (1 << 19)), "40.5 MiB");
+        assert_eq!(size_text((32 << 20) + 1), "32.1 MiB");
+        assert_eq!(size_text(3 * 64 << 10), "192 KiB");
+    }
 
     /// An eight-byte VINT's first byte is 0x01: the marker and nothing else.
     /// Stripping it must leave the remaining seven bytes, not overflow the

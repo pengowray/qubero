@@ -2600,6 +2600,12 @@ impl Evaluator {
                 }
             });
         }
+        // Read whole in one call, so a run longer than the file's chunk store
+        // keeps would wait for ever.
+        if self.cannot_fit(doc, r.space, r.offset, size) {
+            self.spaces.refuse(path, Refusal::TooMuchAtOnce);
+            return Ok(space::Opened::Refused(Refusal::TooMuchAtOnce));
+        }
         let packed = self.read(doc, &r, r.offset, size)?;
         let Some(settings) = self.settings_at(doc, path, &r)? else {
             self.spaces.refuse(path, Refusal::Settings);
