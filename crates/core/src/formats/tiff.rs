@@ -38,17 +38,22 @@
 //! nothing like the numbers in the file's own, and reading a latitude as a
 //! subfile type would be worse than not reading it at all.
 //!
-//! The chain of directories is not followed past the first. Each says where
-//! the next one is, as an offset into the file with nothing bounding it, so a
-//! file whose directory points back at itself is a ring. Every other type here
-//! that refers to itself is bounded by something containing it and must
-//! therefore end; this one is not. The tags above can ring in the same way,
-//! and the cycle guard is what makes following them safe: a pointer landing on
-//! a directory of the same kind already open is refused. `sub ifd` holding a
-//! list rather than one directory is left as the numbers it is; a raw file
-//! with several images in it says so that way.
+//! Each directory says where the next one is, as an offset into the file with
+//! nothing bounding it, so a file whose directory points back at itself is a
+//! ring. The directories after the first are read as one flat list,
+//! `next_ifds`, which stops at an offset it has already read. The tags above
+//! can ring in the same way, and the cycle guard is what makes following them
+//! safe: a pointer landing on a directory of the same kind already open is
+//! refused. `sub ifd` may hold a list of offsets rather than one, which is how
+//! a raw file keeps several images, and every directory in the list is read.
+//!
+//! What a directory describes is placed in it. StripOffsets and
+//! StripByteCounts give each strip of the image, TileOffsets and
+//! TileByteCounts each tile, and JPEGInterchangeFormat and its length a JPEG
+//! image, which in IFD 1 of an EXIF block is the thumbnail. So a byte of image
+//! data reads as `strip 3` or `thumbnail` rather than as `body`.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, Part, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, Part, Step, StrLen, Template, Ty as T};
 
 /// The tags worth naming. There are hundreds more, and a number with no name
 /// is still shown; these are the ones a file in the wild actually carries.
@@ -434,12 +439,29 @@ fn file(e: Endian, space: Space) -> T {
             // values too big to sit inside an entry. Every one of them is
             // pointed at by an entry above rather than laid out in order.
             ("body", T::bytes(E::Remaining)),
+            ("next_ifds", next_ifds(e, space)),
         ],
     )
     // `body` only says that the rest of the file comes after the header. The
     // directories and values placed over it say what those bytes are, so
     // where one covers a byte, the hex view names it rather than `body`.
     .field_aside("body")
+    .field_elem_named_from("next_ifds", E::words("ifd {}", E::idx().add(E::lit(1))))
+    .field_doc("next_ifds", "The IFDs after IFD 0, each found at the next_ifd_offset of the one before. In an EXIF block, IFD 1 holds the thumbnail. In a multi-page TIFF, each page has its own IFD.")
+}
+
+/// Every directory after the first, as one flat list: IFD 0 says where IFD 1
+/// is, IFD 1 says where IFD 2 is, and so on until one says 0.
+///
+/// A chain rather than a directory nested in the one before it, so that a
+/// TIFF of a thousand pages is a list of a thousand rather than a tree a
+/// thousand deep. The chain stops at an offset it has already visited. It does
+/// not know about IFD 0, which `ifd` reads, so an IFD 0 that names itself as
+/// the next one is caught here.
+fn next_ifds(e: Endian, space: Space) -> T {
+    let after_first = E::within(&["ifd", "next_ifd_offset"]);
+    let first = E::cond(after_first.clone().equal_to(E::field("ifd_offset")), E::lit(0), after_first);
+    T::chain(first, &["next_ifd_offset"], Anchor::Window, T::Named(space.named(e).into()))
 }
 
 /// Which set of names an entry's tag is read against. A directory is a
@@ -538,37 +560,44 @@ fn ifd(e: Endian, space: Space) -> T {
         .field_aside("tile_offsets")
         .field_aside("tile_byte_counts")
         .machinery(&["strip_offsets", "strip_byte_counts", "tile_offsets", "tile_byte_counts"])
-        .field_elem_named_from("strips", E::words("strip {}", E::idx()))
-        .field_elem_named_from("tiles", E::words("tile {}", E::idx()))
-        .field_doc("strip_offsets", "The values of StripOffsets (273), read again as a list so that each strip's offset can be looked up by its number.")
+        // A piece whose offset is past the end is passed over, and the ones
+        // after it move up the list, so each is named by the number of the
+        // offset that placed it rather than by where it is in the list.
+        .field_elem_named_from("strips", E::words("strip {}", E::placer(E::idx())))
+        .field_elem_named_from("tiles", E::words("tile {}", E::placer(E::idx())))
+        .field_doc("strip_offsets", "The values of StripOffsets (273) read again, each with its strip's length from StripByteCounts. The strips are placed from this list.")
         .field_doc("strip_byte_counts", "The values of StripByteCounts (279), read again as a list so that each strip's length can be looked up by its number.")
-        .field_doc("tile_offsets", "The values of TileOffsets (324), read again as a list so that each tile's offset can be looked up by its number.")
+        .field_doc("tile_offsets", "The values of TileOffsets (324) read again, each with its tile's length from TileByteCounts. The tiles are placed from this list.")
         .field_doc("tile_byte_counts", "The values of TileByteCounts (325), read again as a list so that each tile's length can be looked up by its number.")
         .field_doc("strips", "The image data, split into strips of whole rows. Each strip is at the offset given in StripOffsets and has the length given in StripByteCounts. Strips are numbered from 0.")
         .field_doc("tiles", "The image data, split into tiles. Each tile is at the offset given in TileOffsets and has the length given in TileByteCounts. Tiles are numbered from 0, left to right and then top to bottom.")
+        .field_doc("thumbnail", "The JPEG image at the offset in JPEGInterchangeFormat (513), with the length in JPEGInterchangeFormatLength (514). In IFD 1 of an EXIF block, this is the thumbnail. In a raw file, it can be a full-size preview.")
 }
 
-/// The image data a directory's entries point at: its strips or its tiles.
+/// The image data a directory's entries point at: its strips or its tiles,
+/// and the JPEG image of [`thumbnail`].
 ///
 /// A strip's offset and its length are in two entries, StripOffsets and
-/// StripByteCounts, each holding one number per strip. An element of the
-/// list of strips has to find number `i` of each, and no expression indexes
-/// into the values of an entry found by its tag. So each of the two entries
-/// is read a second time, here, as a list that can be indexed: the same
-/// bytes, which is why the copy is aside and counts for nothing. Tiles are
-/// the same with TileOffsets and TileByteCounts.
+/// StripByteCounts, each holding one number per strip. Strip `i` needs number
+/// `i` of each, and no expression indexes into the values of an entry found by
+/// its tag. So each of the two entries is read a second time, here, as a list
+/// that can be indexed: the same bytes, which is why the copy is aside and
+/// counts for nothing. Each offset is read as a record that also holds its
+/// strip's length, and the strips are gathered from those records, so that a
+/// strip is an element of a list and is named as one. Tiles are the same with
+/// TileOffsets and TileByteCounts.
 ///
-/// The strips are only read when both entries are there. A file that leaves
-/// StripByteCounts out (some early writers did, for one uncompressed strip)
-/// says where its image starts but not where it ends.
+/// The byte counts are read first so that the offsets, which look them up,
+/// come after them.
 fn image_data(e: Endian) -> Vec<(&'static str, T)> {
     vec![
-        ("strip_offsets", numbers(e, 273)),
-        ("strip_byte_counts", numbers(e, 279)),
-        ("strips", pieces("strip_offsets", "strip_byte_counts", 273, 279)),
-        ("tile_offsets", numbers(e, 324)),
-        ("tile_byte_counts", numbers(e, 325)),
-        ("tiles", pieces("tile_offsets", "tile_byte_counts", 324, 325)),
+        ("strip_byte_counts", numbers(e, 279, |n| n)),
+        ("strip_offsets", numbers(e, 273, |n| piece(n, "strip_byte_counts", 279))),
+        ("strips", pieces("strip_offsets", 273, 279)),
+        ("tile_byte_counts", numbers(e, 325, |n| n)),
+        ("tile_offsets", numbers(e, 324, |n| piece(n, "tile_byte_counts", 325))),
+        ("tiles", pieces("tile_offsets", 324, 325)),
+        ("thumbnail", thumbnail()),
     ]
 }
 
@@ -594,7 +623,10 @@ fn has(tag: i128) -> E {
 /// entry are read where the entry's `value` field starts. That position is an
 /// address in the file rather than in the TIFF, so it is read back with
 /// `at_origin`, which counts from the same place `start_of` does.
-fn numbers(e: Endian, tag: i128) -> T {
+///
+/// `each` says what one number is read as: the number itself, or a record
+/// holding it.
+fn numbers(e: Endian, tag: i128, each: impl Fn(T) -> T) -> T {
     let count = || entry_with(tag, &["count"]);
     let list = T::inline_structure(
         "Numbers",
@@ -602,8 +634,8 @@ fn numbers(e: Endian, tag: i128) -> T {
             "values",
             T::switch(
                 entry_with(tag, &["type"]),
-                vec![(3, T::array(T::u16(e), count())), (4, T::array(T::u32(e), count()))],
-                T::array(T::u32(e), E::lit(0)),
+                vec![(3, T::array(each(T::u16(e)), count())), (4, T::array(each(T::u32(e)), count()))],
+                T::array(each(T::u32(e)), E::lit(0)),
             ),
         )],
     );
@@ -617,23 +649,58 @@ fn numbers(e: Endian, tag: i128) -> T {
     )
 }
 
+/// One offset of a strip or a tile, and that piece's length: number `i` of
+/// the byte counts read just before, for offset `i`. An offset with no byte
+/// count to go with it has a length of 0.
+fn piece(offset: T, byte_counts: &str, count_tag: i128) -> T {
+    let listed = E::idx().less_than(entry_with(count_tag, &["count"]));
+    T::inline_structure(
+        "Piece",
+        vec![
+            ("offset", offset),
+            ("length", T::computed(E::cond(listed, E::elem_within(&[byte_counts, "values"], E::idx(), &[]), E::lit(0)))),
+        ],
+    )
+}
+
 /// One piece of image data for each offset, as long as the byte count beside
-/// it says. Only when the directory has both entries, and only as many pieces
-/// as the shorter of the two lists has numbers.
+/// it says. Only when the directory has both entries.
 ///
-/// A piece whose offset is past the end of the TIFF is not read at all: a
+/// A piece whose offset is past the end of the TIFF is passed over: a
 /// Panasonic RW2 writes 0xffffffff in StripOffsets and keeps the real offset
 /// in a tag of its own. A piece that runs past the end is read as far as the
 /// file goes, which is what a file cut short still has.
-fn pieces(offsets: &str, byte_counts: &str, offset_tag: i128, count_tag: i128) -> T {
-    let offset = E::elem_within(&[offsets, "values"], E::idx(), &[]);
-    let length = E::elem_within(&[byte_counts, "values"], E::idx(), &[]);
-    let piece = T::when(
+fn pieces(offsets: &str, offset_tag: i128, count_tag: i128) -> T {
+    let from = vec![Step::field(offsets), Step::field("values"), Step::each()];
+    let piece = T::sized(E::placer(E::field("length")).at_most(E::Remaining), T::bytes(E::Remaining));
+    T::when(has(offset_tag).both(has(count_tag)), T::gather(from, E::field("offset"), Anchor::Window, E::lit(0), piece))
+}
+
+/// `what`, at `offset` bytes from the start of the TIFF and `length` bytes
+/// long. Nothing when the offset is past the end of the TIFF, and only as many
+/// bytes as there are when the length runs past it.
+fn placed(offset: E, length: E, what: T) -> T {
+    T::when(
         offset.clone().less_than(E::WindowSize),
-        T::at_in_window(offset.clone(), T::sized(length.at_most(E::WindowSize.sub(offset)), T::bytes(E::Remaining))),
-    );
-    let n = entry_with(offset_tag, &["count"]).at_most(entry_with(count_tag, &["count"]));
-    T::when(has(offset_tag).both(has(count_tag)), T::array(piece, n))
+        T::at_in_window(offset.clone(), T::sized(length.at_most(E::WindowSize.sub(offset)), what)),
+    )
+}
+
+/// The JPEG image that JPEGInterchangeFormat (513) points at, as long as
+/// JPEGInterchangeFormatLength (514) says. In IFD1 of an EXIF block this is
+/// the thumbnail. A raw file can use the same two tags for a full-size
+/// preview, in IFD0 or in a SubIFD.
+///
+/// Each tag holds one LONG, so `values` is the number itself. An offset of 0
+/// is read as no image, since byte 0 is where the TIFF header is.
+fn thumbnail() -> T {
+    let offset = entry_with(513, &["value", "values"]);
+    let length = entry_with(514, &["value", "values"]);
+    let one = |tag: i128| has(tag).both(entry_with(tag, &["count"]).equal_to(E::lit(1)));
+    T::when(
+        one(513).both(one(514)).both(offset.clone().greater_than(E::lit(0))),
+        placed(offset, length, T::bytes(E::Remaining)),
+    )
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
@@ -693,8 +760,9 @@ const SONY_SUB_IFD: &[(i128, Space)] = &[
 ];
 
 /// An entry that points at a directory reads it, rather than showing the
-/// offset and stopping. Only when it points at one: `sub ifd` may hold a list
-/// of them, and a list is written elsewhere and is left as the numbers it is.
+/// offset and stopping. `sub ifd` may hold a list of offsets, which never fits
+/// in the entry and is written elsewhere, and then every directory in the list
+/// is read.
 ///
 /// This sits at the entry rather than inside the four bytes of the value,
 /// because those four bytes are a window of their own and an offset counted
@@ -714,7 +782,27 @@ fn sub_ifd(e: Endian, space: Space, otherwise: T) -> T {
                     ("directory", T::at_in_window(E::field("offset"), T::Named(to.named(e).into()))),
                 ],
             );
-            (*tag, T::switch(E::field("count"), vec![(1, one)], otherwise.clone()))
+            // Two or more LONG offsets never fit in four bytes, so the entry
+            // holds where the list is, and each offset in the list is where a
+            // directory is. A DNG keeps its raw image and its previews this
+            // way, and a NEF its raw image and its full-size JPEG.
+            let offsets = E::field("type").equal_to(E::lit(4)).either(E::field("type").equal_to(E::lit(13)));
+            let many = T::inline_structure(
+                "SubIfds",
+                vec![
+                    ("offset", T::u32(e)),
+                    ("values", T::at_in_window(E::field("offset"), T::array(T::u32(e), E::field("count")))),
+                    (
+                        "directories",
+                        T::array(
+                            T::at_in_window(E::elem_within(&["values"], E::idx(), &[]), T::Named(to.named(e).into())),
+                            E::field("count"),
+                        ),
+                    ),
+                ],
+            );
+            let many = T::switch(E::lit(1).less_than(E::field("count")).both(offsets), vec![(1, many)], otherwise.clone());
+            (*tag, T::switch(E::field("count"), vec![(1, one)], many))
         })
         .collect::<Vec<_>>();
     // A JPEG XR names its pixel format with a GUID rather than a number, and
@@ -1188,13 +1276,12 @@ mod tests {
         let strips = ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap();
         assert_eq!(strips.name, "strips");
         assert_eq!(strips.child_count, 1);
-        // The element is the pointer, which takes no room; what it points at
-        // is the six bytes after the header.
-        let strip = ev.node(&d, &in_ifd0(STRIPS, &[0, 0])).unwrap();
+        // The six bytes after the header, and the byte under the cursor is
+        // in them.
+        let strip = ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap();
         assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (8, 6));
-        let p = ev.locate(&d, 10 * 8).unwrap();
-        assert!(p.starts_with(&in_ifd0(STRIPS, &[0])), "{p:?}");
-        assert!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().name.contains("strip 0"));
+        assert!(strip.name.contains("strip 0"), "{}", strip.name);
+        assert_eq!(ev.locate(&d, 10 * 8).unwrap(), in_ifd0(STRIPS, &[0]));
     }
 
     #[test]
@@ -1208,15 +1295,15 @@ mod tests {
         let mut ev = Evaluator::new(tiff());
         assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap().child_count, 3);
         for (i, (at, len)) in [(13u64, 1u64), (8, 2), (10, 3)].into_iter().enumerate() {
-            let strip = ev.node(&d, &in_ifd0(STRIPS, &[i, 0])).unwrap();
+            let strip = ev.node(&d, &in_ifd0(STRIPS, &[i])).unwrap();
             assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (at, len), "strip {i}");
-            assert!(ev.node(&d, &in_ifd0(STRIPS, &[i])).unwrap().name.contains(&format!("strip {i}")));
+            assert!(strip.name.contains(&format!("strip {i}")), "{}", strip.name);
         }
         // Two SHORT offsets take four bytes, so they sit in the entry itself.
         let entries: &[(u16, u16, &[u32])] = &[(273, 3, &[10, 8]), (279, 3, &[3, 2])];
         let d = Document::new(MemSource(le_tiff(&data, entries, 0)));
         let mut ev = Evaluator::new(tiff());
-        let second = ev.node(&d, &in_ifd0(STRIPS, &[1, 0])).unwrap();
+        let second = ev.node(&d, &in_ifd0(STRIPS, &[1])).unwrap();
         assert_eq!((second.offset_bits / 8, second.size_bits / 8), (8, 2));
     }
 
@@ -1226,10 +1313,9 @@ mod tests {
         let entries: &[(u16, u16, &[u32])] = &[(322, 3, &[16]), (323, 3, &[16]), (324, 4, &[8, 10, 12, 14]), (325, 4, &[2, 2, 2, 2])];
         let d = Document::new(MemSource(le_tiff(&data, entries, 0)));
         let mut ev = Evaluator::new(tiff());
-        let tile = ev.node(&d, &in_ifd0(TILES, &[3, 0])).unwrap();
+        let tile = ev.node(&d, &in_ifd0(TILES, &[3])).unwrap();
         assert_eq!((tile.offset_bits / 8, tile.size_bits / 8), (14, 2));
-        let p = ev.locate(&d, 12 * 8).unwrap();
-        assert!(p.starts_with(&in_ifd0(TILES, &[2])), "{p:?}");
+        assert_eq!(ev.locate(&d, 12 * 8).unwrap(), in_ifd0(TILES, &[2]));
         assert!(ev.node(&d, &in_ifd0(TILES, &[2])).unwrap().name.contains("tile 2"));
         // No strips in this file, so the list is not there.
         assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap().child_count, 0);
@@ -1245,11 +1331,139 @@ mod tests {
         let len = file.len() as u64;
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(tiff());
-        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap().child_count, 0);
-        let second = ev.node(&d, &in_ifd0(STRIPS, &[1, 0])).unwrap();
+        // The first strip is passed over, and the second keeps its number.
+        assert_eq!(ev.node(&d, &in_ifd0(STRIPS, &[])).unwrap().child_count, 1);
+        let second = ev.node(&d, &in_ifd0(STRIPS, &[0])).unwrap();
+        assert!(second.name.contains("strip 1"), "{}", second.name);
         assert_eq!(second.offset_bits / 8, 8);
         assert_eq!(second.size_bits / 8, len - 8);
+    }
+
+    const THUMBNAIL: usize = 9;
+
+    /// `tiff` as the EXIF block of a JPEG that holds nothing else. The TIFF
+    /// starts 12 bytes into the file.
+    fn in_exif(tiff: &[u8]) -> Vec<u8> {
+        let mut v = vec![0xff, 0xd8, 0xff, 0xe1];
+        v.extend_from_slice(&(tiff.len() as u16 + 8).to_be_bytes());
+        v.extend_from_slice(b"Exif\0\0");
+        v.extend_from_slice(tiff);
+        v.extend_from_slice(&[0xff, 0xd9]);
+        v
+    }
+
+    /// The path of the TIFF inside a file made by `in_exif`: segment 0, its
+    /// body, contents, App1, data, Exif, tiff.
+    const EXIF: [usize; 6] = [1, 0, 1, 1, 1, 1];
+
+    #[test]
+    fn the_jpeg_that_513_and_514_point_at_is_placed_from_the_start_of_the_tiff() {
+        let image = [0xff, 0xd8, 0xff, 0xd9];
+        let file = le_tiff(&image, &[(513, 4, &[8]), (514, 4, &[4])], 0);
+        let d = Document::new(MemSource(file.clone()));
+        let mut ev = Evaluator::new(tiff());
+        let thumbnail = ev.node(&d, &in_ifd0(THUMBNAIL, &[0])).unwrap();
+        assert_eq!((thumbnail.offset_bits / 8, thumbnail.size_bits / 8), (8, 4));
+        assert_eq!(ev.node(&d, &in_ifd0(THUMBNAIL, &[])).unwrap().name, "thumbnail");
+
+        // The same TIFF in an EXIF block: offset 8 from the TIFF is 20 from
+        // the file, and the end of the TIFF is where the segment ends.
+        let d = Document::new(MemSource(in_exif(&file)));
+        let mut ev = Evaluator::new(crate::formats::jpeg());
+        let thumbnail = ev.node(&d, &[&EXIF[..], &in_ifd0(THUMBNAIL, &[0])].concat()).unwrap();
+        assert_eq!((thumbnail.offset_bits / 8, thumbnail.size_bits / 8), (20, 4));
+    }
+
+    /// A TIFF the way a camera writes one into a JPEG: IFD 0 with one entry,
+    /// IFD 1 after it holding only the thumbnail's two tags, and then the
+    /// thumbnail.
+    fn with_ifd1(thumbnail: &[u8]) -> Vec<u8> {
+        let entry = |tag: u16, value: u32| {
+            let mut v = tag.to_le_bytes().to_vec();
+            v.extend_from_slice(&4u16.to_le_bytes());
+            v.extend_from_slice(&1u32.to_le_bytes());
+            v.extend_from_slice(&value.to_le_bytes());
+            v
+        };
+        let mut v = b"II".to_vec();
+        v.extend_from_slice(&42u16.to_le_bytes());
+        v.extend_from_slice(&8u32.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes());
+        v.extend_from_slice(&entry(256, 1));
+        v.extend_from_slice(&26u32.to_le_bytes());
+        assert_eq!(v.len(), 26);
+        v.extend_from_slice(&2u16.to_le_bytes());
+        v.extend_from_slice(&entry(513, 56));
+        v.extend_from_slice(&entry(514, thumbnail.len() as u32));
+        v.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(v.len(), 56);
+        v.extend_from_slice(thumbnail);
+        v
+    }
+
+    const NEXT_IFDS: usize = 4;
+
+    #[test]
+    fn ifd1_is_read_from_the_next_ifd_offset_of_ifd0_and_its_thumbnail_placed() {
+        let file = with_ifd1(&[0xff, 0xd8, 0xff, 0xd9]);
+        let d = Document::new(MemSource(in_exif(&file)));
+        let mut ev = Evaluator::new(crate::formats::jpeg());
+        let next = [&EXIF[..], &[1, NEXT_IFDS]].concat();
+        assert_eq!(ev.node(&d, &next).unwrap().child_count, 1);
+        let ifd1 = ev.node(&d, &[&next[..], &[0]].concat()).unwrap();
+        assert_eq!(ifd1.offset_bits / 8, 12 + 26);
+        assert!(ifd1.name.contains("ifd 1"), "{}", ifd1.name);
+        let thumbnail = [&next[..], &[0, THUMBNAIL, 0]].concat();
+        let node = ev.node(&d, &thumbnail).unwrap();
+        assert_eq!((node.offset_bits / 8, node.size_bits / 8), (12 + 56, 4));
+        assert!(ev.locate(&d, (12 + 57) * 8).unwrap().starts_with(&thumbnail));
+    }
+
+    #[test]
+    fn an_ifd0_that_names_itself_as_the_next_one_is_read_once() {
+        let d = Document::new(MemSource(le_tiff(&[], &[(256, 3, &[1])], 8)));
+        let mut ev = Evaluator::new(tiff());
+        let next = ev.node(&d, &[1, NEXT_IFDS]).unwrap();
+        assert_eq!(next.child_count, 0);
+    }
+
+    #[test]
+    fn every_directory_a_list_of_sub_ifds_points_at_is_read_with_its_strips() {
+        // Two sub-IFDs of two entries each, at 8 and 38, then five bytes of
+        // strips: two for the first and three for the second.
+        let sub = |strip_at: u32, len: u32| {
+            let mut v = 2u16.to_le_bytes().to_vec();
+            for (tag, value) in [(273u16, strip_at), (279, len)] {
+                v.extend_from_slice(&tag.to_le_bytes());
+                v.extend_from_slice(&4u16.to_le_bytes());
+                v.extend_from_slice(&1u32.to_le_bytes());
+                v.extend_from_slice(&value.to_le_bytes());
+            }
+            v.extend_from_slice(&0u32.to_le_bytes());
+            v
+        };
+        let mut data = sub(68, 2);
+        data.extend_from_slice(&sub(70, 3));
+        data.extend_from_slice(&[1, 1, 2, 2, 2]);
+        let d = Document::new(MemSource(le_tiff(&data, &[(330, 4, &[8, 38])], 0)));
+        let mut ev = Evaluator::new(tiff());
+        let value = [1, 2, 0, 1, 0, 4];
+        let at = |tail: &[usize]| [&value[..], tail].concat();
+        assert_eq!(ev.node(&d, &at(&[1, 0, 1])).unwrap().value, Value::UInt(38));
+        let second = ev.node(&d, &at(&[2, 1, 0])).unwrap();
+        assert_eq!(second.type_name, "Ifd");
+        assert_eq!(second.offset_bits / 8, 38);
+        let strip = ev.node(&d, &at(&[2, 1, 0, STRIPS, 0])).unwrap();
+        assert_eq!((strip.offset_bits / 8, strip.size_bits / 8), (70, 3));
+    }
+
+    #[test]
+    fn a_thumbnail_needs_both_its_tags() {
+        // 513 with no 514 says where an image starts and not how long it is.
+        let d = Document::new(MemSource(le_tiff(&[0xff, 0xd8, 0xff, 0xd9], &[(513, 4, &[8])], 0)));
+        let mut ev = Evaluator::new(tiff());
+        assert_eq!(ev.node(&d, &in_ifd0(THUMBNAIL, &[])).unwrap().child_count, 0);
+        assert_eq!(ev.locate(&d, 9 * 8).unwrap(), vec![1, 3]);
     }
 
     #[test]
