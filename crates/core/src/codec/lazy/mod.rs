@@ -17,12 +17,14 @@
 //!
 //! The output between two checkpoints is a span. Spans are what is decoded
 //! and what is cached, and each has a trace of its own, made when asked for.
+//! An xz span is decoded only as far as a read reaches, a chunk of LZMA2 at a
+//! time, and a later read carries on from where the last one stopped.
 //! The steps of a deflate stream name literals by their byte and matches by
 //! their length and distance, so they can be read off any stretch of the
 //! stream without the output before it; a zstd frame and an xz block are
 //! traced from their own start.
 //!
-//! A zstd frame or an xz block is decoded whole, so one larger than
+//! A zstd frame or an xz block is decoded from its start, so one larger than
 //! [`Limits::span`] is refused as [`Refusal::TooLarge`]. That is what keeps a
 //! file of one frame or one block refused past [`CAP_BYTES`]: what a decoder
 //! needs to start inside one is its whole window or dictionary, which can be
@@ -71,7 +73,8 @@ pub const MAX_CHECKPOINTS: usize = 256;
 pub const SPACING_START: u64 = 1 << 20;
 
 /// How much decoded output one run keeps, in spans, before the span read
-/// longest ago is dropped. One span is kept whatever its size.
+/// longest ago is dropped. One span is kept whatever its size. An xz span
+/// counts for as much of it as is decoded.
 pub const SPAN_CACHE_BYTES: usize = 16 << 20;
 
 /// How many steps a deflate span's trace may hold before it names blocks
@@ -130,7 +133,7 @@ pub struct Limits {
     /// [`MAX_BLOCK_MARKS`].
     pub block_marks: usize,
     /// The most one zstd frame or one xz block may come to, since it is
-    /// decoded whole: [`CAP_BYTES`]. A limit of its own and not
+    /// decoded from its start: [`CAP_BYTES`]. A limit of its own and not
     /// [`Limits::whole`] because the tools that write these choose their
     /// size: `pzstd` writes frames four windows long, and `xz -T0` writes
     /// blocks three dictionaries long, megabytes at the smallest.

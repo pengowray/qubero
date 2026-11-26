@@ -94,9 +94,9 @@ pub(super) fn read_span(
 /// a megabyte or two past its end at most.
 ///
 /// Each block decodes into a vector of its own, which is the block's
-/// dictionary and its output, as when the whole stream is decoded. None of
-/// them is given more room than its block comes to, so what a span holds is
-/// never more than the span, and the decoder.
+/// dictionary and its output, as when the whole stream is decoded. No vector
+/// is given more room than its block comes to, so the bytes held for a span
+/// never come to more than the span's length.
 pub(super) struct Prefix {
     /// What the span comes to, from the index.
     len: usize,
