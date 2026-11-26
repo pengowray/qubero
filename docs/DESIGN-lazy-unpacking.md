@@ -372,7 +372,10 @@ beside the stitched one. Indexes are also kept in a small registry keyed by
 where the run is (space, bit offset, bits, codec), so the member's `Decoded`
 node, the stitched part over the same run and the tab all share one index. The
 registry holds at most 64 MiB of compressed runs in total and drops the index
-used longest ago to make room.
+used longest ago to make room. A run whose pass refused it is kept beside the
+indexes, by the same key, with its refusal: `Evaluator::index_run` hands that
+refusal back to the next node or read over the run without another pass, and
+`Spaces::forget` drops it with the indexes.
 
 **`open_space_at`.** Calls `Evaluator::index_run`, which makes the pass of
 `decode_or_index` (see "The pass in steps"); a `Seekable` becomes

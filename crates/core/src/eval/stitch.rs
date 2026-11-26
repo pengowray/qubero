@@ -1646,6 +1646,54 @@ mod tests {
         assert_eq!(why(&e, &d, space), "blocks[0].compressed could not be unpacked");
     }
 
+    /// A part refused by its index pass is refused from then on without
+    /// another pass: by each read of it, and by the block's own compressed run
+    /// opened as a stream of its own. Dropped with the indexes, so a file
+    /// read again after an edit is indexed again.
+    #[test]
+    fn a_part_refused_by_its_index_pass_is_not_indexed_again() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::{Codec, Refusal};
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let limits = Limits { whole: 4096, lazy: 20_000, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() };
+        // Past `Limits::lazy`, and then the same block made a deflate block
+        // type that does not exist.
+        for (spoil, refusal) in [(false, Refusal::TooLargeLazy), (true, Refusal::Failed)] {
+            let mut file = bgzf_of(&[&big, b"and a short block after it"]);
+            if spoil {
+                file[18] = 0xff;
+            }
+            let d = Document::new(MemSource(file));
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            e.spaces.set_whole_cap(10_000);
+            e.spaces.set_lazy_limits(limits);
+            assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+            let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
+            assert_eq!(e.spaces.passes.get(), 1, "opening it as a document indexed the first block");
+            for _ in 0..2 {
+                assert!(e.read_in(&d, space, 0, 8).is_err());
+            }
+            assert_eq!(e.spaces.passes.get(), 1, "two reads of the first block");
+            let compressed = e.child_named(&d, &[0, 0], "compressed").unwrap().expect("a block has its compressed run");
+            assert_eq!(e.open_space(&d, 0, &compressed).unwrap(), None);
+            assert_eq!(e.open_refusal(&compressed), Some(refusal));
+            assert_eq!(e.spaces.passes.get(), 1, "the block's own run, opened");
+            // The block after it is under `Limits::whole` and needs no pass.
+            assert_eq!(e.read_in(&d, space, 30_000 * 8, 24).unwrap(), b"and");
+            assert_eq!(e.spaces.passes.get(), 1);
+
+            let super::PartSource::Packed { space: run_space, at_bits, size_bits, .. } = e.spaces.stitch(space).unwrap().parts[0].source else {
+                panic!("the first block is packed")
+            };
+            let key = (run_space, at_bits, size_bits);
+            assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), Some(refusal));
+            e.spaces.forget();
+            assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), None);
+            assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+            assert_eq!(e.spaces.passes.get(), 2, "after the indexes were dropped");
+        }
+    }
+
     /// A packed part whose codec has no index, and which comes to more than a
     /// run may be decoded whole at, says so when it is read rather than that
     /// it could not be unpacked.

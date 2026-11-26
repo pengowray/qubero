@@ -51,7 +51,7 @@ use std::ops::Range;
 pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 
 /// What a run is compressed with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Codec {
     /// The Workbook/Book stream of an OLE compound document, following FAT
     /// and mini-FAT chains rather than assuming adjacent sectors.
