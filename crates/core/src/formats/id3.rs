@@ -241,6 +241,31 @@ mod tests {
     }
 
     #[test]
+    fn zeros_after_the_last_frame_are_padding_and_a_footer_is_read() {
+        let frames = frame_bytes(b"TIT2", &[3, b'H', b'i']);
+        let size = frames.len() + 300;
+        let synchsafe = [(size >> 21) as u8 & 0x7f, (size >> 14) as u8 & 0x7f, (size >> 7) as u8 & 0x7f, size as u8 & 0x7f];
+        // Version 2.4 with the footer flag, so the 300 zeros are padding the
+        // standard does not allow with a footer; read as written all the same.
+        let mut out = b"ID3\x04\x00\x10".to_vec();
+        out.extend(synchsafe);
+        out.extend(&frames);
+        out.extend([0; 300]);
+        out.extend(b"3DI\x04\x00\x10");
+        out.extend(synchsafe);
+        let d = Document::new(MemSource(out.clone()));
+        let mut ev = Evaluator::new(id3());
+        assert_eq!(ev.node(&d, &[8]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[9]).unwrap().size_bits, 300 * 8);
+        assert_eq!(ev.node(&d, &[10]).unwrap().size_bits, 10 * 8);
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, out.len() as u64 * 8);
+        match ev.node(&d, &[3]).unwrap().value {
+            Value::Flags { set, .. } => assert_eq!(set, ["footer present"]),
+            other => panic!("flags read as {other:?}"),
+        }
+    }
+
+    #[test]
     fn version_4_frame_sizes_are_synchsafe() {
         // One frame of 200 bytes: 0xC8 as a plain u32, but 0x01 0x48 synchsafe.
         let body = vec![3u8; 200];

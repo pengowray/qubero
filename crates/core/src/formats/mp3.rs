@@ -800,23 +800,29 @@ fn header_length(h: &[u8]) -> Option<(usize, u32)> {
 
 /// Whether a run of frames starts at `at`: three headers in a row, each where
 /// the one before says the next begins, that agree on version, layer and
-/// sample rate. A run that reaches the end of the file sooner counts too.
+/// sample rate. Fewer count when the file runs out first: one frame that ends
+/// where the file does, or two and then a frame cut off by the end.
 fn frames_at(h: &[u8], at: usize, len: u64) -> bool {
     let mut pos = at;
     let mut first = None;
-    for _ in 0..3 {
+    let mut found = 0;
+    while found < 3 {
         if pos as u64 == len {
-            return first.is_some();
+            return found >= 1;
+        }
+        if pos as u64 > len {
+            return found >= 2;
         }
         if pos + 4 > h.len() {
-            // Past what was read: as good as the frames before it.
-            return first.is_some();
+            // The file goes on past the bytes read, and so may the frames.
+            return found >= 1;
         }
         let Some((n, same)) = header_length(&h[pos..]) else { return false };
         if *first.get_or_insert(same) != same {
             return false;
         }
         pos += n;
+        found += 1;
     }
     true
 }
@@ -896,7 +902,353 @@ mod tests {
             assert_eq!(frames.child_count, 2, "{header:08x}");
             let first = ev.node(&d, &[1, 0, 0]).unwrap();
             assert_eq!(first.size_bits / 8, header_length(&header.to_be_bytes()).unwrap().0 as u64, "{header:08x}");
-            let _ = Value::Int(0);
         }
+    }
+
+    /// The path of the child of `path` called `name`.
+    fn child(ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize], name: &str) -> Vec<usize> {
+        let n = ev.node(d, path).unwrap().child_count as usize;
+        for i in 0..n {
+            let mut p = path.to_vec();
+            p.push(i);
+            if ev.node(d, &p).unwrap().name == name {
+                return p;
+            }
+        }
+        panic!("{path:?} has no child {name}");
+    }
+
+    /// The value at a path of names from the root.
+    fn value(ev: &mut Evaluator, d: &Document<MemSource>, names: &[&str]) -> Value {
+        let mut p = Vec::new();
+        for name in names {
+            p = match name.parse::<usize>() {
+                Ok(i) => [p, vec![i]].concat(),
+                Err(_) => child(ev, d, &p, name),
+            };
+        }
+        ev.node(d, &p).unwrap().value
+    }
+
+    fn size(ev: &mut Evaluator, d: &Document<MemSource>, names: &[&str]) -> u64 {
+        let mut p = Vec::new();
+        for name in names {
+            p = match name.parse::<usize>() {
+                Ok(i) => [p, vec![i]].concat(),
+                Err(_) => child(ev, d, &p, name),
+            };
+        }
+        ev.node(d, &p).unwrap().size_bits / 8
+    }
+
+    fn uint(v: Value) -> u128 {
+        match v {
+            Value::UInt(n) => n as u128,
+            Value::Enum { raw, .. } => raw as u128,
+            Value::Int(n) => n as u128,
+            other => panic!("not a number: {other:?}"),
+        }
+    }
+
+    fn name(v: Value) -> String {
+        match v {
+            Value::Enum { name: Some(n), .. } => n,
+            Value::Str(s) => s,
+            other => panic!("no name: {other:?}"),
+        }
+    }
+
+    fn id3v1(comment: &[u8], track: Option<u8>, genre: u8) -> Vec<u8> {
+        let field = |s: &[u8], n: usize| {
+            let mut v = s.to_vec();
+            v.resize(n, 0);
+            v
+        };
+        let mut v = b"TAG".to_vec();
+        v.extend(field(b"Title", 30));
+        v.extend(field(b"Artist", 30));
+        v.extend(field(b"Album", 30));
+        v.extend(b"2026");
+        match track {
+            Some(t) => {
+                v.extend(field(comment, 28));
+                v.extend([0, t]);
+            }
+            None => v.extend(field(comment, 30)),
+        }
+        v.push(genre);
+        v
+    }
+
+    fn ape_item(key: &str, value: &[u8], flags: u32) -> Vec<u8> {
+        let mut v = (value.len() as u32).to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(key.as_bytes());
+        v.push(0);
+        v.extend(value);
+        v
+    }
+
+    fn apev2(items: &[Vec<u8>], header: bool) -> Vec<u8> {
+        let body: Vec<u8> = items.concat();
+        let size = body.len() as u32 + 32;
+        let frame = |flags: u32| {
+            let mut v = b"APETAGEX".to_vec();
+            for n in [2000, size, items.len() as u32, flags] {
+                v.extend(n.to_le_bytes());
+            }
+            v.extend([0; 8]);
+            v
+        };
+        let mut v = if header { frame(0xa000_0000) } else { Vec::new() };
+        v.extend(body);
+        v.extend(frame(if header { 0x8000_0000 } else { 0 }));
+        v
+    }
+
+    fn lyrics3v2(fields: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut v = b"LYRICSBEGIN".to_vec();
+        for (id, text) in fields {
+            v.extend(id.as_bytes());
+            v.extend(format!("{:05}", text.len()).as_bytes());
+            v.extend(*text);
+        }
+        let n = v.len();
+        v.extend(format!("{n:06}").as_bytes());
+        v.extend(b"LYRICS200");
+        v
+    }
+
+    /// MPEG-1 Layer III, 128 kbit/s, 44100 Hz, mono: 417 bytes, with 17 bytes
+    /// of side information.
+    const MONO: u32 = 0xfffb_90c0;
+
+    #[test]
+    fn a_header_reads_as_named_fields() {
+        let d = Document::new(MemSource(frame_bytes(0xfffb_9264)));
+        let mut ev = Evaluator::new(mp3());
+        let f = |n: &'static str| vec!["audio", "frames", "0", n];
+        assert_eq!(name(value(&mut ev, &d, &f("version"))), "MPEG-1");
+        assert_eq!(name(value(&mut ev, &d, &f("layer"))), "Layer III");
+        assert_eq!(name(value(&mut ev, &d, &f("bitrate_index"))), "128 kbit/s");
+        assert_eq!(name(value(&mut ev, &d, &f("sample_rate_index"))), "44100 Hz");
+        assert_eq!(uint(value(&mut ev, &d, &f("padding_bit"))), 1);
+        assert_eq!(name(value(&mut ev, &d, &f("channel_mode"))), "joint stereo");
+        assert_eq!(name(value(&mut ev, &d, &f("mode_extension"))), "intensity stereo off, M/S stereo on");
+        assert_eq!(uint(value(&mut ev, &d, &f("frame_length"))), 418);
+        // Joint stereo is two channels: 32 bytes of side information.
+        assert_eq!(size(&mut ev, &d, &f("side_info")), 32);
+        // The same index means another rate in another version and layer.
+        let d = Document::new(MemSource(frame_bytes(0xfff3_9000)));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "bitrate_index"])), "80 kbit/s");
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "sample_rate_index"])), "22050 Hz");
+        let d = Document::new(MemSource(frame_bytes(0xffe3_1800)));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "version"])), "MPEG-2.5");
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "sample_rate_index"])), "8000 Hz");
+    }
+
+    #[test]
+    fn a_protected_frame_has_a_crc_after_its_header() {
+        // MPEG-1 Layer II, 192 kbit/s, 48000 Hz, protection bit 0.
+        let d = Document::new(MemSource([frame_bytes(0xfffc_a400), frame_bytes(0xfffc_a400)].concat()));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(size(&mut ev, &d, &["audio", "frames", "0", "crc"]), 2);
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "protection_bit"])), "CRC follows");
+        // Layer II has no side information, so the rest is one run.
+        assert_eq!(size(&mut ev, &d, &["audio", "frames", "0", "audio_data"]), 576 - 6);
+        assert_eq!(size(&mut ev, &d, &["audio", "frames", "0", "side_info"]), 0);
+    }
+
+    #[test]
+    fn layer_3_main_data_is_split_where_the_side_information_says() {
+        // Two mono frames. The first has 100 bytes of main data in two
+        // granules; the second's main data begins 30 bytes back, in the first.
+        let side = |begin: u64, parts: [u64; 2]| {
+            // main_data_begin (9), private_bits (5), scfsi (4), then per
+            // granule part2_3_length (12) and 47 bits of zeros.
+            let mut bits: Vec<bool> = Vec::new();
+            let mut put = |v: u64, n: u32| (0..n).rev().for_each(|i| bits.push(v >> i & 1 == 1));
+            put(begin, 9);
+            put(0, 9);
+            for p in parts {
+                put(p, 12);
+                put(0, 47);
+            }
+            bits.chunks(8).map(|c| c.iter().fold(0u8, |a, b| a << 1 | *b as u8)).collect::<Vec<u8>>()
+        };
+        let mut first = frame_bytes(MONO);
+        first[4..21].copy_from_slice(&side(0, [400, 400]));
+        let mut second = frame_bytes(MONO);
+        second[4..21].copy_from_slice(&side(30, [200, 0]));
+        let d = Document::new(MemSource([first, second].concat()));
+        let mut ev = Evaluator::new(mp3());
+        let f = |i: &'static str, n: &'static str| vec!["audio", "frames", i, n];
+        assert_eq!(uint(value(&mut ev, &d, &["audio", "frames", "1", "side_info", "main_data_begin"])), 30);
+        assert_eq!(size(&mut ev, &d, &f("0", "main_data")), 100);
+        // 417 bytes, less the header, the side information, the main data and
+        // the 30 bytes the next frame starts its main data in.
+        assert_eq!(size(&mut ev, &d, &f("0", "ancillary_data")), 417 - 4 - 17 - 100 - 30);
+        assert_eq!(size(&mut ev, &d, &f("0", "later_main_data")), 30);
+        // 200 bits is 25 bytes, and 30 of them were in the frame before.
+        assert_eq!(size(&mut ev, &d, &f("1", "main_data")), 0);
+        assert_eq!(size(&mut ev, &d, &f("1", "ancillary_data")), 417 - 4 - 17);
+    }
+
+    #[test]
+    fn a_xing_header_reads_only_the_fields_its_flags_name() {
+        let mut frame = frame_bytes(MONO);
+        let mut xing = b"Xing".to_vec();
+        xing.extend(3u32.to_be_bytes()); // frame count and byte count
+        xing.extend(100u32.to_be_bytes());
+        xing.extend(41_700u32.to_be_bytes());
+        let mut lame = b"LAME3.100".to_vec();
+        lame.push(0x13); // revision 1, VBR method 3
+        lame.push(195); // lowpass 19500 Hz
+        lame.extend(0.5f32.to_be_bytes());
+        lame.extend([0x2c, 0x1e]); // radio: name 1, originator 3, +3.0 dB
+        lame.extend([0, 0]);
+        lame.push(0x03); // no flags, ATH type 3
+        lame.push(128);
+        lame.extend([0x24, 0x04, 0xb0]); // delay 576, padding 1200
+        lame.push(0b01_0_011_00); // 44.1 kHz source, joint stereo
+        lame.push(0x83); // MP3 gain -3: sign and magnitude
+        lame.extend([0, 0]);
+        lame.extend(41_700u32.to_be_bytes());
+        lame.extend([0, 0, 0, 0]);
+        xing.extend(lame);
+        frame[21..21 + xing.len()].copy_from_slice(&xing);
+        let d = Document::new(MemSource([frame, frame_bytes(MONO)].concat()));
+        let mut ev = Evaluator::new(mp3());
+        let x = |n: &'static str| vec!["audio", "frames", "0", "xing", n];
+        assert_eq!(uint(value(&mut ev, &d, &x("frame_count"))), 100);
+        assert_eq!(uint(value(&mut ev, &d, &x("byte_count"))), 41_700);
+        assert_eq!(size(&mut ev, &d, &x("toc")), 0);
+        assert_eq!(size(&mut ev, &d, &x("quality")), 0);
+        let l = |n: &'static str| vec!["audio", "frames", "0", "xing", "lame", n];
+        assert_eq!(name(value(&mut ev, &d, &l("encoder"))), "LAME3.100");
+        assert_eq!(name(value(&mut ev, &d, &l("vbr_method"))), "VBR method 1");
+        assert_eq!(value(&mut ev, &d, &l("peak")), Value::Float(0.5));
+        assert_eq!(name(value(&mut ev, &d, &["audio", "frames", "0", "xing", "lame", "radio_gain", "name"])), "radio");
+        assert_eq!(uint(value(&mut ev, &d, &["audio", "frames", "0", "xing", "lame", "radio_gain", "gain_tenths_db"])), 30);
+        assert_eq!(uint(value(&mut ev, &d, &l("encoder_delay"))), 576);
+        assert_eq!(uint(value(&mut ev, &d, &l("end_padding"))), 1200);
+        assert_eq!(name(value(&mut ev, &d, &l("stereo_mode"))), "joint stereo");
+        assert_eq!(name(value(&mut ev, &d, &l("source_sample_rate"))), "44.1 kHz");
+        assert_eq!(value(&mut ev, &d, &l("mp3_gain")), Value::Int(-3));
+        assert_eq!(uint(value(&mut ev, &d, &l("music_length"))), 41_700);
+        assert_eq!(size(&mut ev, &d, &["audio", "frames", "1", "xing"]), 0);
+    }
+
+    #[test]
+    fn a_vbri_header_is_32_bytes_after_the_frame_header() {
+        let mut frame = frame_bytes(MONO);
+        let mut vbri = b"VBRI".to_vec();
+        for n in [1u16, 0x0f00, 75] {
+            vbri.extend(n.to_be_bytes());
+        }
+        vbri.extend(41_700u32.to_be_bytes());
+        vbri.extend(100u32.to_be_bytes());
+        for n in [2u16, 1, 2, 50, 0x0100, 0x0200] {
+            vbri.extend(n.to_be_bytes());
+        }
+        frame[36..36 + vbri.len()].copy_from_slice(&vbri);
+        let d = Document::new(MemSource([frame, frame_bytes(MONO)].concat()));
+        let mut ev = Evaluator::new(mp3());
+        let v = |n: &'static str| vec!["audio", "frames", "0", "vbri", n];
+        // Mono side information ends 21 bytes in, 15 short of the header.
+        assert_eq!(size(&mut ev, &d, &v("before")), 15);
+        assert_eq!(uint(value(&mut ev, &d, &v("frame_count"))), 100);
+        assert_eq!(uint(value(&mut ev, &d, &["audio", "frames", "0", "vbri", "toc", "1"])), 0x0200);
+        assert_eq!(size(&mut ev, &d, &["audio", "frames", "0", "xing"]), 0);
+    }
+
+    #[test]
+    fn tags_at_the_end_are_found_from_the_end() {
+        let frames = [frame_bytes(MONO), frame_bytes(MONO)].concat();
+        let ape = apev2(&[ape_item("Title", "Caf\u{e9}".as_bytes(), 0), ape_item("Cover Art (Front)", b"a.png\0\x89PNG", 0b011)], true);
+        let lyrics = lyrics3v2(&[("IND", b"100"), ("LYR", b"[00:01]la la")]);
+        let file = [frames.clone(), ape, lyrics, id3v1(b"A comment", Some(9), 17)].concat();
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
+        assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), 0);
+        assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "0", "value"])), "Caf\u{e9}");
+        assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "1", "content_type"])), "binary");
+        assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "1", "key"])), "Cover Art (Front)");
+        assert_eq!(uint(value(&mut ev, &d, &["apev2", "footer", "item_count"])), 2);
+        assert_eq!(name(value(&mut ev, &d, &["lyrics3", "fields", "1", "id"])), "LYR");
+        assert_eq!(name(value(&mut ev, &d, &["lyrics3", "fields", "1", "value"])), "[00:01]la la");
+        assert_eq!(name(value(&mut ev, &d, &["id3v1", "comment"])), "A comment");
+        assert_eq!(uint(value(&mut ev, &d, &["id3v1", "track"])), 9);
+        assert_eq!(name(value(&mut ev, &d, &["id3v1", "genre"])), "Rock");
+
+        // An APEv2 tag with no header, and an ID3v1.0 tag with no track.
+        let ape = apev2(&[ape_item("Artist", b"Someone", 0)], false);
+        let file = [frames.clone(), ape, id3v1(b"A comment thirty bytes long...", None, 255)].concat();
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(size(&mut ev, &d, &["apev2", "header"]), 0);
+        assert_eq!(name(value(&mut ev, &d, &["apev2", "items", "0", "key"])), "Artist");
+        assert_eq!(size(&mut ev, &d, &["lyrics3"]), 0);
+        assert_eq!(name(value(&mut ev, &d, &["id3v1", "comment"])), "A comment thirty bytes long...");
+        assert_eq!(size(&mut ev, &d, &["id3v1", "track"]), 0);
+        assert_eq!(name(value(&mut ev, &d, &["id3v1", "genre"])), "none");
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_frame_are_named_and_the_tags_still_found() {
+        let file = [frame_bytes(MONO), b"junk!".to_vec(), id3v1(b"", None, 0)].concat();
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 1);
+        assert_eq!(size(&mut ev, &d, &["audio", "not_frames"]), 5);
+        assert_eq!(size(&mut ev, &d, &["id3v1"]), 128);
+    }
+
+    #[test]
+    fn zero_bytes_and_a_second_id3_tag_between_frames_are_read() {
+        let tag = |n: usize| {
+            let mut v = b"ID3\x03\x00\x00\x00\x00\x00".to_vec();
+            v.push(n as u8);
+            v.extend(vec![0; n]);
+            v
+        };
+        let file = [tag(20), vec![0; 7], frame_bytes(MONO), tag(0), frame_bytes(MONO)].concat();
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(mp3());
+        assert_eq!(size(&mut ev, &d, &["id3v2", "padding"]), 20);
+        let frames = ev.node(&d, &[1, 0]).unwrap().child_count;
+        assert_eq!(frames, 4);
+        let kinds: Vec<String> = (0..4).map(|i| ev.node(&d, &[1, 0, i]).unwrap().type_name).collect();
+        assert_eq!(kinds, ["Padding", "Frame", "ID3", "Frame"]);
+    }
+
+    #[test]
+    fn the_recogniser_wants_frames_that_follow_one_another() {
+        let frames = [frame_bytes(MONO), frame_bytes(MONO), frame_bytes(MONO)].concat();
+        assert!(is_mpeg_audio(&frames, frames.len() as u64));
+        // One header and then text is not a stream of frames.
+        let mut one = frame_bytes(MONO);
+        one.extend(b"not another frame header");
+        assert!(!is_mpeg_audio(&one, one.len() as u64));
+        // UTF-16 text opens with FF FE, which is a sync and an MPEG-1 Layer I
+        // header, and text after it is not a second header.
+        let text: Vec<u8> = [0xff, 0xfe].into_iter().chain("Hello, world".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        assert!(!is_mpeg_audio(&text, text.len() as u64));
+
+        let mut tagged = b"ID3\x04\x00\x00\x00\x00\x00\x0a".to_vec();
+        tagged.extend([0; 10]);
+        let mp3 = [tagged.clone(), frames.clone()].concat();
+        assert!(is_tagged_mp3(&mp3, mp3.len() as u64));
+        // A tag in front of FLAC is a tag in front of something else.
+        let flac = [tagged.clone(), b"fLaC\0\0\0\x22".to_vec()].concat();
+        assert!(!is_tagged_mp3(&flac, flac.len() as u64));
+        // A tag longer than the bytes read, as cover art makes one, is taken
+        // for an MP3 on the tag alone.
+        let mut big = b"ID3\x03\x00\x00\x00\x01\x00\x00".to_vec();
+        big.extend([0; 100]);
+        assert!(is_tagged_mp3(&big, 20_000));
     }
 }
