@@ -1087,23 +1087,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
@@ -1249,23 +1250,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
@@ -1411,23 +1413,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
@@ -2395,23 +2398,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
@@ -2557,23 +2561,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
@@ -2719,23 +2724,24 @@ type BoxBody = switch type {
                               audio_object_type == 19 or audio_object_type == 20 or
                               audio_object_type == 21 or audio_object_type == 22 or
                               audio_object_type == 23) u1be
-                          // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                              LC can ignore it.
-                          sync_extension_type: optional(when remaining >= 2 and peek(u11be) ==
-                              695) u11be
-                          extension_audio_object_type: optional(when sync_extension_type == 695)
-                              u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
+                              SyncExtension {
+                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
+                                LC can ignore it.
+                            sync_extension_type: u11be
+                            extension_audio_object_type: u5be enum AudioObjectType {
+                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
+                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
+                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
+                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
+                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
+                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
+                            }
+                            // 1: HE-AAC, with spectral band replication doubling the output
+                                sample rate.
+                            sbr_present_flag: optional(when extension_audio_object_type == 5)
+                                u1be
                           }
-                          // 1: HE-AAC, with spectral band replication doubling the output
-                              sample rate.
-                          sbr_present_flag: optional(when sync_extension_type == 695 and
-                              extension_audio_object_type == 5) u1be
                         }
                         // The bits of the rest that come before the next byte boundary.
                         rest_bits: u((8 - bitsof(header) % 8) % 8)be
