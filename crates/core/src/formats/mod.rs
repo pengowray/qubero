@@ -212,6 +212,7 @@ mod wad_names;
 mod xar;
 mod xz;
 mod wav;
+mod webp;
 mod whisper;
 pub(crate) mod torchlegacy;
 pub(crate) mod torchzip;
@@ -361,6 +362,7 @@ pub use wad::wad;
 pub use xar::xar;
 pub use xz::xz;
 pub use wav::wav;
+pub use webp::webp;
 pub use whisper::whisper;
 pub use torchlegacy::torch_legacy;
 pub use torchzip::torch_zip;
@@ -550,6 +552,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("gitpackidx", |_| git_pack_index()),
     ("qoi", |_| qoi()),
     ("icc", |_| icc()),
+    ("webp", |_| webp()),
     ("tiff", |_| tiff()),
     ("jxr", |_| jxr()),
     ("dng", camera_raw),

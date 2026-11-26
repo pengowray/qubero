@@ -895,16 +895,20 @@ export const TABLE = {
    *  the heading rather than in every cell, and is the one the last row's
    *  time calls for: `time (ms)` for 4,096 samples 64 µs apart. */
   time: (unit: string): string => `time (${unit})`,
-  /** A column the shape's names do not cover, numbered from 1 the way the
-   *  format numbers its channels. */
+  /** A column the shape's names do not cover, numbered from 0 as the title
+   *  numbers the lists a table sits in: `channel 0`. The number has no
+   *  thousands separator, like an index in the title. */
   column: (columnWord: string, n: number): string => `${columnWord} ${n}`,
-  /** A column of a table whose columns come in groups, each group numbered
-   *  from 1 the way the format numbers them: `IF 2 channel 5`. */
+  /** A column of a table whose columns come in groups, each group and each
+   *  column in it numbered from 0: `IF 1 channel 4`. */
   groupColumn: (groupWord: string, group: number, columnWord: string, n: number): string => `${groupWord} ${group} ${columnWord} ${n}`,
-  /** The same on hover, with the group's word written out and both counts:
-   *  `Polarisation 2 of 4, channel 5 of 96`. */
+  /** The same on hover, with the group's word written out and each index
+   *  written as the title writes `channels[2] (of 64)`: the index in square
+   *  brackets and the count after it, `Polarisation [1] (of 4), channel [4]
+   *  (of 96)`. A bare `1 (of 4)` reads as the first of four. As in the title,
+   *  a count has thousands separators and an index does not. */
   groupColumnTitle: (spelled: string, group: number, groups: number, columnWord: string, n: number, per: number): string =>
-    `${spelled} ${group} of ${groups}, ${columnWord} ${n.toLocaleString()} of ${per.toLocaleString()}`,
+    `${spelled} [${group}] (of ${groups.toLocaleString()}), ${columnWord} [${n}] (of ${per.toLocaleString()})`,
   /** The word to number columns by when the shape gives none. */
   columnFallback: "column",
   /** The two columns of the data lens: where the row is kept, and how much of

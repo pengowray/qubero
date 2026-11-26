@@ -2100,10 +2100,10 @@ pub struct TableShape {
     /// could validate these later; for now they are strings the view shows.
     pub units: Vec<Arc<str>>,
     /// What to call a column when `names` does not fit: "channel" gives
-    /// "channel 1", "channel 2", ...
+    /// "channel 0", "channel 1", ..., numbered from 0 by the web app.
     pub column_word: Option<Arc<str>>,
     /// What each of `names` means, for a reader who does not know the
-    /// format's shorthand: `pol 1 real` is "Polarisation 1, real part".
+    /// format's shorthand: `pol 0 real` is "Polarisation [0] (of 2), real part".
     /// Parallel to `names`, or empty.
     pub titles: Vec<Arc<str>>,
     /// Columns that come in runs of equal length, one run per group: a
@@ -2125,7 +2125,7 @@ pub struct TableShape {
 
 /// The groups a table's columns come in: how many, and what one is called.
 /// With more than one, a column numbered by `column_word` is named by its
-/// group as well: "IF 2 channel 5".
+/// group as well: "IF 1 channel 4", both numbered from 0.
 #[derive(Debug, Clone)]
 pub struct ColumnGroups {
     pub count: Expr,

@@ -175,6 +175,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   midi: ["mid", "midi"],
   swf: ["swf"],
   png: ["png"],
+  webp: ["webp"],
   p8png: ["png"],
   p64png: ["png"],
   bmp: ["bmp"],

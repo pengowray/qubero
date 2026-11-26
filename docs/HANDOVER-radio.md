@@ -23,7 +23,7 @@ filterbank, GUPPI raw voltages, LOFAR beamformed HDF5.
 | A table wider than 4,096 columns arrives turned, with `rows` greyed out ("Too many channels to show samples as rows. The limit is 4,096 channels."). The 0002 `.fil` (180,224 columns) threw a RangeError from a spread of every column head. The chunk panel's filter rows are stacked, name above sizes, since `bitshuffle with lz4` and `fletcher32` ran under the sizes. A rate that is not whole says `0.0002926 s apart` rather than `1/3,417.969 s apart`. | f3d35f18 |
 | The 200 MB GJ699 `.gpuspec.0002.h5` kept the page busy for minutes after it opened, and going to `2504` took a minute before the offset could even be typed. The listing opened the whole chunk index: 3,500 entries, under the 50,000-item limit, but each in a different 64 KiB chunk of the file, against a cache of 512. Every chunk that landed set off a walk of the listing that dropped another chunk it needed. A structure now arrives closed once the walk has read nodes from 128 chunks (`CHUNK_BUDGET` in `flatten.ts`). In headless Chromium: before, the page did not settle in 300 s; after, the row at `0x2500` is drawn 155 ms after Enter and the page answers again within 1 s, for `0xb001f87` (chunk 3,277) too, and for the 1.17 GB GJ388 file. | see git log |
 | Every length of time goes through `web/src/timetext.ts`, which picks ns, µs, ms or s from the value: `TBIN 341.3 ns`, `341.3 ns apart`, `TBIN 64 µs` (the card's `6.4E-05 s` on hover). A whole rate is a time too: `125 µs apart`, not `1/8,000 s apart`. From a minute up, `4 min 12 s`. It replaced the table bar's spacing, the report's `secondsText`, the value plot's axis and hover, the WAV outline's `4:12` and the APNG frame delay. A table's time column takes the unit its last row calls for: `time (ms)` for a PSRFITS row of 64 µs samples. | see git log |
-| Columns come in groups: SIGPROC `nifs` and PSRFITS `NPOL` (`ColumnGroups` in `template.rs`). With more than one, a column is `IF 2 channel 5` or `pol 2 channel 5`, and its hover is `Intermediate frequency (IF) 2 of 2, channel 5 of 64`. GUPPI raw headers stay `pol 1 real`, with `Polarisation 1, real part` on hover (`TableShape::titles`). | see git log |
+| Columns come in groups: SIGPROC `nifs` and PSRFITS `NPOL` (`ColumnGroups` in `template.rs`). With more than one, a column is `IF 1 channel 4` or `pol 1 channel 4`, and its hover is `Intermediate frequency (IF) [1] (of 2), channel [4] (of 64)`. GUPPI raw headers stay `pol 0 real`, with `Polarisation [0] (of 2), real part` on hover (`TableShape::titles`). Every column is numbered from 0, like the table's title; until 2026-11-26 they counted from 1 (`IF 2 channel 5`, `pol 1 real`). | see git log |
 | A table inside lists the template names says which one it is, by index from 0 as the inspector writes it: `samples, blocks[1] (of 128), channels[2] (of 64)` for GUPPI, `samples, hdus[3] (of 4), rows[5] (of 2,224)` for the PSRFITS `bpsr111206_072835_beam10.sf`, in the bar, the tab (`blocks[1], channels[2]`), the hover and the export's file name (`samples.blocks[1].channels[2]`; `web/src/tableplace.ts`). Until 2026-11-26 these counted from 1 (`block 2 of 128`, `samples.block2.channel3`). GUPPI channels and FITS rows were counted as items, since the word was lost on the size window around each one. | see git log |
 | The toolbar's file type is written shorter rather than cut (`web/src/labelfit.ts`): up to its middle dot, then without a bracketed remark at its end, then up to its first comma, then the template's own name. `PSRFITS search mode`, `HDF5`. The shortest form sets the label's minimum width. | see git log |
 
@@ -154,10 +154,10 @@ Read; see Done. Left:
 - `FREQUENCY_START` ... `fchannel` ... `FREQUENCY_END` is read as records,
   and the channel frequencies it lists are not used for column names.
 - A file of 45,056 channels and 4 IFs is a table of 180,224 columns, named
-  `IF 1 channel 1` to `IF 4 channel 45,056`. PSRFITS `NPOL` names them the
-  same way, `pol 2 channel 5`. The PSRFITS `POL_TYPE` card (`AABBCRCI`) is
-  not read, so a column says `pol 2` and not `BB`. That a SIGPROC time
-  sample is every channel of IF 1 and then every channel of IF 2 is from
+  `IF 0 channel 0` to `IF 3 channel 45055`. PSRFITS `NPOL` names them the
+  same way, `pol 1 channel 4`. The PSRFITS `POL_TYPE` card (`AABBCRCI`) is
+  not read, so a column says `pol 1` and not `BB`. That a SIGPROC time
+  sample is every channel of IF 0 and then every channel of IF 1 is from
   memory of sigproc's writer; no reference or real multi-IF file checked it.
 - A table's time column changes unit with its length, and a copy or an
   export of the table carries the same unit in its heading: `time (ms)`.

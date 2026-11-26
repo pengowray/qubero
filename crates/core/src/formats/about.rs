@@ -39,6 +39,8 @@ static ABOUT: &[(&str, About)] = &[
         "PNG stores images without loss. It compresses the pixels row by row with zlib, after replacing each row with its differences from the pixels to its left or above, which compresses better. The file is a series of chunks, each with a length, a four-letter type, and a CRC.")),
     ("icc", a("ICC profile", Some("ICC profile"),
         "An ICC profile describes the colors of a device or a color space, such as a display, a camera, a printer or sRGB, so that color management software can convert colors from one to another. The file is a 128-byte header, a table of tags, and the data of each tag: a tone curve, a matrix, a lookup table, text, or a set of measurements. Images carry profiles too: a PNG in its iCCP chunk, a JPEG in APP2 segments, a TIFF in a tag.")),
+    ("webp", a("WebP", Some("WebP"),
+        "WebP stores images with lossy compression, as one key frame of the VP8 video format, or with lossless compression in a format of its own. It can add an alpha channel to a lossy image, and can hold animations, an ICC color profile, and EXIF and XMP metadata. The file is a RIFF container: a series of chunks, each with a four-letter type and a length.")),
     ("gif", a("GIF", Some("GIF"),
         "GIF stores images of up to 256 colors, and animations made of several such images. It compresses the pixels without loss using LZW. Each image uses the color table in the file's header or one of its own.")),
     ("bmp", a("BMP", Some("BMP file format"),

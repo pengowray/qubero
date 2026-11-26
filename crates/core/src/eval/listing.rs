@@ -666,16 +666,25 @@ impl Evaluator {
     /// The outermost enclosing structure that reads as one row, or the field
     /// itself when nothing on the way to it is marked that way. `locate` has
     /// already resolved every step, so this only reads what it left behind.
-    pub(super) fn inline_ancestor(&self, root: &[usize], path: &[usize]) -> Vec<usize> {
+    ///
+    /// Only a structure whose own bytes hold `bit` can stand for it. A TIFF
+    /// entry's value is one row, an offset and the values it points at, and
+    /// the values are somewhere else in the file: a bit of them lifted to the
+    /// row would be drawn at the entry, and the bytes where the values really
+    /// are would be left looking like nothing covers them.
+    pub(super) fn inline_ancestor<S: Source>(&mut self, doc: &Document<S>, root: &[usize], path: &[usize], bit: u64) -> R<Vec<usize>> {
         for n in root.len()..path.len() {
             let prefix = &path[..n];
-            if let Some(r) = self.memo.get(prefix) {
-                if matches!(r.ty.base(), Ty::Struct(s) if s.inline) {
-                    return prefix.to_vec();
-                }
+            let inline = matches!(self.memo.get(prefix).map(|r| r.ty.base()), Some(Ty::Struct(s)) if s.inline);
+            if !inline {
+                continue;
+            }
+            let at = self.memo[prefix].offset;
+            if at <= bit && bit < at + self.size_of(doc, prefix)? {
+                return Ok(prefix.to_vec());
             }
         }
-        path.to_vec()
+        Ok(path.to_vec())
     }
 
     /// Every field across a stretch of the file, in order, for the annotation
@@ -707,7 +716,7 @@ impl Evaluator {
         while at < end && out.len() < max {
             let path = self.locate_under(doc, root, at)?;
             // A structure marked to read on one row stands for its fields here.
-            let path = self.inline_ancestor(root, &path);
+            let path = self.inline_ancestor(doc, root, &path, at)?;
             // Everything a decoder's trace laid down stands for the block it
             // belongs to. The cursor goes all the way to one literal, because
             // a reader who clicks a byte of a deflate stream is asking which
@@ -717,7 +726,18 @@ impl Evaluator {
             let path = self.traced_block(&path);
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
-            let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
+            // `at` counts each byte's bits from the top, and a field read
+            // low bit first counts them from the bottom: a nibble in the top
+            // half of a byte starts at bit 4 by its own count and at bit 0 by
+            // the column's. Asked in the column's count, it looked as though
+            // nothing covered the byte's first bit, and the gap that answered
+            // ran to the end of the file.
+            // Only a field inside one byte is asked this way. A longer run read
+            // low bit first, a deflate block, is a chain of stretches in its
+            // own count that the column already steps along end to end.
+            let in_one_byte = |offset: u64, size: u64| size > 0 && offset / 8 == (offset + size - 1) / 8;
+            let mine = if info.lsb_first && in_one_byte(info.offset_bits, info.size_bits) { crate::decode::mirror_in_byte(at) } else { at };
+            let span = if mine < info.offset_bits || mine >= info.offset_bits + info.size_bits {
                 self.gap_before_the_next_placement(doc, root, &path, &info, at)?
             } else if inline {
                 // A structure that reads on one row is still one of many when
@@ -739,16 +759,59 @@ impl Evaluator {
                 self.traced_block_span(doc, &path, &info)?
             } else if info.composite {
                 self.gap_inside(doc, root, &path, &info, at)?
+            } else if self.aside(&path) {
+                self.aside_between_placements(doc, root, &path, &info, at)?
             } else {
                 self.field_or_its_run(doc, &path, &info, at)?
             };
-            let next = span.offset_bits + span.size_bits;
+            let next = if span.lsb_first && !span.gap && in_one_byte(span.offset_bits, span.size_bits) {
+                // The bits this span covers are not one stretch in the
+                // column's count, so the next bit to ask about is the first
+                // after `at` that the span does not hold.
+                let holds = |b: u64| (span.offset_bits..span.offset_bits + span.size_bits).contains(&crate::decode::mirror_in_byte(b));
+                let mut n = at + 1;
+                while n < end && holds(n) {
+                    n += 1;
+                }
+                n
+            } else {
+                span.offset_bits + span.size_bits
+            };
             at = if next > at { next } else { at + 8 };
             if span.size_bits > 0 {
                 out.push(span);
             }
         }
         Ok(out)
+    }
+
+    /// A field that is a second reading of its bytes, at a bit nothing placed
+    /// over it covers: only the stretch between the placed things either side
+    /// of the bit. A TIFF's `body` is everything after the header, and its
+    /// directories and values are placed over it. Drawn whole from the first
+    /// bit of it the column reached, it would run over every directory after
+    /// that bit and hide them.
+    fn aside_between_placements<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        path: &[usize],
+        info: &NodeInfo,
+        at: u64,
+    ) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let mut begins = info.offset_bits;
+        let mut ends = info.offset_bits + info.size_bits;
+        if let Some(end) = self.placement_end_before(doc, root, at)? {
+            begins = begins.max(end);
+        }
+        if let Some(next) = self.placement_after(doc, root, at)? {
+            ends = ends.min(next);
+        }
+        let ends = ends.max(at + 8);
+        span.offset_bits = begins.min(at);
+        span.size_bits = ends - span.offset_bits;
+        Ok(span)
     }
 
     /// A bit no field covers at all, which in a format whose objects are all

@@ -43,7 +43,7 @@
 //! a field nothing bounds.
 
 use super::tiff::tiff_part;
-use crate::template::{Encoding, Endian::*, Expr as E, Packing, StrLen, Template, Ty as T, Until};
+use crate::template::{Colour, Encoding, Endian::*, Expr as E, Packing, Step, StrLen, Template, Ty as T, Until};
 
 /// Every marker worth naming, by the whole two bytes rather than the second
 /// one, since that is what is read. The names are the abbreviations the
@@ -141,6 +141,26 @@ pub fn jpeg() -> Template {
                 // file was before it was overwritten. Named as what it is
                 // rather than read as segments that are not there.
                 ("trailer", T::bytes(E::Remaining)),
+                // The ICC profile, which a long one is cut into APP2 pieces
+                // for, joined back together in the order the segments are
+                // in. The walk lands on `profile`, which only an APP2 piece
+                // has, so every other segment is passed over.
+                (
+                    "icc_profile",
+                    T::stitched(
+                        vec![
+                            Step::field("segments"),
+                            Step::each(),
+                            Step::field("body"),
+                            Step::field("contents"),
+                            Step::field("data"),
+                            Step::field("profile"),
+                        ],
+                        None,
+                        None,
+                        super::decoded_object(),
+                    ),
+                ),
             ],
         ),
     )
@@ -167,6 +187,9 @@ fn segment(exif: &T) -> T {
         0xffdc,
         sized(T::inline_structure("Dnl", vec![("lines", T::u16(Big))]).reads_as(&[("lines", "{} lines", "")])),
     ));
+    cases.push((0xffcc, sized(T::repeat(conditioning(), Until::End))));
+    cases.push((0xffe2, sized(app2())));
+    cases.push((0xffed, sized(app13())));
     cases.push((0xffee, sized(app14())));
     cases.push((0xffe0, sized(app0())));
     cases.push((0xffe1, sized(app1(exif))));
@@ -176,7 +199,7 @@ fn segment(exif: &T) -> T {
     T::structure_named(
         "Segment",
         "marker",
-        "",
+        "body",
         vec![
             ("marker", T::enumeration_hex("Marker", T::u16(Big), MARKER)),
             ("body", T::switch(E::field("marker"), cases, sized(T::bytes(E::Remaining)))),
@@ -188,13 +211,14 @@ fn segment(exif: &T) -> T {
 /// A length and the bytes it covers. The length counts itself, which is why
 /// every segment in the format holds two bytes fewer than it says.
 fn sized(inner: T) -> T {
-    T::inline_structure(
+    T::structure(
         "Body",
         vec![
             ("length", T::u16(Big)),
             ("contents", T::sized(E::field("length").sub(E::lit(2)), inner)),
         ],
     )
+    .contents("contents")
 }
 
 fn nothing() -> T {
@@ -204,7 +228,7 @@ fn nothing() -> T {
 /// What the image is: how big, how many channels, and how each of them is
 /// sampled. Everything a decoder needs before a scan means anything.
 fn frame() -> T {
-    T::inline_structure(
+    T::structure(
         "Frame",
         vec![
             ("precision", T::u8()),
@@ -260,7 +284,12 @@ fn huffman_table() -> T {
             ("class", T::enumeration("TableClass", T::UInt { bits: 4, endian: Big }, &[(0, "dc"), (1, "ac")])),
             ("id", T::UInt { bits: 4, endian: Big }),
             ("counts", T::array(T::u8(), E::lit(16))),
-            ("symbols", T::bytes(E::sum_of("counts"))),
+            // One byte a code, shortest codes first. A DC table's symbol is
+            // how many bits the difference that follows the code takes; an AC
+            // table's is a run of zeros in its high four bits and that bit
+            // count in its low four, with 0x00 ending the block and 0xf0
+            // standing for sixteen zeros.
+            ("symbols", T::array(T::u8(), E::sum_of("counts"))),
         ],
     )
     .counted_as("table")
@@ -304,20 +333,21 @@ fn quant_table() -> T {
 /// `APP0`, which is JFIF in every file that has one, and which is what makes a
 /// JPEG on disk a JPEG rather than a bare stream.
 fn app0() -> T {
-    T::inline_structure(
+    T::structure(
         "App0",
         vec![
             ("identifier", T::cstr()),
-            ("data", T::matches(E::field("identifier"), vec![("JFIF", jfif())], T::bytes(E::Remaining))),
+            ("data", T::matches(E::field("identifier"), vec![("JFIF", jfif()), ("JFXX", jfxx())], T::bytes(E::Remaining))),
         ],
     )
     // `JFIF` is what an APP0 says in every file that has one, so it is left
     // unsaid; the one that says something else is worth naming.
     .reads_as(&[("identifier", "", "JFIF"), ("data", "", "")])
+    .contents("data")
 }
 
 fn jfif() -> T {
-    T::inline_structure(
+    T::structure(
         "Jfif",
         vec![
             ("version_major", T::u8()),
@@ -337,7 +367,7 @@ fn jfif() -> T {
             ("thumbnail_width", T::u8()),
             ("thumbnail_height", T::u8()),
             // Three bytes a pixel, uncompressed, and almost always none at all.
-            ("thumbnail", T::bytes(E::Remaining)),
+            ("thumbnail", rgb_pixels(E::field("thumbnail_width").mul(E::field("thumbnail_height")))),
         ],
     )
     // The version is 1.01 in every file anyone has, and two fields cannot say
@@ -348,8 +378,62 @@ fn jfif() -> T {
         ("x_density", "x {}", ""),
         ("y_density", "y {}", ""),
         ("density_units", "", ""),
-        ("thumbnail", "thumbnail {}", "0 bytes"),
+        ("thumbnail", "thumbnail {}", "0 pixels"),
     ])
+}
+
+/// Pixels written as a red, a green and a blue byte each, left to right and
+/// top to bottom, which is how both JFIF thumbnails store them.
+fn rgb_pixels(count: E) -> T {
+    let pixel = T::structure("RgbPixel", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())])
+        .counted_as("pixel")
+        .colour(Colour::rgb());
+    T::array(pixel, count)
+}
+
+/// `JFXX`, the JFIF extension segment, which holds a thumbnail in one of
+/// three forms: a whole JPEG, one palette byte a pixel, or three bytes of RGB
+/// a pixel.
+fn jfxx() -> T {
+    let sized = || {
+        vec![("thumbnail_width", T::u8()), ("thumbnail_height", T::u8())]
+    };
+    let count = || E::field("thumbnail_width").mul(E::field("thumbnail_height"));
+    let palette_entry = T::structure("PaletteEntry", vec![("red", T::u8()), ("green", T::u8()), ("blue", T::u8())])
+        .counted_as("entry")
+        .colour(Colour::rgb());
+    let mut palettised = sized();
+    palettised.push(("palette", T::array(palette_entry, E::lit(256))));
+    palettised.push(("pixels", T::array(T::u8(), count())));
+    let mut rgb = sized();
+    rgb.push(("pixels", rgb_pixels(count())));
+    T::structure(
+        "Jfxx",
+        vec![
+            (
+                "extension_code",
+                T::enumeration(
+                    "JfxxExtension",
+                    T::u8(),
+                    &[(0x10, "JPEG thumbnail"), (0x11, "palette thumbnail"), (0x13, "RGB thumbnail")],
+                ),
+            ),
+            (
+                "thumbnail",
+                T::switch(
+                    E::field("extension_code"),
+                    vec![
+                        (0x11, T::structure("PaletteThumbnail", palettised)),
+                        (0x13, T::structure("RgbThumbnail", rgb)),
+                    ],
+                    // A whole JPEG with its own start and end markers. Not
+                    // read as one: see the note at the top of this file.
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+    .field_doc("extension_code", "Which form the thumbnail is in: 0x10 a JPEG, 0x11 one palette index a pixel after a 256-colour palette, 0x13 three bytes of RGB a pixel.")
 }
 
 /// `APP14`, which Adobe writes and which decoders read for one thing: what the
@@ -359,7 +443,7 @@ fn jfif() -> T {
 ///
 /// The identifier is five bytes with nothing after them, not a C string.
 fn app14() -> T {
-    T::inline_structure(
+    T::structure(
         "App14",
         vec![
             ("identifier", T::text(StrLen::Fixed(E::lit(5)), Encoding::Latin1)),
@@ -377,8 +461,13 @@ fn app14() -> T {
                     &[(0, "no transform"), (1, "ycbcr"), (2, "ycck")],
                 ),
             ),
+            // Some Adobe software writes more after the transform. No
+            // published description says what, and decoders stop reading at
+            // the transform.
+            ("extra", T::bytes(E::Remaining)),
         ],
     )
+    .field_doc("extra", "Bytes after the transform flag. Their meaning is not published, and decoders do not read them.")
     .reads_as(&[("identifier", "", "Adobe"), ("transform", "", "")])
 }
 
@@ -387,7 +476,7 @@ fn app14() -> T {
 /// offsets inside it count from where the TIFF begins rather than from the
 /// start of the JPEG, which is what a window is for.
 fn app1(exif: &T) -> T {
-    T::inline_structure(
+    T::structure(
         "App1",
         vec![
             ("identifier", T::cstr()),
@@ -398,24 +487,119 @@ fn app1(exif: &T) -> T {
                     vec![
                         (
                             "Exif",
-                            T::inline_structure(
+                            T::structure(
                                 "Exif",
                                 vec![("pad", T::magic(&[0])), ("tiff", exif.clone())],
                             ),
                         ),
                         ("http://ns.adobe.com/xap/1.0/", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+                        ("http://ns.adobe.com/xmp/extension/", extended_xmp()),
                     ],
                     T::bytes(E::Remaining),
                 ),
             ),
         ],
     )
+    .contents("data")
+}
+
+/// A piece of XMP too long for one segment. The main XMP packet names the
+/// whole by the MD5 of its text, and every piece carries that name, how long
+/// the whole is, and where in it this piece goes.
+fn extended_xmp() -> T {
+    T::structure(
+        "ExtendedXmp",
+        vec![
+            ("guid", T::text(StrLen::Fixed(E::lit(32)), Encoding::Ascii)),
+            ("full_length", T::u32(Big)),
+            ("offset", T::u32(Big)),
+            ("text", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+        ],
+    )
+    .field_doc("guid", "The MD5 of the whole extended XMP, as 32 hex digits. The main XMP packet names it in xmpNote:HasExtendedXMP.")
+    .field_doc("full_length", "How many bytes the whole extended XMP is, across every segment that holds a piece of it.")
+    .field_doc("offset", "Where this piece starts within the whole extended XMP.")
+}
+
+/// `APP2`, which holds an ICC profile, cut into pieces when it is too long
+/// for one segment. Each piece says which it is and how many there are.
+fn app2() -> T {
+    T::structure(
+        "App2",
+        vec![
+            ("identifier", T::cstr()),
+            (
+                "data",
+                T::matches(
+                    E::field("identifier"),
+                    vec![(
+                        "ICC_PROFILE",
+                        T::structure(
+                            "IccPiece",
+                            vec![
+                                ("sequence_number", T::u8()),
+                                ("piece_count", T::u8()),
+                                ("profile", T::bytes(E::Remaining)),
+                            ],
+                        )
+                        .field_doc("sequence_number", "Which piece of the profile this is, counting from 1.")
+                        .field_doc("piece_count", "How many APP2 segments the profile is cut into."),
+                    )],
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+    .contents("data")
+}
+
+/// `APP13`, which is where Photoshop keeps its image resources, the same
+/// records a PSD file has: IPTC captions and keywords, resolution, a
+/// thumbnail.
+fn app13() -> T {
+    T::structure(
+        "App13",
+        vec![
+            ("identifier", T::cstr()),
+            (
+                "data",
+                T::matches(
+                    E::field("identifier"),
+                    vec![("Photoshop 3.0", T::repeat(super::psd::resource(), Until::End))],
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+    .contents("data")
+}
+
+/// One entry of a `DAC` segment, which conditions an arithmetic-coding table
+/// the way a `DHT` defines a Huffman one.
+fn conditioning() -> T {
+    let dc = T::structure(
+        "DcConditioning",
+        vec![("upper", T::UInt { bits: 4, endian: Big }), ("lower", T::UInt { bits: 4, endian: Big })],
+    );
+    let ac = T::structure("AcConditioning", vec![("kx", T::u8())]);
+    T::structure_named(
+        "Conditioning",
+        "id",
+        "",
+        vec![
+            ("class", T::enumeration("TableClass", T::UInt { bits: 4, endian: Big }, &[(0, "dc"), (1, "ac")])),
+            ("id", T::UInt { bits: 4, endian: Big }),
+            ("value", T::switch(E::field("class"), vec![(1, ac)], dc)),
+        ],
+    )
+    .counted_as("table")
+    .field_doc("value", "For a DC table, the bounds L and U of the conditioning range, written U × 16 + L. For an AC table, Kx, the coefficient index that splits low from high frequencies.")
 }
 
 /// The scan: which tables each channel reads with, and then the compressed
 /// bits. The header has a length on it and the bits do not.
 fn scan() -> T {
-    T::inline_structure(
+    T::structure(
         "Scan",
         vec![
             ("length", T::u16(Big)),
@@ -423,7 +607,7 @@ fn scan() -> T {
                 "header",
                 T::sized(
                     E::field("length").sub(E::lit(2)),
-                    T::inline_structure(
+                    T::structure(
                         "ScanHeader",
                         vec![
                             ("component_count", T::u8()),
@@ -600,7 +784,9 @@ mod tests {
             Value::Enum { raw: 0, name: Some("dc".into()), hex: false }
         );
         // Nothing writes the total down: it is the sixteen counts added up.
-        assert_eq!(ev.node(&d, &[table, &[3][..]].concat()).unwrap().value, Value::Bytes { len: 3, preview: vec![5, 6, 7] });
+        let symbols = [table.as_slice(), &[3]].concat();
+        assert_eq!(ev.node(&d, &symbols).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[symbols.as_slice(), &[2]].concat()).unwrap().value, Value::UInt(7));
         // One table, filling the segment exactly.
         assert_eq!(ev.node(&d, &[1, 3, 1, 1]).unwrap().child_count, 1);
     }
@@ -763,5 +949,98 @@ mod tests {
         // from a baseline one, and each says so.
         assert_eq!(ev.node(&d, &[1, 1, 1, 2]).unwrap().refused.as_deref(), Some("progressive"));
         assert_eq!(ev.node(&d, &[1, 2, 1, 2]).unwrap().refused.as_deref(), Some("progressive"));
+    }
+
+    /// A file holding one segment and nothing else.
+    fn doc_of(marker: u16, body: &[u8]) -> Document<MemSource> {
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&seg(marker, body));
+        v.extend_from_slice(&[0xff, 0xd9]);
+        Document::new(MemSource(v))
+    }
+
+    #[test]
+    fn an_icc_profile_piece_says_which_piece_it_is() {
+        let mut body = b"ICC_PROFILE\0".to_vec();
+        body.extend_from_slice(&[2, 3]);
+        body.extend_from_slice(b"abcdef");
+        let d = doc_of(0xffe2, &body);
+        let mut ev = Evaluator::new(jpeg());
+        let data = [1usize, 0, 1, 1, 1];
+        assert_eq!(ev.node(&d, &[data.as_slice(), &[0]].concat()).unwrap().value, Value::UInt(2));
+        assert_eq!(ev.node(&d, &[data.as_slice(), &[1]].concat()).unwrap().value, Value::UInt(3));
+        assert_eq!(ev.node(&d, &[data.as_slice(), &[2]].concat()).unwrap().size_bits, 6 * 8);
+    }
+
+    #[test]
+    fn photoshop_resources_in_app13_are_read_as_a_psd_reads_them() {
+        let mut body = b"Photoshop 3.0\0".to_vec();
+        body.extend_from_slice(b"8BIM");
+        body.extend_from_slice(&1028u16.to_be_bytes()); // IPTC-NAA
+        body.extend_from_slice(&[0, 0]); // empty name, padded to even
+        // One IPTC dataset, the caption (2:120), and a pad to even.
+        let dataset = [&[0x1c, 2, 120, 0, 5][..], b"hello"].concat();
+        body.extend_from_slice(&(dataset.len() as u32).to_be_bytes());
+        body.extend_from_slice(&dataset);
+        body.push(0);
+        let d = doc_of(0xffed, &body);
+        let mut ev = Evaluator::new(jpeg());
+        let first = [1usize, 0, 1, 1, 1, 0];
+        assert_eq!(
+            ev.node(&d, &[first.as_slice(), &[1]].concat()).unwrap().value,
+            Value::Enum { raw: 1028, name: Some("IPTC-NAA".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 1]).unwrap().child_count, 1);
+        let caption = [first.as_slice(), &[6, 0]].concat();
+        assert_eq!(
+            ev.node(&d, &[caption.as_slice(), &[2]].concat()).unwrap().value,
+            Value::Enum { raw: 120, name: Some("caption".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &[caption.as_slice(), &[4]].concat()).unwrap().value, Value::Str("hello".into()));
+    }
+
+    #[test]
+    fn a_jfxx_thumbnail_is_read_as_pixels() {
+        let mut body = b"JFXX\0".to_vec();
+        body.extend_from_slice(&[0x13, 2, 1]); // RGB, two by one
+        body.extend_from_slice(&[255, 0, 0, 0, 0, 255]);
+        let d = doc_of(0xffe0, &body);
+        let mut ev = Evaluator::new(jpeg());
+        let thumb = [1usize, 0, 1, 1, 1, 1];
+        let pixels = [thumb.as_slice(), &[2]].concat();
+        assert_eq!(ev.node(&d, &pixels).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[pixels.as_slice(), &[1, 2]].concat()).unwrap().value, Value::UInt(255));
+    }
+
+    #[test]
+    fn a_dac_entry_splits_dc_bounds_from_an_ac_index() {
+        // A DC table 0 conditioned with U = 1 and L = 0, then AC table 1 with Kx 5.
+        let body = [0x00, 0x10, 0x11, 0x05];
+        let d = doc_of(0xffcc, &body);
+        let mut ev = Evaluator::new(jpeg());
+        let tables = [1usize, 0, 1, 1];
+        assert_eq!(ev.node(&d, &tables).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[tables.as_slice(), &[0, 2, 0]].concat()).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[tables.as_slice(), &[1, 2, 0]].concat()).unwrap().value, Value::UInt(5));
+    }
+
+    #[test]
+    fn icc_pieces_are_joined_into_one_profile() {
+        let piece = |n: u8, bytes: &[u8]| {
+            let mut body = b"ICC_PROFILE\0".to_vec();
+            body.extend_from_slice(&[n, 2]);
+            body.extend_from_slice(bytes);
+            seg(0xffe2, &body)
+        };
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&piece(1, b"abc"));
+        v.extend_from_slice(&seg(0xfffe, b"between"));
+        v.extend_from_slice(&piece(2, b"defg"));
+        v.extend_from_slice(&[0xff, 0xd9]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(jpeg());
+        let object = ev.node(&d, &[3, 0, 0]).unwrap();
+        assert_eq!(object.size_bits, 7 * 8);
+        assert_eq!(object.value, Value::Bytes { len: 7, preview: b"abcdefg".to_vec() });
     }
 }

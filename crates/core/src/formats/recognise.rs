@@ -453,6 +453,8 @@ const PROBES: &[Probe] = &[
     Probe::Is("p64rom", is_p64rom),
     Probe::Is("cdr", |h, _| h.starts_with(b"RIFF") && h.len() >= 12 && h[8..11] == *b"CDR"),
     Probe::Is("cmx", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"CMX1")),
+    // A WebP image, which names itself in the RIFF form field.
+    Probe::Is("webp", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"WEBP")),
     // A sound file, and the one variant of it that is marked by a tag inside
     // the first chunk rather than by anything in the first twelve bytes.
     Probe::Which(|h, _| {
@@ -2305,6 +2307,8 @@ mod tests {
         assert_eq!(sniffed(b"%!PS-Adobe-3.0 EPSF-3.0\n"), Some("eps"));
         assert_eq!(sniffed(b"RIFF\x10\0\0\0CDR9vers\0\0\0\0"), Some("cdr"));
         assert_eq!(sniffed(b"RIFF\x10\0\0\0CMX1cont\0\0\0\0"), Some("cmx"));
+        assert_eq!(sniffed(b"RIFF\x10\0\0\0WEBPVP8L\0\0\0\0"), Some("webp"));
+        assert_eq!(sniffed(b"RIFF\x10\0\0\0WEBPVP8X\x0a\0\0\0"), Some("webp"));
         assert_eq!(sniffed(b"UnityFS\0\0\0\0\x08version\0revision\0"), Some("unitybundle"));
 
         let mut ico = vec![0, 0, 1, 0, 1, 0];

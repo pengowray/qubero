@@ -409,7 +409,11 @@ fn tiff_file_for(space: Space) -> T {
                     ),
                 ),
             ],
-        ),
+        )
+        // `file` is the rest of the header, written in the order the two
+        // letters chose. The word adds a level to the listing and says
+        // nothing, so its fields are listed beside `byte_order`.
+        .contents("file"),
     )
 }
 
@@ -432,6 +436,10 @@ fn file(e: Endian, space: Space) -> T {
             ("body", T::bytes(E::Remaining)),
         ],
     )
+    // `body` only says that the rest of the file comes after the header. The
+    // directories and values placed over it say what those bytes are, so
+    // where one covers a byte, the hex view names it rather than `body`.
+    .field_aside("body")
 }
 
 /// Which set of names an entry's tag is read against. A directory is a
@@ -515,7 +523,9 @@ fn ifd(e: Endian, space: Space) -> T {
     if space == Space::Jxr {
         fields.extend(super::jxr::codestreams());
     }
-    T::structure(space.shown(), fields)
+    // The entries are what a directory is; `entries` is only the list's name,
+    // so the listing shows them beside the count rather than a level down.
+    T::structure(space.shown(), fields).contents("entries")
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four

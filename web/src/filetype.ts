@@ -147,6 +147,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   // started being listed in the dialog, where "pe file" reads as a typo.
   png: "PNG image",
   gif: "GIF image",
+  webp: "WebP image",
   jpeg: "JPEG image",
   tiff: "TIFF image",
   bmp: "Windows bitmap",
