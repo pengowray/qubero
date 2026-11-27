@@ -187,6 +187,20 @@ impl<S: Source> Document<S> {
         save_plan(&self.table)
     }
 
+    /// The byte of the source where the `n_bits` of the document from bit
+    /// `at_bits` start, when no edit touched them: they lie inside one piece
+    /// of the original, and start on a byte of it. None when an edit inside
+    /// them changed or added bits, or a bit-level insert before them moved
+    /// them off a byte of the source.
+    ///
+    /// What lets something that reads a stretch later, with no document to
+    /// hand, read it from the source instead of keeping a copy: see
+    /// [`Source::share`].
+    pub fn source_offset_of(&self, at_bits: u64, n_bits: u64) -> Option<u64> {
+        let bit = self.table.orig_bit_of(at_bits, n_bits)?;
+        (bit % 8 == 0).then_some(bit / 8)
+    }
+
     pub fn read_bits(&self, at: u64, n: u64, out: &mut [u8]) -> Vec<Missing> {
         self.table.read_bits(&self.source, &self.add, at, n, out)
     }
@@ -263,6 +277,46 @@ mod tests {
         d.amend_overwrite_bytes(3, b"W");
         assert!(!d.can_redo());
         assert_eq!(all(&d), b"abcW");
+    }
+
+    /// Where a stretch of the document is in the source: the same place in a
+    /// document no edit touched, moved by an insert or delete before it, and
+    /// nowhere once an edit is inside it, once it crosses from one piece of
+    /// the original into another, or once a bit-level insert before it moves
+    /// it off a byte of the source.
+    #[test]
+    fn a_stretch_no_edit_touched_says_where_it_is_in_the_source() {
+        let mut d = Document::new(MemSource((0..64u8).collect()));
+        assert_eq!(d.source_offset_of(10 * 8, 20 * 8), Some(10));
+        assert_eq!(d.source_offset_of(0, 64 * 8), Some(0));
+        assert_eq!(d.source_offset_of(60 * 8, 5 * 8), None, "past the end");
+        // Not on a byte of the source.
+        assert_eq!(d.source_offset_of(10 * 8 + 3, 8), None);
+
+        // Three bytes inserted before the stretch move it on by three.
+        d.insert_bytes(2, b"abc");
+        assert_eq!(d.source_offset_of(13 * 8, 20 * 8), Some(10));
+        // A deleted byte before it moves it back by one.
+        d.delete_bytes(0, 1);
+        assert_eq!(d.source_offset_of(12 * 8, 20 * 8), Some(10));
+        // The inserted bytes are in no piece of the original.
+        assert_eq!(d.source_offset_of(8, 3 * 8), None);
+        // An overwrite inside the stretch, and the stretch crossing the edit.
+        d.overwrite_bytes(20, b"Z");
+        assert_eq!(d.source_offset_of(12 * 8, 20 * 8), None);
+        assert_eq!(d.source_offset_of(12 * 8, 8 * 8), Some(10), "the stretch before the overwrite");
+        assert_eq!(d.source_offset_of(21 * 8, 4 * 8), Some(19), "the stretch after it");
+
+        // Three bits inserted before the stretch: it still lies in one
+        // piece, but a stretch on a byte of the document is now three bits
+        // short of a byte of the source.
+        let mut d = Document::new(MemSource((0..64u8).collect()));
+        d.insert_bits(8, &[0xa0], 3);
+        assert_eq!(d.source_offset_of(10 * 8, 20 * 8), None);
+        assert_eq!(d.source_offset_of(10 * 8 + 3, 20 * 8), Some(10));
+        // And five bits more make a byte again.
+        d.insert_bits(8, &[0x1f], 5);
+        assert_eq!(d.source_offset_of(11 * 8, 20 * 8), Some(10));
     }
 
     #[test]

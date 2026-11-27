@@ -169,6 +169,20 @@ impl PieceTable {
         }
     }
 
+    /// The bit of the original where the `n` bits of the document from bit
+    /// `at` start, when they all lie inside one piece of the original. None
+    /// when any of them were added by an edit, when they cross from one piece
+    /// into another, or when they reach past the end.
+    pub fn orig_bit_of(&self, at: u64, n: u64) -> Option<u64> {
+        if at.checked_add(n)? > self.len_bits() {
+            return None;
+        }
+        let i = self.locate(at);
+        let p = self.pieces.get(i)?;
+        let within = at - self.starts[i];
+        (p.src == Src::Orig && within + n <= p.bit_len).then_some(p.bit_off + within)
+    }
+
     /// Read `n` bits starting at document bit `at` into `out` (MSB-first, from bit 0).
     /// `out` must hold at least `bytes_for(n)` bytes. Reports unloaded original chunks.
     pub fn read_bits(
