@@ -41,13 +41,17 @@ export type TemplateIndex = {
   readonly root: Block | null;
   /** Per line that starts a statement, the last line of that statement. */
   readonly stmtEnd: ReadonlyMap<number, number>;
-  /** Every `2 => same as case 1` line: the arm it points at and, for one that
-   *  ends `but big-endian` or `but little-endian`, which. */
+  /** Every `2 => same as case 1` line, and every `type B = same as type A`
+   *  line: the arm or type it points at and, for one that ends
+   *  `but big-endian` or `but little-endian`, which. */
   readonly sameAs: readonly SameAs[];
+  /** A type written as `type B = same as type A`, to the type it names. */
+  readonly alias: ReadonlyMap<string, string>;
 };
 
-/** One `same as case` line. `target` is the first line of the arm it names,
- *  null when no arm above it starts with that key. */
+/** One `same as case` or `same as type` line. `target` is the first line of
+ *  the arm or type it names, null when there is no such arm above it or no
+ *  such type. */
 export type SameAs = { readonly line: number; readonly target: number | null; readonly order: ByteOrder | null };
 
 export type ByteOrder = "big" | "little";
@@ -56,21 +60,43 @@ export type ByteOrder = "big" | "little";
  *  the arm's first line. */
 type Frame = { contentIndent: number; block: Block | null; arms: Map<string, number> | null };
 
-/** The key an arm's line starts with and what follows its `=>`, or null for a
- *  line that is not an arm. A key in double quotes may hold ` => ` itself. */
-function armOf(trimmed: string): { key: string; rest: string } | null {
-  let end = 0;
-  if (trimmed.startsWith('"')) {
-    end = 1;
-    while (end < trimmed.length && trimmed[end] !== '"') end += trimmed[end] === "\\" ? 2 : 1;
-    end++;
+/** The keys an arm's statement starts with and what follows its `=>`, or null
+ *  for a statement that is not an arm. Several keys are written with commas
+ *  between them, `30, 38, 41 => same as case 29`, and a quoted key may hold a
+ *  comma or ` => ` itself. */
+function armOf(stmt: string): { keys: string[]; rest: string } | null {
+  const keys: string[] = [];
+  let from = 0;
+  let i = 0;
+  while (i < stmt.length) {
+    const c = stmt[i];
+    if (c === '"' || c === "'") {
+      i++;
+      while (i < stmt.length && stmt[i] !== c) i += stmt[i] === "\\" ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (stmt.startsWith(", ", i)) {
+      keys.push(stmt.slice(from, i));
+      i += 2;
+      from = i;
+      continue;
+    }
+    if (stmt.startsWith(" => ", i)) {
+      if (i === from) return null;
+      keys.push(stmt.slice(from, i));
+      return { keys, rest: stmt.slice(i + 4) };
+    }
+    // A key is one word or one quoted string, so a space or a bracket before
+    // the `=>` means this is not an arm.
+    if (c === " " || c === "(" || c === "{" || c === ":") return null;
+    i++;
   }
-  const at = trimmed.indexOf(" => ", end);
-  if (at <= 0) return null;
-  return { key: trimmed.slice(0, at), rest: trimmed.slice(at + 4) };
+  return null;
 }
 
 const SAME_AS = /^same as case (.+?)(?:, but (big|little)-endian)?$/;
+const SAME_TYPE = /^type (\S+) = same as type (\S+?)(?:, but (big|little)-endian)?$/;
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
@@ -133,11 +159,17 @@ export function indexTemplate(text: string): TemplateIndex {
   const typeSpans = new Map<string, readonly [number, number]>();
   const stmtEnd = new Map<number, number>();
   const sameAs: SameAs[] = [];
+  const alias = new Map<string, string>();
+  /** `same as type` lines, whose type may be written further down. */
+  const sameType: { line: number; target: string; order: ByteOrder | null }[] = [];
   let root: Block | null = null;
   const stack: Frame[] = [];
   /** The statement being read: its first line and kind. */
   let stmt = -1;
   let stmtKind: LineKind = "plain";
+  /** The arms of the choice the statement is an arm of, when it starts at
+   *  that choice's arm indentation. */
+  let stmtArms: Map<string, number> | null = null;
   let topType: { name: string; start: number } | null = null;
 
   const closeTopType = (last: number): void => {
@@ -150,8 +182,7 @@ export function indexTemplate(text: string): TemplateIndex {
     stmtEnd.set(stmt, last);
     const first = stmt;
     stmt = -1;
-    if (stmtKind === "comment" || !ln(last).trimEnd().endsWith("{")) return;
-    const ind = indentOf(ln(first));
+    if (stmtKind === "comment") return;
     // The statement joined back up, remembering where each line starts in it.
     const starts: number[] = [];
     let joined = "";
@@ -160,6 +191,25 @@ export function indexTemplate(text: string): TemplateIndex {
       starts.push(joined.length);
       joined += ln(i).trim();
     }
+    const typed = indentOf(ln(first)) === 0 ? SAME_TYPE.exec(joined) : null;
+    if (typed !== null) {
+      const [, name = "", target = "", order] = typed;
+      alias.set(name, target);
+      sameType.push({ line: first, target, order: order === "big" || order === "little" ? order : null });
+    }
+    if (stmtArms !== null) {
+      const arm = armOf(joined);
+      if (arm !== null) {
+        const same = SAME_AS.exec(arm.rest.trimEnd());
+        if (same !== null) {
+          const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
+          sameAs.push({ line: first, target: stmtArms.get(same[1] ?? "") ?? null, order });
+        }
+        for (const k of arm.keys) if (!stmtArms.has(k)) stmtArms.set(k, first);
+      }
+    }
+    if (!ln(last).trimEnd().endsWith("{")) return;
+    const ind = indentOf(ln(first));
     const body = joined.replace(/\{\s*$/, "");
     const o = opener(body);
     let block: Block | null = null;
@@ -216,17 +266,7 @@ export function indexTemplate(text: string): TemplateIndex {
       const name = trimmed.slice(0, trimmed.indexOf(": "));
       if (!top.block.fields.has(name)) top.block.fields.set(name, i);
     } else stmtKind = "plain";
-    if (top?.arms != null && d === top.contentIndent) {
-      const arm = armOf(trimmed);
-      if (arm !== null) {
-        const same = SAME_AS.exec(arm.rest.trimEnd());
-        if (same !== null) {
-          const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
-          sameAs.push({ line: i, target: top.arms.get(same[1] ?? "") ?? null, order });
-        }
-        if (!top.arms.has(arm.key)) top.arms.set(arm.key, i);
-      }
-    }
+    stmtArms = top?.arms != null && d === top.contentIndent ? top.arms : null;
     kinds[i] = stmtKind;
     if (stmtKind !== "comment" && line.trimEnd().endsWith("{")) finish(i);
   }
@@ -236,6 +276,7 @@ export function indexTemplate(text: string): TemplateIndex {
     if (f.block !== null) f.block.end = lines.length - 1;
   }
   closeTopType(lines.length - 1);
+  for (const t of sameType) sameAs.push({ line: t.line, target: typeSpans.get(t.target)?.[0] ?? null, order: t.order });
   // A name declared twice on one line is coloured once.
   for (const d of decls) {
     const seen = new Set<number>();
@@ -246,7 +287,7 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs, alias };
 }
 
 /** The byte order a block is also read in: the order of a `same as case N,
@@ -268,6 +309,70 @@ function orderOf(index: TemplateIndex, b: Block): ByteOrder | null {
 function inOrder(said: string, order: ByteOrder): string {
   const to = order === "big" ? "be" : "le";
   return said.replace(/(\d+)(le|be)(?![a-z0-9])/g, (m: string, bits: string) => (Number(bits) > 8 ? bits + to : m));
+}
+
+/** The byte orders of the numbers wider than a byte in some type text, first
+ *  one first: `u32be` and a node's `u32 be` are big, `u8le` is none. */
+function wideOrders(said: string): ByteOrder[] {
+  const out: ByteOrder[] = [];
+  for (const m of said.matchAll(/(\d+) ?(le|be)(?![a-z0-9])/g)) {
+    if (Number(m[1]) > 8) out.push(m[2] === "be" ? "big" : "little");
+  }
+  return out;
+}
+
+/** What a field's line says its type is: the text after the field's name. */
+function typeText(index: TemplateIndex, line: number): string {
+  const l = index.lines[line] ?? "";
+  const at = l.indexOf(": ");
+  return at < 0 ? "" : l.slice(at + 2);
+}
+
+/**
+ * The byte order a field was read in, when that is not the order its line
+ * writes: the field was read through a `same as ..., but little-endian` line
+ * (an arm's or a type's) that points at the arm or type the line is in.
+ * Null when the line is in no such arm or type, when it writes no number wider
+ * than a byte, or when the order it was read in is the one it writes.
+ *
+ * The order it was read in comes from the node's own type (`u32 le`) or,
+ * when that names no byte order (an enumeration's name), from the types of
+ * the other fields of the same structure, which `siblings` is asked for only
+ * then. A field whose type and line differ
+ * in byte order can only have been read through such a line, and such a line
+ * sets every number in the arm to one order, so one of them is enough.
+ */
+export function readAs(
+  index: TemplateIndex,
+  line: number,
+  node: { name: string; type: string },
+  siblings: () => readonly { name: string; type: string }[],
+): ByteOrder | null {
+  const reached = index.sameAs.some((s) => {
+    if (s.order === null || s.target === null) return false;
+    const [a, z] = fieldSpan(index, s.target);
+    return line >= a && line <= z;
+  });
+  if (!reached) return null;
+  const written = wideOrders(typeText(index, line));
+  if (written.length === 0) return null;
+  const differs = (c: { type: string }, at: number): ByteOrder | null => {
+    const was = wideOrders(c.type)[0];
+    const says = wideOrders(typeText(index, at))[0];
+    return was !== undefined && says !== undefined && was !== says ? was : null;
+  };
+  let read: ByteOrder | null = null;
+  if (wideOrders(node.type).length > 0) read = differs(node, line);
+  else {
+    // Asked for only here, since they may not have been read yet.
+    const block = index.blocks.find((b) => b.fields.get(node.name) === line);
+    for (const c of siblings()) {
+      const at = block?.fields.get(c.name);
+      read = at === undefined ? null : differs(c, at);
+      if (read !== null) break;
+    }
+  }
+  return read !== null && written.some((w) => w !== read) ? read : null;
 }
 
 /** The lines a field covers: its own statement and every line nested under it. */
@@ -300,13 +405,14 @@ export function blocksNamed(index: TemplateIndex, name: string, scope: readonly 
 
 /** Where to look for the structure a field's value is: the field's own lines,
  *  and every top-level type its statement names (`value: Value` reaches the
- *  structures written inside `type Value = switch ...`). */
+ *  structures written inside `type Value = switch ...`). A type written as
+ *  `same as type` another is looked for in that other. */
 function scopeOf(index: TemplateIndex, line: number): [number, number][] {
   const out: [number, number][] = [[...fieldSpan(index, line)]];
   const last = index.stmtEnd.get(line) ?? line;
   const words = index.lines.slice(line, last + 1).join(" ").match(/[A-Za-z_][\w.]*/g) ?? [];
   for (const w of words) {
-    const span = index.typeSpans.get(w);
+    const span = index.typeSpans.get(index.alias.get(w) ?? w);
     if (span !== undefined) out.push([span[0], span[1]]);
   }
   return out;
@@ -382,9 +488,18 @@ export function findLine(
   chain: readonly ChainNode[],
   children: (depth: number) => readonly { name: string; type: string }[] | null,
 ): number | null {
+  return findLineAt(index, chain, children)?.line ?? null;
+}
+
+/** [`findLine`]'s line, and the place in `chain` of the node it declares. */
+export function findLineAt(
+  index: TemplateIndex,
+  chain: readonly ChainNode[],
+  children: (depth: number) => readonly { name: string; type: string }[] | null,
+): { line: number; depth: number } | null {
   const head = chain[0];
   if (head === undefined) return null;
-  let line: number | null = null;
+  let found: { line: number; depth: number } | null = null;
   let scope: [number, number][] = [];
   let blocks: readonly Block[] = index.root !== null && index.root.name === head.type ? [index.root] : blocksNamed(index, head.type, []);
   for (let i = 1; i < chain.length; i++) {
@@ -397,16 +512,16 @@ export function findLine(
       if (having.length > 1) {
         const kids = children(i - 1);
         chosen = kids === null ? null : bestFit(index, having, kids);
-        if (chosen === null) return line;
+        if (chosen === null) return found;
       }
       if (chosen !== null) {
-        line = chosen.fields.get(n.name)!;
-        scope = scopeOf(index, line);
+        found = { line: chosen.fields.get(n.name)!, depth: i };
+        scope = scopeOf(index, found.line);
       }
     }
     blocks = blocksNamed(index, n.type, scope);
   }
-  return line;
+  return found;
 }
 
 /** A run of a line with one colour. `cls` is empty for plain text. */

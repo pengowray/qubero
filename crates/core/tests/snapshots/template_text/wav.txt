@@ -266,17 +266,8 @@ type Chunk (named by id, contents body) {
                 _ => text[remaining] encoding unknown
               }
             }
-            'TPE1' => same as case 'TIT2'
-            'TPE2' => same as case 'TIT2'
-            'TALB' => same as case 'TIT2'
-            'TCON' => same as case 'TIT2'
-            'TRCK' => same as case 'TIT2'
-            'TYER' => same as case 'TIT2'
-            'TDRC' => same as case 'TIT2'
-            'TCOM' => same as case 'TIT2'
-            'TENC' => same as case 'TIT2'
-            'TSSE' => same as case 'TIT2'
-            'TPOS' => same as case 'TIT2'
+            'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC', 'TSSE',
+                'TPOS' => same as case 'TIT2'
             'COMM' => Comment {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -305,17 +296,8 @@ type Chunk (named by id, contents body) {
                 _ => text[remaining] encoding unknown
               }
             }
-            'TPE1' => same as case 'TIT2'
-            'TPE2' => same as case 'TIT2'
-            'TALB' => same as case 'TIT2'
-            'TCON' => same as case 'TIT2'
-            'TRCK' => same as case 'TIT2'
-            'TYER' => same as case 'TIT2'
-            'TDRC' => same as case 'TIT2'
-            'TCOM' => same as case 'TIT2'
-            'TENC' => same as case 'TIT2'
-            'TSSE' => same as case 'TIT2'
-            'TPOS' => same as case 'TIT2'
+            'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC', 'TSSE',
+                'TPOS' => same as case 'TIT2'
             'COMM' => Comment {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -956,16 +938,8 @@ type Chunk (named by id, contents body) {
                         _ => text[remaining] encoding unknown
                       }
                     }
-                    'TP1' => same as case 'TT2'
-                    'TP2' => same as case 'TT2'
-                    'TAL' => same as case 'TT2'
-                    'TCO' => same as case 'TT2'
-                    'TRK' => same as case 'TT2'
-                    'TYE' => same as case 'TT2'
-                    'TCM' => same as case 'TT2'
-                    'TEN' => same as case 'TT2'
-                    'TSS' => same as case 'TT2'
-                    'TPA' => same as case 'TT2'
+                    'TP1', 'TP2', 'TAL', 'TCO', 'TRK', 'TYE', 'TCM', 'TEN', 'TSS',
+                        'TPA' => same as case 'TT2'
                     'COM' => Comment {
                       encoding: u8be enum TextEncoding {
                         0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1004,17 +978,8 @@ type Chunk (named by id, contents body) {
                           _ => text[remaining] encoding unknown
                         }
                       }
-                      'TPE1' => same as case 'TIT2'
-                      'TPE2' => same as case 'TIT2'
-                      'TALB' => same as case 'TIT2'
-                      'TCON' => same as case 'TIT2'
-                      'TRCK' => same as case 'TIT2'
-                      'TYER' => same as case 'TIT2'
-                      'TDRC' => same as case 'TIT2'
-                      'TCOM' => same as case 'TIT2'
-                      'TENC' => same as case 'TIT2'
-                      'TSSE' => same as case 'TIT2'
-                      'TPOS' => same as case 'TIT2'
+                      'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC',
+                          'TSSE', 'TPOS' => same as case 'TIT2'
                       'COMM' => Comment {
                         encoding: u8be enum TextEncoding {
                           0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1043,17 +1008,8 @@ type Chunk (named by id, contents body) {
                           _ => text[remaining] encoding unknown
                         }
                       }
-                      'TPE1' => same as case 'TIT2'
-                      'TPE2' => same as case 'TIT2'
-                      'TALB' => same as case 'TIT2'
-                      'TCON' => same as case 'TIT2'
-                      'TRCK' => same as case 'TIT2'
-                      'TYER' => same as case 'TIT2'
-                      'TDRC' => same as case 'TIT2'
-                      'TCOM' => same as case 'TIT2'
-                      'TENC' => same as case 'TIT2'
-                      'TSSE' => same as case 'TIT2'
-                      'TPOS' => same as case 'TIT2'
+                      'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC',
+                          'TSSE', 'TPOS' => same as case 'TIT2'
                       'COMM' => Comment {
                         encoding: u8be enum TextEncoding {
                           0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1470,17 +1426,8 @@ type ChunkBE = Chunk (named by id, contents body) {
                 _ => text[remaining] encoding unknown
               }
             }
-            'TPE1' => same as case 'TIT2'
-            'TPE2' => same as case 'TIT2'
-            'TALB' => same as case 'TIT2'
-            'TCON' => same as case 'TIT2'
-            'TRCK' => same as case 'TIT2'
-            'TYER' => same as case 'TIT2'
-            'TDRC' => same as case 'TIT2'
-            'TCOM' => same as case 'TIT2'
-            'TENC' => same as case 'TIT2'
-            'TSSE' => same as case 'TIT2'
-            'TPOS' => same as case 'TIT2'
+            'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC', 'TSSE',
+                'TPOS' => same as case 'TIT2'
             'COMM' => Comment {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1509,17 +1456,8 @@ type ChunkBE = Chunk (named by id, contents body) {
                 _ => text[remaining] encoding unknown
               }
             }
-            'TPE1' => same as case 'TIT2'
-            'TPE2' => same as case 'TIT2'
-            'TALB' => same as case 'TIT2'
-            'TCON' => same as case 'TIT2'
-            'TRCK' => same as case 'TIT2'
-            'TYER' => same as case 'TIT2'
-            'TDRC' => same as case 'TIT2'
-            'TCOM' => same as case 'TIT2'
-            'TENC' => same as case 'TIT2'
-            'TSSE' => same as case 'TIT2'
-            'TPOS' => same as case 'TIT2'
+            'TPE1', 'TPE2', 'TALB', 'TCON', 'TRCK', 'TYER', 'TDRC', 'TCOM', 'TENC', 'TSSE',
+                'TPOS' => same as case 'TIT2'
             'COMM' => Comment {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1584,71 +1522,7 @@ type ChunkBE = Chunk (named by id, contents body) {
       (0 < remaining)]
 }
 
-type ListItem = Chunk {
-  id: text[4] ascii
-  size: u32le
-  body: sized(size) switch id {
-    'labl' => Label {
-      cue_id: u32le
-      text: text until 0x00 or end latin1
-    }
-    'note' => same as case 'labl'
-    'ltxt' => LabelledText {
-      cue_id: u32le
-      sample_length: u32le
-      purpose: text[4] ascii
-      country: u16le
-      language: u16le
-      dialect: u16le
-      code_page: u16le
-      text: text[remaining] padded with 0x00 latin1
-    }
-    'data' => Samples {
-      samples: switch earlier(body.format) {
-        0xfffe => switch earlier(body.extra.sub_format.format) {
-          1 => switch earlier(body.bits_per_sample) {
-            8 => u8be[remaining / 1]
-            16 => i16le[remaining / 2]
-            24 => i24le[remaining / 3]
-            32 => i32le[remaining / 4]
-            _ => bytes[remaining]
-          }
-          3 => switch earlier(body.bits_per_sample) {
-            32 => f32le[remaining / 4]
-            64 => f64le[remaining / 8]
-            _ => bytes[remaining]
-          }
-          _ => bytes[remaining]
-        }
-        _ => switch earlier(body.format) {
-          1 => switch earlier(body.bits_per_sample) {
-            8 => u8be[remaining / 1]
-            16 => i16le[remaining / 2]
-            24 => i24le[remaining / 3]
-            32 => i32le[remaining / 4]
-            _ => bytes[remaining]
-          }
-          3 => switch earlier(body.bits_per_sample) {
-            32 => f32le[remaining / 4]
-            64 => f64le[remaining / 8]
-            _ => bytes[remaining]
-          }
-          _ => bytes[remaining]
-        }
-      }  valid finite
-          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
-              column word channel, named [left, right], describes
-              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
-              earlier(body.bits_per_sample)]
-    }
-    'slnt' => Silence {
-      // How long the silence is, in samples per channel.
-      sample_count: u32le
-    }
-    _ => text until 0x00 or end latin1
-  }
-  pad: bytes[(size - size / 2 * 2) * (0 < remaining)]
-}
+type ListItem = same as type ListItemBE, but little-endian
 
 type ListItemBE = Chunk {
   id: text[4] ascii

@@ -1423,8 +1423,17 @@ button.welcome-crystal {
 }
 /* Muted text on the marked line's fill is under 4.5:1 in both themes. */
 .tp-line.is-at .tp-kw,
-.tp-line.is-at .tp-comment {
+.tp-line.is-at .tp-comment,
+.tp-line.is-at[data-note]::after {
   color: color-mix(in srgb, var(--muted) 60%, var(--fg));
+}
+/* The byte order the marked field was read in, when its line writes the other
+   one. In the UI font so it does not read as part of the notation, and drawn
+   from `data-note` so that copying a selection leaves it out. */
+.tp-line.is-at[data-note]::after {
+  content: attr(data-note);
+  margin-left: 2ch;
+  font-family: var(--sans);
 }
 .tp-field {
   color: var(--accent);

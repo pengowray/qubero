@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { findLine, indexTemplate, tokenizeLine, type ChainNode } from "../src/templateindex.ts";
+import { findLine, findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode } from "../src/templateindex.ts";
 
 const GGUF = `template gguf
 
@@ -296,4 +296,153 @@ test("a field read by an arm the same as another lands in that other arm", () =>
   const idx = indexTemplate(SHORT);
   const n = findLine(idx, [node("file", "ELF"), node("table", "Symbol"), node("value", "u32 le")], () => null);
   assert.equal(line(SHORT, n), "      value: u32le");
+});
+
+// A switch whose arms share `same as` lines, one of them folded because its
+// keys do not fit on one line.
+const GROUPED = `template macho
+
+root MachO {
+  kind: u32be
+  command: switch kind {
+    29 => Signature {
+      offset: u32le
+    }
+    30, 38, 41 => same as case 29
+    2 => u8be
+    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36,
+        37, 39, 40 => same as case 29, but big-endian
+    "a, b", 'fmt ' => same as case 29
+    _ => bytes[0]
+  }
+}
+`;
+
+test("a line of several keys is one same-as line, folded or not", () => {
+  const idx = indexTemplate(GROUPED);
+  const text = (n: number | null): string | null => line(GROUPED, n);
+  assert.deepEqual(
+    idx.sameAs.map((s) => [text(s.line)?.trim().slice(0, 10), text(s.target)?.trim(), s.order]),
+    [
+      ["30, 38, 41", "29 => Signature {", null],
+      ["12, 13, 14", "29 => Signature {", "big"],
+      ['"a, b", \'f', "29 => Signature {", null],
+    ],
+  );
+  // The folded line's second half is not a statement of its own.
+  const folded = GROUPED.split("\n").findIndex((l) => l.trimStart().startsWith("37, 39"));
+  assert.equal(idx.stmtEnd.get(folded), undefined);
+});
+
+// A TIFF inside a PNG, with the big-endian directory written as one line that
+// names the little-endian one, which comes after it.
+const TYPED = `template png
+
+root PNG {
+  tiff: switch order {
+    'II' => TIFF {
+      ifd: at(8 from window) tiff.Ifd.le
+    }
+    'MM' => same as case 'II', but big-endian
+    _ => bytes[0]
+  }
+}
+
+type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian
+
+type tiff.Ifd.le = Ifd (contents entries) {
+  count: u16le
+  entries: Entry {
+    tag: u16le
+  }[count]
+}
+`;
+
+test("a same-as type line points at the type it names, written below it", () => {
+  const idx = indexTemplate(TYPED);
+  const text = (n: number | null): string | null => line(TYPED, n);
+  assert.deepEqual(
+    idx.sameAs.map((s) => [text(s.line), text(s.target), s.order]),
+    [
+      ["    'MM' => same as case 'II', but big-endian", "    'II' => TIFF {", "big"],
+      ["type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian", "type tiff.Ifd.le = Ifd (contents entries) {", "big"],
+    ],
+  );
+  assert.equal(idx.alias.get("tiff.Ifd.be"), "tiff.Ifd.le");
+});
+
+test("a field inside a type written as a same-as line is found in the type it names", () => {
+  const idx = indexTemplate(TYPED);
+  const chain = [
+    node("file", "PNG"),
+    node("tiff", "TIFF"),
+    node("ifd", "at → tiff.Ifd.be"),
+    node("ifd", "Ifd"),
+    node("entries", "Entry[]", true),
+    node("[0] width", "Entry"),
+    node("tag", "u16 be"),
+  ];
+  assert.equal(line(TYPED, findLine(idx, chain, () => null)), "    tag: u16le");
+  assert.equal(line(TYPED, findLine(idx, chain.slice(0, 4).concat(node("count", "u16 be")), () => null)), "  count: u16le");
+});
+
+// Mach-O, whose little-endian files are read by an arm that names the
+// big-endian one.
+const MACHO = `template macho
+
+root MachO
+
+type MachO = switch peek(u32be) {
+  0xfeedfacf => MachOFile {
+    magic: u32be
+    cpu_type: u32be enum CpuType {
+      0x07 = x86
+    }
+    level: u8be
+  }
+  0xcffaedfe => same as case 0xfeedfacf, but little-endian
+  _ => Other {
+    magic: u32be
+  }
+}
+`;
+
+test("a field read in the other byte order from its line says which", () => {
+  const idx = indexTemplate(MACHO);
+  const at = (s: string): number => MACHO.split("\n").findIndex((l) => l.includes(s));
+  const none = (): never[] => [];
+  const magic = at("magic: u32be");
+  assert.equal(readAs(idx, magic, { name: "magic", type: "u32 le" }, none), "little");
+  // A big-endian file reads the line as it is written.
+  assert.equal(readAs(idx, magic, { name: "magic", type: "u32 be" }, none), null);
+  // An enumeration's type names no byte order, so the other fields say it.
+  const kids = [
+    { name: "magic", type: "u32 le" },
+    { name: "cpu_type", type: "CpuType" },
+    { name: "level", type: "u8" },
+  ];
+  assert.equal(readAs(idx, at("cpu_type: u32be"), { name: "cpu_type", type: "CpuType" }, () => kids), "little");
+  // One byte has no byte order to differ in.
+  assert.equal(readAs(idx, at("level: u8be"), { name: "level", type: "u8" }, () => kids), null);
+  // A line no `but little-endian` line points at is read as written.
+  const other = MACHO.split("\n").findIndex((l, i) => i > at("_ => Other") && l.includes("magic: u32be"));
+  assert.equal(readAs(idx, other, { name: "magic", type: "u32 le" }, none), null);
+});
+
+test("a field in a type written out for its counterpart says the counterpart's byte order", () => {
+  const idx = indexTemplate(TYPED);
+  const tag = TYPED.split("\n").findIndex((l) => l.includes("tag: u16le"));
+  assert.equal(readAs(idx, tag, { name: "tag", type: "u16 be" }, () => []), "big");
+  assert.equal(readAs(idx, tag, { name: "tag", type: "u16 le" }, () => []), null);
+  // findLineAt says which node of the chain the line is for.
+  const chain = [node("file", "PNG"), node("tiff", "TIFF"), node("ifd", "at → tiff.Ifd.be"), node("ifd", "Ifd"), node("count", "u16 be")];
+  const found = findLineAt(idx, chain, () => null);
+  assert.equal(found?.depth, 4);
+  assert.equal(line(TYPED, found?.line ?? null), "  count: u16le");
+});
+
+test("a field read through any key of a shared line is found in the arm it names", () => {
+  const idx = indexTemplate(GROUPED);
+  const n = findLine(idx, [node("file", "MachO"), node("command", "Signature"), node("offset", "u32 be")], () => null);
+  assert.equal(line(GROUPED, n), "      offset: u32le");
 });

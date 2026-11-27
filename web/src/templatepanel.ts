@@ -11,7 +11,7 @@
 
 import type { Doc } from "./doc.ts";
 import { SIDEBAR } from "./strings.ts";
-import { findLine, indexTemplate, tokenizeLine, type ChainNode, type TemplateIndex } from "./templateindex.ts";
+import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type TemplateIndex } from "./templateindex.ts";
 
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
  *  empty chunks are sized from it before any line is drawn. */
@@ -37,6 +37,9 @@ export class TemplatePanel {
   /** Bumped on every rebuild, so idle work for an old text stops. */
   private generation = 0;
   private marked: number | null = null;
+  /** Said at the end of the marked line: the byte order its field was read
+   *  in, when that is not the one the line writes. */
+  private note: string | null = null;
   private visible = false;
   /** The template may have changed since the text was fetched. */
   private stale = true;
@@ -190,7 +193,7 @@ export class TemplatePanel {
           row.append(span);
         }
       }
-      if (i === this.marked) row.classList.add("is-at");
+      if (i === this.marked) this.dress(row);
       this.lineEls[i] = row;
       frag.append(row);
     }
@@ -225,14 +228,21 @@ export class TemplatePanel {
     }
     const p = path;
     let loading = false;
-    const line = findLine(index, chain, (depth) => {
+    const kidsAt = (depth: number): readonly { name: string; type: string }[] | null => {
       const kids = this.childrenOf(p.slice(0, depth));
       if (kids === "loading") loading = true;
       return kids === "loading" ? null : kids;
-    });
+    };
+    const found = findLineAt(index, chain, kidsAt);
+    let note: string | null = null;
+    const node = found === null ? undefined : chain[found.depth];
+    if (found !== null && node !== undefined) {
+      const order = readAs(index, found.line, node, () => kidsAt(found.depth - 1) ?? []);
+      if (order !== null) note = SIDEBAR.readAs(order);
+    }
     // Marked now at the enclosing line, and again when the children arrive.
     this.waiting = loading;
-    this.mark(line);
+    this.mark(found?.line ?? null, note);
   }
 
   private childrenOf(path: readonly number[]): readonly { name: string; type: string }[] | null | "loading" {
@@ -250,15 +260,30 @@ export class TemplatePanel {
     return kids;
   }
 
-  private mark(line: number | null): void {
-    if (line === this.marked) return;
-    if (this.marked !== null) this.lineEls[this.marked]?.classList.remove("is-at");
+  private mark(line: number | null, note: string | null = null): void {
+    if (line === this.marked && note === this.note) return;
+    const moved = line !== this.marked;
+    if (this.marked !== null) {
+      const old = this.lineEls[this.marked];
+      old?.classList.remove("is-at");
+      delete old?.dataset.note;
+    }
     this.marked = line;
+    this.note = note;
     if (line === null) return;
     const chunk = this.chunks[Math.floor(line / CHUNK)];
     if (chunk !== undefined) this.fill(chunk);
-    this.lineEls[line]?.classList.add("is-at");
-    this.reveal(line);
+    const row = this.lineEls[line];
+    if (row !== undefined) this.dress(row);
+    if (moved) this.reveal(line);
+  }
+
+  /** Mark a drawn row as the marked line, with its note. The note is drawn by
+   *  CSS from `data-note`, so it is not part of the text a selection copies. */
+  private dress(row: HTMLElement): void {
+    row.classList.add("is-at");
+    if (this.note === null) delete row.dataset.note;
+    else row.dataset.note = this.note;
   }
 
   /** Scroll the marked line into view, leaving the view alone if it already is. */

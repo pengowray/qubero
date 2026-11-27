@@ -167,6 +167,7 @@ pub fn jpeg() -> Template {
         ),
     )
     .with_part(&exif)
+    .with_part(&super::icc::icc_part())
 }
 
 /// One segment: which marker, and then whatever that marker means.
