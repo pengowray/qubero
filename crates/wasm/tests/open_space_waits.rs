@@ -1063,9 +1063,8 @@ fn a_listing_of_three_large_entries_lists_them_all() {
 /// it waited. Now it reads the run through the store a window at a time and
 /// keeps no copy: each "pending" reply names the chunks of one window, at
 /// most six of 64 KiB, and while the pass waits for them the editor says how
-/// far unpacking has got. No chunk is asked for twice but the first and the
-/// last, which the template reads before the pass starts, and the tab reads
-/// the stream's bytes.
+/// far unpacking has got. Every chunk of the file is asked for once, and the
+/// tab reads the stream's bytes.
 #[test]
 fn open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time() {
     let text = long_lines();
@@ -1097,7 +1096,7 @@ fn open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time
                 for c in chunks {
                     let n = times.entry(c).or_default();
                     *n += 1;
-                    assert!(*n <= 2, "chunk {c} asked for {n} times");
+                    assert!(*n <= 1, "chunk {c} asked for {n} times");
                     feed(&mut ed, &file, c);
                 }
             }
@@ -1106,11 +1105,8 @@ fn open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time
         }
         assert!(waits < 1000, "no end to the waits");
     };
-    // The waits for the header and the trailer come before the pass starts.
-    assert!(said + 2 >= waits && waits > file.len() / (6 * CHUNK), "{waits} waits, {said} of them saying how far unpacking had got");
-    let last = (file.len().div_ceil(CHUNK) - 1) as u64;
-    let twice: Vec<u64> = times.iter().filter(|(_, n)| **n > 1).map(|(c, _)| *c).collect();
-    assert!(twice.iter().all(|&c| c == 0 || c == last), "chunks {twice:?} asked for twice");
+    // The wait for the zlib header comes before the pass starts.
+    assert!(said + 1 == waits && waits > file.len() / (6 * CHUNK), "{waits} waits, {said} of them saying how far unpacking had got");
     assert!(widest <= 6, "a reply named {widest} chunks");
     assert_eq!(times.len(), file.len().div_ceil(CHUNK), "every chunk of the file");
     assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
