@@ -1222,16 +1222,34 @@ pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedSte
     decode_step_at(data, 0, trace, step)
 }
 
+/// The bytes of the run [`decode_step_at`] reads to take `step` apart, counted
+/// from the run's front: from the byte the step's first bit is in to the byte
+/// after the one its last bit is in, at most 7. `None` for a step it does not
+/// take apart, so that a caller reads nothing for one: a stored block's
+/// payload, or a coarse block's one opaque step, which can be as long as the
+/// block.
+pub fn step_bytes(trace: &Trace, step: usize) -> Option<std::ops::Range<u64>> {
+    let s = trace.step(step)?;
+    is_coded(&s.kind).then(|| s.in_bits.start / 8..s.in_bits.end.div_ceil(8))
+}
+
+/// Whether a step is a symbol read through a Huffman table, the steps
+/// [`decode_step_at`] takes apart. Stored payload and the one opaque step a
+/// coarsened block leaves behind are steps of a block and are not symbols of
+/// one. Neither was read through a Huffman table, so neither has a width to
+/// give back.
+fn is_coded(kind: &StepKind) -> bool {
+    matches!(kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::EndOfBlock)
+}
+
 /// [`decode_step`] from a window of the run: `data` is bytes of the run from
 /// byte `at` on, which need be no more than the bytes the step's bits are in,
-/// at most 7. The trace's bit positions still count from the run's front.
-/// `None` too for a window that does not hold the step's bits.
+/// at most 7; [`step_bytes`] says which. The trace's bit positions still count
+/// from the run's front. `None` too for a window that does not hold the step's
+/// bits.
 pub fn decode_step_at(data: &[u8], at: u64, trace: &Trace, step: usize) -> Option<DecodedStep> {
     let s = trace.step(step)?;
-    // Stored payload and the one opaque step a coarsened block leaves behind
-    // are steps of a block and are not symbols of one. Neither was read
-    // through a Huffman table, so neither has a width to give back.
-    if !matches!(s.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::EndOfBlock) {
+    if !is_coded(&s.kind) {
         return None;
     }
     let (i, block) = trace.blocks().iter().enumerate().find(|(_, b)| b.steps.contains(&(step as u32)))?;
