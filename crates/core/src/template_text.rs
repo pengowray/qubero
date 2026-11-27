@@ -79,6 +79,8 @@
 //!              | "machinery" NAME {NAME}            fields that are this structure's
 //!                                                   own plumbing, whatever they decide
 //!              | "payload" NAME {NAME}              fields that are the point
+//!              | "positions" NAME {NAME}            fields that hold a position in the
+//!                                                   file nothing here reads as one
 //!              | "line" part {"then" part}          how one reads on a single line
 //!              | "colour" NAME {NAME} ["alpha" NAME] ["depth" expr]
 //!                                                   its fields are the samples of a
@@ -601,6 +603,9 @@ fn struct_attrs(def: &StructDef) -> Vec<String> {
     }
     if !def.payload.is_empty() {
         a.push(format!("payload {}", join_names(&def.payload)));
+    }
+    if !def.positions.is_empty() {
+        a.push(format!("positions {}", join_names(&def.positions)));
     }
     if !def.line.is_empty() {
         let parts: Vec<String> = def.line.iter().map(line_part).collect();
