@@ -25,6 +25,20 @@ export type Block = {
   readonly fields: Map<string, number>;
   /** True for one written at the top level, after `type` or `root`. */
   readonly top: boolean;
+  /** The opening statement from the name on, lines joined: `Body (contents
+   *  contents)` for `0xffe2 => Body (contents contents) {`. */
+  readonly head: string;
+};
+
+/** One `switch` or `match` block. */
+export type Choice = {
+  /** First line of the statement that opens it. */
+  readonly line: number;
+  /** The field it reads, when that is one name: `marker` in `switch marker`.
+   *  Null for an expression, `switch peek(u32be)`. */
+  readonly on: string | null;
+  /** Each arm's key, as written, to the arm's first line. `_` is the default. */
+  readonly arms: Map<string, number>;
 };
 
 export type TemplateIndex = {
@@ -47,6 +61,10 @@ export type TemplateIndex = {
   readonly sameAs: readonly SameAs[];
   /** A type written as `type B = same as type A`, to the type it names. */
   readonly alias: ReadonlyMap<string, string>;
+  /** An arm's first line, to the switch or match it is an arm of. */
+  readonly armOf: ReadonlyMap<number, Choice>;
+  /** A structure's first line, to the structure. */
+  readonly opens: ReadonlyMap<number, Block>;
 };
 
 /** One `same as case` or `same as type` line. `target` is the first line of
@@ -56,15 +74,14 @@ export type SameAs = { readonly line: number; readonly target: number | null; re
 
 export type ByteOrder = "big" | "little";
 
-/** `arms` is set on the frame a `switch` or `match` opens: each arm's key, to
- *  the arm's first line. */
-type Frame = { contentIndent: number; block: Block | null; arms: Map<string, number> | null };
+/** `choice` is set on the frame a `switch` or `match` opens. */
+type Frame = { contentIndent: number; block: Block | null; choice: Choice | null };
 
 /** The keys an arm's statement starts with and what follows its `=>`, or null
  *  for a statement that is not an arm. Several keys are written with commas
  *  between them, `30, 38, 41 => same as case 29`, and a quoted key may hold a
  *  comma or ` => ` itself. */
-function armOf(stmt: string): { keys: string[]; rest: string } | null {
+function armKeys(stmt: string): { keys: string[]; rest: string } | null {
   const keys: string[] = [];
   let from = 0;
   let i = 0;
@@ -97,6 +114,8 @@ function armOf(stmt: string): { keys: string[]; rest: string } | null {
 
 const SAME_AS = /^same as case (.+?)(?:, but (big|little)-endian)?$/;
 const SAME_TYPE = /^type (\S+) = same as type (\S+?)(?:, but (big|little)-endian)?$/;
+/** The one name a choice reads, at the end of its statement without the `{`. */
+const CHOICE_ON = /(?:^|[\s:=(])(?:switch|match) ([A-Za-z_]\w*)\s*$/;
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
@@ -160,6 +179,8 @@ export function indexTemplate(text: string): TemplateIndex {
   const stmtEnd = new Map<number, number>();
   const sameAs: SameAs[] = [];
   const alias = new Map<string, string>();
+  const armOf = new Map<number, Choice>();
+  const opens = new Map<number, Block>();
   /** `same as type` lines, whose type may be written further down. */
   const sameType: { line: number; target: string; order: ByteOrder | null }[] = [];
   let root: Block | null = null;
@@ -167,9 +188,9 @@ export function indexTemplate(text: string): TemplateIndex {
   /** The statement being read: its first line and kind. */
   let stmt = -1;
   let stmtKind: LineKind = "plain";
-  /** The arms of the choice the statement is an arm of, when it starts at
-   *  that choice's arm indentation. */
-  let stmtArms: Map<string, number> | null = null;
+  /** The choice the statement is an arm of, when it starts at that choice's
+   *  arm indentation. */
+  let stmtChoice: Choice | null = null;
   let topType: { name: string; start: number } | null = null;
 
   const closeTopType = (last: number): void => {
@@ -197,15 +218,17 @@ export function indexTemplate(text: string): TemplateIndex {
       alias.set(name, target);
       sameType.push({ line: first, target, order: order === "big" || order === "little" ? order : null });
     }
-    if (stmtArms !== null) {
-      const arm = armOf(joined);
+    if (stmtChoice !== null) {
+      const arm = armKeys(joined);
       if (arm !== null) {
+        const arms = stmtChoice.arms;
         const same = SAME_AS.exec(arm.rest.trimEnd());
         if (same !== null) {
           const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
-          sameAs.push({ line: first, target: stmtArms.get(same[1] ?? "") ?? null, order });
+          sameAs.push({ line: first, target: arms.get(same[1] ?? "") ?? null, order });
         }
-        for (const k of arm.keys) if (!stmtArms.has(k)) stmtArms.set(k, first);
+        for (const k of arm.keys) if (!arms.has(k)) arms.set(k, first);
+        armOf.set(first, stmtChoice);
       }
     }
     if (!ln(last).trimEnd().endsWith("{")) return;
@@ -215,8 +238,9 @@ export function indexTemplate(text: string): TemplateIndex {
     let block: Block | null = null;
     if (o.kind === "struct") {
       const top = ind === 0 && /^(type|root) /.test(joined);
-      block = { name: o.name, open: first, end: last, fields: new Map(), top };
+      block = { name: o.name, open: first, end: last, fields: new Map(), top, head: body.slice(o.at).trimEnd() };
       blocks.push(block);
+      opens.set(first, block);
       const list = byName.get(o.name);
       if (list === undefined) byName.set(o.name, [block]);
       else list.push(block);
@@ -227,7 +251,8 @@ export function indexTemplate(text: string): TemplateIndex {
       const col = indentOf(ln(first + li)) + (o.at - (starts[li] ?? 0));
       decls[first + li]?.push([col, col + o.name.length]);
     }
-    stack.push({ contentIndent: ind + 2, block, arms: o.kind === "choice" ? new Map() : null });
+    const choice = o.kind === "choice" ? { line: first, on: CHOICE_ON.exec(body)?.[1] ?? null, arms: new Map<string, number>() } : null;
+    stack.push({ contentIndent: ind + 2, block, choice });
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -266,7 +291,7 @@ export function indexTemplate(text: string): TemplateIndex {
       const name = trimmed.slice(0, trimmed.indexOf(": "));
       if (!top.block.fields.has(name)) top.block.fields.set(name, i);
     } else stmtKind = "plain";
-    stmtArms = top?.arms != null && d === top.contentIndent ? top.arms : null;
+    stmtChoice = top?.choice != null && d === top.contentIndent ? top.choice : null;
     kinds[i] = stmtKind;
     if (stmtKind !== "comment" && line.trimEnd().endsWith("{")) finish(i);
   }
@@ -287,7 +312,7 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs, alias };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs, alias, armOf, opens };
 }
 
 /** The byte order a block is also read in: the order of a `same as case N,
@@ -393,11 +418,14 @@ export function fieldSpan(index: TemplateIndex, line: number): readonly [number,
 }
 
 /** The structures called `name`, the ones inside `scope` first. Null scope, or
- *  none inside it, falls back to those declared at the top level, then to all. */
-export function blocksNamed(index: TemplateIndex, name: string, scope: readonly (readonly [number, number])[]): readonly Block[] {
+ *  none inside it, falls back to those declared at the top level, then to all.
+ *  With `strict` there is no falling back: only the ones inside `scope`. */
+export function blocksNamed(index: TemplateIndex, name: string, scope: readonly (readonly [number, number])[], strict = false): readonly Block[] {
   const all = index.byName.get(name) ?? [];
+  const within = (b: Block): boolean => scope.some(([a, z]) => b.open >= a && b.open <= z);
+  if (strict) return all.filter(within);
   if (all.length <= 1) return all;
-  const inside = all.filter((b) => scope.some(([a, z]) => b.open >= a && b.open <= z));
+  const inside = all.filter(within);
   if (inside.length > 0) return inside;
   const top = all.filter((b) => b.top);
   return top.length > 0 ? top : all;
@@ -421,24 +449,31 @@ function scopeOf(index: TemplateIndex, line: number): [number, number][] {
 /** One node on the way down from the root to the cursor. */
 export type ChainNode = { readonly name: string; readonly type: string; readonly list: boolean };
 
+/** One child of a node. `value` and `edit` are the node's `value` and
+ *  `edit_text`, which say which arm a switch on this field took. */
+export type Kid = { readonly name: string; readonly type: string; readonly value?: string; readonly edit?: string };
+
+/** The children of the node at `depth` in the chain, or null when they are not
+ *  known yet. */
+export type Children = (depth: number) => readonly Kid[] | null;
+
 /** What a field's type text says first, spaces dropped: `u64 le` is `u64le`. */
 const squash = (s: string): string => s.replace(/\s+/g, "");
 
 /**
- * Of several structures that could be this node, the one its children fit
+ * Of several structures that could be this node, the ones its children fit
  * best: each child whose name is a field of the block counts, and counts again
- * when the field's type text names the child's type. Null when two fit
- * equally well, since picking one of them would be a guess.
+ * when the field's type text names the child's type, or when the field opens a
+ * structure of the child's type's name (`contents: sized(length - 2) App2 {`).
  *
  * A block inside an arm that a `same as case N, but big-endian` line points at
  * is also the block of that line's own arm, so its types are compared a
  * second time as that arm reads them, and the better of the two counts. That
  * is what finds the written-out little-endian header for a big-endian file.
  */
-export function bestFit(index: TemplateIndex, blocks: readonly Block[], children: readonly { name: string; type: string }[]): Block | null {
-  let best: Block | null = null;
+function fits(index: TemplateIndex, blocks: readonly Block[], children: readonly { name: string; type: string }[]): Block[] {
+  let best: Block[] = [];
   let bestScore = -1;
-  let tied = false;
   for (const b of blocks) {
     const order = orderOf(index, b);
     let score = 0;
@@ -452,17 +487,215 @@ export function bestFit(index: TemplateIndex, blocks: readonly Block[], children
       const said = squash(line.slice(line.indexOf(": ") + 2));
       const t = squash(c.type);
       if (t === "") continue;
+      if (index.opens.get(at)?.name === t) {
+        score++;
+        other++;
+        continue;
+      }
       if (said.startsWith(t)) score++;
       if (order !== null && inOrder(said, order).startsWith(t)) other++;
     }
     score = Math.max(score, other);
     if (score > bestScore) {
-      best = b;
+      best = [b];
       bestScore = score;
-      tied = false;
-    } else if (score === bestScore) tied = true;
+    } else if (score === bestScore) best.push(b);
   }
-  return tied ? null : best;
+  return best;
+}
+
+/** The one structure [`fits`] finds best, or null when two fit equally well,
+ *  since picking one of them would be a guess. */
+export function bestFit(index: TemplateIndex, blocks: readonly Block[], children: readonly { name: string; type: string }[]): Block | null {
+  const best = fits(index, blocks, children);
+  return best.length === 1 ? (best[0] ?? null) : null;
+}
+
+/** A number as a key or a value writes it: `12`, `-3`, `0xffe2`. */
+function numberOf(s: string): bigint | null {
+  const t = s.trim();
+  return /^-?\d+$/.test(t) || /^0x[0-9a-f]+$/i.test(t) ? BigInt(t) : null;
+}
+
+/** Text without the quotes around it, when it has them. Spaces inside the
+ *  quotes are kept: `'XYZ '` is four characters. */
+function unquote(t: string): string {
+  if (t.length < 2 || (t[0] !== '"' && t[0] !== "'") || t.at(-1) !== t[0]) return t;
+  return t.slice(1, -1).replace(/\\(.)/g, "$1");
+}
+
+/** An arm's first line or, for an arm written as `same as case N`, the first
+ *  line of arm N. */
+function armTarget(index: TemplateIndex, line: number): number {
+  for (let hop = 0; hop < 8; hop++) {
+    const same = index.sameAs.find((s) => s.line === line && s.target !== null);
+    if (same?.target == null) return line;
+    line = same.target;
+  }
+  return line;
+}
+
+/**
+ * The first line of the arm `choice` takes when the field it reads holds
+ * `kid`'s value, through [`armTarget`]. A number in decimal or hex is
+ * compared with the value's number (an enumeration's value ends with its
+ * number in brackets, `app2 (0xffe2)`), and any other key with the value as
+ * text. Null when no key matches and the default arm `_` cannot be told for
+ * sure: there is none, or a key could not be compared with the value. A key
+ * in quotes that does not match counts as one that could not be compared,
+ * since a value shown as text may be cut short or escaped.
+ */
+function takenArm(index: TemplateIndex, choice: Choice, kid: Kid): number | null {
+  const texts = [kid.value, kid.edit].filter((t): t is string => t !== undefined);
+  const nums: bigint[] = [];
+  for (const t of texts) {
+    const n = numberOf(t);
+    if (n !== null) nums.push(n);
+  }
+  const bracketed = numberOf(/\((-?\d+|0x[0-9a-f]+)\)$/i.exec(kid.value?.trim() ?? "")?.[1] ?? "");
+  if (bracketed !== null) nums.push(bracketed);
+  const strs = texts.flatMap((t) => [t, unquote(t)]);
+  let sure = true;
+  for (const [key, line] of choice.arms) {
+    if (key === "_") continue;
+    if (key.startsWith('"') || key.startsWith("'")) {
+      if (strs.includes(unquote(key))) return armTarget(index, line);
+      sure = false;
+      continue;
+    }
+    const n = numberOf(key);
+    if (n !== null && nums.length > 0) {
+      if (nums.includes(n)) return armTarget(index, line);
+      continue;
+    }
+    if (n === null && strs.includes(key)) return armTarget(index, line);
+    sure = false;
+  }
+  const other = choice.arms.get("_");
+  return sure && other !== undefined ? armTarget(index, other) : null;
+}
+
+/**
+ * Whether the arms that lead to `b` are the ones taken, as far as `sibs` (the
+ * fields beside the field `b` is the value of) say. The arm whose statement
+ * opens `b` is checked against the field its choice reads, then that choice's
+ * own arm when the choice is itself an arm (`1 => switch data {`), and so on
+ * out. True when every arm that can be told is taken and one could be told,
+ * false when one is not taken, null when none could be told.
+ */
+function armsAgree(index: TemplateIndex, b: Block, sibs: readonly Kid[]): boolean | null {
+  let line = b.open;
+  let told = false;
+  for (let choice = index.armOf.get(line); choice !== undefined; choice = index.armOf.get(line)) {
+    const on = choice.on;
+    const kid = on === null ? undefined : sibs.find((k) => k.name === on);
+    const taken = kid === undefined ? null : takenArm(index, choice, kid);
+    if (taken !== null) {
+      if (taken !== line) return false;
+      told = true;
+    }
+    line = choice.line;
+  }
+  return told ? true : null;
+}
+
+/** The children of the node that holds `chain[depth]` as a field, skipping a
+ *  placing node of the same name. Null at the root, under a list, or when
+ *  they are not known. */
+function siblingsOf(chain: readonly ChainNode[], children: Children, depth: number): readonly Kid[] | null {
+  let d = depth - 1;
+  while (d >= 0 && chain[d]?.name === chain[d + 1]?.name) d--;
+  const holder = chain[d];
+  return holder === undefined || holder.list ? null : children(d);
+}
+
+/** True when two structures are written the same from their names on. */
+function sameText(index: TemplateIndex, a: Block, b: Block): boolean {
+  if (a === b) return true;
+  if (a.name !== b.name || a.head !== b.head) return false;
+  const fromA = (index.stmtEnd.get(a.open) ?? a.open) + 1;
+  const fromB = (index.stmtEnd.get(b.open) ?? b.open) + 1;
+  if (a.end - fromA !== b.end - fromB) return false;
+  const da = indentOf(index.lines[a.open] ?? "");
+  const db = indentOf(index.lines[b.open] ?? "");
+  for (let k = 0; fromA + k <= a.end; k++) {
+    if ((index.lines[fromA + k] ?? "").slice(da) !== (index.lines[fromB + k] ?? "").slice(db)) return false;
+  }
+  return true;
+}
+
+/** A line found for the node at `depth` in the chain. */
+type Found = { line: number; depth: number };
+
+/**
+ * Of several structures that have the field `chain[i]`, the one `chain[i - 1]`
+ * is, or null when that cannot be told. The evidence, most trusted first:
+ *
+ * 1. The arms that lead to each structure, against the value of the field
+ *    each `switch` or `match` reads ([`armsAgree`]).
+ * 2. The children of `chain[i - 1]`, by name and type ([`fits`]).
+ * 3. How far down the rest of the chain each structure leads, when each next
+ *    structure is looked for only inside the field above it.
+ *
+ * Structures still left that are written the same are one structure written
+ * twice, and the first is as right as any other.
+ */
+function choose(index: TemplateIndex, chain: readonly ChainNode[], children: Children, i: number, having: readonly Block[]): Block | null {
+  let left = having;
+  const sibs = siblingsOf(chain, children, i - 1);
+  if (sibs !== null) {
+    const verdicts = left.map((b) => armsAgree(index, b, sibs));
+    const taken = left.filter((_, k) => verdicts[k] === true);
+    const possible = left.filter((_, k) => verdicts[k] !== false);
+    if (taken.length > 0) left = taken;
+    else if (possible.length > 0) left = possible;
+  }
+  if (left.length > 1) {
+    const kids = children(i - 1);
+    if (kids !== null) left = fits(index, left, kids);
+  }
+  if (left.length > 1) {
+    const reach = left.map((b) => walk(index, chain, children, i, [b], null, [], true)?.depth ?? -1);
+    const deepest = Math.max(...reach);
+    left = left.filter((_, k) => reach[k] === deepest);
+  }
+  const first = left[0];
+  return first !== undefined && left.every((b) => sameText(index, b, first)) ? first : null;
+}
+
+/** [`findLineAt`] from `chain[from]` on, with `start` the structures
+ *  `chain[from - 1]` may be. With `strict`, a node's structure is looked for
+ *  only inside the field above it. */
+function walk(
+  index: TemplateIndex,
+  chain: readonly ChainNode[],
+  children: Children,
+  from: number,
+  start: readonly Block[],
+  found: Found | null,
+  scope: [number, number][],
+  strict: boolean,
+): Found | null {
+  let blocks = start;
+  for (let i = from; i < chain.length; i++) {
+    const n = chain[i];
+    const parent = chain[i - 1];
+    if (n === undefined || parent === undefined) break;
+    if (!parent.list && blocks.length > 0) {
+      const having = blocks.filter((b) => b.fields.has(n.name));
+      let chosen: Block | null = having.length === 1 ? (having[0] ?? null) : null;
+      if (having.length > 1) {
+        chosen = choose(index, chain, children, i, having);
+        if (chosen === null) return found;
+      }
+      if (chosen !== null) {
+        found = { line: chosen.fields.get(n.name)!, depth: i };
+        scope = scopeOf(index, found.line);
+      }
+    }
+    blocks = blocksNamed(index, n.type, scope, strict);
+  }
+  return found;
 }
 
 /**
@@ -473,55 +706,26 @@ export function bestFit(index: TemplateIndex, blocks: readonly Block[], children
  * a node that repeats its parent's name (a field placed elsewhere is a node
  * for the placing and a node for what is placed), have no line of their own
  * and give the nearest enclosing field's line. Where the parent's type names
- * more than one structure that has the field (ELF writes `ELFHeader` once for
- * each word size and byte order), `children(depth)` is asked for the parent's
- * children to choose between them; when they cannot choose, the search stops
- * at the line it already has.
+ * more than one structure that has the field (each arm of JPEG's `switch
+ * marker` writes a `Body`), [`choose`] picks one, asking `children(depth)` for
+ * the values and children it needs; when it cannot, the search stops at the
+ * line it already has.
  *
  * A node read by an arm written as `2 => same as case 1` has no line of its
  * own and is found in arm 1, since that arm's structures are the only ones
  * with its name. One read by `same as case 1, but big-endian` is found there
- * too, through [`bestFit`].
+ * too, through [`fits`].
  */
-export function findLine(
-  index: TemplateIndex,
-  chain: readonly ChainNode[],
-  children: (depth: number) => readonly { name: string; type: string }[] | null,
-): number | null {
+export function findLine(index: TemplateIndex, chain: readonly ChainNode[], children: Children): number | null {
   return findLineAt(index, chain, children)?.line ?? null;
 }
 
 /** [`findLine`]'s line, and the place in `chain` of the node it declares. */
-export function findLineAt(
-  index: TemplateIndex,
-  chain: readonly ChainNode[],
-  children: (depth: number) => readonly { name: string; type: string }[] | null,
-): { line: number; depth: number } | null {
+export function findLineAt(index: TemplateIndex, chain: readonly ChainNode[], children: Children): Found | null {
   const head = chain[0];
   if (head === undefined) return null;
-  let found: { line: number; depth: number } | null = null;
-  let scope: [number, number][] = [];
-  let blocks: readonly Block[] = index.root !== null && index.root.name === head.type ? [index.root] : blocksNamed(index, head.type, []);
-  for (let i = 1; i < chain.length; i++) {
-    const n = chain[i];
-    const parent = chain[i - 1];
-    if (n === undefined || parent === undefined) break;
-    if (!parent.list && blocks.length > 0) {
-      const having = blocks.filter((b) => b.fields.has(n.name));
-      let chosen: Block | null = having.length === 1 ? (having[0] ?? null) : null;
-      if (having.length > 1) {
-        const kids = children(i - 1);
-        chosen = kids === null ? null : bestFit(index, having, kids);
-        if (chosen === null) return found;
-      }
-      if (chosen !== null) {
-        found = { line: chosen.fields.get(n.name)!, depth: i };
-        scope = scopeOf(index, found.line);
-      }
-    }
-    blocks = blocksNamed(index, n.type, scope);
-  }
-  return found;
+  const blocks = index.root !== null && index.root.name === head.type ? [index.root] : blocksNamed(index, head.type, []);
+  return walk(index, chain, children, 1, blocks, null, [], false);
 }
 
 /** A run of a line with one colour. `cls` is empty for plain text. */

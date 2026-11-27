@@ -11,7 +11,7 @@
 
 import type { Doc } from "./doc.ts";
 import { SIDEBAR } from "./strings.ts";
-import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type TemplateIndex } from "./templateindex.ts";
+import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type Kid, type TemplateIndex } from "./templateindex.ts";
 
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
  *  empty chunks are sized from it before any line is drawn. */
@@ -48,7 +48,7 @@ export class TemplatePanel {
   /** The cursor's field could not be found yet for want of bytes. */
   private waiting = false;
   /** A parent's children, by path, for choosing between same-named structures. */
-  private kids = new Map<string, readonly { name: string; type: string }[] | null>();
+  private kids = new Map<string, readonly Kid[] | null>();
   private charWidth = 0;
   /** The marked line moved while the text had no size (the sidebar folded),
    *  so it is scrolled to once the text has one again. */
@@ -228,7 +228,7 @@ export class TemplatePanel {
     }
     const p = path;
     let loading = false;
-    const kidsAt = (depth: number): readonly { name: string; type: string }[] | null => {
+    const kidsAt = (depth: number): readonly Kid[] | null => {
       const kids = this.childrenOf(p.slice(0, depth));
       if (kids === "loading") loading = true;
       return kids === "loading" ? null : kids;
@@ -245,7 +245,7 @@ export class TemplatePanel {
     this.mark(found?.line ?? null, note);
   }
 
-  private childrenOf(path: readonly number[]): readonly { name: string; type: string }[] | null | "loading" {
+  private childrenOf(path: readonly number[]): readonly Kid[] | null | "loading" {
     const key = path.join("/");
     if (this.kids.has(key)) return this.kids.get(key)!;
     const node = this.doc.templateNode(path);
@@ -255,7 +255,7 @@ export class TemplatePanel {
     // Not kept while the answer is still coming, so the next move asks again.
     if (r.status === "pending" || r.status === "working") return "loading";
     if (r.status !== "ok") return null;
-    const kids = r.node.map((n) => ({ name: n.name, type: n.type }));
+    const kids = r.node.map((n) => ({ name: n.name, type: n.type, value: n.value, edit: n.edit_text }));
     this.kids.set(key, kids);
     return kids;
   }

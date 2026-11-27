@@ -446,3 +446,172 @@ test("a field read through any key of a shared line is found in the arm it names
   const n = findLine(idx, [node("file", "MachO"), node("command", "Signature"), node("offset", "u32 be")], () => null);
   assert.equal(line(GROUPED, n), "      offset: u32le");
 });
+
+// Arms that each write a structure of one name with the same fields, so only
+// the value of the field the switch reads can tell them apart. The comments
+// keep the arms from being written the same.
+const ARMS = `template arms
+
+root T {
+  kind: u16be
+  name: text[4] latin1
+  body: switch kind {
+    1 => Body {
+      // one
+      size: u8be
+    }
+    0x20 => Body {
+      // thirty-two
+      size: u8be
+    }
+    30, 38 => same as case 1
+    _ => Body {
+      // any other
+      size: u8be
+    }
+  }
+  named: match name {
+    "abcd" => Named {
+      // abcd
+      v: u8be
+    }
+    'fmt ' => Named {
+      // fmt
+      v: u8be
+    }
+    _ => Named {
+      // any other
+      v: u8be
+    }
+  }
+}
+`;
+
+test("a field inside an arm is found in the arm the switch's field chose", () => {
+  const idx = indexTemplate(ARMS);
+  const lines = ARMS.split("\n");
+  const after = (s: string, field: string): number => {
+    const from = lines.findIndex((l) => l.includes(s));
+    return lines.findIndex((l, i) => i > from && l.includes(field));
+  };
+  const at = (kind: Partial<{ value: string; edit: string }>, name: string, leaf: "size" | "v"): number | null => {
+    const kids = [
+      { name: "kind", type: "u16 be", ...kind },
+      { name: "name", type: "latin1", value: name },
+      { name: "body", type: "Body" },
+      { name: "named", type: "Named" },
+    ];
+    const chain = [node("file", "T"), leaf === "size" ? node("body", "Body") : node("named", "Named"), node(leaf, "u8")];
+    return findLine(idx, chain, (depth) => (depth === 0 ? kids : null));
+  };
+  // A plain key, a hex key, a key on a shared line and the default arm.
+  assert.equal(at({ value: "1" }, "", "size"), after("1 => Body", "size:"));
+  assert.equal(at({ value: "32" }, "", "size"), after("0x20 => Body", "size:"));
+  assert.equal(at({ value: "38" }, "", "size"), after("1 => Body", "size:"));
+  assert.equal(at({ value: "7" }, "", "size"), after("_ => Body", "size:"));
+  // An enumeration's value ends with its number; its edit text is the label.
+  assert.equal(at({ value: "big (0x20)", edit: "big" }, "", "size"), after("0x20 => Body", "size:"));
+  // Quoted keys, spaces inside the quotes included.
+  assert.equal(at({}, "abcd", "v"), after('"abcd" => Named', "v:"));
+  assert.equal(at({}, "fmt ", "v"), after("'fmt ' => Named", "v:"));
+});
+
+test("an arm is not chosen when the value cannot be compared with every key", () => {
+  const idx = indexTemplate(ARMS);
+  const kids = (kind: string, name: string): { name: string; type: string; value: string }[] => [
+    { name: "kind", type: "u16 be", value: kind },
+    { name: "name", type: "latin1", value: name },
+  ];
+  const size = [node("file", "T"), node("body", "Body"), node("size", "u8")];
+  const v = [node("file", "T"), node("named", "Named"), node("v", "u8")];
+  // A value with no number in it says nothing about numbered keys.
+  assert.equal(line(ARMS, findLine(idx, size, (d) => (d === 0 ? kids("several", "") : null))), "  body: switch kind {");
+  // Text that matches no quoted key may be text shown cut short, so it does
+  // not choose the default arm either.
+  assert.equal(line(ARMS, findLine(idx, v, (d) => (d === 0 ? kids("1", "fmt") : null))), "  named: match name {");
+  assert.equal(line(ARMS, findLine(idx, v, (d) => (d === 0 ? kids("1", "zzzz") : null))), "  named: match name {");
+});
+
+// Two arms whose structures have the same fields at the first level, told
+// apart one level further down, and two arms that open differently named
+// structures in a field of the same name.
+const DEEP = `template deep
+
+root D {
+  kind: u8be
+  body: switch kind {
+    1 => Body {
+      head: Head {
+        a: u8be
+      }
+    }
+    2 => Body {
+      head: Head {
+        b: u8be
+      }
+    }
+  }
+  segment: switch kind {
+    1 => Segment {
+      length: u16be
+      contents: sized(length - 2) App0 {
+        x: u8be
+      }
+    }
+    2 => Segment {
+      length: u16be
+      contents: sized(length - 2) App2 {
+        x: u8be
+      }
+    }
+  }
+}
+`;
+
+test("same-named structures with the same fields are told apart further down", () => {
+  const idx = indexTemplate(DEEP);
+  const b = DEEP.split("\n").findIndex((l) => l.includes("b: u8be"));
+  const chain = [node("file", "D"), node("body", "Body"), node("head", "Head"), node("b", "u8")];
+  assert.equal(findLine(idx, chain, (depth) => (depth === 1 ? [node("head", "Head")] : null)), b);
+  // And with no children known at all.
+  assert.equal(findLine(idx, chain, () => null), b);
+  // A field that opens a structure named as the child's type is.
+  const seg = [node("file", "D"), node("segment", "Segment"), node("contents", "App2")];
+  const segKids = (depth: number): ChainNode[] | null => (depth === 1 ? [node("length", "u16 be"), node("contents", "App2")] : null);
+  assert.equal(line(DEEP, findLine(idx, seg, segKids)), "      contents: sized(length - 2) App2 {");
+});
+
+// Two arms that write the same structure word for word, and two that do not.
+const TWICE = `template twice
+
+root W {
+  kind: u8be
+  table: switch kind {
+    2 => Symbol (unit symbol) {
+      value: u32le
+    }
+    11 => Symbol (unit symbol) {
+      value: u32le
+    }
+  }
+  other: switch kind {
+    2 => Symbol (unit symbol) {
+      value: u32le
+    }
+    11 => Symbol (unit symbol) {
+      value: u32be
+    }
+  }
+}
+`;
+
+test("structures written the same are one structure; different ones are a real tie", () => {
+  const idx = indexTemplate(TWICE);
+  const same = findLine(idx, [node("file", "W"), node("table", "Symbol"), node("value", "u32 le")], () => null);
+  assert.equal(same, TWICE.split("\n").findIndex((l) => l.includes("value: u32le")));
+  // Not the same text: neither the children nor anything further down can
+  // choose, so the enclosing field's line is kept.
+  const tie = [node("file", "W"), node("other", "Symbol"), node("value", "u32")];
+  assert.equal(line(TWICE, findLine(idx, tie, () => null)), "  other: switch kind {");
+  assert.equal(line(TWICE, findLine(idx, tie, (d) => (d === 1 ? [node("value", "u32")] : null))), "  other: switch kind {");
+});
