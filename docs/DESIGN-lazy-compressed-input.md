@@ -2222,12 +2222,6 @@ text above:
   from the beginning, as this item said before part 2: the third entry's call
   carries on one of the other two passes until a place is free, so the third
   entry shows no percentage until its own pass starts.
-- **Rounds with no progress to go by.** `runCheckLoaded`, `ensureTabRange`
-  and the text loops in `web/src/doc.ts` give up after `MAX_ROUNDS` loads
-  however far the core gets. A check of a long run read a window at a time
-  takes a round each time it waits for chunks, so now that 7c has lifted
-  the 64 MiB limit, a long enough run could reach the backstop. They could pass on
-  progress as `waitToOpen`'s callers do.
 - **`CHUNK_CAPACITY`.** A larger store would let `unit_input` grow. That is a
   choice about the browser's memory, not part of this design.
 - **The measuring walk of a large gzip member.** `stream_len_at` reads a
@@ -2239,12 +2233,6 @@ text above:
   past 64 MiB of output, still reads as one member. Not changed in 7c,
   since the walk is part 9's; letting go of the walk's bytes before its
   current step would save most of the memory.
-- **Words for `too-large-input` in the report.** `RV.refused` in
-  `web/src/report/text.ts`, which part 7c's core half could not change, has
-  no case for the new tag and says "Did not unpack" for it.
-  `RV.streamFailedNote` takes its words from `DECODED_REFUSED`, so it has
-  them already. `web/test/joinedpart.test.ts` could check
-  `JOINED.refused("too-large-input", tab)` beside the other tags.
 - **A checksum over more than 64 MiB of the file.** `run_check` refuses a
   sum over bytes of the file (`Coverage::over`) past `CAP_BYTES`, so the
   CRC-32 of a zip entry stored as it is, past 64 MiB, is not checked. It
