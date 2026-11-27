@@ -275,9 +275,11 @@ fn tab_bytes(ed: &mut Editor, tab: u32, at: usize, n: usize) -> Vec<u8> {
 /// A deflated zip entry several times longer than the chunk store, listed
 /// the way the web lists it: the entry's `data`, then what is inside it. Its
 /// run used to be read in one call, which needs more chunks at once than the
-/// store keeps; then it was refused for that. Now the pass over it takes its
-/// place and reads the run into it a window at a time, a quarter of the
-/// store, so the contents list, and Open unpacked gives a tab. The code
+/// store keeps; then it was refused for that. Then the pass over it read the
+/// run into its place a window at a time, a quarter of the store. Now it
+/// reads the run through the store a step's window at a time, the step's
+/// 256 KiB and the 64 KiB margin past it, and keeps no copy, so the contents
+/// list, and Open unpacked gives a tab. The code
 /// panel's read of a step near the run's end used to read the run from its
 /// front to the step in one call, and was refused for that; now it reads only
 /// the bytes the step is in, and nothing for a step that is not a code.
@@ -293,9 +295,9 @@ fn a_zip_entry_longer_than_the_store_lists_a_window_at_a_time() {
     let inside = feeder.children(&mut ed, &data);
     assert!(!inside.is_empty(), "nothing listed inside the entry");
     assert!(feeder.node(&mut ed, &data)["refused"].is_null());
-    // The run's chunks once each, a window of four at a time.
+    // The run's chunks once each, a step's window of at most six at a time.
     assert_eq!(feeder.most_times(), 1, "{:?}", feeder.times);
-    assert!(feeder.widest <= 4, "a reply named {} chunks", feeder.widest);
+    assert!(feeder.widest <= 6, "a reply named {} chunks", feeder.widest);
     let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &data));
     let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
     assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
@@ -565,7 +567,9 @@ fn a_gzip_member_longer_than_the_store_is_measured_and_its_stream_reads() {
     assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
     assert_eq!(tab_bytes(&mut ed, tab, text.len(), short.len()), short);
     assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
-    assert!(feeder.widest <= 4, "a reply named {} chunks", feeder.widest);
+    // A measuring walk reads four chunks at a time, and the pass over the
+    // member a step's window of at most six.
+    assert!(feeder.widest <= 6, "a reply named {} chunks", feeder.widest);
 }
 
 /// A BGZF block, as `formats::bam`'s tests write one: a gzip member with the
@@ -1051,4 +1055,64 @@ fn a_listing_of_three_large_entries_lists_them_all() {
     for (i, fields) in listed.into_iter().enumerate() {
         assert_eq!(fields.unwrap().get(14).map(String::as_str), Some("data"), "entry {i}");
     }
+}
+
+/// Open unpacked on a zlib stream several times longer than the chunk store.
+/// The pass over its run used to wait until it had read the whole run into
+/// a copy, a quarter of the store at a time, with no progress to give while
+/// it waited. Now it reads the run through the store a window at a time and
+/// keeps no copy: each "pending" reply names the chunks of one window, at
+/// most six of 64 KiB, and while the pass waits for them the editor says how
+/// far unpacking has got. No chunk is asked for twice but the first and the
+/// last, which the template reads before the pass starts, and the tab reads
+/// the stream's bytes.
+#[test]
+fn open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time() {
+    let text = long_lines();
+    let mut file = vec![0x78, 0x01];
+    file.extend(miniz_oxide::deflate::compress_to_vec(&text, 1));
+    file.extend(adler32(&text).to_be_bytes());
+    let store = 16;
+    assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store as u32, "zlib");
+    let run = [6];
+    let (mut times, mut widest) = (std::collections::BTreeMap::<u64, usize>::new(), 0);
+    let (mut waits, mut said, mut was) = (0, 0, 0);
+    let tab = loop {
+        let reply = parse(&ed.open_space(0, &run));
+        match reply["status"].as_str().unwrap() {
+            "ok" => break reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32,
+            "pending" => {
+                waits += 1;
+                let chunks = chunks_of(&reply);
+                widest = widest.max(chunks.len());
+                let progress = parse(&ed.unpacking(0))["node"].clone();
+                if !progress.is_null() {
+                    said += 1;
+                    assert_eq!(progress["run_bits"].as_f64().unwrap() as usize, (file.len() - 6) * 8, "{progress}");
+                    let now = read_bits(&progress);
+                    assert!(now >= was, "unpacking went back from {was} to {now}");
+                    was = now;
+                }
+                for c in chunks {
+                    let n = times.entry(c).or_default();
+                    *n += 1;
+                    assert!(*n <= 2, "chunk {c} asked for {n} times");
+                    feed(&mut ed, &file, c);
+                }
+            }
+            "working" => {}
+            _ => panic!("{reply}"),
+        }
+        assert!(waits < 1000, "no end to the waits");
+    };
+    // The waits for the header and the trailer come before the pass starts.
+    assert!(said + 2 >= waits && waits > file.len() / (6 * CHUNK), "{waits} waits, {said} of them saying how far unpacking had got");
+    let last = (file.len().div_ceil(CHUNK) - 1) as u64;
+    let twice: Vec<u64> = times.iter().filter(|(_, n)| **n > 1).map(|(c, _)| *c).collect();
+    assert!(twice.iter().all(|&c| c == 0 || c == last), "chunks {twice:?} asked for twice");
+    assert!(widest <= 6, "a reply named {widest} chunks");
+    assert_eq!(times.len(), file.len().div_ceil(CHUNK), "every chunk of the file");
+    assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
+    assert_eq!(tab_bytes(&mut ed, tab, text.len() - 64, 64), text[text.len() - 64..]);
 }

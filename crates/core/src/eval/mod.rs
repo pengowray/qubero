@@ -2961,13 +2961,15 @@ impl Evaluator {
         }))
     }
 
-    /// How far the pass this go ran out of allowance in has got: an index pass
-    /// over a large compressed stream, or the walk measuring where a gzip
-    /// member's stream ends. That is the stream the call that just handed back
-    /// `Busy` waits on, so asked right after the call, it is that call's
-    /// stream and not one another call carried on in between. Nothing when
-    /// this go has not run out in a pass, and from `begin_slice` on until it
-    /// does. See [`Unpacking`].
+    /// How far the pass this go ran out of allowance in has got, or the pass
+    /// that waits for bytes of the file: an index pass over a large
+    /// compressed stream, or the walk measuring where a gzip member's stream
+    /// ends. That is the stream the call that just handed back `Busy`, or the
+    /// `Pending` of an index pass reading its run a window at a time, waits
+    /// on, so asked right after the call, it is that call's stream and not
+    /// one another call carried on in between. Nothing when this go has not
+    /// run out or waited in a pass, and from `begin_slice` on until it does.
+    /// See [`Unpacking`].
     pub fn unpacking(&self) -> Option<Unpacking> {
         self.go.waits_on()
     }

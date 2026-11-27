@@ -719,7 +719,9 @@ enum Held {
     /// place before reading any of the run, so that it never finishes
     /// reading with nowhere to go, and the place holds the copy, as the pass
     /// would hold it. Only a run that needs more of the file than one window
-    /// is read this way; any other is read in one call.
+    /// is read this way, and only for a pass that cannot read the run
+    /// through a handle a window at a time ([`lazy::reads_in_windows`]); any
+    /// other is read in one call.
     Gathering { bytes: Vec<u8>, known_large: bool },
     /// A pass that has started and not finished.
     Pass(lazy::Indexing),
@@ -1266,6 +1268,13 @@ impl Spaces {
         self.refused_runs.borrow().get(&(key, codec)).copied()
     }
 
+    /// How many runs have a refusal kept, for tests that check a run waiting
+    /// for bytes never has one.
+    #[cfg(test)]
+    pub(super) fn refusals(&self) -> usize {
+        self.refused_runs.borrow().len()
+    }
+
     /// The limits a run too large to hold whole is indexed under.
     pub(super) fn lazy_limits(&self) -> Limits {
         self.lazy_limits
@@ -1447,11 +1456,19 @@ impl super::Evaluator {
 
     /// The pass behind [`Self::index_run`], for a run with no refusal kept.
     ///
-    /// A run that needs more of the file than one window
-    /// ([`Self::gathers`]) is read a window at a time across goes before its
-    /// pass starts. A pass stepped across goes takes its place in
-    /// `Unfinished` first and reads its run into that place
-    /// ([`Held::Gathering`]); any other reads it through [`Self::gather_run`].
+    /// A deflate, zlib, gzip or zstd pass reads its run through a handle onto
+    /// the source the run is in, a window at a time, when a handle reaches
+    /// the run and the source keeps enough for a window
+    /// ([`lazy::reads_in_windows`]). It holds no copy of the run, and starts
+    /// at once: a step whose window is missing chunks hands back `Pending`
+    /// with them, and the pass waits in its place in `Unfinished`.
+    ///
+    /// Any other pass reads a copy of the run. A run that needs more of the
+    /// file than one window ([`Self::gathers`]) is read a window at a time
+    /// across goes before such a pass starts. A pass stepped across goes
+    /// takes its place in `Unfinished` first and reads its run into that
+    /// place ([`Held::Gathering`]); any other reads it through
+    /// [`Self::gather_run`].
     fn index_pass<S: Source>(&self, doc: &Document<S>, key: RunKey, codec: Codec, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
         let held = self.spaces.unfinished.borrow_mut().take(key, codec);
         if let Some(held) = held {
@@ -1460,17 +1477,23 @@ impl super::Evaluator {
         if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
             return Ok(Err(Refusal::TooLarge));
         }
+        let limits = self.spaces.lazy_limits;
+        let windowed = self.shared_input(doc, key).filter(|input| lazy::reads_in_windows(codec, input, &limits));
         // A go with no allowance carries its pass to the end before it hands
-        // back, so it never puts one back and needs no place. A go that has
-        // spent its allowance already starts nothing: the pass would take a
-        // place having done nothing.
-        let placed = lazy::can_step(codec) && self.go.limited();
+        // back, so it never puts one back for that and needs no place,
+        // unless the pass reads a source that can find chunks missing. A go
+        // that has spent its allowance already starts nothing: the pass would
+        // take a place having done nothing.
+        let placed = lazy::can_step(codec) && (self.go.limited() || windowed.as_ref().is_some_and(|input| input.resident_limit().is_some()));
         if placed {
             self.go.charge(0)?;
             self.wait_for_a_place(doc)?;
-            if self.gathers(doc, key.0, key.1, key.2) {
+            if windowed.is_none() && self.gathers(doc, key.0, key.1, key.2) {
                 return self.carry_on(doc, key, codec, Held::Gathering { bytes: Vec::new(), known_large }, true);
             }
+        }
+        if let Some(input) = windowed {
+            return self.start_pass(key, codec, lazy::Indexing::through(codec, input, limits), known_large);
         }
         // What the index will read the run through once it is made, and the
         // pass's own copy of the run, which goes when the pass does. Where
@@ -1486,12 +1509,20 @@ impl super::Evaluator {
                 Err(why) => return Ok(Err(why)),
             },
         };
+        if !lazy::can_step(codec) {
+            #[cfg(test)]
+            self.spaces.passes.set(self.spaces.passes.get() + 1);
+            return Ok(lazy::decode_or_index_through(codec, packed, input, limits));
+        }
+        self.start_pass(key, codec, lazy::Indexing::from_copy(codec, packed, input, limits), known_large)
+    }
+
+    /// Step a pass just made over the run at `key`, told the run is large
+    /// when `known_large`, or hand back the refusal it was made with.
+    fn start_pass(&self, key: RunKey, codec: Codec, made: Result<lazy::Indexing, Refusal>, known_large: bool) -> super::R<Result<Decoded, Refusal>> {
         #[cfg(test)]
         self.spaces.passes.set(self.spaces.passes.get() + 1);
-        if !lazy::can_step(codec) {
-            return Ok(lazy::decode_or_index_through(codec, packed, input, self.spaces.lazy_limits));
-        }
-        let pass = match lazy::Indexing::from_copy(codec, packed, input, self.spaces.lazy_limits) {
+        let pass = match made {
             Ok(pass) if known_large => pass.known_large(),
             Ok(pass) => pass,
             Err(why) => return Ok(Err(why)),
@@ -1574,8 +1605,9 @@ impl super::Evaluator {
                 }
                 #[cfg(test)]
                 self.spaces.passes.set(self.spaces.passes.get() + 1);
-                // As in `index_pass`: a handle when one reaches the run, and
-                // otherwise the copy just gathered.
+                // As in `index_pass`: the index reads a handle when one
+                // reaches the run, and otherwise the copy just gathered,
+                // which the pass reads either way.
                 let packed = Arc::new(bytes);
                 let input = self.shared_input(doc, key).unwrap_or_else(|| lazy::RunInput::held(packed.clone()));
                 match lazy::Indexing::from_copy(codec, packed, input, self.spaces.lazy_limits) {
@@ -1588,31 +1620,34 @@ impl super::Evaluator {
         self.index_steps(key, codec, pass, own)
     }
 
-    /// Step `pass`, over the run at `key`, until it finishes or this go runs
-    /// out. A go that runs out puts the pass back in its place and hands back
-    /// `Busy`. It notes the pass as the one it ran out in when the pass is the
-    /// call's own (`own`), and otherwise notes that the call waits for a place
-    /// with no progress of its own to give.
+    /// Step `pass`, over the run at `key`, until it finishes, this go runs
+    /// out, or a step's window of the run is missing chunks of the file. A go
+    /// that runs out puts the pass back in its place and hands back `Busy`,
+    /// and a step missing chunks puts it back and hands back `Pending` with
+    /// them, which is never a refusal. Either way it notes the pass as the
+    /// one the call waits on when the pass is the call's own (`own`), so
+    /// that [`super::Evaluator::unpacking`] says how far it has got, and
+    /// otherwise notes that the call waits for a place with no progress of
+    /// its own to give.
     fn index_steps(&self, key: RunKey, codec: Codec, mut pass: lazy::Indexing, own: bool) -> super::R<Result<Decoded, Refusal>> {
         loop {
-            if let Err(busy) = self.go.charge(INDEX_STEP_ELEMENTS) {
-                if own {
-                    self.go.ran_out_in(super::Unpacking::of(key, pass.progress()));
-                } else {
-                    self.go.ran_out_waiting();
-                }
-                let stamp = self.spaces.stamp();
-                self.spaces.unfinished.borrow_mut().put(key, codec, Held::Pass(pass), stamp);
-                return Err(busy);
+            let waits = match self.go.charge(INDEX_STEP_ELEMENTS) {
+                Err(busy) => busy,
+                Ok(()) => match pass.step(INDEX_STEP_BYTES, INDEX_STEP_BITS) {
+                    Ok(Stepped::Working) => continue,
+                    Ok(Stepped::NeedsInput(missing)) => super::EvalError::Pending(missing),
+                    Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
+                    Err(why) => return Ok(Err(why)),
+                },
+            };
+            if own {
+                self.go.ran_out_in(super::Unpacking::of(key, pass.progress()));
+            } else {
+                self.go.ran_out_waiting();
             }
-            match pass.step(INDEX_STEP_BYTES, INDEX_STEP_BITS) {
-                Ok(Stepped::Working) => {}
-                // The pass reads a copy of the run, which never finds a
-                // chunk missing.
-                Ok(Stepped::NeedsInput(_)) => return Ok(Err(Refusal::Failed)),
-                Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
-                Err(why) => return Ok(Err(why)),
-            }
+            let stamp = self.spaces.stamp();
+            self.spaces.unfinished.borrow_mut().put(key, codec, Held::Pass(pass), stamp);
+            return Err(waits);
         }
     }
 

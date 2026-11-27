@@ -725,3 +725,74 @@ fn copies_past_what_they_may_come_to_wait_for_room_and_a_run_past_it_is_refused(
     ev.spaces.set_gather_cap(2048);
     assert_eq!(ev.node(&doc(&bytes), &[1]).unwrap().refused, None, "in memory");
 }
+
+// ----- an index pass reading its run a window at a time -----
+
+/// [`small_lazy`], with steps that read 8 KiB of the run and the margin past
+/// it, about 72 KiB at once, so that a store of 160 chunks has room for two
+/// such windows and a pass reads its run through a handle onto it.
+fn windowed_lazy() -> crate::codec::lazy::Limits {
+    crate::codec::lazy::Limits { step_input: 8 << 10, ..small_lazy() }
+}
+
+/// A zlib run past the cap and several times longer than the store is
+/// indexed by a pass that reads it through a handle onto the store, a
+/// window at a time, and keeps no copy of it. Each wait names the chunks of
+/// at most one window, and while the pass waits the evaluator says how far
+/// it has got, as it does when a go runs out. A missing chunk is never kept
+/// as the run's refusal. The pass starts once, and the index it comes to is
+/// the one made from the run in memory.
+#[test]
+fn a_pass_over_a_run_longer_than_the_store_reads_it_a_window_at_a_time() {
+    use crate::codec::lazy::{decode_or_index_with, Decoded};
+    let content = hex_lines(40_000);
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&content, 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    let capacity = 160;
+    assert!(bytes.len() > 3 * capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
+    let mut d = stored(&bytes, capacity);
+    let mut ev = Evaluator::new(one_run(packed.len(), Codec::Zlib));
+    ev.spaces.set_lazy_limits(windowed_lazy());
+    ev.set_slice(Some(600));
+    let mut times: BTreeMap<u64, usize> = BTreeMap::new();
+    let (mut waits, mut was) = (0, 0);
+    loop {
+        ev.begin_slice();
+        match ev.node(&d, &[1, 0]) {
+            Ok(_) => break,
+            Err(EvalError::Pending(missing)) => {
+                waits += 1;
+                assert!(missing.len() <= 76, "a wait named {} chunks", missing.len());
+                let p = ev.unpacking().expect("a pass waiting for bytes says how far it has got");
+                assert_eq!((p.run_space, p.run_offset_bits, p.run_bits), (0, 16, packed.len() as u64 * 8));
+                assert!(p.read_bits >= was, "the pass went back from {was} to {}", p.read_bits);
+                was = p.read_bits;
+                for m in missing {
+                    let n = times.entry(m.chunk).or_default();
+                    *n += 1;
+                    assert!(*n <= 2, "chunk {} asked for {n} times", m.chunk);
+                    feed(&mut d, &bytes, m.chunk);
+                }
+            }
+            Err(EvalError::Busy { .. }) => {}
+            Err(e) => panic!("{e:?}"),
+        }
+        assert_eq!(ev.spaces.refusals(), 0, "a run waiting for bytes was refused");
+        assert!(waits < 1000, "no end to the waits");
+    }
+    assert!(waits > packed.len() / (72 << 10), "{waits} waits");
+    assert_eq!(ev.spaces.passes.get(), 1, "the pass started more than once");
+    let Some(Opened::Space(id)) = ev.spaces.get(&[1]) else { panic!("the stream did not open") };
+    let index = ev.spaces.lazy(id).expect("read through an index").clone();
+    assert_eq!(index.input().owned_bytes(), 0, "the index holds a copy of the run");
+    let Ok(Decoded::Indexed(whole)) = decode_or_index_with(Codec::Zlib, std::sync::Arc::new(packed.clone()), windowed_lazy()) else { panic!("indexed") };
+    assert_eq!((index.spans(), index.len(), index.blocks(), index.adler32(), index.held_bytes()), (whole.spans(), whole.len(), whole.blocks(), whole.adler32(), whole.held_bytes()));
+    for k in 0..index.spans() {
+        assert_eq!(index.span_bytes(k), whole.span_bytes(k), "span {k}");
+    }
+    for at in [10, content.len() / 3, content.len() - 100] {
+        let got = fed(&mut d, &bytes, |d| ev.read_in(d, id, at as u64 * 8, 800)).unwrap();
+        assert!(got == content[at..at + 100], "100 bytes at {at} differ");
+    }
+}
