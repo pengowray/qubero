@@ -3,8 +3,8 @@
 Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
 built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
-from this text), and so is part 5 (2026-11-28; see "Built (part 5)"). Part 4
-and parts 6 to 11 are not. It follows
+from this text). Parts 4 and 5 are built too (2026-11-28; see part 4 in
+"Order of work", and "Built (part 5)"), and parts 6 to 11 are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
