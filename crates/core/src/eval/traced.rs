@@ -39,6 +39,7 @@ use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 use crate::codec::lazy::{refused_as_none, Seekable};
+use crate::codec::tracekind::{Family, Role, TraceKind};
 use crate::codec::{Block, BlockKind, Codec, Step, StepField, StepKind, TableField, Trace, Unit};
 use crate::eval::{EvalError, Evaluator, Sizing, R};
 use crate::template::{Expr as E, Ty as T};
@@ -56,14 +57,29 @@ use crate::template::{Expr as E, Ty as T};
 /// be missing chunks of the file: then the answer is `Pending` with them.
 #[derive(Clone, Copy)]
 pub(super) enum Blocks<'a> {
-    Whole(&'a Trace),
+    /// The trace, and the codec that made it.
+    Whole(&'a Trace, Codec),
     Indexed(&'a Seekable),
 }
 
 impl<'a> Blocks<'a> {
+    /// Which family's kinds the nodes take, or `None` for a codec whose nodes
+    /// have no kind. See [`crate::codec::tracekind`].
+    pub fn family(self) -> Option<Family> {
+        match self {
+            Blocks::Whole(_, codec) => Family::of(codec),
+            Blocks::Indexed(s) => Family::of(s.codec()),
+        }
+    }
+
+    /// The kind of a node in `role` under these blocks.
+    pub fn kind(self, role: Role) -> Option<TraceKind> {
+        TraceKind::of(self.family()?, role)
+    }
+
     pub fn len(self) -> u64 {
         match self {
-            Blocks::Whole(t) => t.blocks().len() as u64,
+            Blocks::Whole(t, _) => t.blocks().len() as u64,
             Blocks::Indexed(s) => s.blocks(),
         }
     }
@@ -72,7 +88,7 @@ impl<'a> Blocks<'a> {
     /// in the block's own trace.
     pub fn get(self, i: u64) -> R<Option<Block>> {
         match self {
-            Blocks::Whole(t) => Ok(t.blocks().get(i as usize).cloned()),
+            Blocks::Whole(t, _) => Ok(t.blocks().get(i as usize).cloned()),
             Blocks::Indexed(s) => refused_as_none(s.block(i)).map_err(EvalError::Pending),
         }
     }
@@ -91,7 +107,7 @@ impl<'a> Blocks<'a> {
     /// which is deflate, zstd or xz and has neither.
     pub fn whole(self) -> Option<&'a Trace> {
         match self {
-            Blocks::Whole(t) => Some(t),
+            Blocks::Whole(t, _) => Some(t),
             Blocks::Indexed(_) => None,
         }
     }
@@ -99,7 +115,7 @@ impl<'a> Blocks<'a> {
     /// Which block holds bit `want` of the run.
     pub fn at_bit(self, want: u64) -> R<Option<u64>> {
         match self {
-            Blocks::Whole(t) => {
+            Blocks::Whole(t, _) => {
                 let Some(i) = t.blocks().partition_point(|b| b.in_bits.start <= want).checked_sub(1) else { return Ok(None) };
                 Ok((want < t.blocks()[i].in_bits.end).then_some(i as u64))
             }
@@ -120,7 +136,7 @@ impl<'a> Blocks<'a> {
     /// and xz do not.
     pub fn lsb_first(self) -> bool {
         match self {
-            Blocks::Whole(t) => t.lsb_first(),
+            Blocks::Whole(t, _) => t.lsb_first(),
             Blocks::Indexed(s) => matches!(s.codec(), Codec::Deflate | Codec::Zlib | Codec::Gzip),
         }
     }
@@ -128,7 +144,7 @@ impl<'a> Blocks<'a> {
     /// What block `block` is called. See [`block_name`].
     pub fn name(self, block: &Block) -> String {
         match self {
-            Blocks::Whole(t) => block_name(t, block),
+            Blocks::Whole(t, _) => block_name(t, block),
             // A deflate block's name needs only its kind and last flag.
             Blocks::Indexed(_) => block_name(&Trace::default(), block),
         }
@@ -138,7 +154,7 @@ impl<'a> Blocks<'a> {
     /// it: the whole trace and `i`, or the block's own trace and 0.
     pub fn trace_of(self, i: u32) -> R<Option<(TraceRef<'a>, u32)>> {
         match self {
-            Blocks::Whole(t) => Ok(Some((TraceRef::Whole(t), i))),
+            Blocks::Whole(t, _) => Ok(Some((TraceRef::Whole(t), i))),
             Blocks::Indexed(s) => {
                 let trace = refused_as_none(s.block_trace(u64::from(i))).map_err(EvalError::Pending)?;
                 Ok(trace.map(|t| (TraceRef::Block(t), 0)))
@@ -174,8 +190,8 @@ impl Evaluator {
             let Some(r) = self.memo.get(&path[..k]) else { continue };
             if matches!(r.ty, T::Decoded { .. }) {
                 let super::space::Opened::Space(id) = self.spaces.get(&path[..k])? else { return None };
-                if let Some(t) = self.spaces.trace(id) {
-                    return Some((r.offset, Blocks::Whole(t)));
+                if let Some((t, codec)) = self.spaces.trace_and_codec(id) {
+                    return Some((r.offset, Blocks::Whole(t, codec)));
                 }
                 return Some((r.offset, Blocks::Indexed(self.spaces.lazy(id)?)));
             }
@@ -796,6 +812,108 @@ mod tests {
         assert_eq!(at, block.offset_bits + block.size_bits, "the block's children do not fill it");
     }
 
+    /// Every row under `blocks` says what sort of row it is, and nothing above
+    /// it or in what came out of the stream does.
+    #[test]
+    fn every_row_a_trace_laid_down_has_a_kind() {
+        let (d, mut e) = reading(&"the shape of the shape of the shape. ".repeat(80).into_bytes());
+        let kind = |e: &mut Evaluator, path: &[usize]| e.node(&d, path).unwrap().trace_kind.map(|k| k.as_str());
+        assert_eq!(kind(&mut e, RUN), None, "the stream is the template's");
+        assert_eq!(kind(&mut e, &[6, 0]), None, "what came out is the template's");
+        assert_eq!(kind(&mut e, &[6, 1]), Some("deflate.blocks"));
+        assert_eq!(kind(&mut e, &[6, 1, 0]), Some("deflate.block"));
+        let block = e.node(&d, &[6, 1, 0]).unwrap();
+        let kinds: Vec<_> = (0..block.child_count as usize).map(|i| kind(&mut e, &[6, 1, 0, i]).unwrap()).collect();
+        assert_eq!(&kinds[..5], ["deflate.bfinal", "deflate.btype", "deflate.hlit", "deflate.hdist", "deflate.hclen"]);
+        assert_eq!(kinds.last(), Some(&"deflate.codes"));
+        for k in &kinds[5..kinds.len() - 1] {
+            assert!(k.contains("code_length"), "{k} among the tables");
+        }
+        let codes = [6, 1, 0, block.child_count as usize - 1];
+        let n = e.node(&d, &codes).unwrap().child_count;
+        let syms = e.children(&d, &codes, 0, n).unwrap();
+        for s in &syms {
+            let want = match () {
+                _ if s.name.starts_with("literal ") => "deflate.literal",
+                _ if s.name.starts_with("match ") => "deflate.match",
+                _ => "deflate.end_of_block",
+            };
+            assert_eq!(s.trace_kind.map(|k| k.as_str()), Some(want), "{}", s.name);
+        }
+        // The column beside the bytes carries the same kind as the row.
+        let r = e.node(&d, &[6, 1, 0]).unwrap();
+        let spans = e.spans(&d, r.offset_bits, r.offset_bits + r.size_bits, 5000).unwrap();
+        assert!(spans.iter().any(|s| s.trace_kind.is_some()), "no span over the block has a kind");
+    }
+
+    /// A stored block's rows, which samples rarely have.
+    #[test]
+    fn a_stored_blocks_rows_have_kinds() {
+        let mut packed = vec![0x78, 0x01, 0x01, 5, 0, !5, !0];
+        packed.extend_from_slice(b"hello");
+        packed.extend_from_slice(&crate::checksum::adler32(b"hello").to_be_bytes());
+        let d = Document::new(MemSource(packed));
+        let mut e = Evaluator::new(crate::formats::builtin("zlib").unwrap());
+        let block = e.node(&d, &[6, 1, 0]).unwrap();
+        let rows = e.children(&d, &[6, 1, 0], 0, block.child_count).unwrap();
+        let kinds: Vec<_> = rows.iter().map(|n| n.trace_kind.map(|k| k.as_str())).collect();
+        assert_eq!(
+            kinds,
+            [Some("deflate.bfinal"), Some("deflate.btype"), Some("deflate.padding"), Some("deflate.stored_len"), Some("deflate.stored_nlen"), Some("deflate.codes")]
+        );
+        assert_eq!(e.node(&d, &[6, 1, 0, 5, 0]).unwrap().trace_kind.map(|k| k.as_str()), Some("deflate.stored_data"));
+    }
+
+    /// Every step the deflate and JPEG decoders lay down inside a block has a
+    /// row in its family's table, including the ones too rare for the samples
+    /// to reach: a run the trace stopped naming, and both repeat codes.
+    #[test]
+    fn every_step_inside_a_block_has_a_kind() {
+        use crate::codec::tracekind::{Family, TraceKind};
+        let deflate = [
+            StepKind::Header(StepField::Bfinal, 1),
+            StepKind::Header(StepField::Btype, 2),
+            StepKind::Header(StepField::Hlit, 0),
+            StepKind::Header(StepField::Hdist, 0),
+            StepKind::Header(StepField::Hclen, 0),
+            StepKind::Header(StepField::Padding, 0),
+            StepKind::Header(StepField::StoredLen, 0),
+            StepKind::Header(StepField::StoredNlen, 0),
+            StepKind::Table(TableField::CodeLen { sym: 0, len: 0 }),
+            StepKind::Table(TableField::LitLen { sym: 0, len: 0 }),
+            StepKind::Table(TableField::Dist { sym: 0, len: 0 }),
+            StepKind::Table(TableField::Repeat { code: 16, count: 3, len: 1, dist: false }),
+            StepKind::Table(TableField::Repeat { code: 17, count: 3, len: 0, dist: false }),
+            StepKind::Table(TableField::Repeat { code: 18, count: 11, len: 0, dist: true }),
+            StepKind::Literal(0),
+            StepKind::Match { len: 3, dist: 1 },
+            StepKind::EndOfBlock,
+            StepKind::Stored,
+            StepKind::Opaque,
+        ];
+        let jpeg = [
+            StepKind::Dc { code: 2, size: 0, diff: 0, dc: 0 },
+            StepKind::Ac { code: 2, run: 0, size: 1, k: 1, value: 1 },
+            StepKind::Zrl { code: 11, k: 1 },
+            StepKind::Eob { code: 4, k: 2 },
+            StepKind::Opaque,
+        ];
+        let jpeg_tail = [StepKind::Header(StepField::Padding, 0), StepKind::Header(StepField::Restart, 3), StepKind::Opaque];
+        let named = |f: Family, k: StepKind, outside| TraceKind::of(f, f.step_role(k, outside)).map(|t| t.as_str());
+        for k in deflate {
+            assert!(named(Family::Deflate, k, false).is_some(), "deflate has no kind for {k:?}");
+        }
+        assert_eq!(named(Family::Deflate, StepKind::Opaque, false), Some("deflate.unnamed_codes"));
+        for k in jpeg {
+            assert!(named(Family::JpegScan, k, false).is_some(), "a JPEG scan has no kind for {k:?}");
+        }
+        for k in jpeg_tail {
+            assert!(named(Family::JpegScan, k, true).is_some(), "a JPEG scan has no kind for {k:?} after the last unit");
+        }
+        assert_eq!(named(Family::JpegScan, StepKind::Opaque, false), Some("jpegscan.unnamed_codes"));
+        assert_eq!(named(Family::JpegScan, StepKind::Opaque, true), Some("jpegscan.trailing"));
+    }
+
     /// The codes: the name says what one stood for, the value is the bits it
     /// was written in, and there is nothing under it.
     #[test]
@@ -1006,8 +1124,9 @@ mod tests {
     }
 
     /// What a test compares of a row: everything the listing shows of it.
-    fn row(n: &crate::eval::NodeInfo) -> (String, String, Option<String>, u64, u64, u64, bool, crate::eval::Value) {
-        (n.name.clone(), n.type_name.clone(), n.unit.clone(), n.offset_bits, n.size_bits, n.child_count, n.lsb_first, n.value.clone())
+    #[allow(clippy::type_complexity)]
+    fn row(n: &crate::eval::NodeInfo) -> (String, String, Option<String>, u64, u64, u64, bool, crate::eval::Value, Option<&'static str>) {
+        (n.name.clone(), n.type_name.clone(), n.unit.clone(), n.offset_bits, n.size_bits, n.child_count, n.lsb_first, n.value.clone(), n.trace_kind.map(|k| k.as_str()))
     }
 
     /// A stream too large to hold whole lists its blocks from the index, and
@@ -1052,6 +1171,7 @@ mod tests {
             let a = whole.children(&d, &block, 0, m).unwrap();
             let b = lazy.children(&d, &block, 0, m).unwrap();
             assert_eq!(a.iter().map(row).collect::<Vec<_>>(), b.iter().map(row).collect::<Vec<_>>(), "block {i}");
+            assert!(b.iter().all(|n| n.trace_kind.is_some()), "a row of block {i} read a piece at a time has no kind");
             let codes = [6, 1, i, m as usize - 1];
             let k = whole.node(&d, &codes).unwrap().child_count;
             let a = whole.children(&d, &codes, 0, k).unwrap();

@@ -11,6 +11,7 @@ use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, gather_lsb, ibm32
 use crate::document::Document;
 use crate::encode;
 use crate::json;
+use crate::codec::tracekind::TraceKind;
 use crate::machinery;
 use crate::source::{Missing, Source};
 use crate::template::{Anchor, Encoding, Expr, Packing, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
@@ -431,6 +432,11 @@ pub struct NodeInfo {
     /// For a `Decoded` field, what its codec does to the bytes: compression,
     /// encoding, scrambling and so on. None for every other field.
     pub codec_kind: Option<crate::codec::CodecKind>,
+    /// For a node a decoder's trace laid down, what sort of node it is apart
+    /// from the values in its name: `deflate.literal`, `jpegscan.mcu`. None
+    /// for every node a template declared, and for the nodes of a codec that
+    /// does not name its kinds yet. See [`crate::codec::tracekind`].
+    pub trace_kind: Option<TraceKind>,
     /// True for the first node inside a space: the one thing a `Decoded` field
     /// holds, whose parent is the stream. There is exactly one per space and it
     /// is always drawn, which the stream itself is not: a template may fold the
@@ -772,6 +778,10 @@ struct Resolved {
     /// checkpoint reads the numbers its own storage field has already placed,
     /// and the storage is where those bytes are counted.
     aside: bool,
+    /// What sort of node a decoder's trace laid down this is, for a node
+    /// under a stream's `blocks` row. None for every node a template
+    /// declared. See [`crate::codec::tracekind`].
+    trace_kind: Option<TraceKind>,
 }
 
 /// What a computed field came to, kept on its node: a whole number for a
@@ -807,6 +817,8 @@ struct Place {
     /// See [`Resolved::aside`]. False for every place a template made, which
     /// says it on the field instead.
     aside: bool,
+    /// See [`Resolved::trace_kind`]. None for every place a template made.
+    trace_kind: Option<TraceKind>,
 }
 
 pub struct Evaluator {
@@ -1297,6 +1309,7 @@ impl Evaluator {
                 Ty::Decoded { codec, .. } => Some(codec.kind()),
                 _ => None,
             },
+            trace_kind: r.trace_kind,
             space_root: r.space != 0
                 && !path.is_empty()
                 && self.memo.get(&path[..path.len() - 1]).is_none_or(|p| p.space != r.space),
@@ -1886,11 +1899,12 @@ impl Evaluator {
         // Reading the child is what goes deeper, and a file that nests pays
         // for every frame still open above it.
         let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
-        let (machinery, elsewhere, aside) = (place.machinery, place.elsewhere, place.aside);
+        let (machinery, elsewhere, aside, trace_kind) = (place.machinery, place.elsewhere, place.aside, place.trace_kind);
         let mut r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
         r.machinery = machinery;
         r.elsewhere = elsewhere;
         r.aside = aside;
+        r.trace_kind = trace_kind;
         self.remember(path, r);
         Ok(())
     }
@@ -1942,8 +1956,8 @@ impl Evaluator {
                 self.open_space_at(doc, parent)?;
                 // Where the first block starts, which for a wrapped stream is
                 // past whatever the wrapper put in front of it.
-                let at = match self.blocks_for(parent) {
-                    Some((base, b)) => base + b.first_start()?,
+                let (at, trace_kind) = match self.blocks_for(parent) {
+                    Some((base, b)) => (base + b.first_start()?, b.kind(crate::codec::tracekind::Role::Blocks)),
                     None => return fail("this stream is no longer open"),
                 };
                 return Ok(Some(Place {
@@ -1955,6 +1969,7 @@ impl Evaluator {
                     machinery: false,
                     elsewhere: false,
                     aside: false,
+                    trace_kind,
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
@@ -1976,7 +1991,7 @@ impl Evaluator {
                 space::Opened::Refused(_) => return fail("this stream did not open"),
             };
             let limit = self.spaces.len_bits(space);
-            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false, elsewhere: false, aside: false }));
+            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false, elsewhere: false, aside: false, trace_kind: None }));
         }
         // A field that reads its contents from somewhere else in the file is
         // not bounded by the structure it was declared in: an object header
@@ -2012,6 +2027,7 @@ impl Evaluator {
                         machinery: false,
                         elsewhere: false,
                         aside: false,
+                        trace_kind: None,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -2119,7 +2135,7 @@ impl Evaluator {
                 return fail("field extends beyond the end of the file");
             }
         }
-        Ok(Some(Place { name, ty, offset, limit, space, machinery: false, elsewhere: false, aside: false }))
+        Ok(Some(Place { name, ty, offset, limit, space, machinery: false, elsewhere: false, aside: false, trace_kind: None }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -2572,6 +2588,7 @@ impl Evaluator {
                         machinery: false,
                         elsewhere: false,
                         aside: false,
+                        trace_kind: None,
                     });
                 }
                 Ty::Match { on, cases, default } => {
@@ -2612,6 +2629,7 @@ impl Evaluator {
                         machinery: false,
                         elsewhere: false,
                         aside: false,
+                        trace_kind: None,
                     });
                 }
             }
@@ -2655,7 +2673,7 @@ impl Evaluator {
         // end mark is a block of nothing, and saying it would not unpack would
         // be saying something went wrong where nothing did.
         if size == 0 {
-            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new(), crate::codec::Trace::default())));
+            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new(), crate::codec::Trace::default(), codec)));
         }
         if size / 8 > crate::codec::CAP_BYTES as u64 {
             self.spaces.refuse(path, Refusal::TooLarge);
@@ -2671,7 +2689,7 @@ impl Evaluator {
                 return Ok(space::Opened::Space(self.spaces.add_lazy(path, index)));
             }
             return Ok(match self.index_run(doc, key, codec, false)? {
-                Ok(crate::codec::lazy::Decoded::Whole(bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
+                Ok(crate::codec::lazy::Decoded::Whole(bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace, codec)),
                 Ok(crate::codec::lazy::Decoded::Indexed(index)) => {
                     let index = std::sync::Arc::new(index);
                     self.spaces.keep_index(key, codec, index.clone());
@@ -2706,7 +2724,7 @@ impl Evaluator {
             }
         };
         Ok(match crate::codec::decode_traced_with(codec, &packed, &settings) {
-            Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
+            Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace, codec)),
             Err(why) => {
                 self.spaces.refuse(path, why);
                 space::Opened::Refused(why)
@@ -3140,16 +3158,22 @@ impl Evaluator {
         let Some((base, blocks)) = self.blocks_for(parent) else {
             return fail("this stream is no longer open");
         };
-        let place = |name: String, ty: Ty, at: u64| {
-            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
+        let place = |name: String, ty: Ty, at: u64, trace_kind: Option<TraceKind>| {
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false, aside: false, trace_kind }))
         };
+        // What sort of node each child is, chosen here from the step or the
+        // row and never from the name. See `codec::tracekind`.
+        let family = blocks.family();
+        let row_kind = |role| family.and_then(|f| TraceKind::of(f, role));
+        let step_kind = |step: &crate::codec::Step, outside_units| family.and_then(|f| TraceKind::of(f, f.step_role(step.kind, outside_units)));
+        use crate::codec::tracekind::Role;
         // A JPEG scan's trace, which is the one kind with units.
         let units = blocks.whole().filter(|t| !t.units().is_empty());
         match part {
             TracedPart::Blocks => {
                 let Some(block) = blocks.get(idx as u64)? else { return fail("no such block") };
                 let at = block.in_bits.start;
-                place(blocks.name(&block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+                place(blocks.name(&block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at, row_kind(Role::Block))
             }
             // A JPEG MCU: its 8×8 blocks, and the padding and restart marker
             // after them.
@@ -3160,12 +3184,12 @@ impl Evaluator {
                     Some(traced::UnitsChild::Unit(j)) => {
                         let unit = &trace.units()[j];
                         let at = trace.step(unit.steps.start as usize).map_or(0, |s| s.in_bits.start);
-                        place(traced::unit_name(trace, unit), Ty::Traced { part: TracedPart::Unit(j as u32) }, at)
+                        place(traced::unit_name(trace, unit), Ty::Traced { part: TracedPart::Unit(j as u32) }, at, row_kind(Role::Unit))
                     }
                     Some(traced::UnitsChild::Step(k)) => {
                         let step = trace.step(k as usize).expect("in range");
                         let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()), true);
-                        place(name, ty, step.in_bits.start)
+                        place(name, ty, step.in_bits.start, step_kind(&step, true))
                     }
                     None => fail("no such field"),
                 }
@@ -3179,7 +3203,7 @@ impl Evaluator {
                 }
                 let step = trace.step(k).expect("in range");
                 let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()), false);
-                place(name, ty, step.in_bits.start)
+                place(name, ty, step.in_bits.start, step_kind(&step, false))
             }
             TracedPart::Block(i) => {
                 let Some((trace, j)) = blocks.trace_of(i)? else { return fail("no such block") };
@@ -3189,7 +3213,7 @@ impl Evaluator {
                 if idx < head {
                     let step = trace.step(view.head.start as usize + idx).expect("in range");
                     let (name, ty) = traced::head_field(&step);
-                    place(name, ty, step.in_bits.start)
+                    place(name, ty, step.in_bits.start, step_kind(&step, false))
                 } else if idx == head && view.block.kind == crate::codec::BlockKind::Scanline && view.symbols.len() == 1 {
                     // A scanline's one payload step is its filtered row, and a
                     // run of one row under a row of its own would be a level
@@ -3197,14 +3221,14 @@ impl Evaluator {
                     // field, beside the filter byte that says how to read it.
                     let step = trace.step(view.symbols.start as usize).expect("in range");
                     let (name, ty) = traced::symbol_ty(&step, view.block.kind);
-                    place(name, ty, step.in_bits.start)
+                    place(name, ty, step.in_bits.start, step_kind(&step, false))
                 } else if idx == head && !view.symbols.is_empty() {
                     let at = view.symbols_at(trace);
                     // RFC 1951's own word: the block is a sequence of codes,
                     // each of which stands for a symbol. Calling the run
                     // "symbols" meant the tooltip over a nine-bit code said
                     // `symbol 0` about a thing that is alphabet symbol 77.
-                    place("codes".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at)
+                    place("codes".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at, row_kind(Role::Codes))
                 } else {
                     fail("no such field")
                 }
@@ -3219,7 +3243,7 @@ impl Evaluator {
                 }
                 let step = trace.step(k).expect("in range");
                 let (name, ty) = traced::symbol_ty(&step, view.block.kind);
-                place(name, ty, step.in_bits.start)
+                place(name, ty, step.in_bits.start, step_kind(&step, false))
             }
         }
     }

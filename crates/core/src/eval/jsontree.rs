@@ -96,6 +96,7 @@ impl Evaluator {
             machinery: false,
             elsewhere: false,
             aside: false,
+            trace_kind: None,
         };
         self.remember(path, r);
         Ok(())

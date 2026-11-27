@@ -40,6 +40,7 @@ pub mod rar5;
 pub mod scanlines;
 pub mod snappy;
 pub mod tascam;
+pub mod tracekind;
 pub mod xz;
 
 use std::ops::Range;
