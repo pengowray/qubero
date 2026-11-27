@@ -798,6 +798,7 @@ fn refused(why: Refusal) -> String {
         Refusal::Unsupported(u) => format!("Can't check this: the data it covers is {}.", u.message()),
         _ => format!("Can't check this: the data it covers {}.", match why {
             Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooLargeUnit(_) => "unpacks to more than the limit",
+            Refusal::TooLargeInput => "is too large to unpack (over 512 MiB compressed)",
             Refusal::TooMuchAtOnce => "is too large for the editor to keep in memory at once",
             Refusal::Unaligned => "doesn't start on a byte",
             Refusal::Settings => "doesn't say how it was packed",

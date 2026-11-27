@@ -33,6 +33,29 @@ pub trait Source {
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         None
     }
+    /// The chunks a read of `len` bytes at `offset` would find not loaded,
+    /// found without copying the bytes: what [`Source::read_bytes`] would
+    /// report, deduplicated and ascending. What a reader asks before a long
+    /// read, so that a read that would only find chunks missing copies
+    /// nothing. A source that keeps chunks marks the ones it finds as read,
+    /// as a read of them would, so that asking first keeps the same chunks.
+    ///
+    /// Every chunk named is one the read would report. A source whose bytes
+    /// are decoded as they are read can name fewer, when finding a chunk
+    /// would take a decode; so a caller told nothing is missing still checks
+    /// what the read reports.
+    ///
+    /// This default makes the read into a buffer of its own and reports what
+    /// it found, which is right for any source and costs the copy. A source
+    /// that holds its bytes answers none, and every source that wraps
+    /// another asks the one it wraps.
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        let mut scratch = vec![0u8; len as usize];
+        let mut found = self.read_bytes(offset, &mut scratch);
+        found.sort_unstable_by_key(|m| m.chunk);
+        found.dedup();
+        found
+    }
 }
 
 /// A borrowed source is a source. This is what lets one file be read both as
@@ -52,6 +75,9 @@ impl<S: Source> Source for &S {
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         (*self).share()
     }
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        (*self).missing(offset, len)
+    }
 }
 
 /// A source held behind an `Arc` is a source: what a handle from
@@ -70,6 +96,9 @@ impl<S: Source + ?Sized> Source for Arc<S> {
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         (**self).share()
     }
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        (**self).missing(offset, len)
+    }
 }
 
 /// In-memory source, for tests and small files.
@@ -87,6 +116,10 @@ impl Source for MemSource {
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
         let o = offset as usize;
         out.copy_from_slice(&self.0[o..o + out.len()]);
+        Vec::new()
+    }
+    /// None: every byte is held.
+    fn missing(&self, _: u64, _: u64) -> Vec<Missing> {
         Vec::new()
     }
 }
@@ -109,6 +142,10 @@ impl Source for ArcSource {
     /// Another over the same bytes, which copies none of them.
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         Some(Arc::new(ArcSource(self.0.clone())))
+    }
+    /// None: every byte is held.
+    fn missing(&self, _: u64, _: u64) -> Vec<Missing> {
+        Vec::new()
     }
 }
 
@@ -197,6 +234,27 @@ impl Source for Kept {
 
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         Some(Arc::new(self.clone()))
+    }
+
+    /// Each chunk the bytes are in that is not kept, found by looking each
+    /// one up. A chunk that is kept is marked as read, as `read_bytes` marks
+    /// it, so that the chunks of a read that waits for the rest are not the
+    /// ones pushed out when the rest are fed.
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        if len == 0 {
+            return Vec::new();
+        }
+        let (first, last) = (offset / self.chunk_size, (offset + len - 1) / self.chunk_size);
+        let mut chunks = self.lock();
+        let mut missing = Vec::new();
+        for chunk in first..=last {
+            let now = chunks.tick();
+            match chunks.map.get_mut(&chunk) {
+                Some(cached) => cached.used = now,
+                None => missing.push(Missing { chunk }),
+            }
+        }
+        missing
     }
 }
 
@@ -287,11 +345,57 @@ impl Source for ChunkStore {
             None => self.kept.share(),
         }
     }
+
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        match &self.behind {
+            Some(source) => source.missing(offset, len),
+            None => self.kept.missing(offset, len),
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A source of `len` zero bytes in chunks of `chunk`, of which `gone`
+    /// are not loaded, that answers [`Source::missing`] itself and counts
+    /// the reads made of it: for tests that something asks which chunks are
+    /// missing and reads nothing.
+    pub(crate) struct Asked {
+        pub(crate) len: u64,
+        pub(crate) chunk: u64,
+        pub(crate) gone: Vec<u64>,
+        pub(crate) reads: AtomicU32,
+    }
+
+    impl Asked {
+        pub(crate) fn new(len: u64, chunk: u64, gone: &[u64]) -> Asked {
+            Asked { len, chunk, gone: gone.to_vec(), reads: AtomicU32::new(0) }
+        }
+
+        pub(crate) fn reads(&self) -> u32 {
+            self.reads.load(Ordering::Relaxed)
+        }
+    }
+
+    impl Source for Asked {
+        fn len_bytes(&self) -> u64 {
+            self.len
+        }
+        fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            out.fill(0);
+            self.missing(offset, out.len() as u64)
+        }
+        fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+            match len {
+                0 => Vec::new(),
+                _ => (offset / self.chunk..=(offset + len - 1) / self.chunk).filter(|c| self.gone.contains(c)).map(|chunk| Missing { chunk }).collect(),
+            }
+        }
+    }
 
     fn read(s: &dyn Source, at: u64, n: usize) -> (Vec<u8>, Vec<Missing>) {
         let mut out = vec![0xee; n];
@@ -358,5 +462,63 @@ mod tests {
         assert_eq!(read(&*behind.share().expect("the handle of the source behind it"), 10, 6), (bytes[10..].to_vec(), vec![]));
         assert!(ChunkStore::behind(Box::new(MemSource(bytes.clone())), 4).share().is_none());
         assert!((&arc).share().is_some() && (&MemSource(bytes)).share().is_none());
+    }
+
+    /// A store says which chunks a read would find missing, the same list
+    /// the read reports, and a handle onto it says the same. Bytes held in
+    /// memory are never missing.
+    #[test]
+    fn a_store_says_which_chunks_a_read_would_find_missing() {
+        let bytes: Vec<u8> = (0..40u8).collect();
+        let store = fed(&bytes, 8, 4, &[1, 3]);
+        let handle = store.share().unwrap();
+        for (at, n) in [(0, 40), (8, 8), (9, 1), (6, 4), (15, 10), (39, 1), (0, 0), (20, 3)] {
+            let (_, reported) = read(&store, at, n);
+            assert_eq!(store.missing(at, n as u64), reported, "{n} bytes at {at}");
+            assert_eq!(handle.missing(at, n as u64), reported, "{n} bytes at {at}, through a handle");
+        }
+        assert_eq!(store.missing(0, 40), vec![Missing { chunk: 0 }, Missing { chunk: 2 }, Missing { chunk: 4 }]);
+        assert!(MemSource(bytes.clone()).missing(0, 40).is_empty() && ArcSource(Arc::new(bytes)).missing(0, 40).is_empty());
+    }
+
+    /// Asking which chunks are missing marks the ones found as read, as a
+    /// read of them does, so that the chunk a read that waits already has is
+    /// not the one pushed out when the chunk it waits for arrives.
+    #[test]
+    fn asking_which_chunks_are_missing_keeps_the_ones_found() {
+        let bytes: Vec<u8> = (0..40u8).collect();
+        let mut store = fed(&bytes, 8, 3, &[0, 1, 3]);
+        // Chunks 0 and 1 were fed before 3, and are asked about now through
+        // a handle, with chunk 2, which is not there.
+        assert_eq!(store.share().unwrap().missing(0, 24), vec![Missing { chunk: 2 }]);
+        store.insert(2, bytes[16..24].into());
+        assert!(store.has(0) && store.has(1) && store.has(2) && !store.has(3));
+    }
+
+    /// Every source that wraps another asks the one it wraps which chunks
+    /// are missing, and reads none of its bytes: a borrow, an `Arc`, a store
+    /// with a source behind it, gathered parts and a document, edited or not.
+    #[test]
+    fn every_wrapper_asks_the_source_it_wraps_and_reads_nothing() {
+        use crate::document::Document;
+        use crate::gather::{Extent, Gathered};
+        let gone = [1, 4];
+        let want = vec![Missing { chunk: 1 }, Missing { chunk: 4 }];
+        let inner = Asked::new(64, 8, &gone);
+        assert_eq!((&inner).missing(0, 64), want);
+        assert_eq!(Gathered::new(&inner, [Extent::new(32, 8), Extent::new(8, 8)]).missing(0, 16), want);
+        assert_eq!(Gathered::new(&inner, [Extent::new(32, 8), Extent::new(8, 8)]).missing(9, 7), vec![Missing { chunk: 1 }]);
+        let mut doc = Document::new(&inner);
+        assert_eq!(doc.missing(0, 64), want);
+        doc.insert_bytes(0, &[7; 20]);
+        assert_eq!(doc.missing(0, 20), vec![], "inserted bytes are there");
+        assert_eq!(doc.missing(20, 16), vec![Missing { chunk: 1 }]);
+        assert_eq!(inner.reads(), 0, "a wrapper read the bytes");
+        let arc = Arc::new(Asked::new(64, 8, &gone));
+        assert_eq!(arc.missing(0, 64), want);
+        assert_eq!(arc.reads(), 0);
+        let behind = ChunkStore::behind(Box::new(arc.clone()), 8);
+        assert_eq!(behind.missing(30, 10), vec![Missing { chunk: 4 }]);
+        assert_eq!(arc.reads(), 0);
     }
 }

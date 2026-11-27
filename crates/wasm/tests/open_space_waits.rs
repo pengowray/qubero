@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use qubero_core::checksum::{adler32, crc32, crc32_update};
+use qubero_core::codec::lazy::Limits;
 use qubero_core::codec::{self, inflate, Codec, StepKind};
 use qubero_wasm::Editor;
 use serde_json::Value;
@@ -149,7 +150,12 @@ fn gzip_fast(content: &[u8]) -> Vec<u8> {
 /// A zip of one entry, `content` deflated at the fastest level and named
 /// `name`, with its central directory and end record.
 fn zip_of(name: &[u8], content: &[u8]) -> Vec<u8> {
-    let packed = miniz_oxide::deflate::compress_to_vec(content, 1);
+    zip_of_packed(name, content, &miniz_oxide::deflate::compress_to_vec(content, 1))
+}
+
+/// The same, with `packed` as the entry's deflate, which is `content`
+/// deflated some other way.
+fn zip_of_packed(name: &[u8], content: &[u8], packed: &[u8]) -> Vec<u8> {
     let crc = crc32(content);
     let sizes = |z: &mut Vec<u8>| {
         z.extend(crc.to_le_bytes());
@@ -166,7 +172,7 @@ fn zip_of(name: &[u8], content: &[u8]) -> Vec<u8> {
     sizes(&mut z);
     z.extend(0u16.to_le_bytes()); // extra field length
     z.extend(name);
-    z.extend(&packed);
+    z.extend_from_slice(packed);
     let central = z.len();
     z.extend(0x0201_4b50u32.to_le_bytes());
     z.extend(20u16.to_le_bytes()); // version made by
@@ -1160,4 +1166,188 @@ fn a_gzip_members_header_lists_while_its_stream_waits_for_the_next_window() {
     // Only the waits before the pass starts say nothing of it: the header's
     // chunk, and the run's first window.
     assert!(bare.iter().all(|&w| w == 0), "waits with no progress came after {bare:?} with it");
+}
+
+// ----- runs past the limit on a copy of the run -----
+
+/// `n` bytes that do not pack.
+fn noise(n: usize) -> Vec<u8> {
+    let mut x = 0x2545_f491_u32;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect()
+}
+
+/// `content` as deflate stored blocks, which take up as much as `content`
+/// does and cost nothing to write or to inflate, for a run of tens of
+/// megabytes.
+fn stored_blocks(content: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(content.len() + content.len() / 65_535 * 5 + 5);
+    let mut pieces = content.chunks(65_535).peekable();
+    while let Some(piece) = pieces.next() {
+        // BFINAL on the last, BTYPE 00, and the rest of the byte padding.
+        out.push(u8::from(pieces.peek().is_none()));
+        out.extend((piece.len() as u16).to_le_bytes());
+        out.extend((!(piece.len() as u16)).to_le_bytes());
+        out.extend_from_slice(piece);
+    }
+    out
+}
+
+/// A gzip file of one member whose deflate is `packed`, which is `content`.
+fn gzip_of_packed(content: &[u8], packed: &[u8]) -> Vec<u8> {
+    let mut gz = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    gz.extend_from_slice(packed);
+    gz.extend(crc32(content).to_le_bytes());
+    gz.extend((content.len() as u32).to_le_bytes());
+    gz
+}
+
+/// What a tab reads at `at`, `n` bytes of it, with the chunks of `file`
+/// each read names fed until every byte is there.
+fn tab_bytes_fed(ed: &mut Editor, file: &[u8], tab: u32, at: usize, n: usize) -> Vec<u8> {
+    let mut out = vec![0u8; n];
+    for _ in 0..20 {
+        let missing = ed.read_bytes(tab, at as f64, &mut out);
+        if missing.is_empty() {
+            return out;
+        }
+        for c in missing {
+            feed(ed, file, c as u64);
+        }
+    }
+    panic!("{n} bytes at {at} of tab {tab} never all arrived");
+}
+
+/// Limits under which a run of a few megabytes is past the limit on a copy
+/// of a run, as one past 64 MiB is in the browser, with `input` in place of
+/// the 512 MiB a run read through a handle may take up: a run held whole up
+/// to 256 KiB of output, a measuring walk counting up to 256 KiB, and a
+/// copy of up to 256 KiB. A joined stream is held whole up to `WHOLE_CAP`.
+/// Checkpoints are 256 KiB apart, so that a span of a run that does not pack
+/// takes up five chunks of the file, well within the store of 16, as a span
+/// of at most 8.5 MiB is within the browser's 32 MiB.
+fn copy_limited(input: u64) -> Limits {
+    Limits { whole: 256 << 10, measure: 256 << 10, copy_input: 256 << 10, input, spacing: 256 << 10, in_spacing: 256 << 10, ..Limits::default() }
+}
+
+const WHOLE_CAP: usize = 256 << 10;
+
+/// A .gz of one member whose run is past the limit on a copy, and several
+/// times longer than the store, opened as the web opens it, through the
+/// file's reading under `limits` (`None` for the defaults). The member's
+/// measuring walk passes its cap and the template takes the member to run
+/// to its trailer; the member's stream lists and opens as a tab; and Open
+/// unpacked on the file's `decoded`, which joins the members, opens a tab
+/// read a part at a time, whose one part reads its run through the store.
+/// Both tabs read `content`.
+fn a_gzip_member_opens(content: &[u8], store: u32, limits: Option<(Limits, usize)>) {
+    let packed = stored_blocks(content);
+    let file = gzip_of_packed(content, &packed);
+    assert!(file.len() > 3 * store as usize * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store, "gzip");
+    if let Some((limits, whole_cap)) = limits {
+        ed.set_stream_limits(limits, whole_cap);
+    }
+    let mut feeder = Feeder::new(&file);
+    let compressed = feeder.child_named(&mut ed, &[0, 0], "compressed");
+    let run = feeder.node(&mut ed, &compressed);
+    assert_eq!(run["size_bits"].as_f64().unwrap() as usize, packed.len() * 8, "{run}");
+    assert!(run["refused"].is_null(), "{run}");
+    for path in [compressed.as_slice(), &[1]] {
+        let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, path));
+        let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab for {path:?}: {reply}")) as u32;
+        assert_eq!(ed.len_bytes(tab), content.len() as f64, "{path:?}");
+        for at in [0, content.len() / 2, content.len() - 100] {
+            assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "{path:?}: 100 bytes at {at} differ");
+        }
+    }
+    assert!(feeder.widest <= 64, "a reply named {} chunks", feeder.widest);
+}
+
+/// The same for a zip entry: its `data` lists what is inside, says no
+/// reason, and Open unpacked on it gives a tab that reads `content`.
+fn a_zip_entry_opens(content: &[u8], store: u32, limits: Option<(Limits, usize)>) {
+    let packed = stored_blocks(content);
+    let file = zip_of_packed(b"noise.bin", content, &packed);
+    assert!(file.len() > 3 * store as usize * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store, "zip");
+    if let Some((limits, whole_cap)) = limits {
+        ed.set_stream_limits(limits, whole_cap);
+    }
+    let mut feeder = Feeder::new(&file);
+    let body = feeder.child_named(&mut ed, &[0, 0], "body");
+    let data = feeder.child_named(&mut ed, &body, "data");
+    assert!(!feeder.children(&mut ed, &data).is_empty(), "nothing listed inside the entry");
+    let node = feeder.node(&mut ed, &data);
+    assert!(node["refused"].is_null(), "{node}");
+    assert_eq!(node["size_bits"].as_f64().unwrap() as usize, packed.len() * 8, "{node}");
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &data));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    for at in [0, content.len() / 2, content.len() - 100] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "100 bytes at {at} differ");
+    }
+    assert!(feeder.widest <= 64, "a reply named {} chunks", feeder.widest);
+}
+
+/// A .gz of one member and a zip entry, each 3 MiB of run in a store of
+/// 1 MiB, past the limit on a copy and within `Limits::input`, open end to
+/// end, as a .gz or a zip entry past 64 MiB does in the browser: no copy of
+/// the run is made, so only `Limits::input` applies.
+#[test]
+fn a_gzip_member_and_a_zip_entry_past_the_copy_limit_open_end_to_end() {
+    let content = noise(3 << 20);
+    let input = content.len() as u64 + 1024;
+    a_gzip_member_opens(&content, 16, Some((copy_limited(input), WHOLE_CAP)));
+    a_zip_entry_opens(&content, 16, Some((copy_limited(input), WHOLE_CAP)));
+}
+
+/// The same files with `Limits::input` one byte short of the run: the
+/// member's stream and the zip entry's `data` say `too-large-input` on
+/// their rows, Open unpacked on each answers with it, and so does Open
+/// joined stream on the gzip's `decoded`.
+#[test]
+fn a_run_past_the_input_limit_says_so_on_its_row_and_when_opened() {
+    let content = noise(1 << 20);
+    let packed = stored_blocks(&content);
+    let limits = (copy_limited(packed.len() as u64 - 1), WHOLE_CAP);
+    let refused = |reply: &Value| reply["node"]["refused"].as_str().map(str::to_string);
+
+    let file = gzip_of_packed(&content, &packed);
+    let mut ed = unfed(&file, 16, "gzip");
+    ed.set_stream_limits(limits.0, limits.1);
+    let mut feeder = Feeder::new(&file);
+    let compressed = feeder.child_named(&mut ed, &[0, 0], "compressed");
+    assert_eq!(feeder.node(&mut ed, &compressed)["refused"], "too-large-input");
+    for path in [compressed.as_slice(), &[1]] {
+        let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, path));
+        assert_eq!(refused(&reply).as_deref(), Some("too-large-input"), "{path:?}: {reply}");
+    }
+
+    let file = zip_of_packed(b"noise.bin", &content, &packed);
+    let mut ed = unfed(&file, 16, "zip");
+    ed.set_stream_limits(limits.0, limits.1);
+    let mut feeder = Feeder::new(&file);
+    let body = feeder.child_named(&mut ed, &[0, 0], "body");
+    let data = feeder.child_named(&mut ed, &body, "data");
+    assert_eq!(feeder.node(&mut ed, &data)["refused"], "too-large-input");
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &data));
+    assert_eq!(refused(&reply).as_deref(), Some("too-large-input"), "{reply}");
+}
+
+/// The same at full size, under the default limits: a .gz of one member and
+/// a zip entry of 65 MiB of run, past the 64 MiB a copy may be, open end to
+/// end from a store of 4 MiB. Slow and about 200 MB of memory, so run on
+/// purpose: `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+#[test]
+#[ignore]
+fn a_gzip_member_and_a_zip_entry_past_64_mib_open_end_to_end() {
+    let content = noise(65 << 20);
+    a_gzip_member_opens(&content, 64, None);
+    a_zip_entry_opens(&content, 64, None);
 }
