@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use qubero_core::codec::{self, Codec, StepField, StepKind};
 use qubero_core::document::Document;
 use qubero_core::eval::Evaluator;
-use qubero_core::source::MemSource;
+use qubero_core::source::ArcSource;
 
 /// What was found, so a run with no samples in hand can say so rather than
 /// passing silently.
@@ -198,7 +198,7 @@ fn every_compressed_sample_opens_as_a_space() {
             continue;
         }
         let Some(template) = qubero_core::formats::template(name) else { continue };
-        let doc = Document::new(MemSource(bytes));
+        let doc = Document::new(ArcSource(std::sync::Arc::new(bytes)));
         let mut ev = Evaluator::new(template);
         let mut found = Vec::new();
         streams(&doc, &mut ev, &[], 6, &mut found);
@@ -225,7 +225,7 @@ fn every_compressed_sample_opens_as_a_space() {
 
 /// Every `Decoded` node under `at`, which is where the streams are.
 fn streams(
-    d: &Document<MemSource>,
+    d: &Document<ArcSource>,
     ev: &mut Evaluator,
     at: &[usize],
     depth: u32,

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use qubero_core::document::Document;
 use qubero_core::eval::Evaluator;
 use qubero_core::formats;
-use qubero_core::source::MemSource;
+use qubero_core::source::ArcSource;
 
 fn rubin() -> Option<PathBuf> {
     let file = qubero_samples::checkout("qubero2-extras")?.join("rubin").join("3018092000065-det000.fits");
@@ -31,7 +31,7 @@ fn a_gzipped_rubin_raw_opens_as_fits() {
     };
     let bytes = std::fs::read(&file).unwrap();
     let found = formats::sniff(&bytes, bytes.len() as u64).expect("sniffs");
-    let d = Document::new(MemSource(bytes));
+    let d = Document::new(ArcSource(std::sync::Arc::new(bytes)));
     let mut e = Evaluator::new(formats::template(found).unwrap());
     assert_eq!(e.children(&d, &[], 0, 2).unwrap()[1].name, "decoded");
 
@@ -77,7 +77,7 @@ fn a_gzipped_rubin_raw_lists_its_blocks() {
     };
     let bytes = std::fs::read(&file).unwrap();
     let found = formats::sniff(&bytes, bytes.len() as u64).expect("sniffs");
-    let d = Document::new(MemSource(bytes));
+    let d = Document::new(ArcSource(std::sync::Arc::new(bytes)));
     let mut e = Evaluator::new(formats::template(found).unwrap());
     let member = [0, 0];
     let fields = e.children(&d, &member, 0, 20).unwrap();
@@ -107,4 +107,9 @@ fn a_gzipped_rubin_raw_lists_its_blocks() {
     let some = e.children(&d, &codes.path, 0, 50.min(codes.child_count)).unwrap();
     assert!(some.iter().any(|c| c.name.starts_with("match ")), "{:?}", some.iter().map(|c| &c.name).collect::<Vec<_>>());
     eprintln!("{} blocks; listed and one opened in {:?}", listed.len(), started.elapsed());
+    // The index reads the member's run through a handle onto the file, and
+    // keeps no copy of it.
+    let id = e.open_space(&d, 0, &run).unwrap().expect("the member's stream opens");
+    let qubero_core::eval::SpaceSource::Lazy(index) = e.space(id).unwrap().source() else { panic!("not read through an index") };
+    assert_eq!((index.input().len(), index.input().owned_bytes()), (stream.size_bits / 8, 0));
 }

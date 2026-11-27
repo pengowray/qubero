@@ -17,7 +17,7 @@ use qubero_core::codec::{self, Codec, StepField, StepKind};
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats;
-use qubero_core::source::MemSource;
+use qubero_core::source::ArcSource;
 
 /// What every one of these files holds, whatever it was compressed with.
 const SENTENCE: &str = "Qubero reads the shape of a compressed file without decompressing it.";
@@ -38,7 +38,7 @@ fn a_file_that_is_one_stream_reads_as_what_the_stream_holds() {
         let Some(path) = find(name) else { continue };
         read += 1;
         let bytes = std::fs::read(&path).expect("reads");
-        let d = Document::new(MemSource(bytes));
+        let d = Document::new(ArcSource(std::sync::Arc::new(bytes)));
         let mut ev = Evaluator::new(formats::builtin(template).expect("a template of that name"));
         let found = text_inside(&d, &mut ev, &[], 8);
         let Some((at, text)) = found else {
@@ -123,7 +123,7 @@ fn the_compress_sample_comes_out_as_gzip_reads_it() {
 
 /// The whole file, for the one sample whose blocks were stored rather than
 /// compressed.
-fn ev_bytes(d: &Document<MemSource>) -> &[u8] {
+fn ev_bytes(d: &Document<ArcSource>) -> &[u8] {
     &d.source().0
 }
 
@@ -131,7 +131,7 @@ fn ev_bytes(d: &Document<MemSource>) -> &[u8] {
 /// path reaches it depends on the format, so it is looked for rather than
 /// spelled.
 fn text_inside(
-    d: &Document<MemSource>,
+    d: &Document<ArcSource>,
     ev: &mut Evaluator,
     at: &[usize],
     depth: u32,

@@ -1919,7 +1919,7 @@ mod tests {
     use crate::eval::space::{Opened, SpaceSource};
     use crate::eval::{Evaluator, SingleRun, Value};
     use crate::formats;
-    use crate::source::MemSource;
+    use crate::source::{ArcSource, MemSource};
 
     /// A run whose codec is three numbers the file wrote down, which is what
     /// [`Packing::Lzma1`](crate::template::Packing::Lzma1) exists for.
@@ -2032,9 +2032,12 @@ mod tests {
         assert_eq!(held(&c), (vec![2, 3, 4], 270));
     }
 
-    /// A file that is one zlib stream, over whatever is handed in.
-    fn zlib_over(content: &[u8]) -> Document<MemSource> {
-        Document::new(MemSource(miniz_oxide::deflate::compress_to_vec_zlib(content, 6)))
+    /// A file that is one zlib stream, over whatever is handed in. Held in an
+    /// `ArcSource`, which gives a handle, so that an index over the stream
+    /// reads it through that handle, as an index in the browser reads the
+    /// file's store.
+    fn zlib_over(content: &[u8]) -> Document<ArcSource> {
+        Document::new(ArcSource(std::sync::Arc::new(miniz_oxide::deflate::compress_to_vec_zlib(content, 6))))
     }
 
     /// The `compressed` field of the zlib template.
@@ -2109,6 +2112,7 @@ mod tests {
         let Some(Opened::Space(id)) = e.spaces.get(RUN) else { panic!("the stream did not open") };
         let index = e.spaces.lazy(id).expect("indexed, not held whole").clone();
         assert!(index.spans() > 10);
+        assert_eq!(index.input().owned_bytes(), 0, "the index reads the file, and holds no copy of the run");
         for at in [0usize, 1000, 777_777, text.len() - 100] {
             let got = e.read_in(&d, id, at as u64 * 8, 800).unwrap();
             assert_eq!(got, &text[at..at + 100], "100 bytes at {at}");
@@ -2169,7 +2173,7 @@ mod tests {
         use crate::source::Source;
         let text = many_lines();
         let d = zlib_over(&text);
-        let file = d.source().0.clone();
+        let file = d.source().0.to_vec();
         let run = 2..file.len() - 4;
         let key = (0, run.start as u64 * 8, run.len() as u64 * 8);
         let Ok(Decoded::Indexed(mut index)) = decode_or_index_with(Codec::Deflate, std::sync::Arc::new(file[run.clone()].to_vec()), small_limits()) else {
@@ -2282,7 +2286,7 @@ mod tests {
         use crate::codec::lazy::tests::zstd_of;
         use crate::eval::EvalError;
         let text = many_lines();
-        let d = Document::new(MemSource(zstd_of(&text, 100_000, true)));
+        let d = Document::new(ArcSource(std::sync::Arc::new(zstd_of(&text, 100_000, true))));
         let open = |e: &mut Evaluator| -> crate::eval::R<Option<crate::eval::SpaceId>> {
             let decoded = e.child_named(&d, &[], "decoded")?.expect("a decoded field");
             e.open_space(&d, 0, &[decoded[0], 0])
@@ -2327,7 +2331,7 @@ mod tests {
     fn a_gzip_past_the_cap_reads_a_go_at_a_time() {
         use crate::eval::EvalError;
         let text = many_lines();
-        let d = Document::new(MemSource(gzip_member(&text)));
+        let d = Document::new(ArcSource(std::sync::Arc::new(gzip_member(&text))));
         let mut e = Evaluator::new(formats::builtin("gzip").unwrap());
         e.spaces.set_lazy_limits(small_limits());
         e.set_slice(Some(600));
