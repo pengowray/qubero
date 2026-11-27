@@ -1127,7 +1127,10 @@ order. Each part needs only the parts before it.
    once. Tested by
    `a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes`
    in `crates/wasm/tests/open_space_waits.rs`: a store of 4 chunks, a run of
-   20, and a code three quarters of the way along it.
+   20, and a code three quarters of the way along it. And for a run read
+   through an index, whose trace is its block's, by
+   `a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes`: a store of 2
+   chunks and the zlib of 70 MiB of tar, about 7 chunks.
 5. **`Missing` as "not yet".** `RunInput`; the `Seekable` keeps one, made over
    its copy (an `ArcSource`), so that until part 7 no read of a `Seekable`
    finds a chunk missing; `ReadError`; every row of the table in "Everything

@@ -401,6 +401,55 @@ fn a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes() {
     }
 }
 
+/// The same for a run whose stream is past 64 MiB and is read through an
+/// index rather than held whole, as most runs longer than the store are. The
+/// trace that names the code is its block's, made from the index's own copy
+/// of the run, and of the file only the bytes the code is in are read. The
+/// run is the zlib of a tar of zeros, written by hand as one block in the
+/// fixed codes, so a code that deep is known: a length of 258, then a
+/// distance of 1.
+#[test]
+fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
+    let file = zlib_of_a_tar_of_zeros(70 << 20);
+    let store = 2;
+    assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store as u32, "zlib");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[6]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+
+    // The step that wrote a byte six sevenths of the way along the stream.
+    let reply = feeder.ask(&mut ed, |ed| ed.map_out(tab, (60 << 20) as f64));
+    let step = &reply["node"];
+    assert_eq!(step["kind"], "match", "{reply}");
+    let bits = |k: &str| step[k].as_f64().unwrap() as u64;
+    let (run_at, start, end) = (bits("run_offset_bits"), bits("in_start"), bits("in_end"));
+    assert_eq!(end - start, 13, "{step}");
+    let own: Vec<u64> = ((run_at + start) / 8 / CHUNK as u64..=(run_at + end - 1) / 8 / CHUNK as u64).collect();
+    assert!(own[0] >= store as u64, "the code is in chunk {}, among the first {store}", own[0]);
+    for c in 0..store as u64 {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, start as f64));
+    assert_eq!(reply["status"], "pending", "{reply}");
+    assert_eq!(chunks_of(&reply), own, "{reply}");
+    for &c in &own {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, start as f64));
+    assert_eq!(reply["status"], "ok", "{reply}");
+    let got = &reply["node"];
+    assert_eq!(got["kind"], "match", "{got}");
+    assert_eq!(got["block_kind"], "fixed", "{got}");
+    assert_eq!(got["bits"].as_f64(), Some(13.0), "{got}");
+    // Length code 285 is 8 bits and means 258 outright; distance code 0 is 5
+    // bits and means 1. A fixed block's tables come from no step of the run.
+    let length = inflate::DecodedCode { symbol: 285, code_bits: 8, extra_bits: 0, extra: 0, value: 258, entry: None, entry_child: None };
+    let distance = inflate::DecodedCode { symbol: 0, code_bits: 5, extra_bits: 0, extra: 0, value: 1, entry: None, entry_child: None };
+    assert!(code_is(&got["symbol"], &length), "{got}");
+    assert!(code_is(&got["distance"], &distance), "{got}");
+}
+
 /// A .gz of two members, the first longer than the chunk store. A member is
 /// measured by inflating it from where its run starts, and that read used to
 /// be capped at half the store: a member longer than that measured as
