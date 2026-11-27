@@ -41,13 +41,17 @@ export type TemplateIndex = {
   readonly root: Block | null;
   /** Per line that starts a statement, the last line of that statement. */
   readonly stmtEnd: ReadonlyMap<number, number>;
-  /** Every `2 => same as case 1` line: the arm it points at and, for one that
-   *  ends `but big-endian` or `but little-endian`, which. */
+  /** Every `2 => same as case 1` line, and every `type B = same as type A`
+   *  line: the arm or type it points at and, for one that ends
+   *  `but big-endian` or `but little-endian`, which. */
   readonly sameAs: readonly SameAs[];
+  /** A type written as `type B = same as type A`, to the type it names. */
+  readonly alias: ReadonlyMap<string, string>;
 };
 
-/** One `same as case` line. `target` is the first line of the arm it names,
- *  null when no arm above it starts with that key. */
+/** One `same as case` or `same as type` line. `target` is the first line of
+ *  the arm or type it names, null when there is no such arm above it or no
+ *  such type. */
 export type SameAs = { readonly line: number; readonly target: number | null; readonly order: ByteOrder | null };
 
 export type ByteOrder = "big" | "little";
@@ -92,6 +96,7 @@ function armOf(stmt: string): { keys: string[]; rest: string } | null {
 }
 
 const SAME_AS = /^same as case (.+?)(?:, but (big|little)-endian)?$/;
+const SAME_TYPE = /^type (\S+) = same as type (\S+?)(?:, but (big|little)-endian)?$/;
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
@@ -154,6 +159,9 @@ export function indexTemplate(text: string): TemplateIndex {
   const typeSpans = new Map<string, readonly [number, number]>();
   const stmtEnd = new Map<number, number>();
   const sameAs: SameAs[] = [];
+  const alias = new Map<string, string>();
+  /** `same as type` lines, whose type may be written further down. */
+  const sameType: { line: number; target: string; order: ByteOrder | null }[] = [];
   let root: Block | null = null;
   const stack: Frame[] = [];
   /** The statement being read: its first line and kind. */
@@ -182,6 +190,12 @@ export function indexTemplate(text: string): TemplateIndex {
       if (i > first) joined += " ";
       starts.push(joined.length);
       joined += ln(i).trim();
+    }
+    const typed = indentOf(ln(first)) === 0 ? SAME_TYPE.exec(joined) : null;
+    if (typed !== null) {
+      const [, name = "", target = "", order] = typed;
+      alias.set(name, target);
+      sameType.push({ line: first, target, order: order === "big" || order === "little" ? order : null });
     }
     if (stmtArms !== null) {
       const arm = armOf(joined);
@@ -262,6 +276,7 @@ export function indexTemplate(text: string): TemplateIndex {
     if (f.block !== null) f.block.end = lines.length - 1;
   }
   closeTopType(lines.length - 1);
+  for (const t of sameType) sameAs.push({ line: t.line, target: typeSpans.get(t.target)?.[0] ?? null, order: t.order });
   // A name declared twice on one line is coloured once.
   for (const d of decls) {
     const seen = new Set<number>();
@@ -272,7 +287,7 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs, alias };
 }
 
 /** The byte order a block is also read in: the order of a `same as case N,
@@ -326,13 +341,14 @@ export function blocksNamed(index: TemplateIndex, name: string, scope: readonly 
 
 /** Where to look for the structure a field's value is: the field's own lines,
  *  and every top-level type its statement names (`value: Value` reaches the
- *  structures written inside `type Value = switch ...`). */
+ *  structures written inside `type Value = switch ...`). A type written as
+ *  `same as type` another is looked for in that other. */
 function scopeOf(index: TemplateIndex, line: number): [number, number][] {
   const out: [number, number][] = [[...fieldSpan(index, line)]];
   const last = index.stmtEnd.get(line) ?? line;
   const words = index.lines.slice(line, last + 1).join(" ").match(/[A-Za-z_][\w.]*/g) ?? [];
   for (const w of words) {
-    const span = index.typeSpans.get(w);
+    const span = index.typeSpans.get(index.alias.get(w) ?? w);
     if (span !== undefined) out.push([span[0], span[1]]);
   }
   return out;

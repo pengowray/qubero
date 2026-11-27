@@ -1865,19 +1865,7 @@ root PNG {
                   ifd.next_ifd_offset, next .next_ifd_offset, from window) tiff.Ifd.le
                   element name from words("ifd {}", index + 1)
             }
-            'MM' => Header {
-              version: u16be enum Version {42 = tiff, 43 = bigtiff}
-              ifd_offset: u32be
-              ifd: at(ifd_offset from window) tiff.Ifd.be
-              body: bytes[remaining]  aside
-              // The IFDs after IFD 0, in the order they are linked. Each IFD starts at the
-                  offset in the next_ifd_offset field of the IFD before it, counted from the
-                  start of the TIFF. In an EXIF block, IFD 1 has the thumbnail. In a multi-page
-                  TIFF, each page has its own IFD.
-              next_ifds: chain(first ifd.next_ifd_offset == ifd_offset ? 0 :
-                  ifd.next_ifd_offset, next .next_ifd_offset, from window) tiff.Ifd.be
-                  element name from words("ifd {}", index + 1)
-            }
+            'MM' => same as case 'II', but big-endian
             _ => bytes[remaining]
           }
         }
@@ -2267,142 +2255,7 @@ root PNG {
   }
 }
 
-type tiff.ExifIfd.be = ExifIfd (contents entries) {
-  count: u16be
-  entries: Entry (named by tag, unit entry) {
-    tag: u16be enum Tag {
-      33434 = exposure time, 33437 = f number, 34850 = exposure program,
-      34852 = spectral sensitivity, 34855 = iso speed, 34864 = sensitivity type,
-      34866 = recommended exposure index, 36864 = exif version, 36867 = date taken,
-      36868 = date digitised, 36880 = offset from utc, 36881 = offset from utc, taken,
-      36882 = offset from utc, digitised, 37121 = components configuration,
-      37122 = compressed bits per pixel, 37377 = shutter speed, 37378 = aperture,
-      37379 = brightness, 37380 = exposure bias, 37381 = widest aperture,
-      37382 = subject distance, 37383 = metering mode, 37384 = light source, 37385 = flash,
-      37386 = focal length, 37396 = subject area, 37500 = maker note, 37510 = comment,
-      37520 = subsecond, 37521 = subsecond, taken, 37522 = subsecond, digitised,
-      40960 = flashpix version, 40961 = colour space, 40962 = width, 40963 = height,
-      40964 = related sound file, 40965 = interoperability ifd,
-      41486 = focal plane x resolution, 41487 = focal plane y resolution,
-      41488 = focal plane resolution unit, 41492 = subject position, 41493 = exposure index,
-      41495 = sensing method, 41728 = file source, 41729 = scene type,
-      41730 = colour filter pattern, 41985 = custom rendered, 41986 = exposure mode,
-      41987 = white balance, 41988 = digital zoom, 41989 = focal length in 35mm,
-      41990 = scene capture type, 41991 = gain control, 41992 = contrast, 41993 = saturation,
-      41994 = sharpness, 41996 = subject distance range, 42016 = image id,
-      42032 = camera owner, 42033 = body serial number, 42034 = lens specification,
-      42035 = lens make, 42036 = lens model, 42037 = lens serial number
-    }
-    type: u16be enum FieldType {
-      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
-      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
-      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
-    }
-    count: u32be
-    room: switch type {
-      1 => computed 1 * count
-      2 => computed 1 * count
-      3 => computed 2 * count
-      4 => computed 4 * count
-      5 => computed 8 * count
-      6 => computed 1 * count
-      7 => computed 1 * count
-      8 => computed 2 * count
-      9 => computed 4 * count
-      10 => computed 8 * count
-      11 => computed 4 * count
-      12 => computed 8 * count
-      13 => computed 4 * count
-      16 => computed 8 * count
-      17 => computed 8 * count
-      18 => computed 8 * count
-      _ => computed 0
-    }
-    value: switch room / 5 {
-      0 => sized(4) Here (inline) {
-        values: switch type {
-          2 => text[count] padded with 0x00 ascii
-          7 => bytes[count]
-          1 => switch count {1 => u8be, _ => u8be[count]}
-          3 => switch count {1 => u16be, _ => u16be[count]}
-          4 => switch count {1 => u32be, _ => u32be[count]}
-          5 => switch count {
-            1 => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }
-            _ => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }[count]
-          }
-          6 => switch count {1 => i8be, _ => i8be[count]}
-          8 => switch count {1 => i16be, _ => i16be[count]}
-          9 => switch count {1 => i32be, _ => i32be[count]}
-          10 => switch count {
-            1 => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }
-            _ => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }[count]
-          }
-          11 => switch count {1 => f32be, _ => f32be[count]}
-          12 => switch count {1 => f64be, _ => f64be[count]}
-          13 => switch count {1 => u32be, _ => u32be[count]}
-          16 => switch count {1 => u64be, _ => u64be[count]}
-          17 => switch count {1 => i64be, _ => i64be[count]}
-          18 => switch count {1 => u64be, _ => u64be[count]}
-          _ => bytes[remaining]
-        }
-        padding: bytes[remaining]
-      }
-      _ => Elsewhere (inline) {
-        offset: u32be
-        values: at(offset from window) switch type {
-          2 => text[count] padded with 0x00 ascii
-          7 => bytes[count]
-          1 => switch count {1 => u8be, _ => u8be[count]}
-          3 => switch count {1 => u16be, _ => u16be[count]}
-          4 => switch count {1 => u32be, _ => u32be[count]}
-          5 => switch count {
-            1 => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }
-            _ => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }[count]
-          }
-          6 => switch count {1 => i8be, _ => i8be[count]}
-          8 => switch count {1 => i16be, _ => i16be[count]}
-          9 => switch count {1 => i32be, _ => i32be[count]}
-          10 => switch count {
-            1 => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }
-            _ => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }[count]
-          }
-          11 => switch count {1 => f32be, _ => f32be[count]}
-          12 => switch count {1 => f64be, _ => f64be[count]}
-          13 => switch count {1 => u32be, _ => u32be[count]}
-          16 => switch count {1 => u64be, _ => u64be[count]}
-          17 => switch count {1 => i64be, _ => i64be[count]}
-          18 => switch count {1 => u64be, _ => u64be[count]}
-          _ => bytes[remaining]
-        }
-      }
-    }
-  }[count]
-  next_ifd_offset: u32be
-}
+type tiff.ExifIfd.be = same as type tiff.ExifIfd.le, but big-endian
 
 type tiff.ExifIfd.le = ExifIfd (contents entries) {
   count: u16le
@@ -2473,7 +2326,7 @@ type tiff.ExifIfd.le = ExifIfd (contents entries) {
               denominator: u32le
             }[count]
           }
-          6 => switch count {1 => i8le, _ => i8le[count]}
+          6 => switch count {1 => i8be, _ => i8be[count]}
           8 => switch count {1 => i16le, _ => i16le[count]}
           9 => switch count {1 => i32le, _ => i32le[count]}
           10 => switch count {
@@ -2514,7 +2367,7 @@ type tiff.ExifIfd.le = ExifIfd (contents entries) {
               denominator: u32le
             }[count]
           }
-          6 => switch count {1 => i8le, _ => i8le[count]}
+          6 => switch count {1 => i8be, _ => i8be[count]}
           8 => switch count {1 => i16le, _ => i16le[count]}
           9 => switch count {1 => i32le, _ => i32le[count]}
           10 => switch count {
@@ -2541,129 +2394,7 @@ type tiff.ExifIfd.le = ExifIfd (contents entries) {
   next_ifd_offset: u32le
 }
 
-type tiff.GpsIfd.be = GpsIfd (contents entries) {
-  count: u16be
-  entries: Entry (named by tag, unit entry) {
-    tag: u16be enum Tag {
-      0 = version id, 1 = latitude ref, 2 = latitude, 3 = longitude ref, 4 = longitude,
-      5 = altitude ref, 6 = altitude, 7 = time, 8 = satellites, 9 = status, 10 = measure mode,
-      11 = precision, 12 = speed ref, 13 = speed, 14 = track ref, 15 = track,
-      16 = direction ref, 17 = direction, 18 = map datum, 19 = destination latitude ref,
-      20 = destination latitude, 21 = destination longitude ref, 22 = destination longitude,
-      23 = destination bearing ref, 24 = destination bearing, 25 = destination distance ref,
-      26 = destination distance, 27 = processing method, 28 = area information, 29 = date,
-      30 = differential, 31 = horizontal error
-    }
-    type: u16be enum FieldType {
-      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
-      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
-      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
-    }
-    count: u32be
-    room: switch type {
-      1 => computed 1 * count
-      2 => computed 1 * count
-      3 => computed 2 * count
-      4 => computed 4 * count
-      5 => computed 8 * count
-      6 => computed 1 * count
-      7 => computed 1 * count
-      8 => computed 2 * count
-      9 => computed 4 * count
-      10 => computed 8 * count
-      11 => computed 4 * count
-      12 => computed 8 * count
-      13 => computed 4 * count
-      16 => computed 8 * count
-      17 => computed 8 * count
-      18 => computed 8 * count
-      _ => computed 0
-    }
-    value: switch room / 5 {
-      0 => sized(4) Here (inline) {
-        values: switch type {
-          2 => text[count] padded with 0x00 ascii
-          7 => bytes[count]
-          1 => switch count {1 => u8be, _ => u8be[count]}
-          3 => switch count {1 => u16be, _ => u16be[count]}
-          4 => switch count {1 => u32be, _ => u32be[count]}
-          5 => switch count {
-            1 => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }
-            _ => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }[count]
-          }
-          6 => switch count {1 => i8be, _ => i8be[count]}
-          8 => switch count {1 => i16be, _ => i16be[count]}
-          9 => switch count {1 => i32be, _ => i32be[count]}
-          10 => switch count {
-            1 => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }
-            _ => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }[count]
-          }
-          11 => switch count {1 => f32be, _ => f32be[count]}
-          12 => switch count {1 => f64be, _ => f64be[count]}
-          13 => switch count {1 => u32be, _ => u32be[count]}
-          16 => switch count {1 => u64be, _ => u64be[count]}
-          17 => switch count {1 => i64be, _ => i64be[count]}
-          18 => switch count {1 => u64be, _ => u64be[count]}
-          _ => bytes[remaining]
-        }
-        padding: bytes[remaining]
-      }
-      _ => Elsewhere (inline) {
-        offset: u32be
-        values: at(offset from window) switch type {
-          2 => text[count] padded with 0x00 ascii
-          7 => bytes[count]
-          1 => switch count {1 => u8be, _ => u8be[count]}
-          3 => switch count {1 => u16be, _ => u16be[count]}
-          4 => switch count {1 => u32be, _ => u32be[count]}
-          5 => switch count {
-            1 => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }
-            _ => Rational (inline) {
-              numerator: u32be
-              denominator: u32be
-            }[count]
-          }
-          6 => switch count {1 => i8be, _ => i8be[count]}
-          8 => switch count {1 => i16be, _ => i16be[count]}
-          9 => switch count {1 => i32be, _ => i32be[count]}
-          10 => switch count {
-            1 => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }
-            _ => Rational (inline) {
-              numerator: i32be
-              denominator: i32be
-            }[count]
-          }
-          11 => switch count {1 => f32be, _ => f32be[count]}
-          12 => switch count {1 => f64be, _ => f64be[count]}
-          13 => switch count {1 => u32be, _ => u32be[count]}
-          16 => switch count {1 => u64be, _ => u64be[count]}
-          17 => switch count {1 => i64be, _ => i64be[count]}
-          18 => switch count {1 => u64be, _ => u64be[count]}
-          _ => bytes[remaining]
-        }
-      }
-    }
-  }[count]
-  next_ifd_offset: u32be
-}
+type tiff.GpsIfd.be = same as type tiff.GpsIfd.le, but big-endian
 
 type tiff.GpsIfd.le = GpsIfd (contents entries) {
   count: u16le
@@ -2721,7 +2452,7 @@ type tiff.GpsIfd.le = GpsIfd (contents entries) {
               denominator: u32le
             }[count]
           }
-          6 => switch count {1 => i8le, _ => i8le[count]}
+          6 => switch count {1 => i8be, _ => i8be[count]}
           8 => switch count {1 => i16le, _ => i16le[count]}
           9 => switch count {1 => i32le, _ => i32le[count]}
           10 => switch count {
@@ -2762,7 +2493,7 @@ type tiff.GpsIfd.le = GpsIfd (contents entries) {
               denominator: u32le
             }[count]
           }
-          6 => switch count {1 => i8le, _ => i8le[count]}
+          6 => switch count {1 => i8be, _ => i8be[count]}
           8 => switch count {1 => i16le, _ => i16le[count]}
           9 => switch count {1 => i32le, _ => i32le[count]}
           10 => switch count {
@@ -2789,596 +2520,7 @@ type tiff.GpsIfd.le = GpsIfd (contents entries) {
   next_ifd_offset: u32le
 }
 
-type tiff.Ifd.be = Ifd (contents entries, machinery strip_offsets strip_byte_counts tile_offsets
-    tile_byte_counts) {
-  count: u16be
-  entries: Entry (named by tag, unit entry) {
-    tag: u16be enum Tag {
-      254 = new subfile type, 255 = subfile type, 256 = image width, 257 = image height,
-      258 = bits per sample, 259 = compression, 262 = photometric interpretation,
-      263 = thresholding, 266 = fill order, 269 = document name, 270 = image description,
-      271 = make, 272 = model, 273 = strip offsets, 274 = orientation, 277 = samples per pixel,
-      278 = rows per strip, 279 = strip byte counts, 280 = min sample value,
-      281 = max sample value, 282 = x resolution, 283 = y resolution,
-      284 = planar configuration, 288 = free offsets, 289 = free byte counts,
-      290 = grey response unit, 291 = grey response curve, 296 = resolution unit,
-      297 = page number, 305 = software, 306 = date time, 315 = artist, 316 = host computer,
-      317 = predictor, 318 = white point, 319 = primary chromaticities, 320 = colour map,
-      321 = halftone hints, 322 = tile width, 323 = tile length, 324 = tile offsets,
-      325 = tile byte counts, 330 = sub ifds, 338 = extra samples, 339 = sample format,
-      513 = jpeg interchange format, 514 = jpeg interchange format length,
-      529 = ycbcr coefficients, 530 = ycbcr subsampling, 531 = ycbcr positioning,
-      532 = reference black white, 700 = xmp, 33421 = cfa repeat pattern dimensions,
-      33422 = cfa pattern, 33432 = copyright, 33723 = iptc, 34665 = exif ifd,
-      34675 = icc profile, 34713 = nikon nef info, 34853 = gps ifd,
-      50341 = print image matching, 37398 = tiff/ep standard id, 50706 = dng version,
-      50707 = dng backward version, 50708 = unique camera model,
-      50709 = localised camera model, 50710 = cfa plane colour, 50711 = cfa layout,
-      50712 = linearisation table, 50713 = black level repeat dimensions, 50714 = black level,
-      50715 = black level delta h, 50716 = black level delta v, 50717 = white level,
-      50718 = default scale, 50719 = default crop origin, 50720 = default crop size,
-      50721 = colour matrix 1, 50722 = colour matrix 2, 50723 = camera calibration 1,
-      50724 = camera calibration 2, 50725 = reduction matrix 1, 50726 = reduction matrix 2,
-      50727 = analogue balance, 50728 = as shot neutral, 50729 = as shot white xy,
-      50730 = baseline exposure, 50731 = baseline noise, 50732 = baseline sharpness,
-      50733 = bayer green split, 50734 = linear response limit, 50735 = camera serial number,
-      50736 = lens info, 50737 = chroma blur radius, 50738 = anti alias strength,
-      50739 = shadow scale, 50740 = dng private data, 50741 = maker note safety,
-      50778 = calibration illuminant 1, 50779 = calibration illuminant 2,
-      50780 = best quality scale, 50781 = raw data unique id, 50827 = original raw file name,
-      50828 = original raw file data, 50829 = active area, 50830 = masked areas,
-      50831 = as shot icc profile, 50832 = as shot pre-profile matrix,
-      50833 = current icc profile, 50834 = current pre-profile matrix
-    }
-    type: u16be enum FieldType {
-      1 = byte, 2 = ascii, 3 = short, 4 = long, 5 = rational, 6 = signed byte, 7 = undefined,
-      8 = signed short, 9 = signed long, 10 = signed rational, 11 = float, 12 = double,
-      13 = ifd, 16 = long8, 17 = signed long8, 18 = ifd8
-    }
-    count: u32be
-    room: switch type {
-      1 => computed 1 * count
-      2 => computed 1 * count
-      3 => computed 2 * count
-      4 => computed 4 * count
-      5 => computed 8 * count
-      6 => computed 1 * count
-      7 => computed 1 * count
-      8 => computed 2 * count
-      9 => computed 4 * count
-      10 => computed 8 * count
-      11 => computed 4 * count
-      12 => computed 8 * count
-      13 => computed 4 * count
-      16 => computed 8 * count
-      17 => computed 8 * count
-      18 => computed 8 * count
-      _ => computed 0
-    }
-    value: switch tag {
-      0x014a => switch count {
-        1 => SubIfd (inline) {
-          offset: u32be
-          directory: at(offset from window) tiff.Ifd.be
-        }
-        _ => switch 1 < count and (type == 4 or type == 13) {
-          1 => SubIfds (inline) {
-            offset: u32be
-            values: at(offset from window) u32be[count]
-            directories: (at(values[index] from window) tiff.Ifd.be)[count]
-          }
-          _ => switch room / 5 {
-            0 => sized(4) Here (inline) {
-              values: switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-              padding: bytes[remaining]
-            }
-            _ => Elsewhere (inline) {
-              offset: u32be
-              values: at(offset from window) switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-            }
-          }
-        }
-      }
-      0x8769 => switch count {
-        1 => SubIfd (inline) {
-          offset: u32be
-          directory: at(offset from window) tiff.ExifIfd.be
-        }
-        _ => switch 1 < count and (type == 4 or type == 13) {
-          1 => SubIfds (inline) {
-            offset: u32be
-            values: at(offset from window) u32be[count]
-            directories: (at(values[index] from window) tiff.ExifIfd.be)[count]
-          }
-          _ => switch room / 5 {
-            0 => sized(4) Here (inline) {
-              values: switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-              padding: bytes[remaining]
-            }
-            _ => Elsewhere (inline) {
-              offset: u32be
-              values: at(offset from window) switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-            }
-          }
-        }
-      }
-      0x8825 => switch count {
-        1 => SubIfd (inline) {
-          offset: u32be
-          directory: at(offset from window) tiff.GpsIfd.be
-        }
-        _ => switch 1 < count and (type == 4 or type == 13) {
-          1 => SubIfds (inline) {
-            offset: u32be
-            values: at(offset from window) u32be[count]
-            directories: (at(values[index] from window) tiff.GpsIfd.be)[count]
-          }
-          _ => switch room / 5 {
-            0 => sized(4) Here (inline) {
-              values: switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-              padding: bytes[remaining]
-            }
-            _ => Elsewhere (inline) {
-              offset: u32be
-              values: at(offset from window) switch type {
-                2 => text[count] padded with 0x00 ascii
-                7 => bytes[count]
-                1 => switch count {1 => u8be, _ => u8be[count]}
-                3 => switch count {1 => u16be, _ => u16be[count]}
-                4 => switch count {1 => u32be, _ => u32be[count]}
-                5 => switch count {
-                  1 => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: u32be
-                    denominator: u32be
-                  }[count]
-                }
-                6 => switch count {1 => i8be, _ => i8be[count]}
-                8 => switch count {1 => i16be, _ => i16be[count]}
-                9 => switch count {1 => i32be, _ => i32be[count]}
-                10 => switch count {
-                  1 => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }
-                  _ => Rational (inline) {
-                    numerator: i32be
-                    denominator: i32be
-                  }[count]
-                }
-                11 => switch count {1 => f32be, _ => f32be[count]}
-                12 => switch count {1 => f64be, _ => f64be[count]}
-                13 => switch count {1 => u32be, _ => u32be[count]}
-                16 => switch count {1 => u64be, _ => u64be[count]}
-                17 => switch count {1 => i64be, _ => i64be[count]}
-                18 => switch count {1 => u64be, _ => u64be[count]}
-                _ => bytes[remaining]
-              }
-            }
-          }
-        }
-      }
-      _ => switch room / 5 {
-        0 => sized(4) Here (inline) {
-          values: switch type {
-            2 => text[count] padded with 0x00 ascii
-            7 => bytes[count]
-            1 => switch count {1 => u8be, _ => u8be[count]}
-            3 => switch count {1 => u16be, _ => u16be[count]}
-            4 => switch count {1 => u32be, _ => u32be[count]}
-            5 => switch count {
-              1 => Rational (inline) {
-                numerator: u32be
-                denominator: u32be
-              }
-              _ => Rational (inline) {
-                numerator: u32be
-                denominator: u32be
-              }[count]
-            }
-            6 => switch count {1 => i8be, _ => i8be[count]}
-            8 => switch count {1 => i16be, _ => i16be[count]}
-            9 => switch count {1 => i32be, _ => i32be[count]}
-            10 => switch count {
-              1 => Rational (inline) {
-                numerator: i32be
-                denominator: i32be
-              }
-              _ => Rational (inline) {
-                numerator: i32be
-                denominator: i32be
-              }[count]
-            }
-            11 => switch count {1 => f32be, _ => f32be[count]}
-            12 => switch count {1 => f64be, _ => f64be[count]}
-            13 => switch count {1 => u32be, _ => u32be[count]}
-            16 => switch count {1 => u64be, _ => u64be[count]}
-            17 => switch count {1 => i64be, _ => i64be[count]}
-            18 => switch count {1 => u64be, _ => u64be[count]}
-            _ => bytes[remaining]
-          }
-          padding: bytes[remaining]
-        }
-        _ => Elsewhere (inline) {
-          offset: u32be
-          values: at(offset from window) switch type {
-            2 => text[count] padded with 0x00 ascii
-            7 => bytes[count]
-            1 => switch count {1 => u8be, _ => u8be[count]}
-            3 => switch count {1 => u16be, _ => u16be[count]}
-            4 => switch count {1 => u32be, _ => u32be[count]}
-            5 => switch count {
-              1 => Rational (inline) {
-                numerator: u32be
-                denominator: u32be
-              }
-              _ => Rational (inline) {
-                numerator: u32be
-                denominator: u32be
-              }[count]
-            }
-            6 => switch count {1 => i8be, _ => i8be[count]}
-            8 => switch count {1 => i16be, _ => i16be[count]}
-            9 => switch count {1 => i32be, _ => i32be[count]}
-            10 => switch count {
-              1 => Rational (inline) {
-                numerator: i32be
-                denominator: i32be
-              }
-              _ => Rational (inline) {
-                numerator: i32be
-                denominator: i32be
-              }[count]
-            }
-            11 => switch count {1 => f32be, _ => f32be[count]}
-            12 => switch count {1 => f64be, _ => f64be[count]}
-            13 => switch count {1 => u32be, _ => u32be[count]}
-            16 => switch count {1 => u64be, _ => u64be[count]}
-            17 => switch count {1 => i64be, _ => i64be[count]}
-            18 => switch count {1 => u64be, _ => u64be[count]}
-            _ => bytes[remaining]
-          }
-        }
-      }
-    }
-  }[count]
-  next_ifd_offset: u32be
-  // The same bytes as StripByteCounts (279), read a second time as a list. Each strip's length
-      is looked up here by the strip's number.
-  strip_byte_counts: optional(when entries[tag = 0x0117].tag == 279) switch
-      entries[tag = 0x0117].room / 5 {
-    0 => at(start of entries[tag = 0x0117].value from origin) Numbers (inline) {
-      values: switch entries[tag = 0x0117].type {
-        3 => u16be[entries[tag = 0x0117].count]
-        4 => u32be[entries[tag = 0x0117].count]
-        _ => u32be[0]
-      }
-    }
-    _ => at(entries[tag = 0x0117].value.offset from window) Numbers (inline) {
-      values: switch entries[tag = 0x0117].type {
-        3 => u16be[entries[tag = 0x0117].count]
-        4 => u32be[entries[tag = 0x0117].count]
-        _ => u32be[0]
-      }
-    }
-  }  aside
-  // The same bytes as StripOffsets (273), read a second time as a list. Each element holds a
-      strip's offset and, beside it, that strip's length from StripByteCounts (279).
-  strip_offsets: optional(when entries[tag = 0x0111].tag == 273) switch
-      entries[tag = 0x0111].room / 5 {
-    0 => at(start of entries[tag = 0x0111].value from origin) Numbers (inline) {
-      values: switch entries[tag = 0x0111].type {
-        3 => Piece (inline) {
-          offset: u16be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0111].count]
-        4 => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0111].count]
-        _ => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[0]
-      }
-    }
-    _ => at(entries[tag = 0x0111].value.offset from window) Numbers (inline) {
-      values: switch entries[tag = 0x0111].type {
-        3 => Piece (inline) {
-          offset: u16be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0111].count]
-        4 => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0111].count]
-        _ => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0117].count ? strip_byte_counts.values[index]
-              : 0
-        }[0]
-      }
-    }
-  }  aside
-  // The image data, split into strips of whole rows. Strip n starts at value n of StripOffsets
-      (273), counted from the start of the TIFF, and its length is value n of StripByteCounts
-      (279). Strips are numbered from 0. A strip whose offset is past the end of the TIFF is
-      left out.
-  strips: optional(when entries[tag = 0x0111].tag == 273 and entries[tag = 0x0117].tag == 279)
-      gather(from strip_offsets.values[], at offset from window)
-      sized(min(descriptor.length, remaining)) bytes[remaining]
-      element name from words("strip {}", descriptor.(index))
-  // The same bytes as TileByteCounts (325), read a second time as a list. Each tile's length is
-      looked up here by the tile's number.
-  tile_byte_counts: optional(when entries[tag = 0x0145].tag == 325) switch
-      entries[tag = 0x0145].room / 5 {
-    0 => at(start of entries[tag = 0x0145].value from origin) Numbers (inline) {
-      values: switch entries[tag = 0x0145].type {
-        3 => u16be[entries[tag = 0x0145].count]
-        4 => u32be[entries[tag = 0x0145].count]
-        _ => u32be[0]
-      }
-    }
-    _ => at(entries[tag = 0x0145].value.offset from window) Numbers (inline) {
-      values: switch entries[tag = 0x0145].type {
-        3 => u16be[entries[tag = 0x0145].count]
-        4 => u32be[entries[tag = 0x0145].count]
-        _ => u32be[0]
-      }
-    }
-  }  aside
-  // The same bytes as TileOffsets (324), read a second time as a list. Each element holds a
-      tile's offset and, beside it, that tile's length from TileByteCounts (325).
-  tile_offsets: optional(when entries[tag = 0x0144].tag == 324) switch
-      entries[tag = 0x0144].room / 5 {
-    0 => at(start of entries[tag = 0x0144].value from origin) Numbers (inline) {
-      values: switch entries[tag = 0x0144].type {
-        3 => Piece (inline) {
-          offset: u16be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0144].count]
-        4 => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0144].count]
-        _ => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[0]
-      }
-    }
-    _ => at(entries[tag = 0x0144].value.offset from window) Numbers (inline) {
-      values: switch entries[tag = 0x0144].type {
-        3 => Piece (inline) {
-          offset: u16be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0144].count]
-        4 => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[entries[tag = 0x0144].count]
-        _ => Piece (inline) {
-          offset: u32be
-          length: computed index < entries[tag = 0x0145].count ? tile_byte_counts.values[index]
-              : 0
-        }[0]
-      }
-    }
-  }  aside
-  // The image data, split into tiles. Tile n starts at value n of TileOffsets (324), counted
-      from the start of the TIFF, and its length is value n of TileByteCounts (325). Tiles are
-      numbered from 0, left to right and then top to bottom. A tile whose offset is past the end
-      of the TIFF is left out.
-  tiles: optional(when entries[tag = 0x0144].tag == 324 and entries[tag = 0x0145].tag == 325)
-      gather(from tile_offsets.values[], at offset from window)
-      sized(min(descriptor.length, remaining)) bytes[remaining]
-      element name from words("tile {}", descriptor.(index))
-  // The JPEG image at the offset in JPEGInterchangeFormat (513), counted from the start of the
-      TIFF, with the length in JPEGInterchangeFormatLength (514). In IFD 1 of an EXIF block,
-      this is the thumbnail. In a raw file, it can be a full-size preview.
-  thumbnail: optional(when entries[tag = 0x0201].tag == 513 and entries[tag = 0x0201].count == 1
-      and (entries[tag = 0x0202].tag == 514 and entries[tag = 0x0202].count == 1) and
-      entries[tag = 0x0201].value.values > 0) optional(when entries[tag = 0x0201].value.values <
-      size of window) at(entries[tag = 0x0201].value.values from window)
-      sized(min(entries[tag = 0x0202].value.values, size of window -
-      entries[tag = 0x0201].value.values)) switch 1 < remaining and peek(u16be) == 65496 {
-    1 => tiff.Jpeg
-    _ => bytes[remaining]
-  }
-}
+type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian
 
 type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_counts tile_offsets
     tile_byte_counts) {
@@ -3476,7 +2618,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3517,7 +2659,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3571,7 +2713,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3612,7 +2754,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3666,7 +2808,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3707,7 +2849,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                     denominator: u32le
                   }[count]
                 }
-                6 => switch count {1 => i8le, _ => i8le[count]}
+                6 => switch count {1 => i8be, _ => i8be[count]}
                 8 => switch count {1 => i16le, _ => i16le[count]}
                 9 => switch count {1 => i32le, _ => i32le[count]}
                 10 => switch count {
@@ -3750,7 +2892,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                 denominator: u32le
               }[count]
             }
-            6 => switch count {1 => i8le, _ => i8le[count]}
+            6 => switch count {1 => i8be, _ => i8be[count]}
             8 => switch count {1 => i16le, _ => i16le[count]}
             9 => switch count {1 => i32le, _ => i32le[count]}
             10 => switch count {
@@ -3791,7 +2933,7 @@ type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_cou
                 denominator: u32le
               }[count]
             }
-            6 => switch count {1 => i8le, _ => i8le[count]}
+            6 => switch count {1 => i8be, _ => i8be[count]}
             8 => switch count {1 => i16le, _ => i16le[count]}
             9 => switch count {1 => i32le, _ => i32le[count]}
             10 => switch count {
@@ -5910,19 +5052,7 @@ type tiff.Jpeg = JPEG {
                         ifd.next_ifd_offset, next .next_ifd_offset, from window) tiff.Ifd.le
                         element name from words("ifd {}", index + 1)
                   }
-                  'MM' => Header {
-                    version: u16be enum Version {42 = tiff, 43 = bigtiff}
-                    ifd_offset: u32be
-                    ifd: at(ifd_offset from window) tiff.Ifd.be
-                    body: bytes[remaining]  aside
-                    // The IFDs after IFD 0, in the order they are linked. Each IFD starts at
-                        the offset in the next_ifd_offset field of the IFD before it, counted
-                        from the start of the TIFF. In an EXIF block, IFD 1 has the thumbnail.
-                        In a multi-page TIFF, each page has its own IFD.
-                    next_ifds: chain(first ifd.next_ifd_offset == ifd_offset ? 0 :
-                        ifd.next_ifd_offset, next .next_ifd_offset, from window) tiff.Ifd.be
-                        element name from words("ifd {}", index + 1)
-                  }
+                  'MM' => same as case 'II', but big-endian
                   _ => bytes[remaining]
                 }
               }

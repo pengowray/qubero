@@ -334,6 +334,58 @@ test("a line of several keys is one same-as line, folded or not", () => {
   assert.equal(idx.stmtEnd.get(folded), undefined);
 });
 
+// A TIFF inside a PNG, with the big-endian directory written as one line that
+// names the little-endian one, which comes after it.
+const TYPED = `template png
+
+root PNG {
+  tiff: switch order {
+    'II' => TIFF {
+      ifd: at(8 from window) tiff.Ifd.le
+    }
+    'MM' => same as case 'II', but big-endian
+    _ => bytes[0]
+  }
+}
+
+type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian
+
+type tiff.Ifd.le = Ifd (contents entries) {
+  count: u16le
+  entries: Entry {
+    tag: u16le
+  }[count]
+}
+`;
+
+test("a same-as type line points at the type it names, written below it", () => {
+  const idx = indexTemplate(TYPED);
+  const text = (n: number | null): string | null => line(TYPED, n);
+  assert.deepEqual(
+    idx.sameAs.map((s) => [text(s.line), text(s.target), s.order]),
+    [
+      ["    'MM' => same as case 'II', but big-endian", "    'II' => TIFF {", "big"],
+      ["type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian", "type tiff.Ifd.le = Ifd (contents entries) {", "big"],
+    ],
+  );
+  assert.equal(idx.alias.get("tiff.Ifd.be"), "tiff.Ifd.le");
+});
+
+test("a field inside a type written as a same-as line is found in the type it names", () => {
+  const idx = indexTemplate(TYPED);
+  const chain = [
+    node("file", "PNG"),
+    node("tiff", "TIFF"),
+    node("ifd", "at → tiff.Ifd.be"),
+    node("ifd", "Ifd"),
+    node("entries", "Entry[]", true),
+    node("[0] width", "Entry"),
+    node("tag", "u16 be"),
+  ];
+  assert.equal(line(TYPED, findLine(idx, chain, () => null)), "    tag: u16le");
+  assert.equal(line(TYPED, findLine(idx, chain.slice(0, 4).concat(node("count", "u16 be")), () => null)), "  count: u16le");
+});
+
 test("a field read through any key of a shared line is found in the arm it names", () => {
   const idx = indexTemplate(GROUPED);
   const n = findLine(idx, [node("file", "MachO"), node("command", "Signature"), node("offset", "u32 be")], () => null);
