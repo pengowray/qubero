@@ -119,16 +119,21 @@ export async function askUntilLoaded<T>(opts: {
  * again. A piece is complete once every span it touches is in the cache or
  * has its chunks loaded.
  *
- * A span holds at most 8 MiB of output. When the spans are at least as long
- * as a piece, a piece touches at most two of them, 16 MiB at most. When they
- * are shorter, the spans it touches add up to less than three pieces,
- * 12 MiB. Either way they fit in the cache together. Only spans of very
- * different lengths, such as a short one between two of 8 MiB, add up to
- * more, and then the chunks of a span pushed out of the cache are most
+ * A deflate span holds at most 8 MiB of output. When the spans are at least
+ * as long as a piece, a piece touches at most two of them, 16 MiB at most.
+ * When they are shorter, the spans it touches add up to less than three
+ * pieces, 12 MiB. Either way they fit in the cache together. Only spans of
+ * very different lengths, such as a short one between two of 8 MiB, add up
+ * to more, and then the chunks of a span pushed out of the cache are most
  * likely still in the store, which keeps 32 MiB. A piece of 16 MiB could
  * touch 32 MiB of spans of any length. A smaller piece does not lower the
  * 16 MiB of two long spans, and means more reads: a 64 MiB picture is 16
  * reads as it is.
+ *
+ * A zstd or xz span made of one frame or block can hold up to 64 MiB of
+ * output, which no cache of 16 MiB keeps, and is decoded from its start for
+ * every read that touches it, whatever the piece. Pieces neither help nor
+ * hurt there.
  */
 export const PIECE_BYTES = 4 * 1024 * 1024;
 

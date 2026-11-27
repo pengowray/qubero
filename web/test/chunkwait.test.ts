@@ -202,7 +202,7 @@ test("a chunk that cannot be read fails the read with the load's own error", asy
   );
 });
 
-test("nothing to read reads nothing", async () => {
+test("a read of no bytes is complete without asking the core", async () => {
   const reads: [number, number][] = [];
   const got = await readInPieces({ at: 10, len: 0, read: fileRead(store(1), 100, reads), load: () => Promise.resolve(), wait: new ChunkWait() });
   assert.equal(got.complete, true);
