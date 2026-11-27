@@ -4,8 +4,9 @@ Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
 built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
 from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
-"Order of work", "Built (part 5)" and "Built (part 6)"), and parts 7 to 11
-are not. It follows
+"Order of work", "Built (part 5)" and "Built (part 6)"). Part 7 is split into
+7a, 7b and 7c (see "Review before part 7"), and 7a is built (2026-11-28; see
+"Built (part 7a)"). Parts 7b, 7c and 8 to 11 are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
@@ -1394,7 +1395,13 @@ changes parts 6 to 10: read it first.
    listed in "The problem", and `Indexes` weighs what each index holds for as
    long as it is kept. On the web side, `waitToOpen`, the status line and
    `ensureRange`, as in "The browser". Fixes: runs over 64 MiB compressed,
-   and the memory of every run that has a handle.
+   and the memory of every run that has a handle. "Review before part 7"
+   splits this into 7a, 7b and 7c. **7a done 2026-11-28**: `Source::share`,
+   the shared store, `source_offset_of`, `run_input`, every index reading
+   its run through the `RunInput` that `run_input` gives once the pass is
+   over, and a tab passing the store's limit on. The passes still read a
+   copy of the run, and the 64 MiB limit is unchanged. See "Built (part 7a)"
+   under "Review before part 7".
 8. **xz's layout in steps.** xz joins `can_step`.
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
@@ -1611,6 +1618,115 @@ reads keep today's behaviour, so part 6 refuses nothing that opens today.
   its prefix cache, until `forget`. The new weighing does not count them.
 - Every field read in the evaluator takes the store's lock. Measure listing
   speed before and after, as part 3 did.
+
+### Built (part 7a)
+
+**Built on 2026-11-28.** Every index the evaluator makes reads its run
+through the `RunInput` that `Evaluator::run_input` gives, from the end of its
+pass on. In the browser that input is a handle onto the file's chunk store,
+for every run of the file that no edit touched, so part 6's limits now apply
+there. The passes still read a copy of the run, gathered as part 2 gathers
+it, and let go of the copy when they end. The 64 MiB limit on a run's
+compressed size is unchanged. Where the code differs from the text above:
+
+- **The store.** `ChunkStore` keeps its chunks, and the clock that says
+  which chunk was read longest ago, in one `Arc<Mutex<…>>` that every handle
+  shares (`Kept` in `source.rs`). A read through a handle marks a chunk as
+  read, as a read of the store does. The lock is held only while bytes are
+  copied out of the chunks, and no source is read while it is held.
+  `impl Source for Arc<S>` is new, so that `Gathered::share` can gather the
+  same parts from a handle onto its source. `Document`'s own `Source` impl
+  gives no handle, since its bytes are the edited ones; `run_input` asks the
+  document's source for one.
+- **`source_offset_of`** is built as designed, on `PieceTable::orig_bit_of`.
+- **`run_input` and the pass's copy.** Until 7b a pass needs a copy of the
+  run, and when no handle reaches the run, the index reads that same copy.
+  So the copy is gathered once. A pass that is not stepped across goes calls
+  `run_input`, and when it gives a copy, the pass reads that copy
+  (`RunInput::held_copy`). A pass stepped across goes gathers into its place
+  in `Unfinished` as before, and then asks only for a handle
+  (`Evaluator::shared_input`). `run_input` refuses a copy longer than
+  `CAP_BYTES` as `TooLarge` before it reads anything, and never refuses a
+  handle. A handle is made only for a run of whole bytes, and in a space
+  other than the file, only for a run that starts on a byte.
+- **Weighing.** `RunInput::owned_bytes` is the length of a copy, and 0 for a
+  handle. `Indexes` weighs each index by that, so until 7c weighs what each
+  index holds, an index over a handle weighs nothing, and `Indexes` keeps
+  any number of them.
+- **The limit a tab passes on.** `Seekable::resident_limit` is the size of
+  the span cache when the index's input has a resident limit, and
+  `SpaceSource::Joined` answers the least of its indexed parts' limits.
+  `file_bytes_at_once` counts the bytes of a space read through an index.
+  That changes one native path too: a packed part of a stitched stream,
+  whose run is in such a space and longer than one gather window (1 MiB
+  natively), is now unpacked through `index_run`, as a part whose run is in
+  the file already was.
+- **Strings.** None was added or changed. Two existing ones now show in the
+  browser in new places. The failure "Can't load {needed} of the file at
+  once: the editor keeps at most {limit} in memory" can show for a read in a
+  tab's own reading, with the span cache's 16 MiB as the limit and "of the
+  file" meaning the tab's bytes. `TooLarge`, "too large to unpack (over
+  64 MiB)", now shows for a zstd frame or an xz block over 16 MiB
+  compressed.
+- **Tests.** In `source.rs` and `gather.rs`: a handle onto a store reads
+  chunks fed in after the handle was made, and finds missing the chunks the
+  store pushed out; a chunk read through a handle counts as read when the
+  store picks the chunk read longest ago to push out; which sources give a
+  handle; a handle onto gathered parts reads the parts. In
+  `document.rs`: `source_offset_of` with no edit, after an insert and a
+  delete before the stretch, with an overwrite inside it, and after a 3-bit
+  insert before it. In `eval/tests/run_input.rs`: a run of the file, a run
+  moved by edits, a run in a space held whole and a run in a space read
+  through an index are each read through a handle with no copy, and each
+  reads back byte for byte after the pass, at places the span cache no
+  longer holds; a run with an overwrite inside it, and a run in a stitched
+  space, are read through a copy; a copy over `CAP_BYTES` is refused, and a
+  handle that long is not. In `eval/tests/resident.rs`: a run longer than a
+  store of 48 chunks of 1 KiB is indexed and then read from the store, and a
+  read of a span whose chunks were pushed out waits for them. Over a tab
+  whose index reads such a store, a whole run is gathered a window at a
+  time, in the file's reading and in the tab's own, and a read longer than
+  the span cache in one call is refused. Without the limit passed on, that
+  test asks for the same chunk a fourth time and fails. The space tests of
+  streams past the cap, `lazy_real`, `decoded_real` and `compressed_real`
+  now read their files through an `ArcSource`, so their indexes read
+  through handles. In `crates/wasm/tests/open_space_waits.rs`,
+  `an_indexed_stream_reads_its_run_through_the_store` opens a 70 MiB zlib
+  stream of a byte pattern over a store of 4 chunks. The tab's last bytes
+  read with no wait, since the pass read those chunks last, and a read a
+  fifth of the way in names chunks the store has pushed out, and reads the
+  pattern once they are fed.
+- **A test changed on purpose.**
+  `a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes` keeps 2 chunks,
+  and its run was one deflate block of about 7 chunks. A block's trace now
+  reads the block through the store, up to where the trace turns coarse, and
+  a block of 7 chunks never fits in a store of 2. The run is now written in
+  blocks of 20,000 copies, about 32 KiB each, and the test makes the block's
+  trace once before it feeds other chunks to push the code's chunk out.
+- **Speed.** Listing through a chunk store takes as long as before, within
+  the noise. Measured on 2026-11-28 with `examples/listing_timing.rs`, in
+  release builds with LTO off (`CARGO_PROFILE_RELEASE_LTO=false` and 16
+  codegen units), pinned to one core, before and after by turns, four runs
+  of each. Each run gives the fastest of 7 tries (9 for the last two files),
+  and the table gives the fastest run. The load average was 3.5 to 5.5 on
+  12 cores. "In memory" reads a `MemSource`, which gives no handle, so its
+  indexes read a copy both before and after; the Rubin raw's index reads the
+  store through a handle after, and a copy before.
+
+  | File | Rows listed | Through the store, before | After | In memory, before | After |
+  |---|---|---|---|---|---|
+  | The Rubin raw, gzip, and its FITS tab | 11,722 | 526.8 ms | 525.4 ms | 527.5 ms | 524.4 ms |
+  | `wad/freedm.wad`, 22 MB | 20,003 | 66.0 ms | 64.3 ms | 64.9 ms | 62.6 ms |
+  | `epub/the-bird-book-pg30000.epub`, 50 MB | 1,347 | 98.7 ms | 98.8 ms | 98.1 ms | 98.5 ms |
+
+- **Left for 7b and 7c**, as planned: the passes reading windows,
+  `NeedsInput`, `Limits::input`, the weights in `Indexes`, and the web
+  changes. Until the web changes land, a read in a tab whose index reads the
+  store can name chunks of the file that `ensureRange` on that tab does not
+  load, since it asks `has_chunk` of the tab, which always answers yes. A
+  view that awaits `ensureRange` and then reads once can then show an
+  incomplete read. `Doc.read`, `textWindow`, `textIndex`, `textBack` and
+  `stringsScan` already fetch the chunks a read names as chunks of the file.
 
 ## Still to do
 
