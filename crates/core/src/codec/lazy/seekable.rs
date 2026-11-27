@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::deflate::{BlockMarks, WindowSink};
 use super::input::{refused_as_none, Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, BlockStart, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
 use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, Window};
 use crate::source::Missing;
 
@@ -52,7 +52,7 @@ pub struct Seekable {
     traced: Mutex<Option<(usize, Arc<Trace>)>>,
     /// Block starts found again by decoding: one list for each kept start,
     /// keyed by that start's place in `blocks.list`.
-    groups: Mutex<Recent<Arc<[(u64, u64)]>>>,
+    groups: Mutex<Recent<Arc<[BlockStart]>>>,
     block_traces: Mutex<Recent<Arc<Trace>>>,
 }
 
@@ -447,23 +447,24 @@ impl Seekable {
     /// Block `i`: where it is in the run and in the output, how it is coded
     /// and whether it says it is the last. Its `steps` are empty; they are in
     /// [`Seekable::block_trace`].
+    ///
+    /// The pass kept what each kept start's header says, so this reads none
+    /// of the run, unless block starts were thinned and the start of block
+    /// `i` or `i + 1` is found again by decoding (see [`Seekable::group`]).
     pub fn block(&self, i: u64) -> Result<Block, ReadError> {
-        let (in_start, out_start) = self.block_start(i)?;
+        let start = self.block_start(i)?;
         let (in_end, out_end) = match i + 1 < self.blocks.count {
-            true => self.block_start(i + 1)?,
+            true => self.block_start(i + 1).map(|s| (s.bit(), s.out))?,
             false => (self.blocks_end, self.len),
         };
-        // BFINAL and BTYPE, the first three bits of the block header, low bit
-        // first, read from the run through its input.
-        let head = self.input.copy((in_start / 8) as usize..(in_start + 3).div_ceil(8) as usize)?;
-        let bit = |k: u64| ((k / 8) as usize).checked_sub(head.at).and_then(|i| head.bytes.get(i)).map_or(0, |b| (b >> (k % 8)) & 1);
-        let kind = match bit(in_start + 1) | bit(in_start + 2) << 1 {
+        let (last, btype) = start.head();
+        let kind = match btype {
             0 => BlockKind::Stored,
             1 => BlockKind::Fixed,
             2 => BlockKind::Dynamic,
             _ => return Err(Refusal::Failed.into()),
         };
-        Ok(Block { steps: 0..0, kind, last: bit(in_start) == 1, in_bits: in_start..in_end, out_bytes: out_start..out_end })
+        Ok(Block { steps: 0..0, kind, last, in_bits: start.bit()..in_end, out_bytes: start.out..out_end })
     }
 
     /// The block that bit `bit` of the run belongs to. None for a bit of the
@@ -474,15 +475,15 @@ impl Seekable {
     pub fn block_of_bit(&self, bit: u64) -> Result<Option<u64>, Vec<Missing>> {
         let list = &self.blocks.list;
         match list.first() {
-            Some(first) if bit >= first.0 && bit < self.blocks_end => {}
+            Some(first) if bit >= first.bit() && bit < self.blocks_end => {}
             _ => return Ok(None),
         }
-        let g = list.partition_point(|m| m.0 <= bit) - 1;
+        let g = list.partition_point(|m| m.bit() <= bit) - 1;
         if self.blocks.stride == 1 {
             return Ok(Some(g as u64));
         }
         let Some(starts) = refused_as_none(self.group(g))? else { return Ok(None) };
-        Ok(Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.0 <= bit) as u64 - 1))
+        Ok(Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.bit() <= bit) as u64 - 1))
     }
 
     /// Where the deflate data is inside the run's wrapper. Refused for a zstd
@@ -494,9 +495,8 @@ impl Seekable {
         }
     }
 
-    /// Where block `i` starts: the bit of its header and how much output
-    /// comes before it.
-    fn block_start(&self, i: u64) -> Result<(u64, u64), ReadError> {
+    /// Where block `i` starts, and what its header says.
+    fn block_start(&self, i: u64) -> Result<BlockStart, ReadError> {
         if i >= self.blocks.count {
             return Err(Refusal::Failed.into());
         }
@@ -513,35 +513,36 @@ impl Seekable {
     /// read through its input from start `g` to the next kept start, or to
     /// the run's end. A stretch past [`Limits::unit_input`] is refused as
     /// [`Refusal::TooLarge`] when the source keeps only part of the file.
-    fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, ReadError> {
+    fn group(&self, g: usize) -> Result<Arc<[BlockStart]>, ReadError> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
         }
-        let &(in_bit, _) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
-        let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.0.div_ceil(8) as usize);
+        let in_bit = self.blocks.list.get(g).ok_or(Refusal::Failed)?.bit();
+        let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.bit().div_ceil(8) as usize);
         // Only a hostile run, of more blocks than are kept, has a long
         // stretch between two kept starts.
         if self.input.too_much(to - (in_bit / 8) as usize, self.limits.unit_input) {
             return Err(Refusal::TooLarge.into());
         }
         let code = self.input.copy((in_bit / 8) as usize..to)?;
-        let starts: Arc<[(u64, u64)]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
+        let starts: Arc<[BlockStart]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
         lock(&self.groups).put(g as u64, starts.clone(), 1);
         Ok(starts)
     }
 
     /// [`Seekable::group`] decoded from `input`, which has to hold the run
     /// from kept start `g` to the next kept start. The list is not cached.
-    pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<(u64, u64)>, Refusal> {
-        let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
-        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()), stopped: None };
+    pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<BlockStart>, Refusal> {
+        let &kept = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
+        let (in_bit, out) = (kept.bit(), kept.out);
+        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.bit()), starts: Some(Vec::new()), stopped: None };
         let f = self.framing()?;
         inflate::run(input, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
         let starts = sink.starts.take().unwrap_or_default();
         // The same decoder read these bits on the index pass, so a different
         // count is the decoder disagreeing with itself.
         let want = self.blocks.stride.min(self.blocks.count - g as u64 * self.blocks.stride);
-        if starts.len() as u64 != want || starts.first() != Some(&(in_bit, out)) {
+        if starts.len() as u64 != want || starts.first() != Some(&kept) {
             return Err(Refusal::Failed);
         }
         Ok(starts)
@@ -597,7 +598,7 @@ impl Seekable {
     /// for each of them.
     pub fn held_bytes(&self) -> usize {
         self.checkpoints.iter().map(|c| c.window().len() + c.head().map_or(0, |h| h.0.len())).sum::<usize>()
-            + self.blocks.list.len() * std::mem::size_of::<(u64, u64)>()
+            + self.blocks.list.len() * std::mem::size_of::<BlockStart>()
             + lock(&self.spans).weight
             + lock(&self.prefixes).weight
     }

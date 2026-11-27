@@ -1570,8 +1570,8 @@ fn deflate_blocks_from_a_window_are_the_blocks_from_the_whole_run() {
         assert!(shape(&t) == shape(&s.block_trace(i).expect("traces")), "block {i}: the traces differ");
     }
     for g in 0..s.blocks.list.len() {
-        let to = s.blocks.list.get(g + 1).map_or(packed.len(), |m| m.0.div_ceil(8) as usize);
-        let code = copy_of(&packed, (s.blocks.list[g].0 / 8) as usize, to);
+        let to = s.blocks.list.get(g + 1).map_or(packed.len(), |m| m.bit().div_ceil(8) as usize);
+        let code = copy_of(&packed, (s.blocks.list[g].bit() / 8) as usize, to);
         let got = s.group_from(g, inflate::Input::new(window(&code, &packed), None)).expect("found again");
         assert_eq!(got, s.group_from(g, inflate::Input::whole(&packed)).expect("found again"), "group {g}");
     }
@@ -1970,12 +1970,14 @@ fn traces_and_blocks_through_an_input_missing_chunks_wait_for_them() {
     }
     for i in (0..s.blocks()).step_by(5) {
         lossy.drop_all();
-        let (b, asked) = waiting(&lossy, || s.block(i).map_err(missing));
+        // A block reads the run only to find a start that was thinned out
+        // (see `a_block_reads_none_of_the_run`), and its trace always does.
+        let (b, _) = waiting(&lossy, || s.block(i).map_err(missing));
         assert_eq!(b, held.block(i).unwrap(), "block {i}");
-        named += asked;
         lossy.drop_all();
-        let (t, _) = waiting(&lossy, || s.block_trace(i).map_err(missing));
+        let (t, asked) = waiting(&lossy, || s.block_trace(i).map_err(missing));
         assert!(shape(&t) == shape(&held.block_trace(i).unwrap()), "block {i}");
+        named += asked;
         let mid = (b.in_bits.start + b.in_bits.end) / 2;
         lossy.drop_all();
         assert_eq!(waiting(&lossy, || s.block_of_bit(mid)).0, Some(i), "bit {mid}");
@@ -2117,6 +2119,43 @@ fn a_large_xz_block_is_a_span_of_its_own() {
     traces_agree(&s, &whole, 179);
 }
 
+/// The pass keeps what each kept block start's header says, so a block of an
+/// index reads none of the run: through an input holding none of it, every
+/// block is the block the whole trace has. Once block starts are thinned
+/// out, only a block whose start or end was dropped reads the run, to find
+/// it again.
+#[test]
+fn a_block_reads_none_of_the_run() {
+    let data = mixed(300_000, 199);
+    let packed = flushed(&data, 6, 3000);
+    let (_, whole) = crate::codec::decode_traced(Codec::Deflate, &packed).expect("decodes whole");
+    let mut kinds = [0usize; 3];
+    for limits in [small(), Limits { block_marks: 4, ..small() }] {
+        let mut s = indexed(Codec::Deflate, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        s.set_input(RunInput::new(Lossy::new(file, 1024), run_at as u64, packed.len() as u64));
+        let stride = s.blocks.stride;
+        let kept = |i: u64| i % stride == 0 || i == s.blocks();
+        for (i, want) in whole.blocks().iter().enumerate() {
+            let i = i as u64;
+            match s.block(i) {
+                Ok(got) => {
+                    assert!(kept(i) && kept(i + 1), "block {i} of every {stride} kept");
+                    assert_eq!((got.kind, got.last, &got.in_bits, &got.out_bytes), (want.kind, want.last, &want.in_bits, &want.out_bytes), "block {i}");
+                    kinds[match got.kind {
+                        BlockKind::Stored => 0,
+                        BlockKind::Fixed => 1,
+                        _ => 2,
+                    }] += 1;
+                }
+                Err(ReadError::Missing(_)) => assert!(!kept(i) || !kept(i + 1), "block {i} of every {stride} kept read the run"),
+                Err(ReadError::Refused(why)) => panic!("block {i}: refused: {why:?}"),
+            }
+        }
+    }
+    assert!(kinds[0] > 0 && kinds[2] > 0, "stored, fixed and dynamic blocks: {kinds:?}");
+}
+
 /// A run in a file read from a store that keeps `limit` bytes at once, with
 /// all of the file's chunks loaded.
 fn from_a_store(packed: &[u8], limit: u64) -> RunInput {
@@ -2233,7 +2272,7 @@ fn a_long_stretch_between_kept_block_starts_is_refused_from_a_store() {
     let mut s = indexed(Codec::Deflate, &packed, limits);
     s.set_input(from_a_store(&packed, 32 << 20));
     let stride = s.blocks.stride;
-    let stretch = |g: usize| s.blocks.list.get(g + 1).map_or(packed.len() as u64 * 8, |m| m.0).div_ceil(8) - s.blocks.list[g].0 / 8;
+    let stretch = |g: usize| s.blocks.list.get(g + 1).map_or(packed.len() as u64 * 8, |m| m.bit()).div_ceil(8) - s.blocks.list[g].bit() / 8;
     let (mut over, mut under) = (0, 0);
     for g in 0..s.blocks.list.len() {
         let i = g as u64 * stride + 1;

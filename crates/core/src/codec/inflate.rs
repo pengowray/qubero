@@ -550,6 +550,67 @@ pub(crate) trait Sink {
     fn boundary(&mut self, _in_bit: u64, _block: Option<u64>) -> ControlFlow<()> {
         ControlFlow::Continue(())
     }
+
+    /// The block whose header starts at bit `in_bit` says whether it is the
+    /// last and how it is coded, which the decoder has just read: called for
+    /// every block, a block a decode starts inside of included, after
+    /// [`Sink::boundary`] was told of its start.
+    #[inline]
+    fn head(&mut self, _in_bit: u64, _last: bool, _btype: u32) {}
+}
+
+/// Where a deflate block starts, as a bit of the run and a byte of the
+/// output, and the BFINAL and BTYPE its header gives, once the decoder has
+/// read them. What a list of blocks needs to say what each is without
+/// reading the run again.
+///
+/// The two take the top three bits of the word that holds the bit, which no
+/// run's bit reaches: a trace counts a run's bits in 32 (`RawStep`), and an
+/// indexed run is at most 512 MiB, 2^32 bits. So a start is 16 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlockStart {
+    word: u64,
+    /// How many bytes of output come before the block.
+    pub(crate) out: u64,
+}
+
+impl BlockStart {
+    const BITS: u64 = (1 << 61) - 1;
+
+    /// A block that starts at bit `in_bit` of the run, after `out` bytes of
+    /// output, whose header has not been read yet.
+    pub(crate) fn new(in_bit: u64, out: u64) -> BlockStart {
+        debug_assert!(in_bit <= BlockStart::BITS);
+        BlockStart { word: in_bit, out }
+    }
+
+    /// The bit of the run the block's header starts at.
+    #[inline]
+    pub(crate) fn bit(self) -> u64 {
+        self.word & BlockStart::BITS
+    }
+
+    /// Whether the block says it is the last, and how it is coded: 0 for a
+    /// stored block, 1 for fixed codes and 2 for codes of its own.
+    pub(crate) fn head(self) -> (bool, u32) {
+        (self.word >> 63 == 1, ((self.word >> 61) & 3) as u32)
+    }
+
+    /// Record what the block's header says, when the header is this
+    /// block's.
+    fn set_head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if self.bit() == in_bit {
+            self.word = in_bit | u64::from(last) << 63 | (u64::from(btype) & 3) << 61;
+        }
+    }
+}
+
+/// Record what a block's header says on the last of `starts`, when that is
+/// the block whose header starts at bit `in_bit`.
+pub(crate) fn note_head(starts: &mut [BlockStart], in_bit: u64, last: bool, btype: u32) {
+    if let Some(s) = starts.last_mut() {
+        s.set_head(in_bit, last, btype);
+    }
 }
 
 /// Every byte of the output in one vector, up to `cap`.
@@ -616,9 +677,8 @@ pub(crate) struct CountSink {
     pub(crate) len: u64,
     pub(crate) cap: u64,
     pub(crate) stop_at: Option<u64>,
-    /// Where each block starts, as the bit of the run and the byte of the
-    /// output, when asked for.
-    pub(crate) starts: Option<Vec<(u64, u64)>>,
+    /// Where each block starts, and what its header says, when asked for.
+    pub(crate) starts: Option<Vec<BlockStart>>,
     pub(crate) stopped: Option<Resume>,
 }
 
@@ -664,9 +724,16 @@ impl Sink for CountSink {
             return ControlFlow::Break(());
         }
         if let (None, Some(starts)) = (block, &mut self.starts) {
-            starts.push((in_bit, self.len));
+            starts.push(BlockStart::new(in_bit, self.len));
         }
         ControlFlow::Continue(())
+    }
+
+    #[inline]
+    fn head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if let Some(starts) = &mut self.starts {
+            note_head(starts, in_bit, last, btype);
+        }
     }
 }
 
@@ -839,6 +906,7 @@ pub(crate) fn run<K: Sink>(
         let at = bits.pos();
         let btype = bits.read(2)?;
         b.push(at, out.len(), StepKind::Header(StepField::Btype, btype));
+        out.head(block_in, last, btype);
         let (kind, flow) = match btype {
             0 => {
                 // Nothing starts a decode inside a stored block.

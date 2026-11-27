@@ -8,7 +8,7 @@ use super::input::RunInput;
 use super::seekable::{seekable, Kind};
 use super::{wrapper, Checkpoint, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
-use crate::codec::inflate::{self, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
+use crate::codec::inflate::{self, note_head, BlockStart, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
 /// A deflate, zlib or gzip run's index pass, done a step at a time: each
@@ -258,14 +258,14 @@ impl DeflatePass {
     }
 }
 
-/// Where each block starts, as a bit of the run and a byte of the output,
-/// recorded by the index pass. Holds every block's start until there are more
-/// than `max`, and from then on the start of every `stride`th block. Block 0's
-/// start is always kept.
+/// Where each block starts, as a bit of the run and a byte of the output, and
+/// what its header says, recorded by the index pass. Holds every block's
+/// start until there are more than `max`, and from then on the start of every
+/// `stride`th block. Block 0's start is always kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BlockMarks {
     /// The start of blocks 0, `stride`, 2 × `stride` and so on.
-    pub(super) list: Vec<(u64, u64)>,
+    pub(super) list: Vec<BlockStart>,
     /// How many blocks have started, kept or not.
     pub(super) count: u64,
     pub(super) stride: u64,
@@ -283,7 +283,7 @@ impl BlockMarks {
     /// blocks whose number is a multiple of the stride.
     fn record(&mut self, in_bit: u64, out: u64) {
         if self.count % self.stride == 0 {
-            self.list.push((in_bit, out));
+            self.list.push(BlockStart::new(in_bit, out));
             if self.list.len() > self.max {
                 let mut i = 0;
                 self.list.retain(|_| {
@@ -440,5 +440,14 @@ impl Sink for WindowSink {
             blocks.record(in_bit, out);
         }
         ControlFlow::Continue(())
+    }
+
+    /// Kept with the block's start, when it is kept. A step carrying on
+    /// inside a block reads its header again, and records the same.
+    #[inline]
+    fn head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if let Some(blocks) = &mut self.blocks {
+            note_head(&mut blocks.list, in_bit, last, btype);
+        }
     }
 }
