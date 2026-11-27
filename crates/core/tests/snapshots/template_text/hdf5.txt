@@ -95,20 +95,7 @@ root switch peek(u64be) {
           _ => at(root_group_object_header_address from origin) ObjectHeader
         }
       }
-      3 => Superblock {
-        offset_size: u8be
-        length_size: u8be
-        file_consistency_flags: u8be
-        base_address: u64le enum Address {18446744073709551615 = undefined}
-        superblock_extension_address: u64le enum Address {18446744073709551615 = undefined}
-        end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
-        root_group_object_header_address: u64le enum Address {18446744073709551615 = undefined}
-        checksum: u32le
-        root_group: switch root_group_object_header_address {
-          0xffffffffffffffff => bytes[0]
-          _ => at(root_group_object_header_address from origin) ObjectHeader
-        }
-      }
+      3 => same as case 2
       _ => bytes[remaining]
     }
   }
@@ -210,22 +197,7 @@ root switch peek(u64be) {
             _ => at(root_group_object_header_address from origin) ObjectHeader
           }
         }
-        3 => Superblock {
-          offset_size: u8be
-          length_size: u8be
-          file_consistency_flags: u8be
-          base_address: u64le enum Address {18446744073709551615 = undefined}
-          superblock_extension_address: u64le enum Address {18446744073709551615 = undefined}
-          end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
-          root_group_object_header_address: u64le enum Address {
-            18446744073709551615 = undefined
-          }
-          checksum: u32le
-          root_group: switch root_group_object_header_address {
-            0xffffffffffffffff => bytes[0]
-            _ => at(root_group_object_header_address from origin) ObjectHeader
-          }
-        }
+        3 => same as case 2
         _ => bytes[remaining]
       }
     }
@@ -259,32 +231,7 @@ type ArrayElement = switch datatype.properties.base.class {
     0x05ec => f64be
     _ => bytes[datatype.properties.base.size]
   }
-  1 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
-      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
-    2 => u8be
-    3 => i8le
-    4 => u16le
-    5 => i16le
-    8 => u32le
-    9 => i32le
-    16 => u64le
-    17 => i64le
-    0x01f6 => u8be
-    0x01f7 => i8be
-    0x01f8 => u16be
-    0x01f9 => i16be
-    0x01fc => u32be
-    0x01fd => i32be
-    0x0204 => u64be
-    0x0205 => i64be
-    0x03ec => f16le
-    0x03f0 => f32le
-    0x03f8 => f64le
-    0x05e0 => f16be
-    0x05e4 => f32be
-    0x05ec => f64be
-    _ => bytes[datatype.properties.base.size]
-  }
+  1 => same as case 0
   3 => sized(datatype.properties.base.size) text[datatype.properties.base.size] padded with 0x00
       utf8
   6 => sized(datatype.properties.base.size) Record (unit record, machinery datatype) {
@@ -321,34 +268,7 @@ type ArrayElement = switch datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[datatype.properties.base.properties.base.size]
     }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(datatype.properties.base.properties.base.size)
         text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[datatype.properties.base.properties.base.size]
@@ -416,35 +336,7 @@ type ArrayElement = switch datatype.properties.base.class {
               _ => (sized(datatype.properties.base.properties.base.size)
                   bytes[datatype.properties.base.properties.base.size])[length]
             }
-            1 => switch datatype.properties.base.properties.base.class * 1000 +
-                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                datatype.properties.base.properties.base.size * 2 +
-                bit(datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(datatype.properties.base.properties.base.size)
-                  bytes[datatype.properties.base.properties.base.size])[length]
-            }
+            1 => same as case 0
             3 => (sized(datatype.properties.base.properties.base.size)
                 text[datatype.properties.base.properties.base.size] padded with 0x00
                 utf8)[length]
@@ -531,34 +423,7 @@ type ArrayElement = switch datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[datatype.properties.base.properties.base.size]
     }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(datatype.properties.base.properties.base.size)
         text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[datatype.properties.base.properties.base.size]
@@ -730,32 +595,7 @@ type Datatype {
           0x05ec => f64be[bit_field + (bit_field_rest & 0xff) * 256]
           _ => (sized(base.size) bytes[base.size])[bit_field + (bit_field_rest & 0xff) * 256]
         }
-        1 => switch base.class * 1000 + bit(base.bit_field, 0) * 500 + base.size * 2 +
-            bit(base.bit_field, 3) {
-          2 => u8be[bit_field + (bit_field_rest & 0xff) * 256]
-          3 => i8le[bit_field + (bit_field_rest & 0xff) * 256]
-          4 => u16le[bit_field + (bit_field_rest & 0xff) * 256]
-          5 => i16le[bit_field + (bit_field_rest & 0xff) * 256]
-          8 => u32le[bit_field + (bit_field_rest & 0xff) * 256]
-          9 => i32le[bit_field + (bit_field_rest & 0xff) * 256]
-          16 => u64le[bit_field + (bit_field_rest & 0xff) * 256]
-          17 => i64le[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01f6 => u8be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01f7 => i8be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01f8 => u16be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01f9 => i16be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01fc => u32be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x01fd => i32be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x0204 => u64be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x0205 => i64be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x03ec => f16le[bit_field + (bit_field_rest & 0xff) * 256]
-          0x03f0 => f32le[bit_field + (bit_field_rest & 0xff) * 256]
-          0x03f8 => f64le[bit_field + (bit_field_rest & 0xff) * 256]
-          0x05e0 => f16be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x05e4 => f32be[bit_field + (bit_field_rest & 0xff) * 256]
-          0x05ec => f64be[bit_field + (bit_field_rest & 0xff) * 256]
-          _ => (sized(base.size) bytes[base.size])[bit_field + (bit_field_rest & 0xff) * 256]
-        }
+        1 => same as case 0
         3 => (sized(base.size) text[base.size] padded with 0x00 utf8)[bit_field +
             (bit_field_rest & 0xff) * 256]
         9 => switch base.bit_field & 0x0f {
@@ -848,32 +688,7 @@ type ElementsBeside = switch earlier(body.class) {
     0x05ec => f64be[run_bytes / element_size]
     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
   }
-  1 => switch earlier(body.class) * 1000 + bit(earlier(body.bit_field), 0) * 500 +
-      earlier(body.size) * 2 + bit(earlier(body.bit_field), 3) {
-    2 => u8be[run_bytes / element_size]
-    3 => i8le[run_bytes / element_size]
-    4 => u16le[run_bytes / element_size]
-    5 => i16le[run_bytes / element_size]
-    8 => u32le[run_bytes / element_size]
-    9 => i32le[run_bytes / element_size]
-    16 => u64le[run_bytes / element_size]
-    17 => i64le[run_bytes / element_size]
-    0x01f6 => u8be[run_bytes / element_size]
-    0x01f7 => i8be[run_bytes / element_size]
-    0x01f8 => u16be[run_bytes / element_size]
-    0x01f9 => i16be[run_bytes / element_size]
-    0x01fc => u32be[run_bytes / element_size]
-    0x01fd => i32be[run_bytes / element_size]
-    0x0204 => u64be[run_bytes / element_size]
-    0x0205 => i64be[run_bytes / element_size]
-    0x03ec => f16le[run_bytes / element_size]
-    0x03f0 => f32le[run_bytes / element_size]
-    0x03f8 => f64le[run_bytes / element_size]
-    0x05e0 => f16be[run_bytes / element_size]
-    0x05e4 => f32be[run_bytes / element_size]
-    0x05ec => f64be[run_bytes / element_size]
-    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
-  }
+  1 => same as case 0
   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes / element_size]
   9 => switch earlier(body.bit_field) & 0x0f {
     1 => switch element_size {
@@ -952,32 +767,7 @@ type ElementsInside = switch datatype.class {
     0x05ec => f64be[run_bytes / element_size]
     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
   }
-  1 => switch datatype.class * 1000 + bit(datatype.bit_field, 0) * 500 + datatype.size * 2 +
-      bit(datatype.bit_field, 3) {
-    2 => u8be[run_bytes / element_size]
-    3 => i8le[run_bytes / element_size]
-    4 => u16le[run_bytes / element_size]
-    5 => i16le[run_bytes / element_size]
-    8 => u32le[run_bytes / element_size]
-    9 => i32le[run_bytes / element_size]
-    16 => u64le[run_bytes / element_size]
-    17 => i64le[run_bytes / element_size]
-    0x01f6 => u8be[run_bytes / element_size]
-    0x01f7 => i8be[run_bytes / element_size]
-    0x01f8 => u16be[run_bytes / element_size]
-    0x01f9 => i16be[run_bytes / element_size]
-    0x01fc => u32be[run_bytes / element_size]
-    0x01fd => i32be[run_bytes / element_size]
-    0x0204 => u64be[run_bytes / element_size]
-    0x0205 => i64be[run_bytes / element_size]
-    0x03ec => f16le[run_bytes / element_size]
-    0x03f0 => f32le[run_bytes / element_size]
-    0x03f8 => f64le[run_bytes / element_size]
-    0x05e0 => f16be[run_bytes / element_size]
-    0x05e4 => f32be[run_bytes / element_size]
-    0x05ec => f64be[run_bytes / element_size]
-    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
-  }
+  1 => same as case 0
   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes / element_size]
   9 => switch datatype.bit_field & 0x0f {
     1 => switch element_size {
@@ -1034,10 +824,7 @@ type EnumName = switch version {
     name: text until 0x00 utf8
     name_padding: bytes[padding(sizeof(name), 8)]
   }
-  2 => EnumName (named by name) {
-    name: text until 0x00 utf8
-    name_padding: bytes[padding(sizeof(name), 8)]
-  }
+  2 => same as case 1
   _ => EnumName (named by name) {
     name: text until 0x00 utf8
   }
@@ -1578,34 +1365,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
     0x05ec => f64be
     _ => bytes[descriptor.datatype.properties.base.size]
   }
-  1 => switch descriptor.datatype.properties.base.class * 1000 +
-      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
-      descriptor.datatype.properties.base.size * 2 +
-      bit(descriptor.datatype.properties.base.bit_field, 3) {
-    2 => u8be
-    3 => i8le
-    4 => u16le
-    5 => i16le
-    8 => u32le
-    9 => i32le
-    16 => u64le
-    17 => i64le
-    0x01f6 => u8be
-    0x01f7 => i8be
-    0x01f8 => u16be
-    0x01f9 => i16be
-    0x01fc => u32be
-    0x01fd => i32be
-    0x0204 => u64be
-    0x0205 => i64be
-    0x03ec => f16le
-    0x03f0 => f32le
-    0x03f8 => f64le
-    0x05e0 => f16be
-    0x05e4 => f32be
-    0x05ec => f64be
-    _ => bytes[descriptor.datatype.properties.base.size]
-  }
+  1 => same as case 0
   3 => sized(descriptor.datatype.properties.base.size)
       text[descriptor.datatype.properties.base.size] padded with 0x00 utf8
   6 => sized(descriptor.datatype.properties.base.size) Record (unit record, machinery datatype)
@@ -1643,34 +1403,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[descriptor.datatype.properties.base.properties.base.size]
     }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(descriptor.datatype.properties.base.properties.base.size)
         text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[descriptor.datatype.properties.base.properties.base.size]
@@ -1738,35 +1471,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
               _ => (sized(descriptor.datatype.properties.base.properties.base.size)
                   bytes[descriptor.datatype.properties.base.properties.base.size])[length]
             }
-            1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                descriptor.datatype.properties.base.properties.base.size * 2 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-            }
+            1 => same as case 0
             3 => (sized(descriptor.datatype.properties.base.properties.base.size)
                 text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00
                 utf8)[length]
@@ -1853,34 +1558,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[descriptor.datatype.properties.base.properties.base.size]
     }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(descriptor.datatype.properties.base.properties.base.size)
         text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[descriptor.datatype.properties.base.properties.base.size]
@@ -1915,32 +1593,7 @@ type MemberElement = switch descriptor.datatype.class {
     0x05ec => f64be
     _ => bytes[descriptor.datatype.size]
   }
-  1 => switch descriptor.datatype.class * 1000 + bit(descriptor.datatype.bit_field, 0) * 500 +
-      descriptor.datatype.size * 2 + bit(descriptor.datatype.bit_field, 3) {
-    2 => u8be
-    3 => i8le
-    4 => u16le
-    5 => i16le
-    8 => u32le
-    9 => i32le
-    16 => u64le
-    17 => i64le
-    0x01f6 => u8be
-    0x01f7 => i8be
-    0x01f8 => u16be
-    0x01f9 => i16be
-    0x01fc => u32be
-    0x01fd => i32be
-    0x0204 => u64be
-    0x0205 => i64be
-    0x03ec => f16le
-    0x03f0 => f32le
-    0x03f8 => f64le
-    0x05e0 => f16be
-    0x05e4 => f32be
-    0x05ec => f64be
-    _ => bytes[descriptor.datatype.size]
-  }
+  1 => same as case 0
   3 => sized(descriptor.datatype.size) text[descriptor.datatype.size] padded with 0x00 utf8
   6 => sized(descriptor.datatype.size) Record (unit record, machinery datatype) {
     datatype: at(descriptor.(start of datatype) from origin) Datatype  aside
@@ -2019,35 +1672,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
     _ => (sized(descriptor.datatype.properties.base.size)
         bytes[descriptor.datatype.properties.base.size])[length]
   }
-  1 => switch descriptor.datatype.properties.base.class * 1000 +
-      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
-      descriptor.datatype.properties.base.size * 2 +
-      bit(descriptor.datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(descriptor.datatype.properties.base.size)
-        bytes[descriptor.datatype.properties.base.size])[length]
-  }
+  1 => same as case 0
   3 => (sized(descriptor.datatype.properties.base.size)
       text[descriptor.datatype.properties.base.size] padded with 0x00 utf8)[length]
   9 => switch descriptor.datatype.properties.base.bit_field & 0x0f {
@@ -2116,35 +1741,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
               _ => (sized(descriptor.datatype.properties.base.properties.base.size)
                   bytes[descriptor.datatype.properties.base.properties.base.size])[length]
             }
-            1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                descriptor.datatype.properties.base.properties.base.size * 2 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-            }
+            1 => same as case 0
             3 => (sized(descriptor.datatype.properties.base.properties.base.size)
                 text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00
                 utf8)[length]
@@ -2239,34 +1836,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[descriptor.datatype.properties.base.properties.base.size]
     }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(descriptor.datatype.properties.base.properties.base.size)
         text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[descriptor.datatype.properties.base.properties.base.size]
@@ -2301,34 +1871,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[descriptor.datatype.properties.base.properties.base.size]
     }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(descriptor.datatype.properties.base.properties.base.size)
         text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[descriptor.datatype.properties.base.properties.base.size]
@@ -2487,36 +2030,7 @@ type Message (named by type, contents body) {
             _ => bytes[0]
           }
         }
-        2 => Layout {
-          dimensionality: u8be
-          layout_class: u8be enum LayoutClass {
-            0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
-          }
-          reserved: bytes[5]
-          address: u64le enum Address {18446744073709551615 = undefined}
-          dimensions: u32le[dimensionality]
-          element_size: switch layout_class / 2 {1 => u32le, _ => bytes[0]}
-          storage: switch layout_class {
-            0 => Compact {
-              size: u32le
-              data: Data (machinery datatype) {
-                element_size: computed earlier(body.size) or else 1
-                run_bytes: computed size
-                datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                    0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                    earlier(body.class) == 10) at(start of earlier(body.bit_field_rest) - 2 from
-                    origin) Datatype
-                    aside
-                elements: ElementsBeside
-              }
-            }
-            2 => switch address {
-              0xffffffffffffffff => bytes[0]
-              _ => at(address from origin) Node
-            }
-            _ => bytes[0]
-          }
-        }
+        2 => same as case 1
         3 => Layout {
           layout_class: u8be enum LayoutClass {
             0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
@@ -2758,199 +2272,7 @@ type Message (named by type, contents body) {
             _ => bytes[remaining]
           }
         }
-        5 => Layout {
-          layout_class: u8be enum LayoutClass {
-            0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
-          }
-          storage: switch layout_class {
-            0 => Compact {
-              size: u16le
-              data: Data (machinery datatype) {
-                element_size: computed earlier(body.size) or else 1
-                run_bytes: computed size
-                datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                    0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                    earlier(body.class) == 10) at(start of earlier(body.bit_field_rest) - 2 from
-                    origin) Datatype
-                    aside
-                elements: ElementsBeside
-              }
-            }
-            1 => Contiguous {
-              address: u64le enum Address {18446744073709551615 = undefined}
-              size: u64le
-              data: switch address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(address from origin) Data (machinery datatype) {
-                  element_size: computed earlier(body.size) or else 1
-                  run_bytes: computed size
-                  datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                      0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                      earlier(body.class) == 10)
-                      at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
-                      aside
-                  elements: ElementsBeside
-                }
-              }
-            }
-            2 => Chunked (machinery datatype) {
-              flags: u8be flags ChunkedFlags {
-                bit 0 = partial edge chunks unfiltered, bit 1 = single chunk filtered
-              }
-              dimensionality: u8be
-              dimension_width: u8be
-              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
-              index_type: u8be enum ChunkIndexType {
-                0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
-                4 = extensible array, 5 = version 2 b-tree
-              }
-              index: switch index_type {
-                1 => switch flags / 2 - flags / 4 * 2 {
-                  1 => SingleChunkIndex {
-                    chunk_size: u64le
-                    filter_mask: u32le
-                  }
-                  _ => bytes[0]
-                }
-                3 => FixedArrayIndex {
-                  page_bits: u8be
-                }
-                4 => ExtensibleArrayIndex {
-                  max_entry_count_bits: u8be
-                  index_block_entries: u8be
-                  secondary_block_min_pointers: u8be
-                  data_block_min_entries: u8be
-                  data_block_page_bits: u8be
-                }
-                5 => BTree2Index {
-                  node_size: u32le
-                  split_percent: u8be
-                  merge_percent: u8be
-                }
-                _ => bytes[0]
-              }
-              address: u64le enum Address {18446744073709551615 = undefined}
-              datatype: at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
-                  aside
-              chunks: switch index_type {
-                1 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) switch flags / 2 - flags / 4 * 2 {
-                    1 => FilteredChunk (packed hdf5_chunk) {
-                      bytes: bytes[index.chunk_size]
-                    }
-                    _ => Data {
-                      element_size: computed datatype.size or else 1
-                      run_bytes: computed product(chunk_dimensions)
-                      elements: ElementsInside
-                    }
-                  }
-                }
-                2 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) ImplicitChunks
-                      (machinery chunks_across chunk_bytes) {
-                    chunks_across: switch index {
-                      0 => computed ceil((earlier(body.max_dimensions.0) or else
-                          earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed ceil((earlier(body.max_dimensions.1) or else
-                          earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed ceil((earlier(body.max_dimensions.2) or else
-                          earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed ceil((earlier(body.max_dimensions.3) or else
-                          earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed ceil((earlier(body.max_dimensions.4) or else
-                          earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed ceil((earlier(body.max_dimensions.5) or else
-                          earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed ceil((earlier(body.max_dimensions.6) or else
-                          earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed ceil((earlier(body.max_dimensions.7) or else
-                          earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed ceil((earlier(body.max_dimensions.8) or else
-                          earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed ceil((earlier(body.max_dimensions.9) or else
-                          earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed ceil((earlier(body.max_dimensions.10) or else
-                          earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed ceil((earlier(body.max_dimensions.11) or else
-                          earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed ceil((earlier(body.max_dimensions.12) or else
-                          earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed ceil((earlier(body.max_dimensions.13) or else
-                          earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed ceil((earlier(body.max_dimensions.14) or else
-                          earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed ceil((earlier(body.max_dimensions.15) or else
-                          earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed ceil((earlier(body.max_dimensions.16) or else
-                          earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed ceil((earlier(body.max_dimensions.17) or else
-                          earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed ceil((earlier(body.max_dimensions.18) or else
-                          earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed ceil((earlier(body.max_dimensions.19) or else
-                          earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed ceil((earlier(body.max_dimensions.20) or else
-                          earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed ceil((earlier(body.max_dimensions.21) or else
-                          earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed ceil((earlier(body.max_dimensions.22) or else
-                          earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed ceil((earlier(body.max_dimensions.23) or else
-                          earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed ceil((earlier(body.max_dimensions.24) or else
-                          earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed ceil((earlier(body.max_dimensions.25) or else
-                          earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed ceil((earlier(body.max_dimensions.26) or else
-                          earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed ceil((earlier(body.max_dimensions.27) or else
-                          earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed ceil((earlier(body.max_dimensions.28) or else
-                          earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed ceil((earlier(body.max_dimensions.29) or else
-                          earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed ceil((earlier(body.max_dimensions.30) or else
-                          earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed ceil((earlier(body.max_dimensions.31) or else
-                          earlier(body.dimensions.31)) / chunk_dimensions[index])
-                      _ => computed 0
-                    }[dimensionality - 1]
-                    chunk_bytes: computed product(chunk_dimensions)
-                    chunks: sized(chunk_bytes) Data {
-                      element_size: computed datatype.size or else 1
-                      run_bytes: computed chunk_bytes
-                      elements: ElementsInside
-                    }[product(chunks_across)]
-                  }
-                }
-                3 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) FixedArray
-                }
-                4 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) ExtensibleArray
-                }
-                5 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) BTree2
-                }
-                _ => bytes[0]
-              }
-            }
-            3 => Virtual {
-              collection_address: u64le enum Address {18446744073709551615 = undefined}
-              object_index: u32le
-              collection: switch collection_address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(collection_address from origin) GlobalHeap
-              }
-            }
-            _ => bytes[remaining]
-          }
-        }
+        5 => same as case 4
         _ => bytes[remaining]
       }
     }
@@ -3209,36 +2531,7 @@ type MessageV2 = Message (named by type, contents body) {
             _ => bytes[0]
           }
         }
-        2 => Layout {
-          dimensionality: u8be
-          layout_class: u8be enum LayoutClass {
-            0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
-          }
-          reserved: bytes[5]
-          address: u64le enum Address {18446744073709551615 = undefined}
-          dimensions: u32le[dimensionality]
-          element_size: switch layout_class / 2 {1 => u32le, _ => bytes[0]}
-          storage: switch layout_class {
-            0 => Compact {
-              size: u32le
-              data: Data (machinery datatype) {
-                element_size: computed earlier(body.size) or else 1
-                run_bytes: computed size
-                datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                    0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                    earlier(body.class) == 10) at(start of earlier(body.bit_field_rest) - 2 from
-                    origin) Datatype
-                    aside
-                elements: ElementsBeside
-              }
-            }
-            2 => switch address {
-              0xffffffffffffffff => bytes[0]
-              _ => at(address from origin) Node
-            }
-            _ => bytes[0]
-          }
-        }
+        2 => same as case 1
         3 => Layout {
           layout_class: u8be enum LayoutClass {
             0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
@@ -3480,199 +2773,7 @@ type MessageV2 = Message (named by type, contents body) {
             _ => bytes[remaining]
           }
         }
-        5 => Layout {
-          layout_class: u8be enum LayoutClass {
-            0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
-          }
-          storage: switch layout_class {
-            0 => Compact {
-              size: u16le
-              data: Data (machinery datatype) {
-                element_size: computed earlier(body.size) or else 1
-                run_bytes: computed size
-                datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                    0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                    earlier(body.class) == 10) at(start of earlier(body.bit_field_rest) - 2 from
-                    origin) Datatype
-                    aside
-                elements: ElementsBeside
-              }
-            }
-            1 => Contiguous {
-              address: u64le enum Address {18446744073709551615 = undefined}
-              size: u64le
-              data: switch address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(address from origin) Data (machinery datatype) {
-                  element_size: computed earlier(body.size) or else 1
-                  run_bytes: computed size
-                  datatype: optional(when earlier(body.class) == 9 ? earlier(body.bit_field) &
-                      0x0f == 0 : earlier(body.class) == 6 or earlier(body.class) == 8 or
-                      earlier(body.class) == 10)
-                      at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
-                      aside
-                  elements: ElementsBeside
-                }
-              }
-            }
-            2 => Chunked (machinery datatype) {
-              flags: u8be flags ChunkedFlags {
-                bit 0 = partial edge chunks unfiltered, bit 1 = single chunk filtered
-              }
-              dimensionality: u8be
-              dimension_width: u8be
-              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
-              index_type: u8be enum ChunkIndexType {
-                0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
-                4 = extensible array, 5 = version 2 b-tree
-              }
-              index: switch index_type {
-                1 => switch flags / 2 - flags / 4 * 2 {
-                  1 => SingleChunkIndex {
-                    chunk_size: u64le
-                    filter_mask: u32le
-                  }
-                  _ => bytes[0]
-                }
-                3 => FixedArrayIndex {
-                  page_bits: u8be
-                }
-                4 => ExtensibleArrayIndex {
-                  max_entry_count_bits: u8be
-                  index_block_entries: u8be
-                  secondary_block_min_pointers: u8be
-                  data_block_min_entries: u8be
-                  data_block_page_bits: u8be
-                }
-                5 => BTree2Index {
-                  node_size: u32le
-                  split_percent: u8be
-                  merge_percent: u8be
-                }
-                _ => bytes[0]
-              }
-              address: u64le enum Address {18446744073709551615 = undefined}
-              datatype: at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
-                  aside
-              chunks: switch index_type {
-                1 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) switch flags / 2 - flags / 4 * 2 {
-                    1 => FilteredChunk (packed hdf5_chunk) {
-                      bytes: bytes[index.chunk_size]
-                    }
-                    _ => Data {
-                      element_size: computed datatype.size or else 1
-                      run_bytes: computed product(chunk_dimensions)
-                      elements: ElementsInside
-                    }
-                  }
-                }
-                2 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) ImplicitChunks
-                      (machinery chunks_across chunk_bytes) {
-                    chunks_across: switch index {
-                      0 => computed ceil((earlier(body.max_dimensions.0) or else
-                          earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed ceil((earlier(body.max_dimensions.1) or else
-                          earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed ceil((earlier(body.max_dimensions.2) or else
-                          earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed ceil((earlier(body.max_dimensions.3) or else
-                          earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed ceil((earlier(body.max_dimensions.4) or else
-                          earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed ceil((earlier(body.max_dimensions.5) or else
-                          earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed ceil((earlier(body.max_dimensions.6) or else
-                          earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed ceil((earlier(body.max_dimensions.7) or else
-                          earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed ceil((earlier(body.max_dimensions.8) or else
-                          earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed ceil((earlier(body.max_dimensions.9) or else
-                          earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed ceil((earlier(body.max_dimensions.10) or else
-                          earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed ceil((earlier(body.max_dimensions.11) or else
-                          earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed ceil((earlier(body.max_dimensions.12) or else
-                          earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed ceil((earlier(body.max_dimensions.13) or else
-                          earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed ceil((earlier(body.max_dimensions.14) or else
-                          earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed ceil((earlier(body.max_dimensions.15) or else
-                          earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed ceil((earlier(body.max_dimensions.16) or else
-                          earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed ceil((earlier(body.max_dimensions.17) or else
-                          earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed ceil((earlier(body.max_dimensions.18) or else
-                          earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed ceil((earlier(body.max_dimensions.19) or else
-                          earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed ceil((earlier(body.max_dimensions.20) or else
-                          earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed ceil((earlier(body.max_dimensions.21) or else
-                          earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed ceil((earlier(body.max_dimensions.22) or else
-                          earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed ceil((earlier(body.max_dimensions.23) or else
-                          earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed ceil((earlier(body.max_dimensions.24) or else
-                          earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed ceil((earlier(body.max_dimensions.25) or else
-                          earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed ceil((earlier(body.max_dimensions.26) or else
-                          earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed ceil((earlier(body.max_dimensions.27) or else
-                          earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed ceil((earlier(body.max_dimensions.28) or else
-                          earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed ceil((earlier(body.max_dimensions.29) or else
-                          earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed ceil((earlier(body.max_dimensions.30) or else
-                          earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed ceil((earlier(body.max_dimensions.31) or else
-                          earlier(body.dimensions.31)) / chunk_dimensions[index])
-                      _ => computed 0
-                    }[dimensionality - 1]
-                    chunk_bytes: computed product(chunk_dimensions)
-                    chunks: sized(chunk_bytes) Data {
-                      element_size: computed datatype.size or else 1
-                      run_bytes: computed chunk_bytes
-                      elements: ElementsInside
-                    }[product(chunks_across)]
-                  }
-                }
-                3 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) FixedArray
-                }
-                4 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) ExtensibleArray
-                }
-                5 => switch address {
-                  0xffffffffffffffff => bytes[0]
-                  _ => at(address from origin) BTree2
-                }
-                _ => bytes[0]
-              }
-            }
-            3 => Virtual {
-              collection_address: u64le enum Address {18446744073709551615 = undefined}
-              object_index: u32le
-              collection: switch collection_address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(collection_address from origin) GlobalHeap
-              }
-            }
-            _ => bytes[remaining]
-          }
-        }
+        5 => same as case 4
         _ => bytes[remaining]
       }
     }
@@ -3956,32 +3057,7 @@ type SequenceElements = switch datatype.properties.base.class {
     0x05ec => f64be[length]
     _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
   }
-  1 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
-      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-  }
+  1 => same as case 0
   3 => (sized(datatype.properties.base.size) text[datatype.properties.base.size] padded with
       0x00 utf8)[length]
   9 => switch datatype.properties.base.bit_field & 0x0f {
@@ -4049,35 +3125,7 @@ type SequenceElements = switch datatype.properties.base.class {
               _ => (sized(datatype.properties.base.properties.base.size)
                   bytes[datatype.properties.base.properties.base.size])[length]
             }
-            1 => switch datatype.properties.base.properties.base.class * 1000 +
-                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                datatype.properties.base.properties.base.size * 2 +
-                bit(datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(datatype.properties.base.properties.base.size)
-                  bytes[datatype.properties.base.properties.base.size])[length]
-            }
+            1 => same as case 0
             3 => (sized(datatype.properties.base.properties.base.size)
                 text[datatype.properties.base.properties.base.size] padded with 0x00
                 utf8)[length]
@@ -4170,34 +3218,7 @@ type SequenceElements = switch datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[datatype.properties.base.properties.base.size]
     }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(datatype.properties.base.properties.base.size)
         text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[datatype.properties.base.properties.base.size]
@@ -4232,34 +3253,7 @@ type SequenceElements = switch datatype.properties.base.class {
       0x05ec => f64be
       _ => bytes[datatype.properties.base.properties.base.size]
     }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
+    1 => same as case 0
     3 => sized(datatype.properties.base.properties.base.size)
         text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
     _ => bytes[datatype.properties.base.properties.base.size]
