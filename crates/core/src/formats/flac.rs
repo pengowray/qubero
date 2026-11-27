@@ -281,7 +281,7 @@ fn seek_table() -> T {
     let point = T::structure(
         "SeekPoint",
         vec![
-            ("sample_number", T::unset_int_named(T::u64(Big), u64::MAX as i128, "placeholder")),
+            ("sample_number", T::unset_int(T::u64(Big), u64::MAX as i128)),
             ("stream_offset", T::u64(Big)),
             ("frame_samples", T::u16(Big)),
         ],

@@ -658,3 +658,28 @@ test("structures written the same are one structure; different ones are a real t
   assert.equal(line(TWICE, findLine(idx, tie, () => null)), "  other: switch kind {");
   assert.equal(line(TWICE, findLine(idx, tie, (d) => (d === 1 ? [node("value", "u32")] : null))), "  other: switch kind {");
 });
+
+// HDF5's addresses, whose value of all ones reads as the format's word for it.
+const NAMED_UNSET = `template hdf5
+
+root HDF5 {
+  superblock: Superblock {
+    base_address: u64le unset 18446744073709551615 "undefined"
+    superblock_extension_address: u64le unset 18446744073709551615 "undefined"
+  }
+}
+`;
+
+test("a field whose unset value has a name is found, and the name is not a keyword", () => {
+  const idx = indexTemplate(NAMED_UNSET);
+  const chain = [node("file", "HDF5"), node("superblock", "Superblock"), node("superblock_extension_address", "u64 le")];
+  assert.equal(line(NAMED_UNSET, findLine(idx, chain, () => null)), '    superblock_extension_address: u64le unset 18446744073709551615 "undefined"');
+  const segs = tokenizeLine('    base_address: u64le unset 18446744073709551615 "undefined"', "field");
+  assert.deepEqual(
+    segs.filter((s) => s.cls !== "").map((s) => [s.cls, s.text]),
+    [
+      ["field", "base_address"],
+      ["kw", "unset"],
+    ],
+  );
+});
