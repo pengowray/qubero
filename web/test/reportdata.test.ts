@@ -377,16 +377,13 @@ test("a stream that would not decode says why, with its codec's verb", () => {
 });
 
 test("a finding for a stream left as bytes says it is too large past either limit", () => {
-  assert.equal(RV.refused("too-large", "32 MiB"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-lazy", "32 MiB"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-zstd-frame", "32 MiB"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-xz-block", "32 MiB"), "Too large to unpack here");
-  assert.equal(
-    RV.refused("too-much-at-once", "32 MiB"),
-    "Takes up over 32 MiB of the file, more than the editor keeps in memory at once, so it was not unpacked",
-  );
-  assert.equal(RV.refused("unaligned", "32 MiB"), "Does not start on a byte boundary, so it was not unpacked");
-  assert.equal(RV.refused("failed", "32 MiB"), "Did not unpack");
+  assert.equal(RV.refused("too-large"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-lazy"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-zstd-frame"), "Too large to unpack here");
+  assert.equal(RV.refused("too-large-xz-block"), "Too large to unpack here");
+  assert.equal(RV.refused("too-much-at-once"), "Too large for the editor to keep in memory at once, so it was not unpacked");
+  assert.equal(RV.refused("unaligned"), "Does not start on a byte boundary, so it was not unpacked");
+  assert.equal(RV.refused("failed"), "Did not unpack");
 });
 
 test("a limit is written as a whole number of its unit, and a refusal that leaves it out says it on hover", () => {

@@ -34,8 +34,9 @@ const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 /** How much of the file the editor keeps in memory at once: what the core's
  *  chunk store holds, from the same two numbers the store is made with. A
  *  stream that has to be read from the file in one piece and takes up more
- *  than this is refused as `too-much-at-once`, and the words for that say
- *  this number. */
+ *  than this is refused as `too-much-at-once`, and so is a zstd frame or an
+ *  xz block over 16 MiB compressed, half of this. The hover on that refusal
+ *  (`DECODED_REFUSED_TITLE`) says this number. */
 export const RESIDENT_BYTES = CHUNK_SIZE * CHUNK_CAPACITY;
 
 // What the file(1) rules get to look at. Their offsets count from the start of

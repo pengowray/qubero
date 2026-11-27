@@ -172,16 +172,15 @@ export const RV = {
    *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and
    *  `too-large-zstd-frame` and `too-large-xz-block` one with a frame or
    *  block that unpacks to more than 64 MiB. All read the same as
-   *  `too-large`. `too-much-at-once` is a stream read from the file in one
-   *  piece that takes up more of it than the editor keeps in memory,
-   *  `resident` (`Doc.residentBytes`, as `formatLimit` writes it). It says
-   *  the limit, since the line has no hover and a stream of another kind
-   *  that takes up more still may have unpacked. */
-  refused: (why: string, resident: string): string =>
+   *  `too-large`. `too-much-at-once` is a stream with a part that a read
+   *  takes from the file whole and that is more than the editor keeps in
+   *  memory at once, such as a zstd frame or an xz block over 16 MiB
+   *  compressed; it reads as `DECODED_REFUSED` words it. */
+  refused: (why: string): string =>
     why === "too-large" || why === "too-large-lazy" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
       ? "Too large to unpack here"
       : why === "too-much-at-once"
-        ? `Takes up over ${resident} of the file, more than the editor keeps in memory at once, so it was not unpacked`
+        ? "Too large for the editor to keep in memory at once, so it was not unpacked"
         : why === "unaligned"
           ? "Does not start on a byte boundary, so it was not unpacked"
           : "Did not unpack",

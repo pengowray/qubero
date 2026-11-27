@@ -18,7 +18,7 @@
 import { problemGlyph } from "../dom.ts";
 import { checkGap } from "../gapcheck.ts";
 import type { Doc } from "../doc.ts";
-import { formatBytes, formatLimit, formatOffset } from "../format.ts";
+import { formatBytes, formatOffset } from "../format.ts";
 import type { ExtentAudit, ExtentCheck, NumbersWithText, TextInNumbers } from "./coredata.ts";
 import type { ReportData } from "./data.ts";
 import { extentFigure } from "./extentfigure.ts";
@@ -124,7 +124,7 @@ function collect(doc: Doc, data: ReportData): Base | typeof WAIT {
       kind: "refused",
       target: { path: s.path, startBit: s.offset_bits, endBit: s.offset_bits + s.size_bits },
       name: s.name,
-      text: RV.refused(s.refused, formatLimit(doc.residentBytes)),
+      text: RV.refused(s.refused),
       value: null,
       bits: s.size_bits,
       rank: 0,

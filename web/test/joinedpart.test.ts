@@ -125,20 +125,26 @@ test("the open button and its refusals say joined, not unpacked", () => {
 
 test("a refusal of a joined stream is said by the core's word for it", () => {
   const tab = JOINED.tabTitle("stream", "range.bam");
-  assert.equal(JOINED.refused("too-large", tab, "32 MiB"), JOINED.tooLarge(tab));
-  assert.equal(JOINED.refused("too-large-lazy", tab, "32 MiB"), JOINED.partTooLarge(tab));
-  assert.equal(JOINED.refused("too-large-zstd-frame", tab, "32 MiB"), JOINED.partZstdFrameTooLarge(tab));
-  assert.equal(JOINED.refused("too-large-xz-block", tab, "32 MiB"), JOINED.partXzBlockTooLarge(tab));
-  assert.equal(JOINED.refused("failed", tab, "32 MiB"), JOINED.failed(tab));
-  // Parts that take up more of the file than the editor keeps in memory, said
-  // as Open unpacked says it of any stream.
-  assert.equal(JOINED.refused("too-much-at-once", tab, "32 MiB"), UNPACKED.tooMuchAtOnce(tab, "32 MiB"));
+  assert.equal(JOINED.refused("too-large", tab), JOINED.tooLarge(tab));
+  assert.equal(JOINED.refused("too-large-lazy", tab), JOINED.partTooLarge(tab));
+  assert.equal(JOINED.refused("too-large-zstd-frame", tab), JOINED.partZstdFrameTooLarge(tab));
+  assert.equal(JOINED.refused("too-large-xz-block", tab), JOINED.partXzBlockTooLarge(tab));
+  assert.equal(JOINED.refused("failed", tab), JOINED.failed(tab));
+  // A part that needs more of the file at once than the editor keeps, such
+  // as a zstd frame over 16 MiB compressed, in the words a field refused
+  // that way shows.
+  assert.equal(
+    JOINED.refused("too-much-at-once", tab),
+    "Couldn't open stream joined from range.bam: one of its parts is too large for the editor to keep in memory at once.",
+  );
+  // What Open unpacked says when a stream's chunks were dropped before it
+  // could open.
   assert.equal(
     UNPACKED.tooMuchAtOnce(tab, "32 MiB"),
     "Couldn't open stream joined from range.bam: it needs more than 32 MiB of the file in memory at once, and the editor keeps at most 32 MiB.",
   );
   // Any other word is said as a part that will not read, as before.
-  assert.equal(JOINED.refused("unaligned", tab, "32 MiB"), JOINED.failed(tab));
+  assert.equal(JOINED.refused("unaligned", tab), JOINED.failed(tab));
 });
 
 /** A node with only what the offer reads set. */

@@ -926,7 +926,7 @@ function buildDocument(tab: Tab): Page {
     // much or will not read, is found out only now, so this is where it is
     // said, for the listing's button and the inspector's alike.
     if ("refused" in unpacked) {
-      if (joinedAt(path)) say(JOINED.refused(unpacked.refused, JOINED.tabTitle(node.name, doc.name), formatLimit(RESIDENT_BYTES)), true);
+      if (joinedAt(path)) say(JOINED.refused(unpacked.refused, JOINED.tabTitle(node.name, doc.name)), true);
       return null;
     }
     const already = tabs.forSpace(unpacked.space);

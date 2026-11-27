@@ -680,6 +680,15 @@ export const JOINED = {
   partZstdFrameTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has a zstd frame that unpacks to over 64 MiB.`,
   partXzBlockTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has an xz block that unpacks to over 64 MiB.`,
   /**
+   * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part needs more of the file at once than
+   * the editor keeps in memory (`too-much-at-once`): a zstd frame or an xz
+   * block over 16 MiB compressed, which a read of it takes from the file
+   * whole. The words are the ones a compressed field refused that way shows
+   * (`DECODED_REFUSED`). The core does not say which part.
+   */
+  partTooMuchAtOnce: (tab: string): string => `Couldn't open ${tab}: one of its parts is too large for the editor to keep in memory at once.`,
+  /**
    * In the status bar, when Open joined stream was pressed and joining the
    * whole stream failed: a part would not read, would not unpack, or unpacked
    * to another length than its block said. The core does not say which part,
@@ -689,11 +698,8 @@ export const JOINED = {
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
   /** Which of the above a refusal of Open joined stream is, by the core's
-   *  refusal word. `too-much-at-once` is parts that take up more of the file
-   *  than the editor keeps in memory at once, which is what
-   *  `UNPACKED.tooMuchAtOnce` says of any stream; `resident` is that limit,
-   *  as there. */
-  refused: (refused: string, tab: string, resident: string): string => {
+   *  refusal word. */
+  refused: (refused: string, tab: string): string => {
     switch (refused) {
       case "too-large":
         return JOINED.tooLarge(tab);
@@ -704,7 +710,7 @@ export const JOINED = {
       case "too-large-xz-block":
         return JOINED.partXzBlockTooLarge(tab);
       case "too-much-at-once":
-        return UNPACKED.tooMuchAtOnce(tab, resident);
+        return JOINED.partTooMuchAtOnce(tab);
       default:
         return JOINED.failed(tab);
     }
