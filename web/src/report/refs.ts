@@ -57,7 +57,8 @@ export function dumpRows(doc: Doc, startByte: number, endByte: number, rows: num
     const line = document.createElement("div");
     const off = document.createElement("span");
     off.className = "rv-dump-off";
-    off.textContent = r.toString(base).padStart(digits, "0");
+    // Decimal is padded with spaces: "0064" reads as a hex address.
+    off.textContent = r.toString(base).padStart(digits, base === 16 ? "0" : " ");
     line.append(off, " ");
     let text = "";
     for (let i = 0; i < 16; i++) {

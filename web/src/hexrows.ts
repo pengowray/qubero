@@ -854,7 +854,9 @@ export class HexRows {
     let height = f.rowHeight * at.segs.length;
     for (const h of at.headHeights) height += h;
     const addr = (parts.lines[0] as LineParts).addr;
-    setText(addr, rowStart.toString(getAddressBase() === "dec" ? 10 : 16).padStart(f.addrWidth, "0"));
+    // Decimal is padded with spaces: "00000064" reads as a hex address.
+    const dec = getAddressBase() === "dec";
+    setText(addr, rowStart.toString(dec ? 10 : 16).padStart(f.addrWidth, dec ? " " : "0"));
     // Which bytes a row stands for only changes when the view moves. A
     // cursor key leaves every address where it was, and writing them all
     // again would be the largest part of the redraw it causes.
