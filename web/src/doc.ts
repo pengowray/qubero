@@ -3677,23 +3677,28 @@ export class Doc {
 
   /**
    * Start reading `chunks` of the file, one read for each stretch of
-   * neighbours among them, and skip any that are here already or on their
-   * way. A span of a stream is up to 256 chunks of its run, and reading
-   * those one by one was 256 reads and 256 redraws, each redraw copying the
-   * chunks that had arrived so far.
+   * neighbours among them, and skip any that are on their way already. A
+   * span of a stream is up to 256 chunks of its run, and reading those one
+   * by one was 256 reads and 256 redraws, each redraw copying the chunks
+   * that had arrived so far.
    *
-   * A chunk is always the file's, whichever document asks. An unpacked
-   * stream's own bytes are never fetched: what a tab is missing is chunks of
-   * the file under the stream, and a stream read by the template it declared
-   * is read in the file's reading, which asks for bytes of the file: the
-   * fields outside the stream that size it, and the runs a joined stream is
-   * kept in. Reading ahead can run off the end, and a chunk past the end is
-   * not a chunk: feeding an empty one would look like bytes that are all
-   * zero, so `stretches` leaves it out.
+   * The store is not asked whether it has them: the core named them as
+   * missing, and the redraw at the end of the read is what the view that
+   * asked is waiting for. `fileChunks`, which waits on the reads itself,
+   * leaves out the chunks the store has.
+   *
+   * A chunk is always the file's, whichever document asks. What a tab is
+   * missing is chunks of the file under its stream, never bytes of the
+   * stream itself, and a stream read by the template it declared is read in
+   * the file's reading, which asks for bytes of the file: the fields outside
+   * the stream that size it, and the runs a joined stream is kept in.
+   * Reading ahead can run off the end, and a chunk past the end is not a
+   * chunk: feeding an empty one would look like bytes that are all zero, so
+   * `stretches` leaves it out.
    */
   private fetchChunks(chunks: Iterable<number>): void {
     const total = Math.ceil(this.blob.size / CHUNK_SIZE);
-    const skip = (c: number): boolean => this.inflight.has(c) || this.editor.has_chunk(0, c);
+    const skip = (c: number): boolean => this.inflight.has(c);
     for (const [start, end] of stretches({ chunks, total, skip, most: STRETCH_CHUNKS })) this.fetchStretch(start, end);
   }
 
@@ -3739,10 +3744,11 @@ export class Doc {
    * more than that at once pushes out its own first chunks.
    */
   async fileChunks(chunks: readonly number[]): Promise<void> {
-    this.fetchChunks(chunks);
+    const absent = chunks.filter((c) => !this.editor.has_chunk(0, c));
+    this.fetchChunks(absent);
     // One read can carry many of them, so each read is waited on once.
     const reads = new Set<Promise<void>>();
-    for (const c of chunks) {
+    for (const c of absent) {
       const read = this.inflight.get(c);
       if (read !== undefined) reads.add(read);
     }
@@ -3921,9 +3927,9 @@ export class Doc {
    * piece needed more of the file at once than the store keeps.
    *
    * Read a piece at a time (`readInPieces`, with pieces of `PIECE_BYTES`),
-   * since such a range may never be in the store all at once: on a tab, any
+   * since a long range may never be in the store all at once: on a tab, a
    * range whose compressed input is longer than the store, and on the file,
-   * any range longer than the store. Each piece is read, the chunks of the
+   * a range longer than the store. Each piece is read, the chunks of the
    * file it names are loaded, and it is read again until it is complete.
    * Rejects with a `ReadFailure` when a chunk cannot be read.
    */
