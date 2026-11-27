@@ -3,8 +3,9 @@
 Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
 built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
-from this text). Parts 4 and 5 are built too (2026-11-28; see part 4 in
-"Order of work", and "Built (part 5)"), and parts 6 to 11 are not. It follows
+from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
+"Order of work", "Built (part 5)" and "Built (part 6)"), and parts 7 to 11
+are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
@@ -764,6 +765,150 @@ code differs from the text above:
   `Pending` in the stitched space and in the joined stream opened as a
   document, and is never added to `Stitch::troubles`.
 
+### Built (part 6)
+
+**Built on 2026-11-28.** `Limits::unit_input` and `Limits::span_input` are
+in the code, and apply only when the source under the `RunInput` has a
+resident limit (`Source::resident_limit` answers a number), as "Review before
+part 7" asks. Until part 7, every index reads through `RunInput::held`, an
+`ArcSource` over the pass's copy of the run, which has no resident limit. So
+nothing that opens today is refused, and only the tests reach the
+refusals. The output bytes and traces of every run are the
+same as before. Where the code differs from "Checkpoints by compressed
+distance" and the table above:
+
+- **Which runs the limits apply to.** `RunInput::resident_limit` gives the
+  source's resident limit. The passes are given the `RunInput` the index will
+  read through, by `Indexing::through` and `decode_or_index_through`. These
+  are private for now, and `Indexing::new` and `decode_or_index_with` call
+  them with `RunInput::held`. The test source `Lossy` has a resident limit
+  only when it is made with `Lossy::keeping`, so the part 5 tests still read
+  with no limit.
+- **Checkpoints.** `Checkpoints::offer` takes a checkpoint when the output or
+  the input since the last checkpoint reaches its spacing, and then resets
+  both. Thinning doubles both spacings. No code caps the spacings: under the
+  default limits they reach at most 8 MiB, as worked out above. A place that
+  is offered twice (by a step that carries on from it, or by the pass going
+  back to its last checkpoint at the cap) gets one checkpoint. `Checkpoints::take_if_long` takes one
+  at the start of a zstd frame or xz block whose input is the input spacing
+  or more.
+- **zstd frames.** For a frame with skippable frames in front of it, the
+  input since the last checkpoint is counted up to the frame's own magic,
+  past those skippable frames, while the checkpoint is taken where the first
+  of them starts. So a long skippable frame always starts a span, and a read
+  of the span can skip it. The pass learns a frame's size when the next frame starts
+  or the walk ends, and `ZstdWalk` now reports both where a frame's skippable
+  frames start and where the frame itself starts (`FrameAt`), and where the
+  last frame ended (`frames_end`). Skippable frames after the last frame
+  become a span of their own, with no output, once they reach the input
+  spacing.
+- **zstd span reads.** Each zstd checkpoint keeps the byte where its span's
+  first frame starts (`Start::Frame { own }`). A read of the span's bytes
+  copies the run from there to the span's end, so it reads none of the
+  skippable frames in front of that frame. A span's trace has a step for each
+  of those skippable frames, so it reads their 8-byte headers. It reads them
+  in pieces of up to 64 KiB (`FRONT_PIECE`), and reads the first piece and
+  the span's frames together, in one read through the `RunInput`. So the
+  trace of a span that starts with one long skippable frame reads the first
+  64 KiB of that frame and none of the rest. A skippable frame in the middle
+  of a span is read with the span. It is shorter than the input spacing,
+  except in a span that thinning made from two.
+- **`unit_input` for a zstd frame** is checked when the frame ends. The size
+  counted is from the frame's own magic to the start of the next frame's
+  skippable frames. As for `Limits::span`, a frame that ended while the run
+  might still be held whole is checked only once the run passes the cap, so
+  a run that is held whole is never refused for it.
+- **xz blocks.** `unit_input` is checked against a block's whole size in the
+  stream (`Layout::block_len`: header, data, padding and check). An xz read
+  copies one block's LZMA2 data and the data of the blocks after it that the
+  read needs, up to `span_input` bytes of the stream, and decodes them before
+  it copies more. `Prefix::reach` returns the number of the next block it
+  needs when its window does not hold that block. A read of a span larger
+  than `span_input` therefore takes more than one round, and works. With no
+  resident limit, a read copies every block it needs at once, as before. The
+  table above says an xz read needs at most `unit_input` at once. As built it
+  needs at most `span_input` at once, or one whole block when that block is
+  larger; a block larger than `unit_input` is refused when the stream is
+  indexed. Both limits are 16 MiB.
+- **Where `span_input` is checked.** By the read and the trace of a zstd span,
+  against the bytes from its first frame's own start, and by the trace of an
+  xz span, against the whole span. Deflate span reads are not checked, since
+  their input is bounded by the input spacing.
+- **`group`'s bound** is checked when `group` reads a stretch, not by the
+  pass.
+- **Header copies** are made when the pass finishes, from its copy of the
+  run, for the checkpoints it keeps. Checkpoints inside the same block share
+  one copy, and `held_bytes` counts the copy once for each of them, so it
+  overstates the memory a little. In part
+  7 the pass holds only a window of the run, so it has to copy the current
+  block's header when the block starts.
+- **BFINAL and BTYPE.** `inflate::run` passes a block's BFINAL and BTYPE to
+  the sink once it has read them (`Sink::head`). `inflate::BlockStart` keeps
+  them in the top three bits of the word that holds the bit where the block
+  starts, so a block start is still 16 bytes. The lists that `group` decodes again record
+  them too. `block(i)` reads the run only when the start of block `i` or
+  block `i + 1` was dropped by thinning.
+- **Block traces.** With `TraceBuilder::stopping_when_coarse`, `inflate::run`
+  stops where the trace turns coarse and returns `Ended::Coarse`, with the
+  block still open in the trace. `block_trace_from` then closes the block at
+  the end the index gives. For the last block it also adds the padding step
+  and any step after the stream, with `inflate::stream_tail`, which
+  `inflate::run` now uses as well. For a Huffman-coded block, `block_trace`
+  copies at most `MAX_HEAD_BYTES` plus 6 bytes for each of `span_steps`
+  codes. A stored block, which never turns coarse, is copied whole. The last
+  block is now copied to its own end, not to the end of the run.
+- **Refusals.** Every refusal added is `Refusal::TooLarge`, as the design
+  says. Its message, "too large to unpack (over 64 MiB)", names 64 MiB of
+  output, while these refusals are for 16 MiB of compressed input; see "Open
+  questions". No reader sees it before
+  part 7, which is the first part to make an index over a source with a
+  resident limit. No string was added or changed.
+- **Spans that change.** Measured on 2026-11-28 in a debug build, by indexing
+  each run with the default limits, and again with the input spacing set so
+  large that it never takes a checkpoint, which gives the old spans:
+
+  | Run | Packed | Unpacked | Spans, old rule | Spans, new rule | Largest span input, old rule | Largest span input, new rule |
+  |---|---|---|---|---|---|---|
+  | The Rubin raw, gzip | 94,940 B | 75,677,760 B | 73 | 73 | 3,021 B | 3,021 B |
+  | 1 MiB of text and 1 MiB of noise by turns, 40 times, gzip level 6 | 53,794,726 B | 83,886,080 B | 80 | 80 | 1,049,179 B | 1,049,318 B |
+  | 70 MiB of zeros with 8,000,000 empty fixed blocks after the first MiB, raw deflate | 10,071,321 B | 73,400,320 B | 70 | 79 (9 of them with no output) | 10,001,033 B | 1,048,576 B |
+
+  Text and noise packs to about as many bytes as it unpacks to, so both rules
+  take a checkpoint at about the same places. In the run of empty blocks, the
+  9 extra checkpoints keep 288 KiB more of output windows, 32 KiB each. The header copies
+  of the three runs come to 20,664, 22,099 and 19,803 bytes.
+- **Tests,** in `codec/lazy/tests.rs`:
+  - Checkpoints by input: runs of 160,000 empty fixed blocks, of stored
+    blocks and of noise, where no span's input passes the input spacing plus
+    a stored block, a byte is never read from a span of no output, and the
+    trace of such a span names its bits as the whole trace does. Thinning
+    doubles both spacings.
+  - zstd and xz runs with one large frame or block, where it is a span of its
+    own and the spans of small ones stay under twice the input spacing. The
+    zstd run also has a 100 KB skippable frame that starts a span, and a
+    40 KB skippable frame after the last frame. A read of that span names only
+    the chunks of its frames, and its trace names only the first 64 KiB of
+    the skippable frame, the next header and the frames.
+  - A zstd frame and an xz block over `unit_input` are refused from a source
+    with a resident limit, in one pass, in steps and told the run is large.
+    The same runs index and read back from a copy in memory, and are held
+    whole when they fit under the cap.
+  - zstd and xz spans joined by thinning past `span_input` are refused when
+    read or traced from such a source, before anything is read. An xz span
+    is still read, a few blocks at a time, and no answer names more chunks
+    than `span_input` covers. A long stretch between kept block starts is
+    refused the same way.
+  - `block(i)` through a source that holds none of the run gives every block
+    when no start was thinned, and with thinned starts reads only for a
+    block whose start or end was dropped.
+  - Block traces with `span_steps` of 200: each is the trace that decoding
+    to the block's end gives, and a coarse block reads only the chunks
+    before the coarse point.
+- **Part 5 tests changed on purpose.** A deflate span read no longer names
+  the chunks of the block header, and a zstd span read starts at its first
+  frame's own magic. `block(i)` no longer waits for chunks, so the part 5
+  test of reads that wait counts block traces instead.
+
 ## Measuring a gzip member
 
 `stream_len_at` reads up to 64 MiB in one `read_in`: the rest of the file
@@ -1238,7 +1383,9 @@ changes parts 6 to 10: read it first.
    BFINAL and BTYPE with the block starts; block traces that stop when coarse;
    `group`'s bound; `Limits::unit_input` and `Limits::span_input` and their
    refusals. The spans of runs that pack badly change; their bytes and traces
-   stay the same.
+   stay the same. **Done 2026-11-28**, with the limits held to only when the
+   source has a resident limit, as "Review before part 7" asks; see "Built
+   (part 6)" under "A `Seekable` reading through its `RunInput`".
 7. **Share the source.** `Source::share`, `ChunkStore`'s chunks behind an
    `Arc<Mutex<…>>`, `Document::source_offset_of`, `Evaluator::run_input`. The
    deflate and zstd passes read their windows through the `RunInput` and
