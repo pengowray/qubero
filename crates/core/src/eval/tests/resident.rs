@@ -419,6 +419,20 @@ fn zlib_of_a_gzip() -> (Vec<u8>, Vec<u8>) {
 /// The zlib template's `compressed`.
 const ZLIB_RUN: &[usize] = &[6];
 
+/// Lines of text, each with a number in hex that does not repeat, so that
+/// they pack to about half.
+fn hex_lines(n: usize) -> Vec<u8> {
+    let mut x = 0x9e37_79b9_7f4a_7c15_u64;
+    (0..n)
+        .flat_map(|i| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            format!("line {i}: {x:016x}\n").into_bytes()
+        })
+        .collect()
+}
+
 /// A zlib run past the cap and longer than the store is read a window at a
 /// time to index it, and the index then reads the run through a handle onto
 /// the store: it holds no copy of the run, and keeps as much as its span
@@ -426,17 +440,7 @@ const ZLIB_RUN: &[usize] = &[6];
 /// for them, and then gives the bytes the run unpacks to.
 #[test]
 fn a_run_longer_than_the_store_is_read_from_the_store_once_indexed() {
-    // Each line with a number in hex that does not repeat, so that the run
-    // packs to about half.
-    let mut x = 0x9e37_79b9_7f4a_7c15_u64;
-    let content: Vec<u8> = (0..12_000)
-        .flat_map(|i| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            format!("line {i}: {x:016x}\n").into_bytes()
-        })
-        .collect();
+    let content = hex_lines(12_000);
     let packed = miniz_oxide::deflate::compress_to_vec_zlib(&content, 6);
     let mut bytes = vec![0xaa, 0xbb];
     bytes.extend_from_slice(&packed);
@@ -457,6 +461,48 @@ fn a_run_longer_than_the_store_is_read_from_the_store_once_indexed() {
         waited += asked.len();
     }
     assert!(waited >= 3, "{waited} waits: the reads found their chunks in the store");
+}
+
+/// A gzip past the cap opens as a stream joined from its one member and read
+/// a part at a time, the way Open unpacked opens one. The member's index
+/// reads its run from the store, so the joined stream keeps as much as that
+/// index keeps decoded, and a read of it names chunks of the file the store
+/// has pushed out, and gives the member's bytes once they are fed. Opening
+/// it reads the joined stream's first bytes after the walk over its parts has
+/// finished, which can wait for chunks, and the walk is made again then.
+#[test]
+fn a_gzip_past_the_cap_opens_as_a_joined_stream_read_from_the_store() {
+    use crate::codec::lazy::ReadError;
+    use crate::eval::SpaceSource;
+    let content = hex_lines(12_000);
+    let bytes = gzip_member(&content);
+    assert!(bytes.len() > 96 * CHUNK as usize, "{} bytes is too few for a store of 48 chunks", bytes.len());
+    let mut d = stored(&bytes, 48);
+    let mut ev = Evaluator::new(crate::formats::gzip());
+    ev.spaces.set_lazy_limits(small_lazy());
+    // Under the stream's 288 KB and over its run of about 140 KB, which a
+    // stream read a part at a time may not pass between its parts' runs.
+    ev.spaces.set_whole_cap(200 << 10);
+    let id = fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opens");
+    let source = ev.space(id).unwrap().source().clone();
+    assert!(matches!(source, SpaceSource::Joined(_)), "not read a part at a time");
+    assert_eq!(source.resident_limit(), Some(64 << 10));
+    let mut waited = 0;
+    for at in [content.len() / 3, 10, content.len() / 2, content.len() - 100] {
+        let mut asked = Vec::new();
+        let got = fed_noting(&mut d, &bytes, &mut asked, |_| {
+            let mut out = vec![0u8; 100];
+            match source.read(at as u64, &mut out) {
+                Ok(()) => Ok(out),
+                Err(ReadError::Missing(missing)) => Err(EvalError::Pending(missing)),
+                Err(ReadError::Refused(why)) => panic!("{why:?}"),
+            }
+        })
+        .unwrap();
+        assert!(got == content[at..at + 100], "100 bytes at {at} differ");
+        waited += asked.len();
+    }
+    assert!(waited >= 2, "{waited} waits: the reads found their chunks in the store");
 }
 
 /// A tab over a stream read through an index, whose run is read from a store
