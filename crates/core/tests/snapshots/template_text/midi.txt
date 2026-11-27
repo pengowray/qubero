@@ -114,10 +114,7 @@ type Chunk (named by id, contents body, line id then body) {
           length: vlq
           data: sized(length) bytes[remaining]
         }
-        247 => SysEx {
-          length: vlq
-          data: sized(length) bytes[remaining]
-        }
+        247 => same as case 240
         255 => Meta (named by type) {
           type: u8be enum MetaType {
             0x00 = sequence number, 0x01 = text, 0x02 = copyright, 0x03 = track name,
@@ -173,418 +170,130 @@ type Chunk (named by id, contents body, line id then body) {
           note: u8be
           velocity: u8be
         }
-        129 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        130 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        131 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        132 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        133 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        134 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        135 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        136 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        137 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        138 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        139 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        140 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        141 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        142 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        143 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        144 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        145 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        146 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        147 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        148 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        149 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        150 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        151 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        152 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        153 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        154 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        155 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        156 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        157 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        158 => Message {
-          note: u8be
-          velocity: u8be
-        }
-        159 => Message {
-          note: u8be
-          velocity: u8be
-        }
+        129 => same as case 128
+        130 => same as case 128
+        131 => same as case 128
+        132 => same as case 128
+        133 => same as case 128
+        134 => same as case 128
+        135 => same as case 128
+        136 => same as case 128
+        137 => same as case 128
+        138 => same as case 128
+        139 => same as case 128
+        140 => same as case 128
+        141 => same as case 128
+        142 => same as case 128
+        143 => same as case 128
+        144 => same as case 128
+        145 => same as case 128
+        146 => same as case 128
+        147 => same as case 128
+        148 => same as case 128
+        149 => same as case 128
+        150 => same as case 128
+        151 => same as case 128
+        152 => same as case 128
+        153 => same as case 128
+        154 => same as case 128
+        155 => same as case 128
+        156 => same as case 128
+        157 => same as case 128
+        158 => same as case 128
+        159 => same as case 128
         160 => Message {
           note: u8be
           pressure: u8be
         }
-        161 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        162 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        163 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        164 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        165 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        166 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        167 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        168 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        169 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        170 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        171 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        172 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        173 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        174 => Message {
-          note: u8be
-          pressure: u8be
-        }
-        175 => Message {
-          note: u8be
-          pressure: u8be
-        }
+        161 => same as case 160
+        162 => same as case 160
+        163 => same as case 160
+        164 => same as case 160
+        165 => same as case 160
+        166 => same as case 160
+        167 => same as case 160
+        168 => same as case 160
+        169 => same as case 160
+        170 => same as case 160
+        171 => same as case 160
+        172 => same as case 160
+        173 => same as case 160
+        174 => same as case 160
+        175 => same as case 160
         176 => Message {
           controller: u8be
           value: u8be
         }
-        177 => Message {
-          controller: u8be
-          value: u8be
-        }
-        178 => Message {
-          controller: u8be
-          value: u8be
-        }
-        179 => Message {
-          controller: u8be
-          value: u8be
-        }
-        180 => Message {
-          controller: u8be
-          value: u8be
-        }
-        181 => Message {
-          controller: u8be
-          value: u8be
-        }
-        182 => Message {
-          controller: u8be
-          value: u8be
-        }
-        183 => Message {
-          controller: u8be
-          value: u8be
-        }
-        184 => Message {
-          controller: u8be
-          value: u8be
-        }
-        185 => Message {
-          controller: u8be
-          value: u8be
-        }
-        186 => Message {
-          controller: u8be
-          value: u8be
-        }
-        187 => Message {
-          controller: u8be
-          value: u8be
-        }
-        188 => Message {
-          controller: u8be
-          value: u8be
-        }
-        189 => Message {
-          controller: u8be
-          value: u8be
-        }
-        190 => Message {
-          controller: u8be
-          value: u8be
-        }
-        191 => Message {
-          controller: u8be
-          value: u8be
-        }
+        177 => same as case 176
+        178 => same as case 176
+        179 => same as case 176
+        180 => same as case 176
+        181 => same as case 176
+        182 => same as case 176
+        183 => same as case 176
+        184 => same as case 176
+        185 => same as case 176
+        186 => same as case 176
+        187 => same as case 176
+        188 => same as case 176
+        189 => same as case 176
+        190 => same as case 176
+        191 => same as case 176
         192 => Message {
           program: u8be
         }
-        193 => Message {
-          program: u8be
-        }
-        194 => Message {
-          program: u8be
-        }
-        195 => Message {
-          program: u8be
-        }
-        196 => Message {
-          program: u8be
-        }
-        197 => Message {
-          program: u8be
-        }
-        198 => Message {
-          program: u8be
-        }
-        199 => Message {
-          program: u8be
-        }
-        200 => Message {
-          program: u8be
-        }
-        201 => Message {
-          program: u8be
-        }
-        202 => Message {
-          program: u8be
-        }
-        203 => Message {
-          program: u8be
-        }
-        204 => Message {
-          program: u8be
-        }
-        205 => Message {
-          program: u8be
-        }
-        206 => Message {
-          program: u8be
-        }
-        207 => Message {
-          program: u8be
-        }
+        193 => same as case 192
+        194 => same as case 192
+        195 => same as case 192
+        196 => same as case 192
+        197 => same as case 192
+        198 => same as case 192
+        199 => same as case 192
+        200 => same as case 192
+        201 => same as case 192
+        202 => same as case 192
+        203 => same as case 192
+        204 => same as case 192
+        205 => same as case 192
+        206 => same as case 192
+        207 => same as case 192
         208 => Message {
           pressure: u8be
         }
-        209 => Message {
-          pressure: u8be
-        }
-        210 => Message {
-          pressure: u8be
-        }
-        211 => Message {
-          pressure: u8be
-        }
-        212 => Message {
-          pressure: u8be
-        }
-        213 => Message {
-          pressure: u8be
-        }
-        214 => Message {
-          pressure: u8be
-        }
-        215 => Message {
-          pressure: u8be
-        }
-        216 => Message {
-          pressure: u8be
-        }
-        217 => Message {
-          pressure: u8be
-        }
-        218 => Message {
-          pressure: u8be
-        }
-        219 => Message {
-          pressure: u8be
-        }
-        220 => Message {
-          pressure: u8be
-        }
-        221 => Message {
-          pressure: u8be
-        }
-        222 => Message {
-          pressure: u8be
-        }
-        223 => Message {
-          pressure: u8be
-        }
+        209 => same as case 208
+        210 => same as case 208
+        211 => same as case 208
+        212 => same as case 208
+        213 => same as case 208
+        214 => same as case 208
+        215 => same as case 208
+        216 => same as case 208
+        217 => same as case 208
+        218 => same as case 208
+        219 => same as case 208
+        220 => same as case 208
+        221 => same as case 208
+        222 => same as case 208
+        223 => same as case 208
         224 => Message {
           bend_low: u8be
           bend_high: u8be
         }
-        225 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        226 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        227 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        228 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        229 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        230 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        231 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        232 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        233 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        234 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        235 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        236 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        237 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        238 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
-        239 => Message {
-          bend_low: u8be
-          bend_high: u8be
-        }
+        225 => same as case 224
+        226 => same as case 224
+        227 => same as case 224
+        228 => same as case 224
+        229 => same as case 224
+        230 => same as case 224
+        231 => same as case 224
+        232 => same as case 224
+        233 => same as case 224
+        234 => same as case 224
+        235 => same as case 224
+        236 => same as case 224
+        237 => same as case 224
+        238 => same as case 224
+        239 => same as case 224
         _ => NoStatus {
           rest_of_track: bytes[remaining]
         }

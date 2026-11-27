@@ -70,6 +70,52 @@ root ELF {
 }
 `;
 
+// ELF as it reads when each word size writes its big-endian arm as one line
+// pointing at the little-endian one, and a section switch with an arm the
+// same as another.
+const SHORT = `template elf
+
+root ELF {
+  class: u8be enum Class {1 = 32-bit, 2 = 64-bit}
+  data: u8be
+  header: switch class {
+    1 => switch data {
+      1 => ELFHeader {
+        tag: u8be
+        entry: u32le
+        program_headers: at(entry from file) ProgramHeader (unit segment) {
+          type: u32le
+          file_size: u32le
+        }[2]
+      }
+      2 => same as case 1, but big-endian
+      _ => bytes[0]
+    }
+    2 => switch data {
+      1 => ELFHeader {
+        tag: u8be
+        entry: u64le
+        program_headers: at(entry from file) ProgramHeader (unit segment) {
+          type: u32le
+          file_size: u64le
+        }[2]
+      }
+      2 => same as case 1, but big-endian
+      _ => bytes[0]
+    }
+    _ => bytes[0]
+  }
+  table: switch data {
+    2 => Symbol {
+      value: u32le
+    }
+    11 => same as case 2
+    "a => b" => same as case 2
+    _ => bytes[0]
+  }
+}
+`;
+
 const line = (text: string, n: number | null): string | null => (n === null ? null : (text.split("\n")[n] ?? null));
 const node = (name: string, type: string, list = false): ChainNode => ({ name, type, list });
 
@@ -193,4 +239,61 @@ test("the tokenizer leaves field names alone where they are only words", () => {
     ],
   );
   assert.deepEqual(tokenizeLine("  // a note", "comment"), [{ text: "  // a note", cls: "comment" }]);
+});
+
+test("a same-as line knows the arm it points at and the byte order it names", () => {
+  const idx = indexTemplate(SHORT);
+  const text = (n: number | null): string | null => line(SHORT, n);
+  assert.deepEqual(
+    idx.sameAs.map((s) => [text(s.line)?.trim(), text(s.target)?.trim(), s.order]),
+    [
+      ["2 => same as case 1, but big-endian", "1 => ELFHeader {", "big"],
+      ["2 => same as case 1, but big-endian", "1 => ELFHeader {", "big"],
+      ["11 => same as case 2", "2 => Symbol {", null],
+      ['"a => b" => same as case 2', "2 => Symbol {", null],
+    ],
+  );
+  // The two `1 => ELFHeader` targets are the two written-out arms, in order.
+  const [a, b] = idx.sameAs;
+  assert.ok(a !== undefined && b !== undefined && a.target !== null && b.target !== null && a.target < b.target);
+});
+
+test("a field read by a big-endian arm written as one line lands in the arm it points at", () => {
+  const idx = indexTemplate(SHORT);
+  const kids64 = [node("tag", "u8 be"), node("entry", "u64 be"), node("program_headers", "at → ProgramHeader[]")];
+  const chain = [node("file", "ELF"), node("header", "ELFHeader"), node("entry", "u64 be")];
+  const n = findLine(idx, chain, (depth) => (depth === 1 ? kids64 : null));
+  assert.equal(line(SHORT, n), "        entry: u64le");
+  // In the 64-bit arm, not the 32-bit one.
+  assert.ok(n !== null && n > SHORT.split("\n").findIndex((l) => l.includes("entry: u32le")));
+  // A 32-bit big-endian file lands in the 32-bit arm.
+  const kids32 = [node("tag", "u8 be"), node("entry", "u32 be"), node("program_headers", "at → ProgramHeader[]")];
+  const m = findLine(idx, [node("file", "ELF"), node("header", "ELFHeader"), node("entry", "u32 be")], (depth) => (depth === 1 ? kids32 : null));
+  assert.equal(line(SHORT, m), "        entry: u32le");
+  // And deeper, through the placed list.
+  const deep = [
+    node("file", "ELF"),
+    node("header", "ELFHeader"),
+    node("program_headers", "at → ProgramHeader[]"),
+    node("program_headers", "ProgramHeader[]", true),
+    node("[0] load", "ProgramHeader"),
+    node("file_size", "u64 be"),
+  ];
+  const d = findLine(idx, deep, (depth) => (depth === 1 ? kids64 : null));
+  assert.equal(line(SHORT, d), "          file_size: u64le");
+  assert.ok(d !== null && n !== null && d > n);
+});
+
+test("a little-endian file still lands in the arm written for it", () => {
+  const idx = indexTemplate(SHORT);
+  const kids = [node("tag", "u8 be"), node("entry", "u64 le"), node("program_headers", "at → ProgramHeader[]")];
+  const n = findLine(idx, [node("file", "ELF"), node("header", "ELFHeader"), node("entry", "u64 le")], (depth) => (depth === 1 ? kids : null));
+  assert.equal(line(SHORT, n), "        entry: u64le");
+  assert.ok(n !== null && n > SHORT.split("\n").findIndex((l) => l.includes("entry: u32le")));
+});
+
+test("a field read by an arm the same as another lands in that other arm", () => {
+  const idx = indexTemplate(SHORT);
+  const n = findLine(idx, [node("file", "ELF"), node("table", "Symbol"), node("value", "u32 le")], () => null);
+  assert.equal(line(SHORT, n), "      value: u32le");
 });

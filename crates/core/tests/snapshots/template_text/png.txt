@@ -1746,14 +1746,8 @@ root PNG {
         3 => bKGDPalette {
           palette_index: u8be
         }
-        4 => bKGDGrey (colour grey depth earlier[type = 'IHDR'].data.bit_depth) {
-          grey: u16be
-        }
-        6 => bKGDRgb (colour red green blue depth earlier[type = 'IHDR'].data.bit_depth) {
-          red: u16be
-          green: u16be
-          blue: u16be
-        }
+        4 => same as case 0
+        6 => same as case 2
         _ => bytes[remaining]
       }
       'pHYs' => pHYs {
@@ -4032,210 +4026,18 @@ type tiff.Jpeg = JPEG {
           }[component_count]
         }
       }
-      0xffc1 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc2 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc3 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc5 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc6 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc7 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffc9 => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffca => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffcb => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffcd => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffce => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
-      0xffcf => Body (contents contents) {
-        length: u16be
-        contents: sized(length - 2) Frame (line width worded "width {}" then height worded
-            "height {}" then components then precision worded "precision {}" except "8") {
-          precision: u8be
-          height: u16be
-          width: u16be
-          component_count: u8be
-          components: Component (named by id, unit component, line h_sampling worded "h {}" then
-              v_sampling worded "v {}" then quant_table worded "quant table {}") {
-            id: u8be
-            h_sampling: u4be
-            v_sampling: u4be
-            quant_table: u8be
-          }[component_count]
-        }
-      }
+      0xffc1 => same as case 0xffc0
+      0xffc2 => same as case 0xffc0
+      0xffc3 => same as case 0xffc0
+      0xffc5 => same as case 0xffc0
+      0xffc6 => same as case 0xffc0
+      0xffc7 => same as case 0xffc0
+      0xffc9 => same as case 0xffc0
+      0xffca => same as case 0xffc0
+      0xffcb => same as case 0xffc0
+      0xffcd => same as case 0xffc0
+      0xffce => same as case 0xffc0
+      0xffcf => same as case 0xffc0
       0xffc4 => Body (contents contents) {
         length: u16be
         contents: sized(length - 2) repeat(until end) HuffmanTable

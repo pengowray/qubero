@@ -96,7 +96,7 @@ pub trait Deduced: Send + Sync {
 
 /// An integer-valued expression. `Ref` names a field that appears earlier in the
 /// same struct, or in an enclosing struct before the current field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Lit(i128),
     /// Names are shared rather than copied: a type is cloned every time an
@@ -801,7 +801,7 @@ pub enum Expr {
 /// Which element of a labelled list to read, and what to read from it. The
 /// body of [`Expr::Tagged`], kept out of the enum so that its 128-bit tag does
 /// not set the width of every expression there is.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaggedRef {
     /// The list to look in, by the name of an earlier field. `None` means the
     /// list this field's own element sits in, and only the elements before it.
@@ -834,7 +834,7 @@ pub struct TaggedRef {
 /// rather than a value counted up to. Reading those eight bytes as a number
 /// would answer with 0x4e41584953312020, which is a number no file wrote and
 /// nobody could check the template against.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Tag {
     Int(i128),
     /// The raw bytes of the key field, compared as they are written. A key of
@@ -894,7 +894,7 @@ pub enum Tag {
 
 /// The needle of [`Expr::FindText`]: bytes the template fixes on either side
 /// of text the file holds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FindText {
     /// Written before the text: `\n--` in front of a MIME boundary, which is
     /// what says the boundary starts a line.
@@ -1350,7 +1350,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Until {
     /// Repeat until the enclosing size limit (or end of file) is reached.
     End,
@@ -1426,7 +1426,7 @@ pub enum Until {
 ///
 /// A key nobody named is still read, still placed, and still shown; it just
 /// keeps the generic type its shape gives it, unless `rest` says otherwise.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct JsonSchema {
     /// What the type column says for this value, in place of the generic
     /// `string` or `object` its shape would give it.
@@ -1475,7 +1475,7 @@ impl JsonSchema {
 /// number 550 asks the reader to do the unpacking. Bits with no name still
 /// exist and are still shown, because a set bit nobody named is exactly the
 /// kind of thing worth noticing.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FlagsDef {
     pub name: String,
     /// Bit number, counting from the least significant, and what it means.
@@ -1491,7 +1491,7 @@ impl FlagsDef {
 /// Names for the values an integer field is expected to take: `color_type` 6
 /// reads as "rgba". The underlying integer is untouched, so expressions and
 /// switches still see the number, and a value with no name is still shown.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
     pub cases: Vec<(i128, String)>,
@@ -1515,7 +1515,7 @@ pub struct EnumDef {
 /// A run of values that mean the same thing and differ only by a number: every
 /// even value from 12 up is a SQLite blob, and how far up it is says how many
 /// bytes long. `label` is written with `{n}` where that number goes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnumSpan {
     pub from: i128,
     /// How far apart the values of the run are. One for a solid run, two for
@@ -1560,7 +1560,7 @@ impl EnumDef {
 /// What the bytes of a text field mean. The last two are for formats that do
 /// not say outright: one where the bytes announce themselves, one where nobody
 /// knows and a guess is the honest answer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Encoding {
     Utf8,
     Ascii,
@@ -1611,7 +1611,7 @@ impl Encoding {
 /// How far a text field runs. Formats disagree, so the template says which:
 /// a fixed run of bytes, a fixed run whose tail is padding, or a run that ends
 /// at a terminator byte.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StrLen {
     /// Exactly this many bytes, all of them part of the value.
     Fixed(Expr),
@@ -1723,7 +1723,7 @@ pub enum Anchor {
 /// one it sits inside. Or it is a [`Step::Placer`], for a gather inside an
 /// element another gather placed. Every step after it starts from wherever the
 /// one before it landed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     /// Into the field of this name, stepping through an `At` the way a path
     /// does everywhere else: naming a field whose contents are elsewhere means
@@ -1843,7 +1843,7 @@ impl Step {
 /// members of a `TBranch` are that class whatever the bytes say, and reading
 /// the word out of the file again to find that out would be a read for
 /// nothing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum KeyPart {
     /// A number the expression comes to.
     Int(Expr),
@@ -1885,7 +1885,7 @@ impl KeyValue {
 /// record of the file said so, and each member should be able to say which
 /// description of a member it was laid out from: `fBasketSeek` is eight bytes
 /// a pointer because element 19 of `TBranch`'s description says `Long64_t*`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Built {
     pub ty: Ty,
     /// The description record the type was built from. `None` for a type the
@@ -1935,7 +1935,7 @@ pub trait SchemaBuilder: std::fmt::Debug + Send + Sync {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: Arc<str>,
     pub ty: Ty,
@@ -2089,7 +2089,7 @@ pub struct Field {
 /// [`Evaluator::table_shape`](crate::eval::Evaluator::table_shape) reads the
 /// expressions in the file being looked at and answers with numbers, and with
 /// nothing where an expression names a field this file has not got.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TableShape {
     /// Elements per row. None: one element is one row.
     pub columns: Option<Expr>,
@@ -2126,7 +2126,7 @@ pub struct TableShape {
 /// The groups a table's columns come in: how many, and what one is called.
 /// With more than one, a column numbered by `column_word` is named by its
 /// group as well: "IF 1 channel 4", both numbered from 0.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnGroups {
     pub count: Expr,
     /// The format's own word for a group, as short as the header needs it:
@@ -2144,7 +2144,7 @@ pub struct ColumnGroups {
 /// A FITS card is `cards[12].body.value` by its path and `TBIN` to anyone who
 /// reads the format, and its unit is written in the card's comment. A WAV
 /// sample rate is in hertz because the format says so.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableFact {
     pub value: Expr,
     /// The name to show instead of the field's path. None: the path.
@@ -2157,7 +2157,7 @@ pub struct TableFact {
 }
 
 /// Where a fact's unit comes from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FactUnit {
     /// A unit the format fixes, as a UCUM code: `Hz`, `s`, `MHz`.
     Fixed(Arc<str>),
@@ -2260,7 +2260,7 @@ pub enum Cells {
 /// Nothing here formats anything. [`Evaluator::time_of`](crate::eval::Evaluator::time_of)
 /// resolves the number to an instant; the words a reader sees are the
 /// interface's, as [`Verdict`](crate::eval::Verdict)'s two strings are.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Time {
     pub epoch: Epoch,
     pub zone: Zone,
@@ -2293,7 +2293,7 @@ pub struct Time {
 /// and a Windows FILETIME amounts to: three pairs of numbers. The named
 /// constructors on [`Time`] are how a template writes one, so a template still
 /// reads as `Time::filetime()` rather than as two magic numbers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Epoch {
     /// A count of fixed steps from a fixed instant.
     Counted(Counted),
@@ -2562,7 +2562,7 @@ impl Time {
 /// Every expression here is worked out where a [`Check`]'s expressions are: as
 /// though it stood at the end of the structure the field sits in, so a bound
 /// may name a field written after it. [`Expr::This`] is the field's own value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Valid {
     /// Equal to this.
     Eq(Expr),
@@ -2610,7 +2610,7 @@ pub enum Valid {
 /// says what a field checks and how much of the file that is; taking the sum is
 /// [`Evaluator::run_check`](crate::eval::Evaluator::run_check), and it is asked
 /// for rather than done on the way past.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Check {
     pub algorithm: Checksum,
     pub over: Covers,
@@ -2672,7 +2672,7 @@ impl Check {
 /// Offsets are counted from the start of the structure the check field sits in,
 /// not from the start of the file, so the same declaration works for the
 /// thousandth chunk as for the first.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Covers {
     /// The bytes of a field, wherever [`Named`] says to look for it.
     Field { name: Named },
@@ -2753,7 +2753,7 @@ pub enum Covers {
 /// enum: the record holding the sum is written *after* the record holding the
 /// bytes, because the writer was streaming and did not know the number until
 /// the data had gone past.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Named {
     /// A field of the structure the check sits in, or of a structure that one
     /// sits inside. Resolved outwards, which is how a RAR 5 file header's
@@ -2800,7 +2800,7 @@ impl Named {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
     UInt { bits: u32, endian: Endian },
     Int { bits: u32, endian: Endian },
@@ -3418,7 +3418,7 @@ pub enum Ty {
 /// sits inside. That is not [`Check`]'s rule, which looks one past the last
 /// field of the structure: a check is nearly always written in front of what
 /// it seals, and a packed run is placed by what came before it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Packing {
     /// A codec whose settings are a property of the format rather than of the
     /// file: deflate is deflate, and a template naming it has said everything.
@@ -3491,7 +3491,7 @@ pub enum Packing {
 
 /// Where a PNG's header keeps the five numbers its scanlines are shaped by.
 /// See [`Packing::PngScanlines`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PngHeader {
     pub width: Expr,
     pub height: Expr,
@@ -3602,7 +3602,7 @@ impl Unset {
 /// field tree: a space packet reads as `0xb3 · seq 4903 · 231 bytes`, and
 /// that it is version 0, telemetry, and carries a secondary header is true of
 /// nearly every packet in the capture and is one hover away.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LinePart {
     /// The field this part reads. A field the shapes left out of a particular
     /// record is skipped rather than refused.
@@ -3621,7 +3621,7 @@ pub struct LinePart {
     pub quiet: Arc<str>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
@@ -3737,7 +3737,7 @@ pub struct StructDef {
 /// a view guessing from the names would paint every `r`, `g` and `b` in the
 /// world. So the template says so, and every view that shows the structure
 /// shows the colour beside it (see [`crate::eval::NodeInfo::colour`]).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Colour {
     /// The fields holding the colour: one for grey, or red, green and blue in
     /// that order.
@@ -4874,7 +4874,7 @@ impl Template {
 /// Names are prefixed with the format they belong to, `tiff.Ifd`, because the
 /// table they land in is shared: two borrowed formats should not fall out over
 /// a word as ordinary as `Header`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Part {
     pub root: Ty,
     pub types: Vec<(String, Ty)>,
