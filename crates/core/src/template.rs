@@ -2856,7 +2856,11 @@ pub enum Ty {
     /// the number underneath, so a count that is unset still clamps and
     /// compares as the number the file holds rather than becoming an absence
     /// halfway through the arithmetic.
-    Nullable { inner: Box<Ty>, unset: Unset },
+    ///
+    /// `name` is the format's own word for the value, such as HDF5's
+    /// "undefined", and the value reads as that word. Without one it reads as
+    /// "unset".
+    Nullable { inner: Box<Ty>, unset: Unset, name: Option<Arc<str>> },
     F16(Endian),
     /// Brain float: the top half of an f32, so it reaches as far as a float
     /// does and holds three digits rather than seven. Not an f16, which trades
@@ -3864,11 +3868,20 @@ impl Ty {
     /// `inner`, reading as unset when it holds `sentinel`. See
     /// [`Ty::Nullable`].
     pub fn unset_int(inner: Ty, sentinel: i128) -> Ty {
-        Ty::Nullable { inner: Box::new(inner), unset: Unset::Int(sentinel) }
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Int(sentinel), name: None }
     }
     /// The same for a float slot, compared exactly.
     pub fn unset_float(inner: Ty, sentinel: f64) -> Ty {
-        Ty::Nullable { inner: Box::new(inner), unset: Unset::Float(sentinel) }
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Float(sentinel), name: None }
+    }
+    /// `inner`, reading as `name` when it holds `sentinel`: the word the
+    /// format uses for that value, such as HDF5's "undefined".
+    pub fn unset_int_named(inner: Ty, sentinel: i128, name: &str) -> Ty {
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Int(sentinel), name: Some(Arc::from(name)) }
+    }
+    /// The same for a float slot, compared exactly.
+    pub fn unset_float_named(inner: Ty, sentinel: f64, name: &str) -> Ty {
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Float(sentinel), name: Some(Arc::from(name)) }
     }
     /// Unsigned fixed-point, e.g. `fixed(32, 16, Big)` for MP4's 16.16.
     pub fn fixed(bits: u32, frac: u32, endian: Endian) -> Ty {

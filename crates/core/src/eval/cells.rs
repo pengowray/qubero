@@ -120,7 +120,7 @@ fn kind_of(v: &Value) -> &'static str {
         Value::Enum { .. } => "enum",
         Value::Flags { .. } => "flags",
         Value::Composite { .. } => "composite",
-        Value::Magic { .. } | Value::Unread { .. } | Value::Unset(_) => "str",
+        Value::Magic { .. } | Value::Unread { .. } | Value::Unset { .. } => "str",
     }
 }
 

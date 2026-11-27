@@ -559,17 +559,19 @@ fn product_head() -> Vec<(&'static str, T)> {
 /// A field a message fills in with all ones to say it has nothing to put
 /// there. Most fields at one level have no second surface, and every one of
 /// its three fields is written that way rather than left out; read as numbers
-/// they are a surface of type 255 at a scale of -127.
+/// they are a surface of type 255 at a scale of -127. WMO calls a value of
+/// all ones "missing", as code table 0.0 does for discipline 255, and each
+/// reads as that word.
 fn surface_type() -> T {
-    T::unset_int(T::u8(), 255)
+    T::unset_int_named(T::u8(), 255, "missing")
 }
 
 fn surface_scale() -> T {
-    T::unset_int(sm8(), -127)
+    T::unset_int_named(sm8(), -127, "missing")
 }
 
 fn surface_value() -> T {
-    T::unset_int(u32be(), 0xFFFF_FFFF)
+    T::unset_int_named(u32be(), 0xFFFF_FFFF, "missing")
 }
 
 /// Product template 4.0: an analysis or a forecast at one level.
@@ -1275,7 +1277,7 @@ mod tests {
         // A second surface of all ones, which is what a field at one level
         // writes rather than leaving the fields out.
         let second = ev.node(&d, &[0, 1, 4, 2, 2, 2, 12]).unwrap();
-        assert_eq!(second.value, Value::Unset(Box::new(Value::UInt(255))));
+        assert_eq!(second.value, Value::Unset { value: Box::new(Value::UInt(255)), name: Some("missing".into()) });
         // And the field is still the u8 it was: a sentinel says how one value
         // reads and nothing else.
         assert_eq!(second.type_name, "u8");

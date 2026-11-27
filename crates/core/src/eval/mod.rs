@@ -96,7 +96,7 @@ pub use ledger::{Ledger, LedgerRow};
 pub use extent::{ExtentAudit, ExtentCheck};
 pub use directory::{Directories, Directory, DirectoryEntry, DirectoryTarget};
 pub use survey::ReportWalk;
-pub use listing::{magic_reading, Span, SpanElement, SpanPart, SpanPointer, SpanWorth};
+pub use listing::{magic_reading, unset_reading, Span, SpanElement, SpanPart, SpanPointer, SpanWorth};
 pub use readas::{NotText, ReadAs};
 pub use textnum::{NumbersWithText, TextInNumbers, TextRun, TEXT_MIN_CHARS};
 pub use relate::write_expr;
@@ -278,8 +278,10 @@ pub enum Value {
     /// A slot holding the value its format writes to mean nobody filled it in.
     /// The number is kept rather than thrown away: it is what the bytes say,
     /// it is what an expression reading this field gets, and a reader who
-    /// wants to see -12345 can still be shown it. See [`crate::template::Ty::Nullable`].
-    Unset(Box<Value>),
+    /// wants to see -12345 can still be shown it. `name` is the format's word
+    /// for the value when the template gives one, and the value reads as that
+    /// word; see [`unset_reading`]. See [`crate::template::Ty::Nullable`].
+    Unset { value: Box<Value>, name: Option<std::sync::Arc<str>> },
     /// An integer read as independent bits. `set` names the bits that are on,
     /// in bit order; `unnamed` counts the bits that are on and have no name,
     /// which is worth saying rather than hiding.
@@ -297,7 +299,7 @@ impl Value {
             // An unset slot is still the number the file holds. A count that
             // nobody filled in is -12345, and the clamp in front of it is
             // there to deal with exactly that.
-            Value::Unset(inner) => inner.as_int(),
+            Value::Unset { value, .. } => value.as_int(),
             // Short text/byte fields used in expressions are their bytes as a
             // big-endian number, so a switch can key on e.g. "IHDR".
             Value::Bytes { len, preview } if *len <= 15 => Some(be_int(preview)),

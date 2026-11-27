@@ -88,7 +88,10 @@
 //! annotation  := "[" expr "]"                       a list of that many elements
 //!              | "enum" NAME "{" {int "=" NAME} "}"
 //!              | "flags" NAME "{" {"bit" int "=" NAME} "}"
-//!              | "unset" number                     that value means "nothing here"
+//!              | "unset" number [text]              that value means "nothing here"; the
+//!                                                   text in quotes is the format's word
+//!                                                   for it, and the value reads as that
+//!                                                   word rather than as "unset"
 //! option      := "to the next"                      each element runs to where the next
 //!                                                   one starts
 //!              | "skip missing"                     an entry of the offsets list that
@@ -476,8 +479,8 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
             let head = format!("{head}{open}");
             return write_ty(out, ind, &head, elem, &format!("{close}[{}]{tail}", expr(count)));
         }
-        Ty::Nullable { inner, unset } => {
-            return write_ty(out, ind, head, inner, &format!(" unset {}{tail}", unset_text(unset)))
+        Ty::Nullable { inner, unset, name } => {
+            return write_ty(out, ind, head, inner, &format!(" unset {}{tail}", unset_text(unset, name)))
         }
         _ => {}
     }
@@ -1635,7 +1638,7 @@ fn time_text(t: &Time) -> String {
     };
     let mut s = format!("time {epoch} {zone}");
     for u in &t.unset {
-        let _ = write!(s, " unset {}", unset_text(u));
+        let _ = write!(s, " unset {}", unset_text(u, &None));
     }
     s
 }
@@ -1764,10 +1767,16 @@ fn codec(c: crate::codec::Codec) -> String {
     }
 }
 
-fn unset_text(u: &Unset) -> String {
-    match u {
+/// The value that means "nothing here", and the format's word for it in
+/// quotes when the template gives one: `unset 18446744073709551615 "undefined"`.
+fn unset_text(u: &Unset, name: &Option<Arc<str>>) -> String {
+    let value = match u {
         Unset::Int(v) => v.to_string(),
         Unset::Float(f) => format!("{f:?}"),
+    };
+    match name {
+        Some(name) => format!("{value} {name:?}"),
+        None => value,
     }
 }
 
@@ -1822,7 +1831,7 @@ fn inline(ty: &Ty) -> Option<String> {
         Ty::Int { bits, endian } => format!("i{bits}{}", end(*endian)),
         Ty::SignMagnitude { bits, endian } => format!("signmag{bits}{}", end(*endian)),
         Ty::UIntExpr { bits, endian } => format!("u({}){}", expr(bits), end(*endian)),
-        Ty::Nullable { inner, unset } => format!("{} unset {}", inline(inner)?, unset_text(unset)),
+        Ty::Nullable { inner, unset, name } => format!("{} unset {}", inline(inner)?, unset_text(unset, name)),
         Ty::F16(e) => format!("f16{}", end(*e)),
         Ty::BF16(e) => format!("bf16{}", end(*e)),
         Ty::F32(e) => format!("f32{}", end(*e)),
@@ -2499,8 +2508,21 @@ mod tests {
     }
 
     #[test]
+    fn a_named_unset_value_writes_its_name_in_quotes() {
+        let named = Ty::unset_int_named(Ty::u64(Endian::Little), u64::MAX as i128, "undefined");
+        assert_eq!(inline(&named).as_deref(), Some("u64le unset 18446744073709551615 \"undefined\""));
+        let float = Ty::unset_float_named(Ty::F32(Endian::Big), -12345.0, "missing");
+        assert_eq!(inline(&float).as_deref(), Some("f32be unset -12345.0 \"missing\""));
+        // Without a name the line is as it was.
+        let plain = Ty::unset_int(Ty::u64(Endian::Little), 0);
+        assert_eq!(inline(&plain).as_deref(), Some("u64le unset 0"));
+        // Two arms that differ only in the name are not the same arm.
+        assert_ne!(named, Ty::unset_int(Ty::u64(Endian::Little), u64::MAX as i128));
+    }
+
+    #[test]
     fn an_element_of_more_than_one_word_keeps_its_brackets() {
-        let elem = Ty::Nullable { inner: Box::new(Ty::u32(Endian::Little)), unset: Unset::Int(0) };
+        let elem = Ty::Nullable { inner: Box::new(Ty::u32(Endian::Little)), unset: Unset::Int(0), name: None };
         let list = Ty::Array { elem: Box::new(elem), count: E::lit(4) };
         assert_eq!(inline(&list).as_deref(), Some("(u32le unset 0)[4]"));
         // One word takes the count bare.

@@ -338,12 +338,12 @@ fn flac_mapping() -> T {
             ("signature", T::magic(b"\x7fFLAC")),
             ("major_version", T::u8()),
             ("minor_version", T::u8()),
-            ("header_packet_count", T::unset_int(T::u16(Big), 0)),
+            ("header_packet_count", T::unset_int_named(T::u16(Big), 0, "unknown")),
             ("native_signature", T::magic(super::flac::MAGIC)),
             ("stream_info", super::flac::metadata_block()),
         ],
     )
-    .field_doc("header_packet_count", "Number of header packets after this one, each containing one metadata block. Unset (0) if unknown.")
+    .field_doc("header_packet_count", "Number of header packets after this one, each containing one metadata block. 0 if unknown.")
 }
 
 #[cfg(test)]

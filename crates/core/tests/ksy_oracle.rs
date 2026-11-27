@@ -397,7 +397,7 @@ fn matches(value: &Value, want: &Want) -> bool {
 		}
 		(Value::Float(v), Want::Float(w)) => (v - w).abs() < 1e-6,
 		(Value::Float(v), Want::Int(w)) => (v - *w as f64).abs() < 1e-6,
-		(Value::Unset(inner), _) => matches(inner, want),
+		(Value::Unset { value, .. }, _) => matches(value, want),
 		_ => false,
 	}
 }

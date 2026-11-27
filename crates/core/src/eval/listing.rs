@@ -168,7 +168,7 @@ pub(super) fn brief(v: &Value) -> String {
         Value::Unread { .. } => "\u{2026}".to_string(),
         // A slot nobody filled in. The number underneath is in the file and in
         // the hex view; saying -12345 here would read as a measurement.
-        Value::Unset(_) => "unset".to_string(),
+        Value::Unset { name, .. } => unset_reading(name.as_deref()).to_string(),
         Value::Magic { bytes, .. } => magic_reading(bytes),
         Value::Composite { .. } => String::new(),
     }
@@ -260,6 +260,13 @@ fn plural(noun: &str) -> String {
         return format!("{noun}es");
     }
     format!("{noun}s")
+}
+
+/// How an unset value reads: the format's own word for it when the template
+/// gives one, and "unset" when it does not. The listing, the node the web app
+/// is sent and everything built from them read it from here.
+pub fn unset_reading(name: Option<&str>) -> &str {
+    name.unwrap_or("unset")
 }
 
 /// How a signature reads in one line.

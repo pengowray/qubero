@@ -230,7 +230,8 @@ export type TemplateNode = {
   /** What the in-place editor starts with; differs from `value` for enums. */
   readonly edit_text: string;
   /** `unset` is a number holding the value its format writes for a slot
-   *  nobody filled in; `edit_text` is still the number underneath it. */
+   *  nobody filled in; `value` is the format's word for it ("undefined" in
+   *  HDF5) or "unset", and `edit_text` is still the number underneath it. */
   readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "insn" | "magic" | "enum" | "flags" | "unset" | "composite";
   /** What is wrong with this value, when something is. Absent for nearly every
    *  field, which holds what its format allows. */

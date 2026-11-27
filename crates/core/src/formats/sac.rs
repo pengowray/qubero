@@ -404,11 +404,11 @@ mod tests {
         let d = Document::new(MemSource(build(false, 4, 1, 1)));
         let mut ev = Evaluator::new(sac());
         let nzjday = ev.node(&d, &[FIRST_INT + 1]).unwrap();
-        assert_eq!(nzjday.value, Value::Unset(Box::new(Value::Int(UNSET))));
+        assert_eq!(nzjday.value, Value::Unset { value: Box::new(Value::Int(UNSET)), name: None });
         assert_eq!(nzjday.type_name, "i32 le");
         // `depmin`, the second float slot, which this file leaves alone.
         let depmin = ev.node(&d, &[1]).unwrap();
-        assert_eq!(depmin.value, Value::Unset(Box::new(Value::Float(UNSET as f64))));
+        assert_eq!(depmin.value, Value::Unset { value: Box::new(Value::Float(UNSET as f64)), name: None });
         assert_eq!(depmin.type_name, "f32 le");
         // A slot that was filled in is the number it holds, and nothing has
         // been wrapped away: `delta` is the sample spacing.
@@ -457,7 +457,7 @@ mod tests {
             assert_eq!(ev.node(&d, &[DATA, 1, 0]).unwrap().value, Value::Float(0.01));
             assert_eq!(ev.node(&d, &[DATA, 1, 1]).unwrap().value, Value::Float(1.5));
             let sdelta = ev.node(&d, &[DATA, 1, 21]).unwrap();
-            assert_eq!(sdelta.value, Value::Unset(Box::new(Value::Float(UNSET as f64))));
+            assert_eq!(sdelta.value, Value::Unset { value: Box::new(Value::Float(UNSET as f64)), name: None });
             assert_eq!(sdelta.type_name, if big { "f64 be" } else { "f64 le" });
         }
     }
