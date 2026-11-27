@@ -62,7 +62,7 @@ const RESERVED_DOC: &str = "Reserved bits. Writers must set them to 0, and reade
 
 pub fn webp() -> Template {
     let exif = super::tiff::tiff_part();
-    wav::riff("webp", chunk_body(&exif.root)).with_part(&exif)
+    wav::riff("webp", chunk_body(&exif.root)).with_part(&exif).with_part(&super::icc::icc_part())
 }
 
 /// What a chunk's payload reads as, by its id. An id not named here is its

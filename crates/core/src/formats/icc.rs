@@ -355,15 +355,18 @@ pub(crate) const H273_MATRIX: &[(i128, &str)] = &[
 pub(crate) const H273_RANGE: &[(i128, &str)] = &[(0, "narrow range"), (1, "full range")];
 
 pub fn icc() -> Template {
-    let part = icc_part();
-    Template::new("icc", part.root.clone()).with_part(&part)
+    Template::new("icc", profile())
 }
 
+/// The name a format that carries a profile reads it by.
+const PROFILE: &str = "icc.Profile";
+
 /// The whole of a profile, for a format that carries one: a PNG's iCCP chunk,
-/// and later a JPEG's APP2 segments. The profile refers to no type by name,
-/// so the part is its root and nothing else.
+/// a JPEG's APP2 segments and the profile joined from them, and a WebP's ICCP
+/// chunk. The profile is a named type, so a template that reads it in several
+/// places, as a PNG holding a JPEG thumbnail does, has it written once.
 pub(crate) fn icc_part() -> Part {
-    Part::new(profile())
+    Part::new(T::Named(PROFILE.into())).with_type(PROFILE, profile())
 }
 
 /// Whether a file is a profile: `acsp` 36 bytes in, and a profile size at the

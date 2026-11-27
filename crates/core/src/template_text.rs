@@ -2691,6 +2691,41 @@ mod tests {
         Ty::structure("File", names.iter().enumerate().map(|(i, n)| (["a", "b", "c"][i], Ty::Named((*n).into()))).collect())
     }
 
+    /// Every name a built-in template uses is one of its types, so a format
+    /// that borrows another's part has taken the names with it.
+    #[test]
+    fn every_name_a_builtin_uses_is_one_of_its_types() {
+        let mut missing = Vec::new();
+        for name in crate::formats::builtin_names() {
+            let Some(t) = crate::formats::builtin(name) else { continue };
+            for ty in std::iter::once(&t.root).chain(t.types.values()) {
+                let mut names = Vec::new();
+                order_ty(&mut ty.clone(), None, &mut names);
+                for n in names {
+                    if !t.types.contains_key(&*n) {
+                        missing.push(format!("{name} uses {n}"));
+                    }
+                }
+            }
+        }
+        missing.dedup();
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// The ICC profile is one named type wherever a format carries one: a
+    /// PNG reads it in iCCP, and in its EXIF thumbnail's APP2 segments and
+    /// joined profile.
+    #[test]
+    fn an_icc_profile_is_written_once() {
+        for name in ["png", "jpeg", "webp", "tiff", "flac"] {
+            let text = render(&crate::formats::builtin(name).expect("a template"));
+            assert_eq!(text.matches("\ntype icc.Profile = ").count(), 1, "{name}");
+            assert_eq!(text.matches("ICCProfile {").count(), 1, "{name}");
+        }
+        let png = render(&crate::formats::builtin("png").expect("png"));
+        assert_eq!(png.lines().filter(|l| l.ends_with(" icc.Profile")).count(), 3, "{png}");
+    }
+
     /// A type equal to one written out is one line, and a type that fits on
     /// one line is written out whatever it repeats.
     #[test]
