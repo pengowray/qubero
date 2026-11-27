@@ -839,7 +839,7 @@ function buildDocument(tab: Tab): Page {
   const askOpen = (path: readonly number[]): OpenStep<Doc | { readonly refused: string } | null> => {
     const r = doc.openSpace(path);
     if (r !== null && "working" in r) return { kind: "working", unpacking: r.unpacking };
-    if (r !== null && "pending" in r) return { kind: "pending", chunks: r.pending };
+    if (r !== null && "pending" in r) return { kind: "pending", chunks: r.pending, unpacking: r.unpacking };
     return { kind: "done", value: r };
   };
   /** Whether the stream at `path` is joined from several runs, which the
@@ -886,13 +886,16 @@ function buildDocument(tab: Tab): Page {
     // to give, so the status bar keeps the progress it showed last rather
     // than going back to 0%.
     let shown: Unpacking | null = null;
+    const sayUnpacking = (u: Unpacking | null): void => {
+      shown = u ?? shown;
+      waitSays(UNPACKED.unpacking(node.name, percentText(shown?.read_bits ?? 0, shown?.run_bits ?? 0), formatBytes(shown?.unpacked_bytes ?? 0)));
+    };
     waitToOpen(first, () => askOpen(path), (chunks) => doc.fileChunks(chunks), {
       live: () => waiting === wait,
-      working: (u) => {
-        shown = u ?? shown;
-        waitSays(UNPACKED.unpacking(node.name, percentText(shown?.read_bits ?? 0, shown?.run_bits ?? 0), formatBytes(shown?.unpacked_bytes ?? 0)));
-      },
-      loading: () => waitSays(UNPACKED.loading(node.name)),
+      working: sayUnpacking,
+      // Once the pass has started, the chunks it waits on are the next
+      // window of its run, so the bar goes on saying how far it has got.
+      loading: (u) => (u === null && shown === null ? waitSays(UNPACKED.loading(node.name)) : sayUnpacking(u)),
       done: (value) => {
         waiting = null;
         waitSays("");

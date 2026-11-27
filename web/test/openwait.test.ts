@@ -11,6 +11,13 @@ type Step = OpenStep<string>;
 const done = (value: string): Step => ({ kind: "done", value });
 const working: Step = { kind: "working", unpacking: null };
 const pending = (...chunks: number[]): Step => ({ kind: "pending", chunks });
+/** A pass that has read `read` bits of its run waiting on `chunks`, the
+ *  next window of it. */
+const windowWait = (read: number, ...chunks: number[]): Step => ({
+  kind: "pending",
+  chunks,
+  unpacking: { run_space: 0, run_offset_bits: 0, read_bits: read, run_bits: 1_000_000, unpacked_bytes: 0 },
+});
 
 /**
  * Run one wait over `replies`, the core's answers in order after the press's
@@ -52,7 +59,7 @@ function run(
       {
         live,
         working: () => said.push("working"),
-        loading: () => said.push("loading"),
+        loading: (u) => said.push(u === null ? "loading" : `loading at ${u.read_bits}`),
         done: (value) => end(`done ${value}`),
         lost: () => end("lost"),
         failed: (error) => end(`failed ${error instanceof Error ? error.message : String(error)}`),
@@ -137,4 +144,28 @@ test("a wait that loads new chunks every round still stops after the last round 
   const r = await run(replies);
   assert.equal(r.loads.length, MAX_ROUNDS);
   assert.equal(r.said.at(-1), "lost");
+});
+
+test("a pass waiting on each next window of its run says how far it has got as the chunks load", async () => {
+  const r = await run([pending(0), windowWait(100, 1, 2), windowWait(200, 3, 4), done("tab")]);
+  assert.deepEqual(r.said, ["loading", "loading at 100", "loading at 200", "done tab"]);
+  assert.deepEqual(r.loads, [[0], [1, 2], [3, 4]]);
+});
+
+test("a pass that gets further with every window loads more rounds than a wait that does not", async () => {
+  const replies = Array.from({ length: MAX_ROUNDS + 10 }, (_, i) => windowWait(i + 1, i));
+  const r = await run([...replies, done("tab")]);
+  assert.equal(r.loads.length, MAX_ROUNDS + 10);
+  assert.equal(r.said.at(-1), "done tab");
+});
+
+test("a pass that waits again on a window it was given, no further on, ends the wait", async () => {
+  const r = await run([windowWait(100, 3, 4), windowWait(100, 3, 4)]);
+  assert.deepEqual(r.said, ["loading at 100", "lost"]);
+});
+
+test("a window asked for again once the pass got further is loaded again", async () => {
+  const r = await run([windowWait(100, 3, 4), windowWait(150, 3, 4), done("tab")]);
+  assert.deepEqual(r.loads, [[3, 4], [3, 4]]);
+  assert.equal(r.said.at(-1), "done tab");
 });

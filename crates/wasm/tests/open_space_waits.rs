@@ -1112,3 +1112,52 @@ fn open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time
     assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
     assert_eq!(tab_bytes(&mut ed, tab, text.len() - 64, 64), text[text.len() - 64..]);
 }
+
+/// A gzip member's stream longer than the store is unpacked a window of its
+/// run at a time, and between windows the pass waits for the next chunks.
+/// The listing's ask for the member's fields gets the header on those
+/// "pending" replies too, as `ready`, with how far the pass has got as
+/// `unpacking`, the way a "working" reply gives them, so the rows above the
+/// stream and the progress stay drawn while the chunks load.
+#[test]
+fn a_gzip_members_header_lists_while_its_stream_waits_for_the_next_window() {
+    let text = long_lines();
+    let file = gzip_fast(&text);
+    let store = 16;
+    assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store as u32, "gzip");
+    let member = [0, 0];
+    let (mut asks, mut waits, mut read) = (0, 0, 0);
+    let mut bare = Vec::new();
+    let all = loop {
+        let reply = parse(&ed.template_children(0, &member, 0.0, 20.0));
+        match reply["status"].as_str().unwrap() {
+            "ok" => break names(&reply["node"]),
+            "pending" => {
+                if reply["unpacking"].is_null() {
+                    bare.push(waits);
+                } else {
+                    waits += 1;
+                    assert_eq!(names(&reply["ready"]).len(), 10, "{reply}");
+                    assert_eq!(run_at(&reply["unpacking"]), 80, "the member's run starts after its ten bytes of header");
+                    let now = read_bits(&reply["unpacking"]);
+                    assert!(now >= read, "unpacking went back from {read} to {now}");
+                    read = now;
+                }
+                for c in chunks_of(&reply) {
+                    feed(&mut ed, &file, c);
+                }
+            }
+            "working" => {}
+            _ => panic!("{reply}"),
+        }
+        asks += 1;
+        assert!(asks < 10_000, "no end to the asks");
+    };
+    assert_eq!(all.len(), 13);
+    assert_eq!(all[10], "compressed");
+    assert!(waits > file.len() / (6 * CHUNK), "{waits} waits said how far unpacking had got");
+    // Only the waits before the pass starts say nothing of it: the header's
+    // chunk, and the run's first window.
+    assert!(bare.iter().all(|&w| w == 0), "waits with no progress came after {bare:?} with it");
+}

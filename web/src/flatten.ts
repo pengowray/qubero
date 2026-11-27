@@ -529,9 +529,10 @@ class Walk {
     // counted yet, since the nodes it is in have not come back. Counted as
     // one, under a number no real chunk has.
     if (this.opts.chunkBytes !== undefined) this.chunks.add(-1 - this.waits++);
-    const working = reply.status === "working";
-    this.waitedOn.set(pathKey(path), { working, unpacking: working ? (reply.unpacking ?? null) : null });
-    const ready = working ? (reply.ready ?? []) : [];
+    // A pass reading its run a window at a time answers "pending" between
+    // windows with the same `ready` and `unpacking` as a "working" reply.
+    this.waitedOn.set(pathKey(path), { working: reply.status === "working", unpacking: reply.unpacking ?? null });
+    const ready = reply.ready ?? [];
     if (ready.length === 0) return null;
     this.count(ready);
     return { from, nodes: ready, waitsTo: to };

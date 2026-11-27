@@ -2101,7 +2101,10 @@ function signatureName(id: Identification): string {
  */
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
-  | { readonly status: "pending"; readonly reachedBytes: number }
+  /** Waiting on chunks of the file, which are already being read. From
+   * `templateChildren`, when what waits is a pass reading its run a window at
+   * a time, `ready` and `unpacking` are as for "working". */
+  | { readonly status: "pending"; readonly reachedBytes: number; readonly ready?: readonly TemplateNode[]; readonly unpacking?: Unpacking }
   /** Still being worked out. `reachedBytes` is how far into the file the
    * reading has got. Asking again carries on from there. `unpacking`, from
    * `templateChildren`, is how far the pass the rest of the answer waits on
@@ -2324,7 +2327,7 @@ export type ExtentEstimate = {
 
 type RawReply<T> =
   | { status: "ok"; node: T; wanted?: number[] }
-  | { status: "pending"; chunks: number[]; reached_bytes: number }
+  | { status: "pending"; chunks: number[]; reached_bytes: number; ready?: TemplateNode[]; wanted?: number[]; unpacking?: Unpacking }
   | { status: "working"; reached_bytes: number; ready?: TemplateNode[]; wanted?: number[]; unpacking?: Unpacking }
   | { status: "error"; message: string };
 
@@ -2610,7 +2613,7 @@ export class Doc {
     | Doc
     | { readonly refused: string }
     | { readonly working: true; readonly unpacking: Unpacking | null }
-    | { readonly pending: readonly number[] }
+    | { readonly pending: readonly number[]; readonly unpacking: Unpacking | null }
     | null {
     const raw = JSON.parse(this.editor.open_space(this.space, Uint32Array.from(path))) as RawReply<{
       space: number;
@@ -2620,7 +2623,7 @@ export class Doc {
       stored: boolean;
     }>;
     const r = this.settle(raw);
-    if (raw.status === "pending") return { pending: raw.chunks };
+    if (raw.status === "pending") return { pending: raw.chunks, unpacking: this.unpacking() };
     if (r.status === "working") return { working: true, unpacking: this.unpacking() };
     if (r.status !== "ok") return null;
     if (r.node.space === 0) return r.node.refused === undefined ? null : { refused: r.node.refused };
@@ -3086,7 +3089,13 @@ export class Doc {
           this.nextMiss = last + 1 + READ_AHEAD;
         } else this.nextMiss = last + 1;
       }
-      return { status: "pending", reachedBytes: r.reached_bytes };
+      for (const c of r.wanted ?? []) this.fetchChunk(c);
+      return {
+        status: "pending",
+        reachedBytes: r.reached_bytes,
+        ...(r.ready === undefined ? {} : { ready: r.ready }),
+        ...(r.unpacking === undefined ? {} : { unpacking: r.unpacking }),
+      };
     }
     if (r.status === "ok" && r.wanted !== undefined && r.wanted.length > 0) {
       // Answered without some previews, so the rows are here and their first

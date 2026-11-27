@@ -12,8 +12,10 @@ export type OpenStep<T> =
   /** A large stream is being unpacked a go at a time; ask again after the
    *  page has drawn. */
   | { readonly kind: "working"; readonly unpacking: Unpacking | null }
-  /** The core waits on these chunks of the file; ask again once they load. */
-  | { readonly kind: "pending"; readonly chunks: readonly number[] };
+  /** The core waits on these chunks of the file; ask again once they load.
+   *  `unpacking` is how far the pass waiting on them has got, when a pass
+   *  reading its run a window at a time is what waits. */
+  | { readonly kind: "pending"; readonly chunks: readonly number[]; readonly unpacking?: Unpacking | null };
 
 /** What the wait says and does as it goes. Every one is called only while
  *  `live` says the wait is still wanted. */
@@ -22,7 +24,7 @@ export type OpenHooks<T> = {
    *  the tab was closed. Asked before every ask after the first. */
   readonly live: () => boolean;
   readonly working: (unpacking: Unpacking | null) => void;
-  readonly loading: () => void;
+  readonly loading: (unpacking: Unpacking | null) => void;
   readonly done: (value: T) => void;
   /** The core asked again for chunks that loaded for this wait, with no
    *  unpacking done in between: they were pushed out of the store before it
@@ -34,7 +36,8 @@ export type OpenHooks<T> = {
 };
 
 /**
- * How many times one wait loads chunks before it gives up. A backstop only:
+ * How many times one wait loads chunks, since the pass it carries last said
+ * it got further, before it gives up. A backstop only:
  * a stream that needs more chunks at once than the store keeps is stopped by
  * the rule in `waitToOpen` within a round or two, and every other round loads
  * chunks this wait had not loaded since the core last got further.
@@ -63,6 +66,16 @@ export function waitToOpen<T>(
   /** Chunks loaded for this wait since the core last said it got further. */
   const loaded = new Set<number>();
   let rounds = 0;
+  /** How far the pass this wait carries had read, the last time it said. A
+   *  pass reading its run a window at a time waits for the next window's
+   *  chunks with no "working" answer in between, and each wait that says it
+   *  read further is the core getting further. */
+  let read = -1;
+  const further = (u: Unpacking | null | undefined): boolean => {
+    if (u === null || u === undefined || u.read_bits <= read) return false;
+    read = u.read_bits;
+    return true;
+  };
   const again = (): void => {
     if (hooks.live()) take(ask());
   };
@@ -72,18 +85,23 @@ export function waitToOpen<T>(
       return;
     }
     if (step.kind === "working") {
+      further(step.unpacking);
       loaded.clear();
       hooks.working(step.unpacking);
       later(again);
       return;
     }
     const { chunks } = step;
+    if (further(step.unpacking)) {
+      loaded.clear();
+      rounds = 0;
+    }
     rounds += 1;
     if (chunks.length === 0 || rounds > MAX_ROUNDS || chunks.some((c) => loaded.has(c))) {
       hooks.lost();
       return;
     }
-    hooks.loading();
+    hooks.loading(step.unpacking ?? null);
     load(chunks).then(
       () => {
         for (const c of chunks) loaded.add(c);

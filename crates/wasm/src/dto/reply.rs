@@ -14,7 +14,21 @@ pub(crate) enum Reply<T: Serialize> {
         wanted: Vec<f64>,
     },
     #[serde(rename = "pending")]
-    Pending { chunks: Vec<f64>, reached_bytes: f64 },
+    Pending {
+        chunks: Vec<f64>,
+        reached_bytes: f64,
+        /// For a slice of children whose rest wait on a pass that waits for
+        /// bytes of the file: the ones before the first that waits, as for
+        /// `Working`. See `slice_reply`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ready: Option<T>,
+        /// Chunks `ready` was given without, as for `Ok`.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        wanted: Vec<f64>,
+        /// How far that pass has got.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unpacking: Option<UnpackingDto>,
+    },
     #[serde(rename = "working")]
     Working {
         reached_bytes: f64,
@@ -52,7 +66,13 @@ pub(crate) fn unpacking_dto(p: Unpacking) -> UnpackingDto {
 pub(crate) fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64, wanted: Vec<f64>) -> String {
     let rep = match r {
         Ok(node) => Reply::Ok { node, wanted },
-        Err(EvalError::Pending(m)) => Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes },
+        Err(EvalError::Pending(m)) => Reply::Pending {
+            chunks: m.into_iter().map(|m| m.chunk as f64).collect(),
+            reached_bytes,
+            ready: None,
+            wanted: Vec::new(),
+            unpacking: None,
+        },
         Err(EvalError::Busy { reached_bits }) => {
             Reply::Working { reached_bytes: (reached_bits / 8) as f64, ready: None, wanted: Vec::new(), unpacking: None }
         }
@@ -67,13 +87,24 @@ pub(crate) fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f
 /// has got. A slice that waits on bytes of the file is answered whole, as
 /// before: the listing's walk over a file still loading was tuned to stop at
 /// such a slice, and reading on into the children it has would ask for more
-/// chunks at once.
+/// chunks at once. The exception is a pass that reads its run a window at a
+/// time and waits for the next window: that wait comes between goes the way
+/// running out of time does, so it is answered the same way, or the rows
+/// before the stream and the progress would come and go with each window.
 pub(crate) fn slice_reply<T: Serialize>(ready: Vec<T>, rest: Result<(), EvalError>, e: &Evaluator) -> String {
     let wanted = wanted(e);
     let rep = match rest {
         Ok(()) => Reply::Ok { node: ready, wanted },
         Err(EvalError::Pending(m)) => {
-            Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes: (e.reached_bits() / 8) as f64 }
+            let chunks = m.into_iter().map(|m| m.chunk as f64).collect();
+            let reached_bytes = (e.reached_bits() / 8) as f64;
+            match e.unpacking() {
+                Some(p) => {
+                    let (ready, wanted) = if ready.is_empty() { (None, Vec::new()) } else { (Some(ready), wanted) };
+                    Reply::Pending { chunks, reached_bytes, ready, wanted, unpacking: Some(unpacking_dto(p)) }
+                }
+                None => Reply::Pending { chunks, reached_bytes, ready: None, wanted: Vec::new(), unpacking: None },
+            }
         }
         Err(EvalError::Busy { reached_bits }) => {
             let (ready, wanted) = if ready.is_empty() { (None, Vec::new()) } else { (Some(ready), wanted) };
