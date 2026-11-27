@@ -341,7 +341,8 @@ block's tables from the trace's head steps (`rebuild`), not from the run. It
 takes a window and the byte the window starts at. Then, in part 4, the wasm
 crate's `decode_step` reads the run from byte `in_bits.start / 8` to byte
 `in_bits.end.div_ceil(8)`, at most 7 bytes, instead of reading with
-`field_bytes` from the run's front.
+`field_bytes` from the run's front. Part 4 was built on 2026-11-28; see item 4
+of "Order of work".
 
 ### Built (part 3)
 
@@ -1120,7 +1121,19 @@ changes parts 6 to 10: read it first.
    (part 3)" under "The decoders read a window".
 4. **`decode_step` reads only its trace step.** The wasm crate reads at most
    7 bytes of the run. Fixes: the code panel on a trace step deep in a long
-   run.
+   run. **Done 2026-11-28.** `inflate::step_bytes` gives the bytes of the run
+   a step's bits are in, and `Evaluator::field_bytes_at` reads them, so the
+   wasm crate's `decode_step` calls `decode_step_at` with those bytes. A step
+   that is not a code, such as a stored block's payload or a coarse block's
+   one step, now answers null without reading any of the run; before, the
+   run up to the step was read first, and could be refused as too much at
+   once. Tested by
+   `a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes`
+   in `crates/wasm/tests/open_space_waits.rs`: a store of 4 chunks, a run of
+   20, and a code three quarters of the way along it. And for a run read
+   through an index, whose trace is its block's, by
+   `a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes`: a store of 2
+   chunks and the zlib of 70 MiB of tar, about 7 chunks.
 5. **`Missing` as "not yet".** `RunInput`; the `Seekable` keeps one, made over
    its copy (an `ArcSource`), so that until part 7 no read of a `Seekable`
    finds a chunk missing; `ReadError`; every row of the table in "Everything
