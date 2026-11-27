@@ -82,10 +82,11 @@ struct Cached {
 /// Fixed-size chunk cache fed from outside (the JS host reads the File/Blob and
 /// pushes chunks in). Beyond `capacity`, the chunk read longest ago goes.
 ///
-/// Or, for a store with a source behind it, nothing is fed in and nothing is
-/// missing: a read goes to that source. What the interface opens an unpacked
-/// stream's tab over, so the stream's bytes are not copied into a second
-/// buffer, and a stream read a piece at a time is read a piece at a time.
+/// Or, for a store with a source behind it, nothing is fed in: a read goes to
+/// that source, and a chunk is missing only when that source says so. What
+/// the interface opens an unpacked stream's tab over, so the stream's bytes
+/// are not copied into a second buffer, and a stream read a piece at a time
+/// is read a piece at a time.
 pub struct ChunkStore {
     len: u64,
     chunk_size: u64,
@@ -102,9 +103,11 @@ impl ChunkStore {
         Self { len, chunk_size, capacity, chunks: HashMap::new(), clock: Cell::new(0), behind: None }
     }
 
-    /// A store that reads everything from `source`, and so never says a chunk
-    /// is missing. `chunk_size` is only what a caller counting in chunks
-    /// counts in.
+    /// A store that reads everything from `source`. Nothing is fed in, and a
+    /// read reports a chunk missing only when `source` does: a space read
+    /// through an index reports the chunks of the file its compressed run is
+    /// missing. `chunk_size` is only what a caller counting in chunks counts
+    /// in.
     pub fn behind(source: Box<dyn Source>, chunk_size: u64) -> Self {
         let mut store = ChunkStore::new(source.len_bytes(), chunk_size, 0);
         store.behind = Some(source);

@@ -109,13 +109,14 @@ struct Sheet {
 impl Sheet {
     /// A reading of one of the core's spaces.
     ///
-    /// The store reads the space's own source, so nothing is missing and
-    /// nothing is copied: a space has no file behind it to fetch a missing
-    /// chunk back from, and a stream too large to hold whole is decoded a
-    /// piece at a time as it is read. The template is the one the core
-    /// settled on, which is the stream's own or, where that said only bytes,
-    /// whatever the unpacked bytes were recognised as. Only the second is read
-    /// here; the first is read in the file's reading.
+    /// The store reads the space's own source, so nothing is copied, and a
+    /// stream too large to hold whole is decoded a piece at a time as it is
+    /// read. Such a stream reads its compressed run from the file as it goes,
+    /// and a read reports the chunks of the file that run is missing, which
+    /// the web fetches as it fetches any chunk of the file. The template is
+    /// the one the core settled on, which is the stream's own or, where that
+    /// said only bytes, whatever the unpacked bytes were recognised as. Only
+    /// the second is read here; the first is read in the file's reading.
     fn from_space(space: &qubero_core::eval::Space, home: usize, origin: Vec<usize>) -> Sheet {
         let template = space.read_as().clone();
         let store = ChunkStore::behind(Box::new(space.source().clone()), SPACE_CHUNK);
