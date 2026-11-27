@@ -347,7 +347,7 @@ fn superblock_v0(indexed_k: bool) -> T {
         // The root group, and with it every object in the file.
         ("root_group", symbol_table_entry(false)),
     ]);
-    T::structure("Superblock", fields)
+    T::structure("Superblock", fields).positions(&["base_address", "free_space_address", "end_of_file_address", "driver_info_address"])
 }
 
 /// Versions 2 and 3, which drop the caches and the node sizes and add a
@@ -369,6 +369,7 @@ fn superblock_v2() -> T {
             ("root_group", at_address("root_group_object_header_address", T::Named("ObjectHeader".into()))),
         ],
     )
+    .positions(&["base_address", "superblock_extension_address", "end_of_file_address"])
 }
 
 /// An address, which is as wide as the superblock's offset size says and is
@@ -435,7 +436,8 @@ fn link_cache(named: bool) -> T {
         ));
     }
     fields.push(("unused", T::bytes(E::lit(12))));
-    T::structure("LinkCache", fields)
+    // Counted from the start of the local heap's data segment.
+    T::structure("LinkCache", fields).positions(&["link_value_offset"])
 }
 
 /// An entry in a symbol table: a name, an address, and a cache of what is
@@ -470,7 +472,8 @@ fn symbol_table_entry(named: bool) -> T {
                         T::inline_structure(
                             "GroupCache",
                             vec![("cached_btree_address", addr()), ("cached_heap_address", addr())],
-                        ),
+                        )
+                        .positions(&["cached_btree_address", "cached_heap_address"]),
                     ),
                     (2, link_cache(named)),
                 ],
@@ -491,10 +494,12 @@ fn symbol_table_entry(named: bool) -> T {
         ));
     }
     fields.push(("object", at_address("object_header_address", T::Named("ObjectHeader".into()))));
+    // `link_name_offset` counts from the start of the local heap's data
+    // segment, the same as where `name` reads it when the heap is in scope.
     if named {
-        T::structure_named("Link", "name", "object", fields)
+        T::structure_named("Link", "name", "object", fields).positions(&["link_name_offset"])
     } else {
-        T::structure("Link", fields)
+        T::structure("Link", fields).positions(&["link_name_offset"])
     }
 }
 
@@ -1550,6 +1555,7 @@ fn fractal_heap() -> T {
             ),
         ],
     )
+    .positions(&["huge_object_btree_address", "free_space_manager_address"])
 }
 
 /// A block holding the objects themselves. What is in one is not said
@@ -1571,6 +1577,7 @@ fn heap_direct_block() -> T {
             ("links", T::repeat(heap_link(), Until::End).counted_as("links")),
         ],
     )
+    .positions(&["heap_header_address"])
 }
 
 /// One object in a fractal heap's block, which for a group's heap is a link.
@@ -1626,6 +1633,7 @@ fn heap_indirect_block() -> T {
             ("checksum", T::u32(Little)),
         ],
     )
+    .positions(&["heap_header_address"])
 }
 
 /// One entry of that table: where a block is, and the block, which is a direct
@@ -2220,6 +2228,7 @@ fn link_info() -> T {
             ("name_index", at_address("name_index_btree_address", T::Named("BTree2".into()))),
         ],
     )
+    .positions(&["creation_order_index_address"])
 }
 
 fn group_info() -> T {
@@ -2621,6 +2630,7 @@ fn symbol_table() -> T {
             ("heap", at_address("heap_address", T::Named("LocalHeap".into()))),
         ],
     )
+    .positions(&["btree_address"])
 }
 
 fn modification_time() -> T {
@@ -2651,6 +2661,8 @@ fn local_heap() -> T {
             ("tree", at_address("btree_address", T::Named("Node".into()))),
         ],
     )
+    // Counted from the start of the data segment.
+    .positions(&["free_list_offset"])
 }
 
 /// What an address inside a tree points at: another tree, a symbol table node,
@@ -2691,7 +2703,9 @@ fn btree() -> T {
             // range rather than opening a child.
             (
                 "last_key",
-                T::switch(E::field("node_type"), vec![(1, chunk_key())], T::structure("Key", vec![("name_offset", length())])),
+                // `name_offset` counts from the start of the local heap's data
+                // segment.
+                T::switch(E::field("node_type"), vec![(1, chunk_key())], T::structure("Key", vec![("name_offset", length())]).positions(&["name_offset"])),
             ),
         ],
     )
@@ -3816,5 +3830,27 @@ pub(crate) mod tests {
     #[test]
     fn the_signature_claims_the_file() {
         assert_eq!(sniffed(b"\x89HDF\r\n\x1a\n\0\0"), Some("hdf5"));
+    }
+
+    /// Every address is a position, whether or not anything here follows it,
+    /// and so is every offset into a local heap's data segment. Sizes,
+    /// counts and offsets into a fractal heap's own address space are not.
+    #[test]
+    fn addresses_are_positions() {
+        let t = hdf5();
+        use crate::machinery::assert_marks;
+        assert_marks(&t, "Superblock", &["base_address", "free_space_address", "end_of_file_address", "driver_info_address", "superblock_extension_address", "root_group_object_header_address"], &["offset_size", "length_size"]);
+        assert_marks(&t, "GroupCache", &["cached_btree_address", "cached_heap_address"], &[]);
+        assert_marks(&t, "Link", &["link_name_offset", "object_header_address"], &["cache_type"]);
+        assert_marks(&t, "LinkCache", &["link_value_offset"], &[]);
+        assert_marks(&t, "FractalHeap", &["huge_object_btree_address", "free_space_manager_address", "root_block_address"], &["managed_space", "direct_block_iterator_offset", "starting_block_size"]);
+        assert_marks(&t, "HeapDirectBlock", &["heap_header_address"], &["block_offset"]);
+        assert_marks(&t, "HeapIndirectBlock", &["heap_header_address"], &["block_offset"]);
+        assert_marks(&t, "LinkInfo", &["creation_order_index_address", "fractal_heap_address"], &["max_creation_index"]);
+        assert_marks(&t, "SymbolTable", &["btree_address", "heap_address"], &[]);
+        assert_marks(&t, "LocalHeap", &["free_list_offset", "data_segment_address"], &["data_segment_size"]);
+        for name in ["FixedArrayDataBlock", "ExtensibleArrayIndexBlock", "ExtensibleArraySecondaryBlock", "ExtensibleArrayDataBlock"] {
+            assert_marks(&t, name, &["header_address"], &["version"]);
+        }
     }
 }
