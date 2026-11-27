@@ -766,6 +766,10 @@ export class HexView {
   /** Draw again for a change of the base addresses are written in: the
    *  address column's width, its digits and the chips' offset values. */
   redrawAddresses(): void {
+    // A chip's tooltip writes addresses too, and a row is not filled again
+    // while its chips say the same thing.
+    this.forgetOrigins();
+    this.grid.forgetNotes();
     this.remeasure();
     this.render();
   }

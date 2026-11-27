@@ -166,6 +166,12 @@ export class HexRows {
   private rowEls: HTMLElement[] = [];
   /** The elements each row is made of, kept between draws. See `fitParts`. */
   private parts: RowParts[] = [];
+
+  /** Fill every row's chips again on the next draw, for a change in what a
+   *  chip's tooltip says that its text does not show. */
+  forgetNotes(): void {
+    for (const p of this.parts) p.noteKey = "";
+  }
   /** Which element of the pool draws each row of the view, top row first, and
    *  the same elements again for the callers that want them that way. Both are
    *  written by `place` and read by everything after it. */

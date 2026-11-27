@@ -46,7 +46,7 @@ import {
   UNICODE_ENCODINGS,
 } from "./encodings.ts";
 import { rememberChoice, storedChoice, storedNumber, storedText } from "./stored.ts";
-import { getAddressBase, setAddressBase } from "./format.ts";
+import { getAddressBase, positionValue, setAddressBase } from "./format.ts";
 import { ASCII_GLYPHS, fieldBits, fieldStart } from "./hexcell.ts";
 import { gearIcon } from "./icons.ts";
 import { SettingsDialog, type ExtraTemplate, type ListingColumns } from "./settingsdialog.ts";
@@ -1501,7 +1501,9 @@ function buildDocument(tab: Tab): Page {
       if (o.role === "points" || o.path.length === 0) continue;
       const n = inFile(o.path) ? doc.templateNode(o.path) : null;
       const at = n !== null && n.status === "ok" ? formatOffset(n.node.offset_bits) : null;
-      lines.push(LINKS.origin(roleLabel(o.role), o.label, o.value, at));
+      // A position is an address, so it is written the way addresses are.
+      const value = o.role === "position" ? (positionValue({ locates: true, kind: "uint", edit_text: o.value.replace(/,/g, "") }) ?? o.value) : o.value;
+      lines.push(LINKS.origin(roleLabel(o.role), o.label, value, at));
     }
     return lines.length === 0 ? null : lines.join("\n");
   };
