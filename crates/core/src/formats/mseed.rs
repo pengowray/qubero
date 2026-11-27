@@ -357,6 +357,8 @@ fn body(e: Endian, data: T) -> T {
         ],
     )
     .machinery(&["reserved", "first_blockette_offset", "header_padding"])
+    // Both count from the start of the record.
+    .positions(&["data_offset", "first_blockette_offset"])
     .payload(&["station", "channel", "sample_count"])
     .counted_as("record")
 }
@@ -430,6 +432,7 @@ fn blockette(e: Endian) -> T {
             ("padding", T::bytes(padding)),
         ],
     )
+    .positions(&["next"])
     .counted_as("blockette")
 }
 
@@ -644,6 +647,7 @@ fn b2000_body(e: Endian) -> T {
             ("opaque", T::bytes(opaque)),
         ],
     )
+    .positions(&["data_offset"])
     .payload(&["headers"])
 }
 
@@ -1276,5 +1280,15 @@ mod tests {
         not[YEAR_AT..YEAR_AT + 4].copy_from_slice(&[0xff; 4]);
         assert!(!is_mseed(&not, not.len() as u64));
         assert!(!is_mseed(&[0u8; 512], 512));
+    }
+
+    /// The offsets into a record are positions. The counts beside them are
+    /// not.
+    #[test]
+    fn record_offsets_are_positions() {
+        let t = mseed();
+        crate::machinery::assert_marks(&t, "MiniSEEDRecord", &["data_offset", "first_blockette_offset"], &["blockette_count", "sample_count"]);
+        crate::machinery::assert_marks(&t, "MiniSEEDBlockette", &["next"], &["type"]);
+        crate::machinery::assert_marks(&t, "OpaqueData", &["data_offset"], &["length", "header_count"]);
     }
 }

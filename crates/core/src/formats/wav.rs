@@ -687,11 +687,15 @@ fn cue(endian: Endian) -> T {
             ("id", T::u32(endian)),
             ("position", T::u32(endian)),
             ("chunk", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
+            // In bytes: where the chunk holding the cue starts, counted from
+            // the data of a `wavl` list (zero without one), and where the
+            // block holding it starts, counted from that chunk's data.
             ("chunk_start", T::u32(endian)),
             ("block_start", T::u32(endian)),
             ("sample_offset", T::u32(endian)),
         ],
-    );
+    )
+    .positions(&["chunk_start", "block_start"]);
     T::structure("Cue", vec![("count", T::u32(endian)), ("points", T::array(point, E::field("count")))])
 }
 
@@ -1743,5 +1747,12 @@ mod tests {
         let mut ev = Evaluator::new(wav());
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().type_name, "Samples");
         assert_eq!(ev.node(&d, &[3, 1, 2, 0, 0]).unwrap().value, Value::Int(980));
+    }
+
+    /// A cue point's chunk and block starts count bytes, and are positions.
+    /// Its position and sample offset count samples, and are not.
+    #[test]
+    fn cue_point_byte_offsets_are_positions() {
+        crate::machinery::assert_marks(&wav(), "CuePoint", &["chunk_start", "block_start"], &["position", "sample_offset"]);
     }
 }
