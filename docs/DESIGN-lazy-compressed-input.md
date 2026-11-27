@@ -863,7 +863,8 @@ distance" and the table above:
   output, while these refusals are for 16 MiB of compressed input; see "Open
   questions". No reader sees it before
   part 7, which is the first part to make an index over a source with a
-  resident limit. No string was added or changed.
+  resident limit. No string was added or changed. Part 7a changed all of
+  these refusals to `Refusal::TooMuchAtOnce`; see "Built (part 7a)".
 - **Spans that change.** Measured on 2026-11-28 in a debug build, by indexing
   each run with the default limits, and again with the input spacing set so
   large that it never takes a checkpoint, which gives the old spans:
@@ -1665,13 +1666,46 @@ compressed size is unchanged. Where the code differs from the text above:
   whose run is in such a space and longer than one gather window (1 MiB
   natively), is now unpacked through `index_run`, as a part whose run is in
   the file already was.
-- **Strings.** None was added or changed. Two existing ones now show in the
-  browser in new places. The failure "Can't load {needed} of the file at
-  once: the editor keeps at most {limit} in memory" can show for a read in a
-  tab's own reading, with the span cache's 16 MiB as the limit and "of the
-  file" meaning the tab's bytes. `TooLarge`, "too large to unpack (over
-  64 MiB)", now shows for a zstd frame or an xz block over 16 MiB
-  compressed.
+- **Part 6's refusals are `TooMuchAtOnce`.** A zstd frame or xz block whose
+  compressed bytes pass `Limits::unit_input`, a zstd or xz span read past
+  `Limits::span_input`, and a stretch between two kept deflate block starts
+  past `unit_input` are refused as `Refusal::TooMuchAtOnce` (tag
+  `too-much-at-once`), not `TooLarge`. Each applies only when the source
+  under the `RunInput` has a resident limit, so its reason is that the
+  editor cannot read that much of the file at once; the run is not too large
+  to unpack. A joined stream with such a part is refused with the same tag,
+  where a part refused as `TooLarge` was refused as `Failed` before.
+- **A read in one call longer than an index keeps fails.** `read_indexed`,
+  for a space read through an index, and `read_part_index`, for a part of a
+  stitched space read through its index, fail a read that finds chunks
+  missing and is longer than `Seekable::resident_limit`, with the failure
+  `read_in` gives a read of the file that can never fit
+  (`pending_unless_too_much`). Such a read, made in one call where a tab is
+  read in the file's reading, used to ask for the same chunks for ever. A
+  whole run is still read a window at a time, so it never gets there.
+- **Strings.** Two strings changed, in `web/src`:
+  - `JOINED.refused` for `too-much-at-once`, in the status bar after Open
+    joined stream, now gives `JOINED.partTooMuchAtOnce`: "Couldn't open
+    {tab}: one of its parts is too large for the editor to keep in memory
+    at once." It gave `UNPACKED.tooMuchAtOnce`, which says the stream needs
+    more than 32 MiB of the file at once, and is false for a frame of
+    17 MiB.
+  - `RV.refused` for `too-much-at-once`, a finding in the report, is now
+    "Too large for the editor to keep in memory at once, so it was not
+    unpacked". It said the stream takes up over 32 MiB of the file, which
+    is false for the same frame. Neither takes the limit as an argument any
+    more.
+
+  The listing and the inspector already showed `DECODED_REFUSED`'s "too
+  large for the editor to keep in memory at once" for the tag, with the
+  hover "The editor keeps at most 32 MiB of the file in memory." Two
+  existing strings show in new places. The failure "Can't load {needed} of
+  the file at once: the editor keeps at most {limit} in memory" can show for
+  a read of a stream read through an index, with the span cache's 16 MiB as
+  the limit and "of the file" meaning the stream's bytes. And a zstd frame or
+  an xz block over 16 MiB compressed now shows the words for
+  `too-much-at-once`, where the hover's 32 MiB is the store and the limit
+  that applied is 16 MiB.
 - **Tests.** In `source.rs` and `gather.rs`: a handle onto a store reads
   chunks fed in after the handle was made, and finds missing the chunks the
   store pushed out; a chunk read through a handle counts as read when the
@@ -1697,7 +1731,12 @@ compressed size is unchanged. Where the code differs from the text above:
   48 chunks, opens as a joined stream read a part at a time, whose one part
   is read through an index over the store; the joined stream's limit is the
   span cache, and reads of it wait for pushed-out chunks and then give the
-  member's bytes. The space tests of
+  member's bytes. A zstd frame over a lowered `unit_input` is refused as
+  `too-much-at-once` over the store, and opens from memory. A read in one
+  call of all of a stream read through an index, and of all of a joined
+  stream's indexed part, fails with the reason; without the new check each
+  asks for the same chunk a fourth time and fails there. A read of 48 KiB
+  of each still waits and reads. The space tests of
   streams past the cap, `lazy_real`, `decoded_real` and `compressed_real`
   now read their files through an `ArcSource`, so their indexes read
   through handles. In `crates/wasm/tests/open_space_waits.rs`,
