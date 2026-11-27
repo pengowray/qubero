@@ -171,6 +171,9 @@ impl DeflatePass {
                         self.phase = self.past_the_cap(sink);
                         Ok(Stepped::Working)
                     }
+                    // The pass's trace goes on to the end of a block when
+                    // it turns coarse.
+                    Ok(Ended::Coarse(_)) => Err(Refusal::Failed),
                     Err(other) => Err(other),
                 }
             }
@@ -184,6 +187,7 @@ impl DeflatePass {
                         Ok(Stepped::Working)
                     }
                     Ok(Ended::Stream(blocks_end)) => self.finish(sink, blocks_end).map(Stepped::Done),
+                    Ok(Ended::Coarse(_)) => Err(Refusal::Failed),
                     Err(Refusal::TooLarge) => Err(Refusal::TooLargeLazy),
                     Err(other) => Err(other),
                 }

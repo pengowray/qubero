@@ -1311,6 +1311,9 @@ pub(crate) struct TraceBuilder {
     /// block open, for a decode carrying on from there into this same trace.
     /// See [`TraceBuilder::carried_on`].
     carried_on: bool,
+    /// Whether a decode stops once this trace turns coarse. See
+    /// [`TraceBuilder::stopping_when_coarse`].
+    stop_when_coarse: bool,
     /// Where the symbols of that open block started, while it is open.
     pub(crate) paused: Option<Paused>,
 }
@@ -1378,6 +1381,20 @@ impl TraceBuilder {
 
     pub(crate) fn is_carried_on(&self) -> bool {
         self.carried_on
+    }
+
+    /// A builder for the trace of one deflate block whose end the caller
+    /// knows: once the trace grows too long and names the block's codes as
+    /// one opaque step, the decode stops there rather than decoding on
+    /// without recording, and leaves the block open for the caller to close
+    /// at its end. See [`crate::codec::inflate::Ended::Coarse`].
+    pub(crate) fn stopping_when_coarse(mut self) -> TraceBuilder {
+        self.stop_when_coarse = true;
+        self
+    }
+
+    pub(crate) fn stops_when_coarse(&self) -> bool {
+        self.stop_when_coarse
     }
 
     /// Stop recording for a while, or start again. For a decode carrying on

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::deflate::{BlockMarks, WindowSink};
 use super::input::{refused_as_none, Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, BlockStart, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, BlockStart, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, Window};
 use crate::source::Missing;
 
@@ -556,35 +556,55 @@ impl Seekable {
     ///
     /// In a block of more than [`Limits::span_steps`] codes, the codes are one
     /// opaque step, as they are in a whole run's trace past
-    /// [`crate::codec::MAX_STEPS`].
+    /// [`crate::codec::MAX_STEPS`]. The decode stops where the trace turns
+    /// coarse, and the opaque step runs on to the block's end, which the
+    /// index knows.
     ///
     /// The block is read through the run's input, from its first byte to the
-    /// byte holding its last bit, or to the run's end for the last block.
+    /// byte holding its last bit, or for a Huffman-coded block, as far as
+    /// [`Limits::span_steps`] codes reach at most: [`MAX_HEAD_BYTES`] for its
+    /// header and tables, and 48 bits a code. So under the default limits a
+    /// block's trace reads at most about 6 MB of the run.
     pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, ReadError> {
         if let Some(t) = lock(&self.block_traces).get(i) {
             return Ok(t);
         }
         let block = self.block(i)?;
-        let to = match i + 1 < self.blocks.count {
-            true => block.in_bits.end.div_ceil(8) as usize,
-            false => self.input.len() as usize,
-        };
-        let code = self.input.copy((block.in_bits.start / 8) as usize..to)?;
-        let t = Arc::new(self.block_trace_from(i, Input::new(code.window(self.input.len()), None))?);
+        let from = (block.in_bits.start / 8) as usize;
+        let mut to = block.in_bits.end.div_ceil(8) as usize;
+        if block.kind != BlockKind::Stored {
+            to = to.min(from + MAX_HEAD_BYTES + self.limits.span_steps.saturating_mul(6));
+        }
+        let code = self.input.copy(from..to)?;
+        let t = Arc::new(self.block_trace_from(i, Input::new(code.window(self.input.len()), None), true)?);
         lock(&self.block_traces).put(i, t.clone(), t.len());
         Ok(t)
     }
 
     /// [`Seekable::block_trace`] decoded from `input`, which has to hold
-    /// block `i`. The trace is not cached.
-    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, ReadError> {
+    /// block `i`, or with `stop`, as much of it as is decoded before the
+    /// trace turns coarse. The trace is not cached. Without `stop`, a coarse
+    /// block is decoded to its end, which gives the same trace.
+    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>, stop: bool) -> Result<Trace, ReadError> {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
         let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
         let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: next, starts: None, stopped: None };
         let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(in_bit, out);
+        if stop {
+            b = b.stopping_when_coarse();
+        }
         let f = self.framing()?;
-        inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;
+        if let Ended::Coarse(_) = inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))? {
+            // What a decode to the block's end would have done: the opaque
+            // step runs to the block's end, and so does the trace, or for the
+            // last block, on to the end of the deflate data.
+            b.close_block(block.in_bits.end, block.out_bytes.end, block.kind, block.last);
+            match next {
+                Some(end) => b.finish_at(end, block.out_bytes.end),
+                None => inflate::stream_tail(&mut b, block.in_bits.end, f.end, block.out_bytes.end),
+            }
+        }
         let t = b.done();
         match t.blocks() {
             [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => Ok(t),

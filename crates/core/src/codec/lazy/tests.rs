@@ -1566,7 +1566,7 @@ fn deflate_blocks_from_a_window_are_the_blocks_from_the_whole_run() {
         let b = s.block(i).expect("a block");
         let to = if i + 1 < s.blocks() { b.in_bits.end.div_ceil(8) as usize } else { packed.len() };
         let code = copy_of(&packed, (b.in_bits.start / 8) as usize, to);
-        let t = s.block_trace_from(i, inflate::Input::new(window(&code, &packed), None)).unwrap_or_else(|e| panic!("block {i}: {e:?}"));
+        let t = s.block_trace_from(i, inflate::Input::new(window(&code, &packed), None), true).unwrap_or_else(|e| panic!("block {i}: {e:?}"));
         assert!(shape(&t) == shape(&s.block_trace(i).expect("traces")), "block {i}: the traces differ");
     }
     for g in 0..s.blocks.list.len() {
@@ -2154,6 +2154,52 @@ fn a_block_reads_none_of_the_run() {
         }
     }
     assert!(kinds[0] > 0 && kinds[2] > 0, "stored, fixed and dynamic blocks: {kinds:?}");
+}
+
+/// A block of more codes than a block's trace may hold is decoded only until
+/// its trace turns coarse: the opaque step then runs on to the block's end,
+/// which the index knows, and the trace is the one a decode to the block's
+/// end makes, the last block's padding and what follows it included. The
+/// block is read only as far as the codes before that point can reach, and
+/// for a long block that is well short of its end.
+#[test]
+fn a_block_trace_stops_where_it_turns_coarse() {
+    let data = mixed(300_000, 211);
+    let limits = Limits { span_steps: 200, ..small() };
+    let reach = inflate::MAX_HEAD_BYTES + 200 * 6;
+    let (mut coarse, mut short) = (0, 0);
+    for (codec, packed) in [(Codec::Deflate, flushed(&data, 6, 6000)), (Codec::Gzip, gzip_of(&data, 6)), (Codec::Zlib, wrapped(Codec::Zlib, &fixed_only(&data), &data))] {
+        let held = indexed(codec, &packed, limits);
+        let mut s = indexed(codec, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::new(file, 1024);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        for i in 0..s.blocks() {
+            let b = held.block(i).expect("a block");
+            let to_the_end = held.block_trace_from(i, inflate::Input::whole(&packed), false).expect("traces");
+            lossy.drop_all();
+            let mut named = Vec::new();
+            let t = loop {
+                match s.block_trace(i) {
+                    Ok(t) => break t,
+                    Err(ReadError::Missing(m)) => {
+                        lossy.feed(&m);
+                        named.extend(m);
+                    }
+                    Err(ReadError::Refused(why)) => panic!("{codec:?} block {i}: refused: {why:?}"),
+                }
+            };
+            assert!(shape(&t) == shape(&to_the_end), "{codec:?} block {i}: the traces differ");
+            t.check_tiles().unwrap_or_else(|e| panic!("{codec:?} block {i}: {e}"));
+            if to_the_end.coarse() {
+                coarse += 1;
+                let from = run_at + (b.in_bits.start / 8) as usize;
+                assert!(named.iter().all(|m| (m.chunk as usize * 1024) < from + reach), "{codec:?} block {i}: read {named:?} from byte {from}");
+                short += ((b.in_bits.end / 8) as usize + run_at > from + reach + 2048) as usize;
+            }
+        }
+    }
+    assert!(coarse > 10 && short > 5, "{coarse} coarse blocks, {short} of them read well short of their end");
 }
 
 /// A run in a file read from a store that keeps `limit` bytes at once, with
