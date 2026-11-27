@@ -271,6 +271,7 @@ fn zip64_central() -> T {
             ("rest", T::bytes(E::Remaining)),
         ],
     )
+    .positions(&["local_header_offset"])
 }
 fn text(len: &str) -> T {
     T::text(StrLen::Fixed(E::field(len)), Encoding::Unknown)
@@ -519,6 +520,7 @@ fn end() -> T {
             ("comment", text("comment_length")),
         ],
     )
+    .positions(&["directory_offset"])
 }
 /// The end record a ZIP64 archive writes before the ordinary one, holding the
 /// counts and offsets that do not fit in it. Its size counts the bytes after
@@ -549,7 +551,7 @@ fn zip64_end() -> T {
                             ("directory_offset", T::u64(Little)),
                             ("extensible_data", T::bytes(E::Remaining)),
                         ],
-                    ))], T::bytes(E::Remaining)),
+                    ).positions(&["directory_offset"]))], T::bytes(E::Remaining)),
                 ),
             ),
         ],
@@ -560,10 +562,12 @@ fn zip64_locator() -> T {
         "Zip64Locator",
         vec![
             ("directory_disk", T::u32(Little)),
+            // Where the ZIP64 end record is.
             ("directory_offset", T::u64(Little)),
             ("disk_count", T::u32(Little)),
         ],
     )
+    .positions(&["directory_offset"])
 }
 
 #[cfg(test)]
@@ -893,5 +897,17 @@ mod tests {
             e.node(&d, &[0, 0, 1, 1, 7]).unwrap().value.as_int(),
             Some(5_000_000_000)
         );
+    }
+
+    /// The offsets of the central directory and of a local header are
+    /// positions; the sizes and counts beside them are not.
+    #[test]
+    fn directory_and_header_offsets_are_positions() {
+        let t = zip();
+        crate::machinery::assert_marks(&t, "EndOfCentralDirectory", &["directory_offset"], &["directory_size", "entries_total"]);
+        crate::machinery::assert_marks(&t, "Zip64EndRecord", &["directory_offset"], &["directory_size"]);
+        crate::machinery::assert_marks(&t, "Zip64Locator", &["directory_offset"], &["disk_count"]);
+        crate::machinery::assert_marks(&t, "Zip64Fields", &["local_header_offset"], &["compressed_size"]);
+        crate::machinery::assert_marks(&t, "CentralDirectoryFile", &["local_header_offset"], &["compressed_size"]);
     }
 }
