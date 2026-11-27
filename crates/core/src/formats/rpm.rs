@@ -119,6 +119,8 @@ fn entry(tag_enum: &str, tags: &'static [(i128, &'static str)]) -> T {
             ("count", T::u32(Big)),
         ],
     ).named_by("tag")
+    // Counted from the start of the store.
+    .positions(&["offset"])
     .counted_as("entry")
 }
 
@@ -359,5 +361,10 @@ mod tests {
         let payload = e.node(&d, &[4]).unwrap();
         assert_eq!(payload.size_bits, 13 * 8);
         assert!(payload.type_name.contains("Gzip"), "not named as a gzip stream: {}", payload.type_name);
+    }
+
+    #[test]
+    fn an_index_entry_offset_is_a_position() {
+        crate::machinery::assert_marks(&rpm(), "RpmIndexEntry", &["offset"], &["count"]);
     }
 }

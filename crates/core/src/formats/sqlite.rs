@@ -292,6 +292,8 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, usable: E,
     // the listing folds it behind the page all the same.
     T::structure(name, fields)
         .machinery(&["page_type", "first_freeblock", "cell_content_start", "fragmented_free_bytes"])
+        // Both count from the start of the page.
+        .positions(&["first_freeblock", "cell_content_start"])
         .reads_as(&[("page_type", "", ""), ("cell_count", "{} cells", ""), ("right_most_page", "right-most child page {}", "")])
 }
 
@@ -334,6 +336,7 @@ fn freelist_trunk() -> T {
         ],
     )
     .machinery(&["next_trunk_offset"])
+    .positions(&["next_trunk_offset"])
     .reads_as(&[("next_trunk", "next trunk page {}", "0"), ("leaf_count", "{} leaf pages", "")])
 }
 
@@ -972,5 +975,17 @@ mod tests {
         let mut ev = Evaluator::new(sqlite());
         assert!(ev.node(&d, &[PAGES, 0, CELLS, 0, 2]).is_err());
         assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+    }
+
+    /// The offsets in a page header count from the start of the page, and
+    /// are positions. The cell count and the page numbers are not.
+    #[test]
+    fn page_header_offsets_are_positions() {
+        let t = sqlite();
+        for name in ["TableLeaf", "TableInterior", "IndexLeaf", "IndexInterior"] {
+            crate::machinery::assert_marks(&t, name, &["first_freeblock", "cell_content_start"], &["cell_count", "fragmented_free_bytes"]);
+        }
+        crate::machinery::assert_marks(&t, "TableInterior", &[], &["right_most_page"]);
+        crate::machinery::assert_marks(&t, "FreelistTrunk", &["next_trunk_offset"], &["next_trunk", "leaf_count"]);
     }
 }

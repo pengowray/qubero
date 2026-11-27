@@ -79,7 +79,7 @@ pub fn pe() -> Template {
         // header starts at 64 has none at all.
         ("dos_stub", T::bytes(E::field("pe_header_offset").sub(E::lit(64)))),
     ]);
-    let dos = T::structure("DOSHeader", dos_fields);
+    let dos = T::structure("DOSHeader", dos_fields).positions(&["relocation_table", "pe_header_offset"]);
 
     // Named by its own `name`, which is what carries `.text` and `.rdata` out
     // to every view: a section header labelled `[2]` says nothing, and the
@@ -103,7 +103,8 @@ pub fn pe() -> Template {
             ("line_number_count", T::u16(Little)),
             ("characteristics", T::flags("SectionFlags", T::u32(Little), SECTION_FLAGS)),
         ],
-    );
+    )
+    .positions(&["relocations_offset", "line_numbers_offset"]);
 
     let mut pe32: Vec<(&str, T)> = vec![
         // The only field PE32+ drops: with a 64-bit image base there is no
@@ -174,6 +175,7 @@ pub fn pe() -> Template {
             ),
         ],
     )
+    .positions(&["symbol_table"])
     // `TimeDateStamp`: seconds from 1970, and the one date in a PE header. A
     // reproducible build puts a hash of its inputs here instead, which reads as
     // a date somewhere in the far past or future and is meant to; nothing here
@@ -492,5 +494,16 @@ mod tests {
         let mut e = Evaluator::new(t);
         assert_eq!(e.locate(&doc, 0).expect("the first record"), vec![0, 0, 0]);
         assert_eq!(e.locate(&doc, 6 * 8).expect("the slack"), vec![0], "the run, not an error");
+    }
+
+    /// The offsets in the headers that nothing here reads through are
+    /// positions all the same. The relative virtual addresses and counts
+    /// beside them are not.
+    #[test]
+    fn header_and_section_offsets_are_positions() {
+        let t = pe();
+        crate::machinery::assert_marks(&t, "DOSHeader", &["pe_header_offset", "relocation_table"], &["relocation_count"]);
+        crate::machinery::assert_marks(&t, "PEHeader", &["symbol_table"], &["symbol_count"]);
+        crate::machinery::assert_marks(&t, "Section", &["raw_offset", "relocations_offset", "line_numbers_offset"], &["virtual_address", "relocation_count"]);
     }
 }

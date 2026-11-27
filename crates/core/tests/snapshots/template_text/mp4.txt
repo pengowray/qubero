@@ -578,13 +578,15 @@ type BoxBody = switch type {
       }  aside
       // The chunk offsets from stco (or co64), used to find each chunk.
       chunk_offsets: switch boxes[type = 'stco'].type == 'stco' {
-        1 => at(start of boxes[type = 'stco'].body.version from origin) ChunkOffsets32 {
+        1 => at(start of boxes[type = 'stco'].body.version from origin) ChunkOffsets32
+            (positions entries) {
           version: u8be
           flags: u24be
           entry_count: u32be
           entries: u32be[entry_count]
         }
-        _ => at(start of boxes[type = 'co64'].body.version from origin) ChunkOffsets64 {
+        _ => at(start of boxes[type = 'co64'].body.version from origin) ChunkOffsets64
+            (positions entries) {
           version: u8be
           flags: u24be
           entry_count: u32be
@@ -1338,13 +1340,13 @@ type BoxBody = switch type {
     sample_count: u32be
     entry_sizes: u(field_size)be[sample_count]
   }
-  'stco' => ChunkOffsets32 {
+  'stco' => ChunkOffsets32 (positions entries) {
     version: u8be
     flags: u24be
     entry_count: u32be
     entries: u32be[entry_count]
   }
-  'co64' => ChunkOffsets64 {
+  'co64' => ChunkOffsets64 (positions entries) {
     version: u8be
     flags: u24be
     entry_count: u32be
@@ -1522,7 +1524,7 @@ type BoxBody = switch type {
     sample_count: u32be
     sample_info_sizes: optional(when default_sample_info_size == 0) u8be[sample_count]
   }
-  'saio' => AuxInfoOffsets {
+  'saio' => AuxInfoOffsets (positions offsets) {
     version: u8be
     flags: u24be flags AuxInfoFlags {bit 0 = type present}
     aux_info_type: optional(when bit(flags, 0)) text[4] latin1
@@ -1571,7 +1573,7 @@ type BoxBody = switch type {
     // This fragment's number. Fragments are numbered in order, from 1.
     sequence_number: u32be
   }
-  'tfhd' => TrackFragmentHeader {
+  'tfhd' => TrackFragmentHeader (positions base_data_offset) {
     version: u8be
     flags: u24be flags TrackFragmentFlags {
       bit 0 = base data offset present, bit 1 = sample description index present,
@@ -1742,7 +1744,7 @@ type BoxBody = switch type {
     length_size_of_trun_num: u2be
     length_size_of_sample_num: u2be
     number_of_entry: u32be
-    entries: RandomAccessEntry {
+    entries: RandomAccessEntry (positions moof_offset) {
       // When the sample plays, in the media's timescale.
       time: switch version {1 => u64be, _ => u32be}
       // The file offset of the moof that holds the sample.
@@ -1761,7 +1763,7 @@ type BoxBody = switch type {
         the end of the file.
     size: u32be
   }
-  'sidx' => SegmentIndex {
+  'sidx' => SegmentIndex (positions first_offset) {
     version: u8be
     flags: u24be
     reference_id: u32be
@@ -2536,7 +2538,7 @@ type BoxBody = switch type {
     // How many bytes each extent_index has: 0, 4 or 8. Reserved in version 0.
     index_size: u4be
     item_count: switch version < 2 {1 => u16be, _ => u32be}
-    items: ItemLocation (named by item_type|item_id) {
+    items: ItemLocation (named by item_type|item_id, positions base_offset) {
       item_id: switch version >= 2 {1 => u32be, _ => u16be}
       item_type: optional(when boxes[type = 'iinf'].body.entries[body.item_id =
           item_id].body.item_type != 0) computed text
@@ -2575,7 +2577,7 @@ type BoxBody = switch type {
             obu_size: optional(when has_size_field) leb128
             payload: bytes[has_size_field ? min(obu_size, remaining) : remaining]
           }
-          'Exif' => ExifItem {
+          'Exif' => ExifItem (positions tiff_header_offset) {
             // How many bytes after this field the TIFF header of the Exif data starts.
             tiff_header_offset: u32be
             exif: bytes[remaining]

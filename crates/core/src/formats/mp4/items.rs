@@ -70,6 +70,7 @@ fn item_content() -> T {
             (
                 super::cc("Exif"),
                 T::structure("ExifItem", vec![("tiff_header_offset", u32be()), ("exif", T::bytes(E::Remaining))])
+                    .positions(&["tiff_header_offset"])
                     .field_doc("tiff_header_offset", "How many bytes after this field the TIFF header of the Exif data starts."),
             ),
         ],
@@ -116,6 +117,7 @@ fn iloc() -> T {
         ],
     )
     .named_by("item_type|item_id")
+    .positions(&["base_offset"])
     .field_doc("construction_method", "Where the offsets count from: the file, the idat box, or another item.")
     .field_doc("data_reference_index", "Which entry of dref says where the data is, counting from 1; 0 means this file.");
     let mut fields = full_box();

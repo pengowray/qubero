@@ -5,7 +5,8 @@ root switch peek(u64be) {
     signature: magic 89 48 44 46 0D 0A 1A 0A
     superblock_version: u8be
     superblock: switch superblock_version {
-      0 => Superblock {
+      0 => Superblock (positions base_address free_space_address end_of_file_address
+          driver_info_address) {
         free_space_version: u8be
         root_group_entry_version: u8be
         reserved: u8be
@@ -20,17 +21,17 @@ root switch peek(u64be) {
         free_space_address: u64le enum Address {18446744073709551615 = undefined}
         end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
         driver_info_address: u64le enum Address {18446744073709551615 = undefined}
-        root_group: Link {
+        root_group: Link (positions link_name_offset) {
           link_name_offset: u64le
           object_header_address: u64le enum Address {18446744073709551615 = undefined}
           cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
           reserved: u32le
           scratch: switch cache_type {
-            1 => GroupCache (inline) {
+            1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
               cached_btree_address: u64le enum Address {18446744073709551615 = undefined}
               cached_heap_address: u64le enum Address {18446744073709551615 = undefined}
             }
-            2 => LinkCache {
+            2 => LinkCache (positions link_value_offset) {
               link_value_offset: u32le
               unused: bytes[12]
             }
@@ -42,7 +43,8 @@ root switch peek(u64be) {
           }
         }
       }
-      1 => Superblock {
+      1 => Superblock (positions base_address free_space_address end_of_file_address
+          driver_info_address) {
         free_space_version: u8be
         root_group_entry_version: u8be
         reserved: u8be
@@ -59,17 +61,17 @@ root switch peek(u64be) {
         free_space_address: u64le enum Address {18446744073709551615 = undefined}
         end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
         driver_info_address: u64le enum Address {18446744073709551615 = undefined}
-        root_group: Link {
+        root_group: Link (positions link_name_offset) {
           link_name_offset: u64le
           object_header_address: u64le enum Address {18446744073709551615 = undefined}
           cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
           reserved: u32le
           scratch: switch cache_type {
-            1 => GroupCache (inline) {
+            1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
               cached_btree_address: u64le enum Address {18446744073709551615 = undefined}
               cached_heap_address: u64le enum Address {18446744073709551615 = undefined}
             }
-            2 => LinkCache {
+            2 => LinkCache (positions link_value_offset) {
               link_value_offset: u32le
               unused: bytes[12]
             }
@@ -81,7 +83,8 @@ root switch peek(u64be) {
           }
         }
       }
-      2 => Superblock {
+      2 => Superblock (positions base_address superblock_extension_address end_of_file_address)
+          {
         offset_size: u8be
         length_size: u8be
         file_consistency_flags: u8be
@@ -105,7 +108,8 @@ root switch peek(u64be) {
       signature: magic 89 48 44 46 0D 0A 1A 0A
       superblock_version: u8be
       superblock: switch superblock_version {
-        0 => Superblock {
+        0 => Superblock (positions base_address free_space_address end_of_file_address
+            driver_info_address) {
           free_space_version: u8be
           root_group_entry_version: u8be
           reserved: u8be
@@ -120,17 +124,17 @@ root switch peek(u64be) {
           free_space_address: u64le enum Address {18446744073709551615 = undefined}
           end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
           driver_info_address: u64le enum Address {18446744073709551615 = undefined}
-          root_group: Link {
+          root_group: Link (positions link_name_offset) {
             link_name_offset: u64le
             object_header_address: u64le enum Address {18446744073709551615 = undefined}
             cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
             reserved: u32le
             scratch: switch cache_type {
-              1 => GroupCache (inline) {
+              1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
                 cached_btree_address: u64le enum Address {18446744073709551615 = undefined}
                 cached_heap_address: u64le enum Address {18446744073709551615 = undefined}
               }
-              2 => LinkCache {
+              2 => LinkCache (positions link_value_offset) {
                 link_value_offset: u32le
                 unused: bytes[12]
               }
@@ -142,7 +146,8 @@ root switch peek(u64be) {
             }
           }
         }
-        1 => Superblock {
+        1 => Superblock (positions base_address free_space_address end_of_file_address
+            driver_info_address) {
           free_space_version: u8be
           root_group_entry_version: u8be
           reserved: u8be
@@ -159,17 +164,17 @@ root switch peek(u64be) {
           free_space_address: u64le enum Address {18446744073709551615 = undefined}
           end_of_file_address: u64le enum Address {18446744073709551615 = undefined}
           driver_info_address: u64le enum Address {18446744073709551615 = undefined}
-          root_group: Link {
+          root_group: Link (positions link_name_offset) {
             link_name_offset: u64le
             object_header_address: u64le enum Address {18446744073709551615 = undefined}
             cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
             reserved: u32le
             scratch: switch cache_type {
-              1 => GroupCache (inline) {
+              1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
                 cached_btree_address: u64le enum Address {18446744073709551615 = undefined}
                 cached_heap_address: u64le enum Address {18446744073709551615 = undefined}
               }
-              2 => LinkCache {
+              2 => LinkCache (positions link_value_offset) {
                 link_value_offset: u32le
                 unused: bytes[12]
               }
@@ -181,7 +186,8 @@ root switch peek(u64be) {
             }
           }
         }
-        2 => Superblock {
+        2 => Superblock (positions base_address superblock_extension_address
+            end_of_file_address) {
           offset_size: u8be
           length_size: u8be
           file_consistency_flags: u8be
@@ -850,7 +856,8 @@ type ExtensibleArray {
   checksum: u32le
   index_block: switch index_block_address {
     0xffffffffffffffff => bytes[0]
-    _ => at(index_block_address from origin) ExtensibleArrayIndexBlock {
+    _ => at(index_block_address from origin) ExtensibleArrayIndexBlock
+        (positions header_address) {
       signature: magic "EAIB"
       version: u8be
       client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
@@ -886,7 +893,7 @@ type ExtensibleArray {
         block_entries: computed data_block_min_entries << log2(2 * (index + 2) / 3)
         block: switch address {
           0xffffffffffffffff => bytes[0]
-          _ => at(address from origin) ExtensibleArrayDataBlock {
+          _ => at(address from origin) ExtensibleArrayDataBlock (positions header_address) {
             signature: magic "EADB"
             version: u8be
             client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
@@ -932,7 +939,8 @@ type ExtensibleArray {
         page_count: computed (page_entries < block_entries) * (block_entries / page_entries)
         block: switch address {
           0xffffffffffffffff => bytes[0]
-          _ => at(address from origin) ExtensibleArraySecondaryBlock {
+          _ => at(address from origin) ExtensibleArraySecondaryBlock (positions header_address)
+              {
             signature: magic "EASB"
             version: u8be
             client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
@@ -944,7 +952,8 @@ type ExtensibleArray {
               position: computed index
               block: switch address {
                 0xffffffffffffffff => bytes[0]
-                _ => at(address from origin) ExtensibleArrayDataBlock {
+                _ => at(address from origin) ExtensibleArrayDataBlock (positions header_address)
+                    {
                   signature: magic "EADB"
                   version: u8be
                   client_id: u8be enum ArrayClient {
@@ -1043,7 +1052,7 @@ type FixedArray {
   data_block: switch data_block_address {
     0xffffffffffffffff => bytes[0]
     _ => at(data_block_address from origin) FixedArrayDataBlock
-        (machinery page_entries page_count) {
+        (machinery page_entries page_count, positions header_address) {
       signature: magic "FADB"
       version: u8be
       client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
@@ -1119,7 +1128,7 @@ type FixedArray {
   }
 }
 
-type FractalHeap {
+type FractalHeap (positions huge_object_btree_address free_space_manager_address) {
   signature: magic "FRHP"
   version: u8be
   heap_id_length: u16le
@@ -1190,7 +1199,7 @@ type GlobalHeap {
   }
 }
 
-type HeapDirectBlock {
+type HeapDirectBlock (positions heap_header_address) {
   signature: magic "FHDB"
   version: u8be
   heap_header_address: u64le enum Address {18446744073709551615 = undefined}
@@ -1248,7 +1257,7 @@ type HeapDirectBlock {
   }
 }
 
-type HeapIndirectBlock {
+type HeapIndirectBlock (positions heap_header_address) {
   signature: magic "FHIB"
   version: u8be
   heap_header_address: u64le enum Address {18446744073709551615 = undefined}
@@ -1291,7 +1300,7 @@ type HeapIndirectBlock {
   checksum: u32le
 }
 
-type LocalHeap {
+type LocalHeap (positions free_list_offset) {
   signature: magic "HEAP"
   version: u8be
   reserved: bytes[3]
@@ -1904,7 +1913,7 @@ type Message (named by type, contents body) {
   body: sized(size) switch type {
     0 => bytes[remaining]
     1 => Dataspace
-    2 => LinkInfo {
+    2 => LinkInfo (positions creation_order_index_address) {
       version: u8be
       flags: u8be flags LinkInfoFlags {
         bit 0 = creation order tracked, bit 1 = creation order indexed
@@ -2369,7 +2378,7 @@ type Message (named by type, contents body) {
         }
       }
     }
-    17 => SymbolTable {
+    17 => SymbolTable (positions btree_address) {
       btree_address: u64le enum Address {18446744073709551615 = undefined}
       heap_address: u64le enum Address {18446744073709551615 = undefined}
       heap: switch heap_address {
@@ -2405,7 +2414,7 @@ type MessageV2 = Message (named by type, contents body) {
   body: sized(size) switch type {
     0 => bytes[remaining]
     1 => Dataspace
-    2 => LinkInfo {
+    2 => LinkInfo (positions creation_order_index_address) {
       version: u8be
       flags: u8be flags LinkInfoFlags {
         bit 0 = creation order tracked, bit 1 = creation order indexed
@@ -2870,7 +2879,7 @@ type MessageV2 = Message (named by type, contents body) {
         }
       }
     }
-    17 => SymbolTable {
+    17 => SymbolTable (positions btree_address) {
       btree_address: u64le enum Address {18446744073709551615 = undefined}
       heap_address: u64le enum Address {18446744073709551615 = undefined}
       heap: switch heap_address {
@@ -2942,7 +2951,7 @@ type Node = switch peek(u32be) {
         filter_mask: u32le
         offsets: u64le[dimensionality]
       }
-      _ => Key {
+      _ => Key (positions name_offset) {
         name_offset: u64le
       }
     }
@@ -2952,17 +2961,17 @@ type Node = switch peek(u32be) {
     version: u8be
     reserved: u8be
     symbol_count: u16le
-    symbols: Link (named by name, contents object) {
+    symbols: Link (named by name, contents object, positions link_name_offset) {
       link_name_offset: u64le
       object_header_address: u64le enum Address {18446744073709551615 = undefined}
       cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
       reserved: u32le
       scratch: switch cache_type {
-        1 => GroupCache (inline) {
+        1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
           cached_btree_address: u64le enum Address {18446744073709551615 = undefined}
           cached_heap_address: u64le enum Address {18446744073709551615 = undefined}
         }
-        2 => LinkCache {
+        2 => LinkCache (positions link_value_offset) {
           link_value_offset: u32le
           link_value: at(data_segment_address + link_value_offset from origin) text until 0x00
               utf8

@@ -689,7 +689,7 @@ fn toc(e: Endian, v: Version) -> T {
                 ("version", u32a(count("nStatInstance"))),
                 ("positionStat", u64a(count("nStatInstance"))),
             ],
-        );
+        ).positions(&["positionStat"]);
         // A column as long as the counts in `counts` add up to, held to what
         // the bytes left could hold.
         let summed = |counts: &str, width: i128| E::sum_of(counts).at_most(E::Remaining.div(E::lit(width)));
@@ -749,7 +749,7 @@ fn toc(e: Endian, v: Version) -> T {
                 ("amplitudeSimEvent", T::array(T::F32(e), summed("nSimEvent", 4))),
                 ("positionSimEvent", u64a(summed("nSimEvent", 8))),
             ],
-        );
+        ).positions(&["positionH", "positionDetector", "positionEvent", "positionSimEvent"]);
     }
     T::structure(
         "FrTOC",
@@ -817,5 +817,5 @@ fn toc(e: Endian, v: Version) -> T {
             ("positionSimEvent", u64a(count("nTotalSEvent"))),
             ("chkSum", T::u32(e)),
         ],
-    )
+    ).positions(&["positionH", "positionDetector", "positionStat", "positionEvent", "positionSimEvent"])
 }

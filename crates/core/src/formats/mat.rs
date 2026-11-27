@@ -343,7 +343,7 @@ fn header(e: Endian) -> T {
             ("version", T::enumeration_hex("Version", T::u16(e), &[(V5, "level 5"), (V73, "level 7.3, HDF5")])),
             ("endian_marker", T::text(StrLen::Fixed(E::lit(2)), Encoding::Ascii)),
         ],
-    )
+    ).positions(&["subsystem_offset"])
 }
 
 /// A level 7.3 file's contents: the rest of the user block, and then the HDF5
@@ -956,7 +956,7 @@ fn linking(e: Endian) -> T {
             .into_iter()
             .map(|n| (n, T::u32(e)))
             .collect(),
-    );
+    ).positions(&["classes", "saveobj_properties", "objects", "properties", "dynamic_properties", "region_6", "region_7", "end"]);
     let name = T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1);
     T::structure(
         "LinkingMetadata",
@@ -1507,5 +1507,12 @@ mod tests {
     fn ordinary_bytes_are_not_a_level_4_matrix() {
         assert!(!is_mat4(b"this is just a sentence, and a long one at that.", 48));
         assert!(!is_mat4(&[0u8; 64], 64));
+    }
+
+    #[test]
+    fn the_subsystem_offset_is_a_position() {
+        crate::machinery::assert_marks(&mat(), "Header", &["subsystem_offset"], &["version"]);
+        crate::machinery::assert_marks(&mat(), "RegionOffsets", &["classes", "end"], &[]);
+        crate::machinery::assert_marks(&mat(), "LinkingMetadata", &[], &["name_count"]);
     }
 }

@@ -2175,7 +2175,7 @@ type icc.Profile = sized(remaining) ICCProfile {
 
 type tiff.ExifIfd.be = same as type tiff.ExifIfd.le, but big-endian
 
-type tiff.ExifIfd.le = ExifIfd (contents entries) {
+type tiff.ExifIfd.le = ExifIfd (contents entries, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2314,7 +2314,7 @@ type tiff.ExifIfd.le = ExifIfd (contents entries) {
 
 type tiff.GpsIfd.be = same as type tiff.GpsIfd.le, but big-endian
 
-type tiff.GpsIfd.le = GpsIfd (contents entries) {
+type tiff.GpsIfd.le = GpsIfd (contents entries, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2441,7 +2441,7 @@ type tiff.GpsIfd.le = GpsIfd (contents entries) {
 type tiff.Ifd.be = same as type tiff.Ifd.le, but big-endian
 
 type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_counts tile_offsets
-    tile_byte_counts) {
+    tile_byte_counts, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {

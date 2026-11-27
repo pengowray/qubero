@@ -597,7 +597,9 @@ fn ifd(e: Endian, space: Space) -> T {
     }
     // The entries are what a directory is; `entries` is only the list's name,
     // so the listing shows them beside the count rather than a level down.
-    let ifd = T::structure(space.shown(), fields).contents("entries");
+    // `next_ifd_offset` counts from the start of the TIFF. The chain of IFDs
+    // reads it in IFD 0 and the ones after; an EXIF or GPS IFD has one too.
+    let ifd = T::structure(space.shown(), fields).contents("entries").positions(&["next_ifd_offset"]);
     if !images {
         return ifd;
     }
@@ -1616,5 +1618,15 @@ mod tests {
         assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Enum { raw: 0x5858, name: None, hex: false });
         // Nothing is read as a number that could be either way round.
         assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 20 * 8);
+    }
+
+    /// Every IFD's `next_ifd_offset` is a position, including an EXIF or GPS
+    /// IFD's that nothing follows. Its entry count is not.
+    #[test]
+    fn every_next_ifd_offset_is_a_position() {
+        let t = tiff();
+        for name in ["Ifd", "ExifIfd", "GpsIfd"] {
+            crate::machinery::assert_marks(&t, name, &["next_ifd_offset"], &["count"]);
+        }
     }
 }

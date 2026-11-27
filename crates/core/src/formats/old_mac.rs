@@ -181,6 +181,7 @@ fn stuffit5_body() -> T {
             ("entries", T::repeat(sit5_entry(), Until::End)),
         ],
     )
+    .positions(&["first_entry_offset"])
 }
 
 fn sit5_entry() -> T {
@@ -214,6 +215,7 @@ fn sit5_entry() -> T {
         ],
     )
     .counted_as("entry")
+    .positions(&["previous_offset", "next_offset", "parent_offset"])
     .field_times(&["created", "modified"], mac_local())
 }
 
@@ -426,5 +428,14 @@ mod tests {
 
         let cpt = [1, 1, 0, 0, 0, 0, 0, 8, 0];
         assert_eq!(crate::formats::sniff(&cpt, cpt.len() as u64), Some("compactpro"));
+    }
+
+    /// The links between StuffIt 5 entries are positions. The lengths beside
+    /// them are not.
+    #[test]
+    fn stuffit5_entry_links_are_positions() {
+        let t = stuffit();
+        crate::machinery::assert_marks(&t, "StuffIt5", &["first_entry_offset"], &["archive_size", "declared_entry_count"]);
+        crate::machinery::assert_marks(&t, "Entry5", &["previous_offset", "next_offset", "parent_offset"], &["data_compressed_length", "name_length"]);
     }
 }

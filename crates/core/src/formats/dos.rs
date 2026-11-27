@@ -110,7 +110,7 @@ pub fn dos() -> Template {
         ("overlay", T::bytes(E::Remaining)),
     ]);
 
-    Template::new("msdos", T::structure("DOSExecutable", fields))
+    Template::new("msdos", T::structure("DOSExecutable", fields).positions(&["relocation_table"]))
 }
 
 /// A `.COM` program: 16-bit code from the first byte, and nothing else. There
@@ -314,5 +314,10 @@ mod tests {
         assert_eq!(len_of(read(v.clone(), &[RELOCATIONS])), 0);
         // Which the header padding then covers instead.
         assert_eq!(len_of(read(v, &[HEADER_PADDING])), 0x40 - 28);
+    }
+
+    #[test]
+    fn the_relocation_table_offset_is_a_position() {
+        crate::machinery::assert_marks(&dos(), "DOSExecutable", &["relocation_table"], &["relocation_count"]);
     }
 }

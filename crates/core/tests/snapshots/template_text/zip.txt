@@ -133,7 +133,7 @@ root ZIP {
           }
           size: u16le
           data: sized(size) switch id {
-            1 => Zip64Fields {
+            1 => Zip64Fields (positions local_header_offset) {
               uncompressed_size: switch (4294967294 < uncompressed_size) * (7 < remaining) {
                 1 => u64le
                 _ => bytes[0]
@@ -203,7 +203,7 @@ root ZIP {
           }
         }  aside
       }
-      0x06054b50 => EndOfCentralDirectory {
+      0x06054b50 => EndOfCentralDirectory (positions directory_offset) {
         disk_number: u16le
         directory_disk: u16le
         entries_on_disk: u16le
@@ -216,7 +216,7 @@ root ZIP {
       0x06064b50 => Zip64End {
         record_size: u64le
         record: sized(record_size) switch 43 < record_size {
-          1 => Zip64EndRecord {
+          1 => Zip64EndRecord (positions directory_offset) {
             version_made_by: u16le
             version_needed: u16le
             disk_number: u32le
@@ -230,7 +230,7 @@ root ZIP {
           _ => bytes[remaining]
         }
       }
-      0x07064b50 => Zip64Locator {
+      0x07064b50 => Zip64Locator (positions directory_offset) {
         directory_disk: u32le
         directory_offset: u64le
         disk_count: u32le

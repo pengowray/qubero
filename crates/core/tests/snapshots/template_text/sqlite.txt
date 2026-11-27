@@ -27,8 +27,8 @@ root SQLite {
   sqlite_version: u32be
   page1: sized(page_bytes - 100) switch peek(u8be) {
     2 => IndexInterior (machinery page_type first_freeblock cell_content_start
-        fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-        right_most_page worded "right-most child page {}") {
+        fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type then
+        cell_count worded "{} cells" then right_most_page worded "right-most child page {}") {
       page_type: u8be enum PageType {
         2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
       }
@@ -185,8 +185,8 @@ root SQLite {
       }
     }
     5 => TableInterior (machinery page_type first_freeblock cell_content_start
-        fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-        right_most_page worded "right-most child page {}") {
+        fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type then
+        cell_count worded "{} cells" then right_most_page worded "right-most child page {}") {
       page_type: u8be enum PageType {
         2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
       }
@@ -202,8 +202,8 @@ root SQLite {
       }
     }
     10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
-        fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-        right_most_page worded "right-most child page {}") {
+        fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type then
+        cell_count worded "{} cells" then right_most_page worded "right-most child page {}") {
       page_type: u8be enum PageType {
         2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
       }
@@ -358,8 +358,8 @@ root SQLite {
       }
     }
     13 => TableLeaf (machinery page_type first_freeblock cell_content_start
-        fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-        right_most_page worded "right-most child page {}") {
+        fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type then
+        cell_count worded "{} cells" then right_most_page worded "right-most child page {}") {
       page_type: u8be enum PageType {
         2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
       }
@@ -516,8 +516,9 @@ root SQLite {
     _ => bytes[remaining]
   }
   freelist: chain(first (first_freelist_page - 1) * page_bytes, next .next_trunk_offset, from
-      stream) sized(page_bytes) FreelistTrunk (machinery next_trunk_offset, line next_trunk
-      worded "next trunk page {}" except "0" then leaf_count worded "{} leaf pages") {
+      stream) sized(page_bytes) FreelistTrunk (machinery next_trunk_offset, positions
+      next_trunk_offset, line next_trunk worded "next trunk page {}" except "0" then leaf_count
+      worded "{} leaf pages") {
     next_trunk: u32be
     leaf_count: u32be
     leaves: FreelistEntry (inline) {
@@ -531,8 +532,9 @@ root SQLite {
       aside
   pages: repeat(until end) sized(page_bytes) switch index + 2 == first_freelist_page or
       freelist[next_trunk = index + 2].next_trunk ? 1 : (free_pages[ = index + 2] ? 2 : 0) {
-    1 => FreelistTrunk (machinery next_trunk_offset, line next_trunk worded "next trunk page {}"
-        except "0" then leaf_count worded "{} leaf pages") {
+    1 => FreelistTrunk (machinery next_trunk_offset, positions next_trunk_offset, line
+        next_trunk worded "next trunk page {}" except "0" then leaf_count worded "{} leaf
+        pages") {
       next_trunk: u32be
       leaf_count: u32be
       leaves: FreelistEntry (inline) {
@@ -546,8 +548,9 @@ root SQLite {
     }
     _ => switch peek(u8be) {
       2 => IndexInterior (machinery page_type first_freeblock cell_content_start
-          fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-          right_most_page worded "right-most child page {}") {
+          fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type
+          then cell_count worded "{} cells" then right_most_page worded "right-most child page
+          {}") {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -612,8 +615,9 @@ root SQLite {
         }
       }
       5 => TableInterior (machinery page_type first_freeblock cell_content_start
-          fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-          right_most_page worded "right-most child page {}") {
+          fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type
+          then cell_count worded "{} cells" then right_most_page worded "right-most child page
+          {}") {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -629,8 +633,9 @@ root SQLite {
         }
       }
       10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
-          fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-          right_most_page worded "right-most child page {}") {
+          fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type
+          then cell_count worded "{} cells" then right_most_page worded "right-most child page
+          {}") {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -693,8 +698,9 @@ root SQLite {
         }
       }
       13 => TableLeaf (machinery page_type first_freeblock cell_content_start
-          fragmented_free_bytes, line page_type then cell_count worded "{} cells" then
-          right_most_page worded "right-most child page {}") {
+          fragmented_free_bytes, positions first_freeblock cell_content_start, line page_type
+          then cell_count worded "{} cells" then right_most_page worded "right-most child page
+          {}") {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }

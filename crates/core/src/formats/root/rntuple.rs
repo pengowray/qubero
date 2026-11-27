@@ -386,7 +386,7 @@ fn locator() -> T {
             ("payload", T::bytes(packed.and(E::lit(0xffff)).sub(E::lit(4)).at_least(E::lit(0)))),
         ],
     );
-    let standard = T::structure("RNTupleLocator", vec![("size", T::i32(Little)), ("offset", T::u64(Little))]);
+    let standard = T::structure("RNTupleLocator", vec![("size", T::i32(Little)), ("offset", T::u64(Little))]).positions(&["offset"]);
     T::switch(E::peek(32, Little).bit(31), vec![(1, other)], standard)
 }
 

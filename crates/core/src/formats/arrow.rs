@@ -278,10 +278,11 @@ fn reading() -> T {
 /// multiplying.
 fn view(text: bool) -> T {
     let inlined = if text { T::utf8_padded(E::lit(12), 0) } else { T::bytes(E::lit(12)) };
+    // `offset` counts from the start of the data buffer `buffer_index` names.
     let elsewhere = T::inline_structure(
         "ViewReference",
         vec![("prefix", T::bytes(E::lit(4))), ("buffer_index", T::i32(Little)), ("offset", T::i32(Little))],
-    );
+    ).positions(&["offset"]);
     T::inline_structure(
         "View",
         vec![
@@ -599,5 +600,14 @@ mod tests {
         assert_eq!(messages.offset_bits, 48 * 8, "after the schema message and its length");
         assert_eq!(messages.child_count, 1, "the end-of-stream marker");
         assert_eq!(e.node(&d, &[1, 0, 0, 1]).unwrap().value.as_int(), Some(0));
+    }
+
+    /// Where the rest of a long view is, in the data buffer it names, is a
+    /// position. The buffer's index and the view's length are not.
+    #[test]
+    fn a_view_offset_is_a_position() {
+        let t = Template::new("view", view(false));
+        crate::machinery::assert_marks(&t, "ViewReference", &["offset"], &["buffer_index"]);
+        crate::machinery::assert_marks(&t, "View", &[], &["length"]);
     }
 }

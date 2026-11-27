@@ -287,6 +287,7 @@ fn seek_table() -> T {
         ],
     )
     .counted_as("seek point")
+    .positions(&["stream_offset"])
     .reads_as(&[("sample_number", "sample {}", ""), ("stream_offset", "offset {}", ""), ("frame_samples", "{} samples", "")])
     .field_doc("sample_number", "Number of the first sample in the target frame. Unset (all ones) for a placeholder point, which reserves space for a seek point added later.")
     .field_doc("stream_offset", "Where the target frame starts, in bytes from the start of the first frame.")
@@ -899,5 +900,14 @@ mod tests {
         assert!(e.run_check(&d, &p).unwrap().expect("a verdict").ok);
         let p = path(&mut e, &d, &["frame", "crc16"]);
         assert!(!e.run_check(&d, &p).unwrap().expect("a verdict").ok);
+    }
+
+    /// A seek point's offset counts bytes from the first frame. A cue sheet's
+    /// offsets count samples, and are not positions.
+    #[test]
+    fn a_seek_point_offset_is_a_position() {
+        let t = flac();
+        crate::machinery::assert_marks(&t, "SeekPoint", &["stream_offset"], &["sample_number", "frame_samples"]);
+        crate::machinery::assert_marks(&t, "CueSheetTrack", &[], &["offset"]);
     }
 }

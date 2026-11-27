@@ -147,6 +147,7 @@ fn symbol_table(offset: T) -> T {
             ("names", T::repeat(T::cstr(), Until::End).counted_as("name")),
         ],
     )
+    .positions(&["offsets"])
 }
 
 /// A member's file, named by its first bytes where those say something. A
@@ -274,5 +275,11 @@ mod tests {
         let d = Document::new(MemSource(archive(&[member("empty/", b"")])));
         let mut e = Evaluator::new(ar());
         assert_eq!(e.node(&d, &[1, 0, 7]).unwrap().size_bits, 0);
+    }
+
+    /// Each offset in the symbol table is where a member's header starts.
+    #[test]
+    fn the_symbol_table_offsets_are_positions() {
+        crate::machinery::assert_marks(&ar(), "ArSymbolTable", &["offsets"], &["count"]);
     }
 }

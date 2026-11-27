@@ -329,7 +329,7 @@ fn fixed_array_data_block() -> T {
                 ),
             ),
         ],
-    )
+    ).positions(&["header_address"])
     .machinery(&["page_entries", "page_count"])
 }
 
@@ -442,7 +442,7 @@ fn extensible_array_index_block() -> T {
             ),
             ("checksum", T::u32(Little)),
         ],
-    )
+    ).positions(&["header_address"])
 }
 
 /// A data block address the index block holds, and the block.
@@ -527,7 +527,7 @@ fn extensible_array_secondary_block() -> T {
             ("data_blocks", T::array(secondary_data_block_pointer(), E::field("data_block_count"))),
             ("checksum", T::u32(Little)),
         ],
-    )
+    ).positions(&["header_address"])
 }
 
 /// A data block address a secondary block holds, and the block. Every data
@@ -580,7 +580,7 @@ fn extensible_array_data_block(pageable: bool) -> T {
     } else {
         fields.extend(vec![("entries", entries(E::field("block_entries"))), ("checksum", T::u32(Little))]);
     }
-    T::structure("ExtensibleArrayDataBlock", fields)
+    T::structure("ExtensibleArrayDataBlock", fields).positions(&["header_address"])
 }
 
 /// What either array calls its entries: a chunk's address, and, where a filter

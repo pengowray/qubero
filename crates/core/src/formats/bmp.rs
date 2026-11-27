@@ -57,7 +57,8 @@ pub fn bmp() -> Template {
                 ),
                 ("pixels", T::bytes(E::Remaining)),
             ],
-        ),
+        )
+        .positions(&["pixel_offset"]),
     )
 }
 
@@ -247,5 +248,10 @@ mod tests {
         let mut ev = Evaluator::new(bmp());
         assert_eq!(ev.node(&d, &[6, 10]).unwrap().size_bits, (124 - 40) * 8);
         assert_eq!(ev.node(&d, &[6, 11]).unwrap().child_count, 0);
+    }
+
+    #[test]
+    fn the_pixel_offset_is_a_position() {
+        crate::machinery::assert_marks(&bmp(), "BMP", &["pixel_offset"], &["file_size", "dib_size"]);
     }
 }

@@ -43,7 +43,8 @@ pub fn au() -> Template {
                 ("annotation", T::text(StrLen::Padded { size: E::field("data_offset").sub(E::lit(24)), pad: 0 }, Encoding::Ascii)),
                 ("samples", sample_table()),
             ],
-        ),
+        )
+        .positions(&["data_offset"]),
     )
     // The two companded encodings are a byte each, and the byte is not the
     // number the sample is: 0xff is the quietest mu-law code, not -1. Nothing
@@ -221,5 +222,10 @@ mod tests {
         let d = Document::new(MemSource(file(23, 8000, 1, &data)));
         let mut ev = Evaluator::new(au());
         assert_eq!(ev.node(&d, &[7, 0]).unwrap().type_name, "bytes[]");
+    }
+
+    #[test]
+    fn the_data_offset_is_a_position() {
+        crate::machinery::assert_marks(&au(), "AU", &["data_offset"], &["data_size"]);
     }
 }

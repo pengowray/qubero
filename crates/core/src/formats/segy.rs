@@ -373,7 +373,7 @@ fn rev2_layout(e: Endian, two_one: bool) -> T {
         ("trailer_stanza_count", T::i32(e)),
         ("unassigned", T::bytes(E::lit(68))),
     ]);
-    T::structure("SegyRev2Layout", fields).machinery(&["unassigned"])
+    T::structure("SegyRev2Layout", fields).positions(&["first_trace_offset"]).machinery(&["unassigned"])
 }
 
 /// The extended textual headers, as many as the binary header says.

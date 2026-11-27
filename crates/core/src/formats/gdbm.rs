@@ -97,7 +97,7 @@ fn header(s: &Shape) -> T {
     }
     fields.push(("avail", avail(s)));
     fields.push(("rest", T::bytes(E::Remaining)));
-    T::structure("Gdbm", fields)
+    T::structure("Gdbm", fields).positions(&["next_block"])
 }
 
 /// The first block of free space, which lives in the header block.
@@ -115,7 +115,7 @@ fn avail(s: &Shape) -> T {
             f.push(("av_adr", off()));
             f
         },
-    );
+    ).positions(&["av_adr"]);
     T::inline_structure(
         "Available",
         vec![
@@ -131,7 +131,7 @@ fn avail(s: &Shape) -> T {
                 T::array(element, E::field("size").at_most(E::Remaining.div(E::lit(if wide { 16 } else { 8 })))),
             ),
         ],
-    )
+    ).positions(&["next_block"])
 }
 
 /// Whether these bytes open a GDBM file: one of the ten magics, which are
@@ -256,5 +256,15 @@ mod tests {
     fn other_bytes_are_not_a_gdbm_file() {
         assert!(!is_gdbm(b"SQLite format 3\0"));
         assert!(!is_gdbm(&[0; 2]));
+    }
+
+    /// The file offsets in the header and its free-space table are
+    /// positions. The sizes and counts beside them are not.
+    #[test]
+    fn header_file_offsets_are_positions() {
+        let t = gdbm();
+        crate::machinery::assert_marks(&t, "Gdbm", &["next_block"], &["block_size", "dir_size"]);
+        crate::machinery::assert_marks(&t, "Available", &["next_block"], &["size", "count"]);
+        crate::machinery::assert_marks(&t, "Free", &["av_adr"], &["av_size"]);
     }
 }

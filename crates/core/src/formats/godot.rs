@@ -719,7 +719,7 @@ fn contents(v: Ver, e: Endian) -> T {
         Ver::Three => "Godot3Resource",
         Ver::Four => "Godot4Resource",
     };
-    T::structure(name, fields)
+    T::structure(name, fields).positions(&["import_metadata_offset"])
 }
 
 /// The header, read the way round this file says it was written.
@@ -1344,5 +1344,13 @@ mod tests {
         let contents = e.node(&d, &[2, 4]).unwrap();
         assert_eq!(contents.child_count, 0);
         assert!(contents.size_bits > 0);
+    }
+
+    #[test]
+    fn the_import_metadata_offset_is_a_position() {
+        let t = godot();
+        for name in ["Godot3Resource", "Godot4Resource"] {
+            crate::machinery::assert_marks(&t, name, &["import_metadata_offset"], &["string_table_size"]);
+        }
     }
 }

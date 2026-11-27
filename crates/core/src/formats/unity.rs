@@ -29,7 +29,7 @@ pub fn unity_assets() -> Template {
                     T::switch(E::field("format_version"), cases, T::bytes(E::Remaining)),
                 ),
             ],
-        ),
+        ).positions(&["legacy_data_offset"]),
     )
 }
 
@@ -213,5 +213,10 @@ mod tests {
         let d = Document::new(MemSource(v));
         let mut ev = Evaluator::new(unity_bundle());
         assert_eq!(ev.node(&d, &[4, 1]).unwrap().value, Value::UInt(4));
+    }
+
+    #[test]
+    fn the_legacy_data_offset_is_a_position() {
+        crate::machinery::assert_marks(&unity_assets(), "UnitySerializedFile", &["legacy_data_offset"], &["legacy_file_size", "legacy_metadata_size"]);
     }
 }

@@ -152,7 +152,7 @@ type Chunk (named by id, contents body) {
     }
     'cue ' => Cue {
       count: u32le
-      points: CuePoint {
+      points: CuePoint (positions chunk_start block_start) {
         id: u32le
         position: u32le
         chunk: text[4] ascii
@@ -1312,7 +1312,7 @@ type ChunkBE = Chunk (named by id, contents body) {
     }
     'cue ' => Cue {
       count: u32be
-      points: CuePoint {
+      points: CuePoint (positions chunk_start block_start) {
         id: u32be
         position: u32be
         chunk: text[4] ascii

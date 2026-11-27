@@ -117,6 +117,15 @@ fn header() -> T {
             ("unread", T::bytes(E::Remaining)),
         ],
     )
+    // Every offset in a journal counts from the start of the file.
+    .positions(&[
+        "data_hash_table_offset",
+        "field_hash_table_offset",
+        "tail_object_offset",
+        "entry_array_offset",
+        "tail_entry_array_offset",
+        "tail_entry_offset",
+    ])
     // The two realtime stamps only. A journal counts wall-clock time in
     // microseconds from 1970; `tail_entry_monotonic` beside them counts from
     // the machine's last boot, which is not an instant on any calendar and is
@@ -214,6 +223,7 @@ fn data() -> T {
             ),
         ],
     )
+    .positions(&["next_hash_offset", "next_field_offset", "entry_offset", "entry_array_offset", "tail_entry_array_offset"])
 }
 
 /// The name of a field, once, with the head of the chain of every value it
@@ -228,6 +238,7 @@ fn field() -> T {
             ("payload", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
         ],
     )
+    .positions(&["next_hash_offset", "head_data_offset"])
 }
 
 /// One log entry: when it happened, and a pointer to each of the values it
@@ -256,6 +267,7 @@ fn entry_item() -> T {
         compact(),
         vec![(1, T::u32(Little).counted_as("item"))],
         T::inline_structure("EntryItem", vec![("object_offset", T::u64(Little)), ("hash", T::u64(Little))])
+            .positions(&["object_offset"])
             .counted_as("item"),
     )
 }
@@ -276,6 +288,7 @@ fn entry_array() -> T {
             ),
         ],
     )
+    .positions(&["next_entry_array_offset", "items"])
 }
 
 /// A bucket per hash, each holding the two ends of a chain of objects that
@@ -291,6 +304,7 @@ fn hash_table(name: &str) -> T {
                     "HashItem",
                     vec![("head_hash_offset", T::u64(Little)), ("tail_hash_offset", T::u64(Little))],
                 )
+                .positions(&["head_hash_offset", "tail_hash_offset"])
                 .counted_as("bucket"),
                 Until::End,
             ),
@@ -441,5 +455,18 @@ mod tests {
         let mut e = Evaluator::new(journal());
         assert_eq!(e.node(&d, &[1]).unwrap().child_count, 2);
         assert_eq!(e.node(&d, &[1, 1, 4]).unwrap().size_bits, (4096 - 16) * 8);
+    }
+
+    /// The offsets that link a journal's objects are positions. The sizes
+    /// and counts beside them are not.
+    #[test]
+    fn object_offsets_are_positions() {
+        let t = journal();
+        crate::machinery::assert_marks(&t, "JournalHeader", &["data_hash_table_offset", "tail_entry_offset"], &["data_hash_table_size", "n_entries"]);
+        crate::machinery::assert_marks(&t, "DataObject", &["next_hash_offset", "entry_array_offset"], &["n_entries"]);
+        crate::machinery::assert_marks(&t, "FieldObject", &["head_data_offset"], &["hash"]);
+        crate::machinery::assert_marks(&t, "EntryItem", &["object_offset"], &["hash"]);
+        crate::machinery::assert_marks(&t, "EntryArrayObject", &["next_entry_array_offset", "items"], &[]);
+        crate::machinery::assert_marks(&t, "HashItem", &["head_hash_offset", "tail_hash_offset"], &[]);
     }
 }

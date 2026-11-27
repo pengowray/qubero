@@ -32,6 +32,8 @@ use crate::template::{Expr, StrLen, StructDef, Ty, Until};
 
 mod positions;
 pub use positions::{Positions, AT, EACH};
+#[cfg(test)]
+pub(crate) use positions::assert_marks;
 
 /// For each field of `def`, the first later sibling whose length, count, type
 /// or position that field settles. `None` for a field no sibling reads, which

@@ -281,7 +281,7 @@ fn file(bits: u32, e: Endian) -> T {
 /// to be. The length is what makes an unknown command harmless: it says where
 /// the next one starts without anything having to understand this one.
 fn command(e: Endian) -> T {
-    let linkedit = T::structure("LinkEditData", vec![("offset", T::u32(e)), ("size", T::u32(e))]);
+    let linkedit = T::structure("LinkEditData", vec![("offset", T::u32(e)), ("size", T::u32(e))]).positions(&["offset"]);
     let version = T::structure(
         "VersionMinimum",
         vec![("version", T::u32(e)), ("sdk_version", T::u32(e))],
@@ -299,6 +299,7 @@ fn command(e: Endian) -> T {
             ("name", T::text(StrLen::Padded { size: E::field("size").sub(E::lit(24)), pad: 0 }, Encoding::Utf8)),
         ],
     ).named_by("name")
+    .positions(&["name_offset"])
     // Seconds from 1970, when the library was built. Most linkers write 1 or 2
     // rather than a real time, and a reader shown the second after the epoch
     // has been told the truth about what is in the field.
@@ -306,10 +307,11 @@ fn command(e: Endian) -> T {
     let path = T::structure(
         "Path",
         vec![
+            // Where the name is, counted from the start of the command.
             ("name_offset", T::u32(e)),
             ("name", T::text(StrLen::Padded { size: E::field("size").sub(E::lit(12)), pad: 0 }, Encoding::Utf8)),
         ],
-    ).named_by("name");
+    ).named_by("name").positions(&["name_offset"]);
     let cases: Vec<(i128, T)> = vec![
         (0x1, segment(32, e)),
         (0x19, segment(64, e)),
@@ -323,7 +325,8 @@ fn command(e: Endian) -> T {
                     ("string_offset", T::u32(e)),
                     ("string_size", T::u32(e)),
                 ],
-            ),
+            )
+            .positions(&["symbol_offset", "string_offset"]),
         ),
         (0xc, dylib.clone()),
         (0xd, dylib.clone()),
@@ -335,7 +338,9 @@ fn command(e: Endian) -> T {
         (0x1b, T::structure("Uuid", vec![("uuid", T::bytes(E::lit(16)))])),
         (
             0x8000_0028,
-            T::structure("Main", vec![("entry_offset", T::u64(e)), ("stack_size", T::u64(e))]),
+            // `entry_offset` is where `main` is, counted from the start of
+            // the file.
+            T::structure("Main", vec![("entry_offset", T::u64(e)), ("stack_size", T::u64(e))]).positions(&["entry_offset"]),
         ),
         (0x2a, T::structure("SourceVersion", vec![("version", T::u64(e))])),
         (0x24, version.clone()),
@@ -409,6 +414,7 @@ fn segment(bits: u32, e: Endian) -> T {
             ("sections", T::array(section(bits, e), E::field("section_count"))),
         ],
     )
+    .positions(&["file_offset"])
 }
 
 /// One section, and its bytes where it says they are. A section marked as
@@ -448,7 +454,7 @@ fn section(bits: u32, e: Endian) -> T {
         "contents",
         T::switch(E::field("offset"), vec![(0, T::bytes(E::lit(0)))], T::at_in_window(E::field("offset"), contents)),
     ));
-    T::structure_named("Section", "name", "", fields).counted_as("section")
+    T::structure_named("Section", "name", "", fields).counted_as("section").positions(&["relocation_offset"])
 }
 
 #[cfg(test)]
@@ -563,6 +569,27 @@ mod tests {
         let Value::Flags { set, unnamed, .. } = ev.node(&d, &[6]).unwrap().value else { panic!("not flags") };
         assert_eq!(set, ["noundefs", "dyldlink", "twolevel", "pie"]);
         assert_eq!(unnamed, 0);
+    }
+
+    /// A segment's file offset and a section's relocation offset are
+    /// positions, so a view writes them in the base its addresses are in. The
+    /// memory addresses and sizes beside them are not.
+    #[test]
+    fn segment_and_section_offsets_are_positions() {
+        let d = Document::new(MemSource(sample()));
+        let mut ev = Evaluator::new(macho());
+        let segment = [8, 0, 2];
+        assert_eq!(ev.node(&d, &[8, 0, 2, 3]).unwrap().name, "file_offset");
+        assert!(ev.node(&d, &[8, 0, 2, 3]).unwrap().locates);
+        assert!(!ev.node(&d, &[8, 0, 2, 1]).unwrap().locates, "address");
+        assert!(!ev.node(&d, &[8, 0, 2, 4]).unwrap().locates, "file_size");
+        let section = [&segment[..], &[9, 0]].concat();
+        let field = |i: usize| [&section[..], &[i]].concat();
+        assert_eq!(ev.node(&d, &field(6)).unwrap().name, "relocation_offset");
+        assert!(ev.node(&d, &field(6)).unwrap().locates);
+        assert!(ev.node(&d, &field(4)).unwrap().locates, "offset");
+        assert!(!ev.node(&d, &field(2)).unwrap().locates, "address");
+        assert!(!ev.node(&d, &field(7)).unwrap().locates, "relocation_count");
     }
 
     #[test]

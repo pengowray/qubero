@@ -175,6 +175,7 @@ fn version34(version: u32) -> T {
             ),
         ],
     )
+    .positions(&["file_base", "directory_offset"])
 }
 
 pub fn godot_pck() -> Template {
@@ -369,5 +370,15 @@ mod tests {
         let (d, mut e) = ev(b);
         assert_eq!(e.node(&d, &[5, 4]).unwrap().child_count, 1);
         assert_eq!(e.node(&d, &[5, 4, 0]).unwrap().size_bits, 0);
+    }
+
+    /// Where the directory is and the base each file's offset is added to,
+    /// both counted from the start of the pack, are positions.
+    #[test]
+    fn the_directory_offset_is_a_position() {
+        let t = godot_pck();
+        for name in ["GodotPack3", "GodotPack4"] {
+            crate::machinery::assert_marks(&t, name, &["directory_offset", "file_base"], &["pack_flags"]);
+        }
     }
 }

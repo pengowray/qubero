@@ -121,7 +121,7 @@ fn exif_box(exif: &T) -> T {
             ("prefix", T::bytes(E::field("tiff_header_offset").at_most(E::Remaining))),
             ("tiff", exif.clone()),
         ],
-    )
+    ).positions(&["tiff_header_offset"])
 }
 
 /// `jumd`: the description box a JUMBF superbox opens with. `TYPE` says what

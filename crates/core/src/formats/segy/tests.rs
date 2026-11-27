@@ -293,3 +293,12 @@ fn recognised_by_its_first_card_and_a_plausible_binary_header() {
     assert!(!is_segy(&text, 4000));
     assert!(!is_segy(&good[..3000], 3000));
 }
+
+/// The first trace's offset is a position. The trace count beside it is not,
+/// and neither is a trace's source to receiver offset, which is a distance.
+#[test]
+fn the_first_trace_offset_is_a_position() {
+    let t = segy();
+    crate::machinery::assert_marks(&t, "SegyRev2Layout", &["first_trace_offset"], &["trace_count"]);
+    crate::machinery::assert_marks(&t, "SegyTraceHeader", &[], &["source_receiver_offset"]);
+}
