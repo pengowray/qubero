@@ -189,6 +189,21 @@ pub struct Editor {
     live: usize,
 }
 
+/// Not exported to the web: what this crate's tests set, outside the
+/// `#[wasm_bindgen]` block so that no host can call it.
+impl Editor {
+    /// Read the compressed runs the file's reading opens from here on under
+    /// `limits`, and hold a joined stream whole only up to `whole_cap` bytes,
+    /// so that a test reaches the limits with a few megabytes of file. Tabs
+    /// with readings of their own keep the default limits.
+    #[doc(hidden)]
+    pub fn set_stream_limits(&mut self, limits: qubero_core::codec::lazy::Limits, whole_cap: usize) {
+        if let Some(e) = self.sheets[0].eval.as_mut() {
+            e.set_stream_limits(limits, whole_cap);
+        }
+    }
+}
+
 /// What a `.ksy` the reader pasted in resolves its `meta/imports` against:
 /// the files they supplied alongside it first, then the bundled collection.
 ///

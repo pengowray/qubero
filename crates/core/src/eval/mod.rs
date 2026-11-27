@@ -943,6 +943,15 @@ impl Evaluator {
         self.go.set_slice(elements);
     }
 
+    /// Read the compressed runs opened from here on under `limits`, and hold
+    /// a joined stream whole only up to `whole_cap` bytes, in place of the
+    /// default limits. For tests outside this crate that reach the limits
+    /// with a few megabytes, such as the wasm crate's; nothing else calls it.
+    #[doc(hidden)]
+    pub fn set_stream_limits(&mut self, limits: crate::codec::lazy::Limits, whole_cap: usize) {
+        self.spaces.set_stream_limits(limits, whole_cap);
+    }
+
     /// Start another go. What was worked out already is kept; only the
     /// allowance is refilled.
     pub fn begin_slice(&mut self) {
@@ -2657,7 +2666,9 @@ impl Evaluator {
         if size == 0 {
             return Ok(space::Opened::Space(self.spaces.add(path, Vec::new(), crate::codec::Trace::default())));
         }
-        if size / 8 > crate::codec::CAP_BYTES as u64 {
+        // A run that can be indexed is held to the limit of the way its pass
+        // reads it, which `index_pass` decides; any other is read whole.
+        if !crate::codec::lazy::can_index(codec) && size / 8 > crate::codec::CAP_BYTES as u64 {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }

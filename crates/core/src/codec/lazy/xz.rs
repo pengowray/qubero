@@ -144,6 +144,26 @@ pub(super) fn read_span_through(
     Ok(())
 }
 
+/// The chunks of `input` that [`read_span_through`], asked for the first
+/// `upto` bytes of span `k`, would name: those of the stretch it copies first,
+/// worked out from how far the span is decoded already, without decoding.
+/// Nothing when that much of the span is decoded already.
+pub(super) fn span_missing(cache: &Mutex<Recent<Prefix>>, input: &RunInput, l: &xz::Layout, units: Range<usize>, k: usize, upto: usize, most: usize) -> Vec<crate::source::Missing> {
+    let needs = {
+        let cache = lock(cache);
+        let fresh;
+        let p = match cache.peek(k as u64) {
+            Some(p) => p,
+            None => {
+                fresh = Prefix::new(l, units.clone());
+                &fresh
+            }
+        };
+        p.next_block(units.clone(), upto).map(|next| p.needs(l, units, upto, next, most))
+    };
+    needs.map_or_else(Vec::new, |range| input.missing(range))
+}
+
 /// A span decoded from its start as far as reads have reached, and the
 /// decoder that carries it on from there.
 ///
@@ -188,6 +208,20 @@ impl Prefix {
         self.blocks.iter().map(Vec::capacity).sum::<usize>()
             + self.blocks.capacity() * std::mem::size_of::<Vec<u8>>()
             + self.decoder.as_ref().map_or(0, Lzma2::held_bytes)
+    }
+
+    /// The block [`Prefix::reach`], given no bytes of the stream, says it
+    /// needs first to decode the first `upto` bytes of the span: the block it
+    /// stopped inside, or the one after the last it finished. Nothing when
+    /// that much is decoded already.
+    fn next_block(&self, units: Range<usize>, upto: usize) -> Option<usize> {
+        if self.decoded >= upto && upto < self.len {
+            return None;
+        }
+        match self.decoder {
+            Some(_) => Some(self.first + self.blocks.len() - 1),
+            None => Some(self.first + self.blocks.len()).filter(|&next| next < units.end),
+        }
     }
 
     /// The bytes of the stream that [`Prefix::reach`] reads next to decode

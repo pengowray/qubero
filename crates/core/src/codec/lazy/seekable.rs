@@ -239,6 +239,46 @@ impl Seekable {
         Ok(())
     }
 
+    /// The chunks of the file a [`Seekable::read`] of `len` bytes at `at`
+    /// would name, found without decoding anything or copying the run. A
+    /// read decodes the spans it reaches in order and stops at the first one
+    /// whose compressed bytes are missing chunks, naming all of that span's,
+    /// so this names the same: those of the first span it reaches that is not
+    /// held decoded and is missing chunks. Nothing when the read would be
+    /// refused first, at a span too large to read at once.
+    pub fn missing(&self, at: u64, len: u64) -> Vec<Missing> {
+        let end = at.saturating_add(len).min(self.len);
+        let mut pos = at;
+        while pos < end {
+            let Some(k) = self.span_of_byte(pos) else { break };
+            let range = self.span_bytes(k);
+            let found = match &self.kind {
+                Kind::Xz(l) => {
+                    let most = match self.input.resident_limit() {
+                        Some(_) => self.limits.span_input,
+                        None => usize::MAX,
+                    };
+                    let upto = (range.end.min(end) - range.start) as usize;
+                    super::xz::span_missing(&self.prefixes, &self.input, l, self.span_units(k, l), k, upto, most)
+                }
+                _ if lock(&self.spans).holds(k as u64) => Vec::new(),
+                Kind::Deflate(_) => self.input.missing(self.deflate_span_in(k)),
+                Kind::Zstd => {
+                    let frames = self.frames_in(k);
+                    if self.at_once(frames.len()).is_err() {
+                        return Vec::new();
+                    }
+                    self.input.missing(frames)
+                }
+            };
+            if !found.is_empty() {
+                return found;
+            }
+            pos = range.end;
+        }
+        Vec::new()
+    }
+
     /// The bytes of the run span `k` reads, for a span that starts on a byte:
     /// from its checkpoint's bit to the next one's, and the last to the end.
     pub(super) fn span_in(&self, k: usize) -> std::ops::Range<usize> {
@@ -317,10 +357,16 @@ impl Seekable {
     /// the last span). The header of the block the checkpoint is inside is
     /// the checkpoint's own copy.
     fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies<'_>, Vec<Missing>> {
+        let code = self.input.copy(self.deflate_span_in(k))?;
+        Ok(DeflateCopies { code, head: self.checkpoints[k].head() })
+    }
+
+    /// The bytes of the run [`Seekable::deflate_span_copies`] copies for
+    /// deflate span `k`.
+    fn deflate_span_in(&self, k: usize) -> std::ops::Range<usize> {
         let c = &self.checkpoints[k];
         let to = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |n| n.in_bit.div_ceil(8) as usize);
-        let code = self.input.copy((c.in_bit / 8) as usize..to)?;
-        Ok(DeflateCopies { code, head: c.head() })
+        (c.in_bit / 8) as usize..to
     }
 
     /// Deflate span `k`, decoded from `input`: from checkpoint `k`'s bit to
@@ -637,6 +683,29 @@ impl Seekable {
             + lock(&self.prefixes).weight
     }
 
+    /// How many bytes the index holds for as long as it is kept, apart from
+    /// its caches and its input: its checkpoints' windows, its copies of
+    /// block headers, each counted once however many checkpoints share it,
+    /// its block starts and, for xz, the list of the stream's blocks. Under
+    /// the default limits that is at most 8 MiB of windows, under 72 KiB of
+    /// header copies and 1 MiB of block starts. It does not change once the
+    /// index is made, so it is what the evaluator's list of indexes weighs
+    /// the index by, with what its input owns
+    /// ([`RunInput::owned_bytes`]). The caches are bounded by the limits.
+    pub fn kept_bytes(&self) -> u64 {
+        let windows: usize = self.checkpoints.iter().map(|c| c.window().len()).sum();
+        let mut heads: Vec<(*const u8, usize)> = self.checkpoints.iter().filter_map(|c| c.head()).map(|(bytes, _)| (bytes.as_ptr(), bytes.len())).collect();
+        heads.sort_unstable();
+        heads.dedup();
+        let heads: usize = heads.iter().map(|h| h.1).sum();
+        let blocks = self.blocks.list.len() * std::mem::size_of::<BlockStart>();
+        let layout = match &self.kind {
+            Kind::Xz(l) => l.blocks.len() * std::mem::size_of::<xz::BlockAt>(),
+            Kind::Deflate(_) | Kind::Zstd => 0,
+        };
+        (windows + heads + blocks + layout) as u64
+    }
+
     /// Where each checkpoint is, as the bit of the run and the byte of the
     /// output, for tests.
     #[cfg(test)]
@@ -696,6 +765,16 @@ impl<T> Recent<T> {
             #[cfg(test)]
             peak: 0,
         }
+    }
+
+    /// Entry `k`, without marking it as used.
+    pub(super) fn peek(&self, k: u64) -> Option<&T> {
+        self.entries.iter().find(|e| e.0 == k).map(|e| &e.1)
+    }
+
+    /// Whether entry `k` is kept, without marking it as used.
+    pub(super) fn holds(&self, k: u64) -> bool {
+        self.peek(k).is_some()
     }
 
     /// Take entry `k` out, to change it and put it back.

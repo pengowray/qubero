@@ -210,6 +210,11 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB)",
+  /** A deflate, zlib, gzip or zstd run read a piece at a time whose
+   *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
+   *  most such a run may take up. The limit is on the compressed size, not on
+   *  what it unpacks to. Also said after a part's name, as "is …". */
+  "too-large-input": "too large to unpack (over 512 MiB compressed)",
   /** A zstd run, or an xz stream, read a piece at a time: each frame or
    *  block of it is unpacked whole, and one of them unpacks to more than
    *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
@@ -672,6 +677,14 @@ export const JOINED = {
   partTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts unpacks to over 1 GiB.`,
   /**
    * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part is over 512 MiB compressed
+   * (`too-large-input`), the most a compressed stream read a piece at a time
+   * may take up. The limit is on that one part, not on the parts together,
+   * and on its compressed size. The core does not say which part.
+   */
+  partTooLargeInput: (tab: string): string => `Couldn't open ${tab}: one of its parts is over 512 MiB compressed.`,
+  /**
+   * In the status bar, when Open joined stream was pressed and the core
    * refused because one compressed part has a zstd frame, or an xz block,
    * that unpacks to more than 64 MiB (`too-large-zstd-frame`,
    * `too-large-xz-block`): each frame or block is unpacked whole. The core
@@ -705,6 +718,8 @@ export const JOINED = {
         return JOINED.tooLarge(tab);
       case "too-large-lazy":
         return JOINED.partTooLarge(tab);
+      case "too-large-input":
+        return JOINED.partTooLargeInput(tab);
       case "too-large-zstd-frame":
         return JOINED.partZstdFrameTooLarge(tab);
       case "too-large-xz-block":

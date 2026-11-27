@@ -155,6 +155,24 @@ impl<S: Source> Source for Gathered<S> {
         missing
     }
 
+    /// The chunks of the source it gathers from that the parts under these
+    /// bytes are missing, asked of that source part by part.
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        let mut missing: Vec<Missing> = Vec::new();
+        let (mut at, end) = (offset, offset.saturating_add(len).min(self.len_bytes()));
+        while at < end {
+            let index = self.extent_at(at);
+            let Some(extent) = self.extents.get(index) else { break };
+            let within = at - self.starts[index];
+            let take = (extent.len - within).min(end - at);
+            missing.extend(self.inner.missing(extent.at + within, take));
+            at += take;
+        }
+        missing.sort_by_key(|m| m.chunk);
+        missing.dedup();
+        missing
+    }
+
     /// What the source it gathers from keeps.
     fn resident_limit(&self) -> Option<u64> {
         self.inner.resident_limit()

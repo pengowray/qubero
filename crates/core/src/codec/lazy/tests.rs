@@ -27,6 +27,8 @@ fn small() -> Limits {
         unit_input: 16 << 20,
         span_input: 16 << 20,
         step_input: STEP_INPUT,
+        input: INPUT_CAP_BYTES,
+        copy_input: crate::codec::CAP_BYTES,
     }
 }
 
@@ -1905,6 +1907,70 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
     assert!(inside_blocks > 3 && header_before > 0, "{inside_blocks} deflate spans start inside a block, {header_before} chunks past its header");
 }
 
+/// An index says which chunks of the file a read of its output would name,
+/// without decoding or copying anything: for every span of a deflate, a
+/// zstd and an xz run read from a source with none of the run loaded, a
+/// read of the span and a read from its middle into the next name the same
+/// chunks as it says. A span held decoded needs nothing, and nor does an xz
+/// span decoded as far as the read reaches.
+#[test]
+fn an_index_says_which_chunks_a_read_would_name() {
+    let data = mixed(300_000, 61);
+    for (codec, packed, limits) in [
+        (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6), Limits { spacing: 16 << 10, ..small() }),
+        (Codec::Zstd, zstd_of(&data, 30_000, true), small()),
+        (Codec::Xz, xz_pieces(&data, 60_000, Some(20_000)), Limits { span: 1 << 20, ..small() }),
+    ] {
+        let mut s = indexed(codec, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::new(file, 1024);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        let forget = |s: &Seekable| {
+            for k in 0..s.spans() as u64 {
+                lock(&s.spans).take(k);
+                lock(&s.prefixes).take(k);
+            }
+        };
+        for k in 0..s.spans() {
+            let want = s.span_bytes(k);
+            let mid = (want.start + want.end) / 2;
+            for (at, n) in [(want.start, want.end - want.start), (mid, (want.end - want.start).min(s.len() - mid))] {
+                if n == 0 {
+                    continue;
+                }
+                forget(&s);
+                lossy.drop_all();
+                let said = s.missing(at, n);
+                let mut got = vec![0u8; n as usize];
+                match s.read(at, &mut got) {
+                    Err(ReadError::Missing(named)) => assert_eq!(said, named, "{codec:?} span {k}: {n} bytes at {at}"),
+                    other => panic!("{codec:?} span {k}: {other:?}"),
+                }
+            }
+        }
+        let want = s.span_bytes(s.spans() / 2);
+        let mut got = vec![0u8; (want.end - want.start) as usize];
+        read_waiting(&s, &lossy, want.start, &mut got);
+        lossy.drop_all();
+        assert_eq!(s.missing(want.start, want.end - want.start), vec![], "{codec:?}: a span held decoded");
+    }
+}
+
+/// A read of a run through its input asks the source which chunks are
+/// missing first, and reads nothing when some are.
+#[test]
+fn a_read_of_a_run_asks_which_chunks_are_missing_before_it_copies() {
+    use crate::source::tests::Asked;
+    let source = Arc::new(Asked::new(64, 8, &[2]));
+    let input = RunInput::new(source.clone(), 4, 50);
+    let mut out = [0xeeu8; 20];
+    assert_eq!(input.read(4, &mut out), Err(vec![crate::source::Missing { chunk: 2 }]));
+    assert_eq!((source.reads(), out), (0, [0u8; 20]));
+    assert_eq!(input.missing(0..4), vec![]);
+    assert!(input.read(0, &mut [0u8; 4]).is_ok());
+    assert_eq!(source.reads(), 1);
+}
+
 /// An xz span read part of the way keeps what it decoded when a later read
 /// of it finds chunks missing, and that read, made again once they are fed,
 /// carries on from there rather than from the span's first block.
@@ -2672,4 +2738,44 @@ fn a_pass_reads_in_windows_only_from_a_store_with_room_for_two() {
         assert!(!reads_in_windows(codec, &from_a_store(&packed, 2 * window as u64 - 1), &limits), "{codec:?}");
     }
     assert!(!reads_in_windows(Codec::Xz, &RunInput::held(Arc::new(packed)), &limits));
+}
+
+/// A pass that reads its run through a handle is held to `Limits::input`:
+/// a run of exactly that length is indexed from a store, and one a byte
+/// longer is refused as `TooLargeInput` when the pass is made, before any of
+/// it is read. A pass that reads a copy is held to `Limits::copy_input`
+/// instead, and says `TooLarge` past it, whatever `Limits::input` is; an xz
+/// stream's layout always reads a copy. The default limits are 512 MiB and
+/// 64 MiB.
+#[test]
+fn a_pass_is_held_to_the_limit_of_the_way_it_reads_its_run() {
+    assert_eq!((Limits::default().input, Limits::default().copy_input), (512 << 20, 64 << 20));
+    let data = mixed(300_000, 307);
+    let limits = in_windows();
+    for codec in [Codec::Zlib, Codec::Zstd] {
+        let packed = match codec {
+            Codec::Zstd => zstd_of(&data, 30_000, true),
+            _ => miniz_oxide::deflate::compress_to_vec_zlib(&data, 6),
+        };
+        let len = packed.len();
+        let capacity = (2 * window_of(codec, &limits)).div_ceil(1024) + 4;
+        let (file, mut store, input) = in_a_chunk_store(&packed, capacity);
+        let past = Limits { input: len as u64 - 1, ..limits };
+        assert_eq!(Indexing::through(codec, input.clone(), past).err(), Some(Refusal::TooLargeInput), "{codec:?}");
+        let at = Limits { input: len as u64, copy_input: len - 1, ..limits };
+        let fed = fed_pass(Indexing::through(codec, input.clone(), at).expect("a run of the limit starts"), &mut store, &file, u64::MAX, u64::MAX);
+        assert!(matches!(fed.got, Ok(Decoded::Indexed(_))), "{codec:?}: {:?}", fed.got.err());
+
+        let copy = Arc::new(packed.clone());
+        let short = Limits { copy_input: len - 1, ..limits };
+        assert_eq!(Indexing::from_copy(codec, copy.clone(), input.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
+        assert_eq!(Indexing::new(codec, copy.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
+        assert_eq!(decode_or_index_with(codec, copy.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
+        assert!(Indexing::from_copy(codec, copy.clone(), input, past).is_ok(), "{codec:?}");
+        assert!(matches!(decode_or_index_with(codec, copy, past), Ok(Decoded::Indexed(_))), "{codec:?}");
+    }
+    let xz = Arc::new(xz_pieces(&data, 60_000, Some(20_000)));
+    let short = Limits { span: 1 << 20, copy_input: xz.len() - 1, input: 0, ..small() };
+    assert_eq!(decode_or_index_with(Codec::Xz, xz.clone(), short).err(), Some(Refusal::TooLarge));
+    assert!(matches!(decode_or_index_with(Codec::Xz, xz, Limits { copy_input: usize::MAX, ..short }), Ok(Decoded::Indexed(_))));
 }

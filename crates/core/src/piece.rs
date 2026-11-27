@@ -183,6 +183,34 @@ impl PieceTable {
         (p.src == Src::Orig && within + n <= p.bit_len).then_some(p.bit_off + within)
     }
 
+    /// The unloaded original chunks a [`PieceTable::read_bits`] of the same
+    /// bits would report, asked of `src` with [`Source::missing`], so that
+    /// nothing is copied. Inserted bits are always there.
+    pub fn missing_bits(&self, src: &dyn Source, at: u64, n: u64) -> Vec<Missing> {
+        let mut missing = Vec::new();
+        if n == 0 || at >= self.len_bits() {
+            return missing;
+        }
+        let end = (at + n).min(self.len_bits());
+        let mut cur = at;
+        let mut i = self.locate(cur);
+        while cur < end && i < self.pieces.len() {
+            let p = self.pieces[i];
+            let in_piece = cur - self.starts[i];
+            let take = (p.bit_len - in_piece).min(end - cur);
+            if p.src == Src::Orig {
+                let src_bit = p.bit_off + in_piece;
+                let first_byte = src_bit / 8;
+                missing.extend(src.missing(first_byte, (src_bit + take).div_ceil(8) - first_byte));
+            }
+            cur += take;
+            i += 1;
+        }
+        missing.sort_by_key(|m| m.chunk);
+        missing.dedup();
+        missing
+    }
+
     /// Read `n` bits starting at document bit `at` into `out` (MSB-first, from bit 0).
     /// `out` must hold at least `bytes_for(n)` bytes. Reports unloaded original chunks.
     pub fn read_bits(

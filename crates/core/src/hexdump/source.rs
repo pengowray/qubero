@@ -132,6 +132,11 @@ impl Source for DumpSource {
         }
         Vec::new()
     }
+
+    /// None: the dump's text is held.
+    fn missing(&self, _: u64, _: u64) -> Vec<Missing> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

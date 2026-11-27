@@ -5,9 +5,10 @@ built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
 from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
 "Order of work", "Built (part 5)" and "Built (part 6)"). Part 7 is split into
-7a, 7b and 7c (see "Review before part 7"), and 7a and 7b are built
-(2026-11-28; see "Built (part 7a)" and "Built (part 7b)"). Parts 7c and 8 to
-11 are not. It follows
+7a, 7b and 7c (see "Review before part 7"), and 7a, 7b and the core half of
+7c are built (2026-11-28; see "Built (part 7a)", "Built (part 7b)" and
+"Built (part 7c, core)"). The web half of 7c and parts 8 to 11 are not. It
+follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
@@ -981,13 +982,14 @@ for ever, since both joins start again from the first part on every
 |---|---|---|
 | `LAZY_CAP_BYTES` | 1 GiB of output | Stays. The zip-bomb guard. |
 | `CAP_BYTES`, as the output of a run held whole | 64 MiB | Stays. |
-| `CAP_BYTES`, as the compressed size of a run that can be indexed | 64 MiB | Replaced by `Limits::input`, 512 MiB, in the five places listed in "The problem". |
+| `CAP_BYTES`, as the compressed size of a run that can be indexed | 64 MiB | Since part 7c, replaced by `Limits::input`, 512 MiB, for a pass that reads its run through a handle a window at a time. A pass that reads a copy of its run keeps 64 MiB, as `Limits::copy_input`: an xz run, a run no handle reaches, and a run in a source with too little room for two windows. |
 | `CAP_BYTES`, as the input and output of a codec that cannot be indexed | 64 MiB | Stays. The input is gathered a window at a time (part 2). |
 | `inflate_len`'s output cap | 64 MiB | Stays. |
 | `Limits::span` | 64 MiB of output per zstd frame or xz block | Stays. |
-| `INDEXED_RUN_BYTES` | 64 MiB of compressed runs | Stays at 64 MiB, but weighs each index by what it holds for as long as it is kept: its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB) and its block starts (at most 1 MiB), about 9.1 MiB at most. The caches inside each index are bounded as today. |
-| `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Removed. |
-| `Limits::input` (new) | 512 MiB of compressed input | A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB. A longer run is refused as `TooLarge` before anything is read, since the size of the field holding the run is known. |
+| `INDEXED_RUN_BYTES` | 64 MiB of what indexes hold | Stays at 64 MiB. Since part 7c it weighs each index by what it holds for as long as it is kept (`Seekable::kept_bytes`): its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB), its block starts (at most 1 MiB) and an xz stream's list of blocks, about 9.1 MiB at most, and the copy of its run when it holds one. The caches inside each index are bounded as before, and not weighed. |
+| `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Since part 7c a packed part read through an index over a handle does not count against it. Stored parts, packed parts decoded whole, and packed parts whose index holds a copy still do; part 10 removes it. |
+| `Limits::input` (new) | 512 MiB of compressed input | Built in part 7c. A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB; a run of exactly 512 MiB is allowed. A longer run read through a handle is refused as `Refusal::TooLargeInput` (`too-large-input`) before anything is read, since the size of the field holding the run is known. |
+| `Limits::copy_input` (new) | 64 MiB (`CAP_BYTES`) of compressed input | Part 7c. The most a run may take up when its pass reads a copy of it. A longer one is refused as `TooLarge` before anything is read. A field of `Limits` so that a test can show a run past it opening through a handle. |
 | `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned, to at most 8 MiB. |
 | `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). A frame, block or stretch over it is refused as `TooLarge`. |
 | `Limits::span_input` (new) | 16 MiB of compressed input | The most one read of a zstd or xz span may gather at once. A span over it is refused when read, as `TooLarge`. Deflate spans never reach it (8.5 MiB at most). |
@@ -1457,7 +1459,17 @@ changes parts 6 to 10: read it first.
    time, answer `NeedsInput`, and wait in `Unfinished` across `Pending`,
    when the source has room for two windows; any other pass still reads a
    copy. xz, the 64 MiB limit and the web are unchanged. See "Built (part
-   7b)" under "Review before part 7".
+   7b)" under "Review before part 7". **7c's core half done 2026-11-28**: a
+   pass that reads its run through a handle a window at a time is held to
+   `Limits::input`, 512 MiB, and refused past it as `too-large-input`; any
+   other pass reads a copy and keeps the 64 MiB limit, now
+   `Limits::copy_input`. A joined stream's part read through an index over
+   a handle no longer counts against `whole_cap`. `Indexes` weighs what each
+   index holds. `Source::missing` says which chunks a read would find
+   missing, and `RunInput::read` asks it before it copies. So a .gz of one
+   member and a zip entry past 64 MiB compressed open, natively and through
+   the wasm `Editor`. See "Built (part 7c, core)" under "Review before part
+   7". The web half (the text loops, `fetchRun`, `readLoaded`) is not done.
 8. **xz's layout in steps.** xz joins `can_step`.
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
@@ -2039,6 +2051,146 @@ differs from the text above:
   of the store is refused with the existing words for `too-much-at-once`:
   "too large for the editor to keep in memory at once".
 
+### Built (part 7c, core)
+
+**Built on 2026-11-28.** A run read through a handle may now be up to
+512 MiB compressed, so a .gz of one member and a deflated zip entry past
+64 MiB compressed open, through the core and through the wasm `Editor`.
+The web half of 7c (the text loops, `fetchRun`, `readLoaded`) is not part
+of this; its notes go in "The browser". Where the code differs from the
+text above:
+
+- **Two limits, decided by the way the pass reads.** `Limits::input`
+  (`INPUT_CAP_BYTES`, 512 MiB) is the limit for a pass that reads its run
+  through a handle a window at a time, and `Limits::copy_input`
+  (`CAP_BYTES`, 64 MiB) is the limit for every pass that reads a copy of
+  its run: an xz run, a run no handle
+  reaches, and a run in a source with too little room for two windows
+  (`lazy::reads_in_windows`). The design named one limit. `copy_input` is
+  a field so that a test can show a run past it opening through a handle,
+  and its default is the 64 MiB of before. `lazy::too_long_to_index(len,
+  through_handle, limits)` is the one comparison, used by `index_pass`
+  (`through_handle` is whether the pass is windowed), by
+  `Indexing::reading` (whether the pass reads a copy), by
+  `decode_or_index_through` and by `run_input` (a copy). A copy is never
+  held to `Limits::input`, so a copy path never shows the new words. A run
+  of exactly 512 MiB is allowed: its last step starts below bit 2^32.
+- **Where each run is refused.** `index_pass` works out whether the pass
+  is windowed before anything else, and refuses a run too long for that
+  way of reading before it waits for a place or gathers anything. So a run
+  past 64 MiB with a handle that would be read through a copy is refused
+  as `too-large`, and not as `too-much-at-once` by `GATHER_BYTES`.
+  `open_space_at` now refuses past 64 MiB only a run of a codec that
+  cannot be indexed, and leaves the rest to `index_pass`. `DeflatePass::new`
+  had lost its check in 7b. `Indexing::new` reads a run held in memory, so
+  it is held to `copy_input`.
+- **The refusal.** `Refusal::TooLargeInput`, tag `too-large-input`, for a
+  run past `Limits::input`. Its words, in `Refusal::message` and
+  `DECODED_REFUSED`, are "too large to unpack (over 512 MiB compressed)".
+  A joined stream with such a part is refused with the same tag
+  (`join_part_lazily`), which `JOINED.refused` turns into
+  `JOINED.partTooLargeInput`: "Couldn't open {tab}: one of its parts is
+  over 512 MiB compressed." The check of a checksum over such a stream
+  says "Can't check this: the data it covers is too large to unpack (over
+  512 MiB compressed)." The limit is on one run, not on a joined stream's
+  parts together. `RV.refused` in `web/src/report/text.ts` has no words
+  for the tag and says "Did not unpack"; see "Still to do".
+- **What else stopped at 64 MiB on the way to a tab.** Read on the path
+  from a .gz or a zip entry past 64 MiB compressed to an open tab:
+  - `too_large_to_join` summed every part's run against `whole_cap`, so
+    Open joined stream on a .gz of one member past 64 MiB compressed was
+    refused as `too-large`. It now counts only what the joined stream
+    copies: stored parts, packed parts decoded whole, and packed parts read
+    through an index that no handle reaches, whose index holds a copy. A
+    packed part read through an index over a handle counts nothing. Which
+    parts are read through an index is decided as `index_part` decides it.
+  - `stream_len_at` reads at most 64 MiB of a member and counts at most
+    `Limits::measure` (64 MiB) of output. A member past 64 MiB compressed
+    comes to more than 64 MiB of output, so the walk is refused at the
+    measuring cap and the gzip template takes the member to run to its
+    trailer (`Remaining - 8`). A .gz of one member opens that way. The walk
+    still reads and holds up to 64 MiB of the member first; see "Still to
+    do".
+  - `gather_run` and `GATHER_BYTES` are reached only by copy paths, which
+    are held to `copy_input`, and are unchanged.
+  - `run_check` over bytes of the file (`Coverage::over`), as for a zip
+    entry stored as it is, still refuses past 64 MiB. A deflated entry's
+    CRC-32 is the index's sum, and is checked at any length.
+  - A tab's read needs one span's compressed bytes at once. A deflate span
+    takes up at most 8.5 MiB and a zstd or xz span at most
+    `Limits::span_input`, 16 MiB, within the browser's 32 MiB store. A
+    tab's read from a store smaller than one span's bytes waits for ever;
+    only tests make stores that small.
+  The end-to-end check at full size is
+  `a_gzip_member_and_a_zip_entry_past_64_mib_open_end_to_end` in
+  `crates/wasm/tests/open_space_waits.rs`, marked `#[ignore]`: 65 MiB of
+  runs in stored blocks, under the default limits, from a store of 4 MiB.
+  It took 6 seconds and 290 MB in a debug build.
+- **`Indexes` weighs what each index holds.** `Seekable::kept_bytes` is
+  its checkpoints' windows, its header copies counted once each however
+  many checkpoints share one, its block starts and an xz stream's list of
+  blocks. It does not change once the index is made, so the weight is
+  worked out once, in `Indexes::put`, with `RunInput::owned_bytes`. The
+  caches are not weighed, as planned. `INDEXED_RUN_BYTES` stays 64 MiB; the
+  cap is a field of `Indexes`, made small by tests (`set_index_cap`).
+- **`Source::missing(offset, len)`** gives the chunks a `read_bytes` of
+  the same bytes would report, sorted, without copying them. It may name
+  fewer when finding them needs a decode, so a caller told nothing is
+  missing still checks what the read reports; it never names a chunk the
+  read would not. The default reads the bytes into a buffer of its own,
+  which is right for any source. `MemSource`, `ArcSource`, `DumpSource`
+  and `textnum`'s window answer none. The store's chunks (`Kept`) are
+  looked up one by one, and a chunk found is marked as read, as a read
+  marks it, so that a read waiting for the rest keeps the chunks it has.
+  `ChunkStore`, `&S`, `Arc<S>` and `Gathered` forward it. `Document`
+  forwards it through its edits (`PieceTable::missing_bits`).
+  `SpaceSource` asks its index, which answers what its read would name:
+  the chunks of the first span it reaches that is not held decoded and is
+  missing some, worked out for xz from how far the span is decoded
+  (`xz::span_missing`). `Joined` asks its first indexed part that is
+  missing some. `RunInput::read` asks first and copies nothing when chunks
+  are missing; it still honours what the read reports after an empty
+  answer. `&S` and `Gathered` already forwarded `share`, as the review
+  asked, from 7a on.
+- **The contract of a tab's `read_bytes` is unchanged.** A read names
+  every missing chunk of the first span it needs that is not held decoded,
+  up to 8.5 MiB of the file for deflate and 16 MiB for zstd and xz, and no
+  chunk of any span after it.
+- **The wasm crate.** No exported function and no reply's JSON changed,
+  apart from `too-large-input` as a new value of `refused`.
+  `Editor::set_stream_limits`, in an `impl Editor` block outside
+  `#[wasm_bindgen]`, sets the file's reading's limits for this crate's
+  tests, through `Evaluator::set_stream_limits`; both are
+  `#[doc(hidden)]`.
+- **Tests.** In `codec/lazy/tests.rs`: a zlib and a zstd pass over a store
+  are refused as `TooLargeInput` one byte past `Limits::input` and indexed
+  at it, while `from_copy`, `Indexing::new` and `decode_or_index_with`
+  are refused as `TooLarge` past `copy_input` and not held to `input`, nor
+  is xz; an index's `missing` names what a read of each span, and of each
+  span's second half into the next, names, for deflate, zstd and xz, and
+  nothing for a span held decoded; `RunInput::read` copies nothing from a
+  source missing a chunk. In `source.rs`: a store's and a handle's
+  `missing` against the read's list; a chunk found by `missing` is kept
+  when a fed chunk pushes one out; every wrapper asks its source and reads
+  nothing. In `eval/tests/resident.rs`: a zlib run past `copy_input` and
+  three times longer than the store opens through its handle at exactly
+  `Limits::input`, and one byte past it is refused as `too-large-input`
+  with nothing read; from a store too small for two windows, and in
+  memory, it is refused as `too-large`; a .gz of one member past
+  `copy_input` opens as a joined stream read a part at a time, says
+  `too-large-input` past `Limits::input` on the joined stream and the
+  member's stream, and is refused as too large in memory, where its index
+  holds a copy; and that joined stream's `missing`, and a lazy space's in
+  `space.rs`, match what their reads then report. In `space.rs` and
+  `eval/tests/run_input.rs`: weights, with the copy counted, and the index
+  used longest ago let go first. In
+  `crates/wasm/tests/open_space_waits.rs`, with small limits set through
+  `Editor::set_stream_limits`: a .gz of one member and a zip entry of
+  3 MiB of run, past `copy_input`, open end to end from a store of 1 MiB,
+  their tabs reading the right bytes; one byte past `Limits::input`, both
+  rows and Open unpacked say `too-large-input`, and so does Open joined
+  stream.
+
 ## Still to do
 
 - **A joined stream walked twice.** `join_whole` gives a finished walk to
@@ -2073,18 +2225,45 @@ differs from the text above:
 - **Rounds with no progress to go by.** `runCheckLoaded`, `ensureTabRange`
   and the text loops in `web/src/doc.ts` give up after `MAX_ROUNDS` loads
   however far the core gets. A check of a long run read a window at a time
-  takes a round each time it waits for chunks, so once 7c lifts the 64 MiB
-  limit a long enough run could reach the backstop. They could pass on
+  takes a round each time it waits for chunks, so now that 7c has lifted
+  the 64 MiB limit, a long enough run could reach the backstop. They could pass on
   progress as `waitToOpen`'s callers do.
 - **`CHUNK_CAPACITY`.** A larger store would let `unit_input` grow. That is a
   choice about the browser's memory, not part of this design.
+- **The measuring walk of a large gzip member.** `stream_len_at` reads a
+  member's bytes into the walk's own copy, up to 64 MiB, until the walk
+  finds the stream's end or passes `Limits::measure`. A member past 64 MiB
+  compressed always passes it, so a .gz of one such member reads and holds
+  64 MiB of itself before the template falls back to the trailer, and two
+  walks can hold 128 MiB at once. A .gz of several members, one of them
+  past 64 MiB of output, still reads as one member. Not changed in 7c,
+  since the walk is part 9's; letting go of the walk's bytes before its
+  current step would save most of the memory.
+- **Words for `too-large-input` in the report.** `RV.refused` in
+  `web/src/report/text.ts`, which part 7c's core half could not change, has
+  no case for the new tag and says "Did not unpack" for it.
+  `RV.streamFailedNote` takes its words from `DECODED_REFUSED`, so it has
+  them already. `web/test/joinedpart.test.ts` could check
+  `JOINED.refused("too-large-input", tab)` beside the other tags.
+- **A checksum over more than 64 MiB of the file.** `run_check` refuses a
+  sum over bytes of the file (`Coverage::over`) past `CAP_BYTES`, so the
+  CRC-32 of a zip entry stored as it is, past 64 MiB, is not checked. It
+  could be summed a window at a time, as `gather_run` reads.
+- **Runs that keep the 64 MiB limit.** A run read through a copy:
+  an xz stream (part 8 lays it out in steps), a run in a stitched space or
+  in an edited stretch, and a run in a source with too little room for two
+  windows. A joined stream's stored parts and packed parts decoded whole
+  still count against `whole_cap` (part 10).
 
 ## Open questions
 
 - Should `TooLarge` be split, so that the listing can say whether the
   compressed run or the output is too large? With this design the compressed
   limit is 512 MiB, and the output limits are 64 MiB for a run held whole and
-  1 GiB for an indexed run. One phrase cannot say all three.
+  1 GiB for an indexed run. One phrase cannot say all three. Part 7c gave
+  the 512 MiB limit a refusal of its own, `too-large-input`; `too-large`
+  still says both a copy past 64 MiB compressed and a run held whole past
+  64 MiB of output.
 - Is the length check in `join_lazily` worth a walk across goes, or should a
   part of the wrong length show as a failed read when it is read?
 - Should gathering report a percentage, and with what string?
