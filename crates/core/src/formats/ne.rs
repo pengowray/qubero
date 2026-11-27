@@ -94,7 +94,7 @@ pub fn ne() -> Template {
         ("ne_header_offset", T::u32(Little)),
         ("dos_stub", T::bytes(E::field("ne_header_offset").sub(E::lit(64)))),
     ]);
-    let dos = T::structure("DOSHeader", dos_fields);
+    let dos = T::structure("DOSHeader", dos_fields).positions(&["relocation_table", "ne_header_offset"]);
 
     Template::new("ne", T::structure("NE", vec![("dos", dos), ("ne", header())]))
 }
@@ -664,5 +664,10 @@ mod tests {
         let d = Document::new(MemSource(sample()));
         let mut ev = Evaluator::new(ne());
         assert_eq!(ev.node(&d, &[1, 35, 0, 0, 1]).unwrap().value, Value::Str("WIN".into()));
+    }
+
+    #[test]
+    fn the_dos_header_offsets_are_positions() {
+        crate::machinery::assert_marks(&ne(), "DOSHeader", &["ne_header_offset", "relocation_table"], &["relocation_count"]);
     }
 }

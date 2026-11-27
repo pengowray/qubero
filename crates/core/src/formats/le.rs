@@ -106,7 +106,7 @@ pub fn le() -> Template {
         ("header_offset", T::u32(Little)),
         ("dos_stub", T::bytes(E::field("header_offset").sub(E::lit(64)))),
     ]);
-    let dos = T::structure("DOSHeader", dos_fields);
+    let dos = T::structure("DOSHeader", dos_fields).positions(&["relocation_table", "header_offset"]);
 
     Template::new(
         "le",
@@ -222,6 +222,18 @@ fn header(kind: Kind) -> T {
             ),
         ],
     )
+    .positions(&[
+        "iterated_data_offset",
+        "resource_table_offset",
+        "entry_table_offset",
+        "directives_offset",
+        "fixup_page_table_offset",
+        "fixup_record_table_offset",
+        "import_procedure_table_offset",
+        "page_checksum_offset",
+        "data_pages_offset",
+        "debug_offset",
+    ])
 }
 
 /// The twenty bytes that pad the header to 196. A Windows VxD spends four of
@@ -241,7 +253,8 @@ fn tail() -> T {
                     ("device_id", T::u16(Little)),
                     ("ddk_version", T::u16(Little)),
                 ],
-            ),
+            )
+            .positions(&["version_resource_offset"]),
         )],
         T::bytes(E::lit(20)),
     )
@@ -489,5 +502,19 @@ mod tests {
         let first = ev.node(&d, &[EXE, OBJECTS, 0, 0, 6, 0]).unwrap();
         assert_eq!(first.size_bits, 0);
         assert_eq!(ev.node(&d, &[EXE, OBJECTS, 0, 0, 6, 1, 0]).unwrap().child_count, 4);
+    }
+
+    /// The table offsets in the header are positions, counted from the start
+    /// of the header or of the file, and the counts and sizes beside them are
+    /// not. A page's offset in an LX counts in units of the page shift, and
+    /// is not one.
+    #[test]
+    fn the_header_table_offsets_are_positions() {
+        let t = le();
+        crate::machinery::assert_marks(&t, "DOSHeader", &["header_offset", "relocation_table"], &["relocation_count"]);
+        crate::machinery::assert_marks(&t, "LXHeader", &["data_pages_offset", "debug_offset", "fixup_record_table_offset", "entry_table_offset"], &["debug_size", "page_count"]);
+        crate::machinery::assert_marks(&t, "LEHeader", &["iterated_data_offset", "page_checksum_offset"], &["directive_count"]);
+        crate::machinery::assert_marks(&t, "VxDInfo", &["version_resource_offset"], &["version_resource_size"]);
+        crate::machinery::assert_marks(&t, "PageEntry", &[], &["page_offset"]);
     }
 }

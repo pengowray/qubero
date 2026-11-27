@@ -112,6 +112,7 @@ fn section() -> T {
         ],
     )
     .counted_as("section")
+    .positions(&["relocation_offset", "line_number_offset"])
 }
 
 fn section_data() -> T {
@@ -243,5 +244,10 @@ mod tests {
         );
         assert_eq!(ev.node(&doc, &[11, 0, 0]).unwrap().offset_bits, 60 * 8);
         assert_eq!(ev.node(&doc, &[11, 0, 1, 0]).unwrap().offset_bits, 64 * 8);
+    }
+
+    #[test]
+    fn section_offsets_are_positions() {
+        crate::machinery::assert_marks(&coff(), "Section", &["relocation_offset", "line_number_offset"], &["virtual_address", "relocation_count"]);
     }
 }
