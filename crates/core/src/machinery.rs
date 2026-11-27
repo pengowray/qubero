@@ -119,6 +119,11 @@ pub fn locators(def: &StructDef) -> Vec<bool> {
     for (i, f) in def.fields.iter().enumerate() {
         names.clear();
         ty_positions(&f.ty, &mut names);
+        // Most fields place nothing, and a structure of thousands of fields
+        // asked once per field would otherwise cost the square of that.
+        if names.is_empty() {
+            continue;
+        }
         for (j, g) in def.fields.iter().enumerate().take(i) {
             if names.iter().any(|n| *n == g.name) {
                 out[j] = true;
