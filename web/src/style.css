@@ -1421,7 +1421,7 @@ button.welcome-crystal {
   cursor: pointer;
 }
 .tp-line.is-field:not(.is-at):hover {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 40%, transparent);
 }
 /* A click that found no such field in the file: the line's fill flashes once
    as the note appears, so the click visibly did something. Kept to a grey
