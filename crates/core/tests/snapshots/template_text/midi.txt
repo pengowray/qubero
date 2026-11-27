@@ -170,130 +170,37 @@ type Chunk (named by id, contents body, line id then body) {
           note: u8be
           velocity: u8be
         }
-        129 => same as case 128
-        130 => same as case 128
-        131 => same as case 128
-        132 => same as case 128
-        133 => same as case 128
-        134 => same as case 128
-        135 => same as case 128
-        136 => same as case 128
-        137 => same as case 128
-        138 => same as case 128
-        139 => same as case 128
-        140 => same as case 128
-        141 => same as case 128
-        142 => same as case 128
-        143 => same as case 128
-        144 => same as case 128
-        145 => same as case 128
-        146 => same as case 128
-        147 => same as case 128
-        148 => same as case 128
-        149 => same as case 128
-        150 => same as case 128
-        151 => same as case 128
-        152 => same as case 128
-        153 => same as case 128
-        154 => same as case 128
-        155 => same as case 128
-        156 => same as case 128
-        157 => same as case 128
-        158 => same as case 128
-        159 => same as case 128
+        129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
+            146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158,
+            159 => same as case 128
         160 => Message {
           note: u8be
           pressure: u8be
         }
-        161 => same as case 160
-        162 => same as case 160
-        163 => same as case 160
-        164 => same as case 160
-        165 => same as case 160
-        166 => same as case 160
-        167 => same as case 160
-        168 => same as case 160
-        169 => same as case 160
-        170 => same as case 160
-        171 => same as case 160
-        172 => same as case 160
-        173 => same as case 160
-        174 => same as case 160
-        175 => same as case 160
+        161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174,
+            175 => same as case 160
         176 => Message {
           controller: u8be
           value: u8be
         }
-        177 => same as case 176
-        178 => same as case 176
-        179 => same as case 176
-        180 => same as case 176
-        181 => same as case 176
-        182 => same as case 176
-        183 => same as case 176
-        184 => same as case 176
-        185 => same as case 176
-        186 => same as case 176
-        187 => same as case 176
-        188 => same as case 176
-        189 => same as case 176
-        190 => same as case 176
-        191 => same as case 176
+        177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
+            191 => same as case 176
         192 => Message {
           program: u8be
         }
-        193 => same as case 192
-        194 => same as case 192
-        195 => same as case 192
-        196 => same as case 192
-        197 => same as case 192
-        198 => same as case 192
-        199 => same as case 192
-        200 => same as case 192
-        201 => same as case 192
-        202 => same as case 192
-        203 => same as case 192
-        204 => same as case 192
-        205 => same as case 192
-        206 => same as case 192
-        207 => same as case 192
+        193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206,
+            207 => same as case 192
         208 => Message {
           pressure: u8be
         }
-        209 => same as case 208
-        210 => same as case 208
-        211 => same as case 208
-        212 => same as case 208
-        213 => same as case 208
-        214 => same as case 208
-        215 => same as case 208
-        216 => same as case 208
-        217 => same as case 208
-        218 => same as case 208
-        219 => same as case 208
-        220 => same as case 208
-        221 => same as case 208
-        222 => same as case 208
-        223 => same as case 208
+        209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222,
+            223 => same as case 208
         224 => Message {
           bend_low: u8be
           bend_high: u8be
         }
-        225 => same as case 224
-        226 => same as case 224
-        227 => same as case 224
-        228 => same as case 224
-        229 => same as case 224
-        230 => same as case 224
-        231 => same as case 224
-        232 => same as case 224
-        233 => same as case 224
-        234 => same as case 224
-        235 => same as case 224
-        236 => same as case 224
-        237 => same as case 224
-        238 => same as case 224
-        239 => same as case 224
+        225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
+            239 => same as case 224
         _ => NoStatus {
           rest_of_track: bytes[remaining]
         }

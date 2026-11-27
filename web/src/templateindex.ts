@@ -56,18 +56,39 @@ export type ByteOrder = "big" | "little";
  *  the arm's first line. */
 type Frame = { contentIndent: number; block: Block | null; arms: Map<string, number> | null };
 
-/** The key an arm's line starts with and what follows its `=>`, or null for a
- *  line that is not an arm. A key in double quotes may hold ` => ` itself. */
-function armOf(trimmed: string): { key: string; rest: string } | null {
-  let end = 0;
-  if (trimmed.startsWith('"')) {
-    end = 1;
-    while (end < trimmed.length && trimmed[end] !== '"') end += trimmed[end] === "\\" ? 2 : 1;
-    end++;
+/** The keys an arm's statement starts with and what follows its `=>`, or null
+ *  for a statement that is not an arm. Several keys are written with commas
+ *  between them, `30, 38, 41 => same as case 29`, and a quoted key may hold a
+ *  comma or ` => ` itself. */
+function armOf(stmt: string): { keys: string[]; rest: string } | null {
+  const keys: string[] = [];
+  let from = 0;
+  let i = 0;
+  while (i < stmt.length) {
+    const c = stmt[i];
+    if (c === '"' || c === "'") {
+      i++;
+      while (i < stmt.length && stmt[i] !== c) i += stmt[i] === "\\" ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (stmt.startsWith(", ", i)) {
+      keys.push(stmt.slice(from, i));
+      i += 2;
+      from = i;
+      continue;
+    }
+    if (stmt.startsWith(" => ", i)) {
+      if (i === from) return null;
+      keys.push(stmt.slice(from, i));
+      return { keys, rest: stmt.slice(i + 4) };
+    }
+    // A key is one word or one quoted string, so a space or a bracket before
+    // the `=>` means this is not an arm.
+    if (c === " " || c === "(" || c === "{" || c === ":") return null;
+    i++;
   }
-  const at = trimmed.indexOf(" => ", end);
-  if (at <= 0) return null;
-  return { key: trimmed.slice(0, at), rest: trimmed.slice(at + 4) };
+  return null;
 }
 
 const SAME_AS = /^same as case (.+?)(?:, but (big|little)-endian)?$/;
@@ -138,6 +159,9 @@ export function indexTemplate(text: string): TemplateIndex {
   /** The statement being read: its first line and kind. */
   let stmt = -1;
   let stmtKind: LineKind = "plain";
+  /** The arms of the choice the statement is an arm of, when it starts at
+   *  that choice's arm indentation. */
+  let stmtArms: Map<string, number> | null = null;
   let topType: { name: string; start: number } | null = null;
 
   const closeTopType = (last: number): void => {
@@ -150,8 +174,7 @@ export function indexTemplate(text: string): TemplateIndex {
     stmtEnd.set(stmt, last);
     const first = stmt;
     stmt = -1;
-    if (stmtKind === "comment" || !ln(last).trimEnd().endsWith("{")) return;
-    const ind = indentOf(ln(first));
+    if (stmtKind === "comment") return;
     // The statement joined back up, remembering where each line starts in it.
     const starts: number[] = [];
     let joined = "";
@@ -160,6 +183,19 @@ export function indexTemplate(text: string): TemplateIndex {
       starts.push(joined.length);
       joined += ln(i).trim();
     }
+    if (stmtArms !== null) {
+      const arm = armOf(joined);
+      if (arm !== null) {
+        const same = SAME_AS.exec(arm.rest.trimEnd());
+        if (same !== null) {
+          const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
+          sameAs.push({ line: first, target: stmtArms.get(same[1] ?? "") ?? null, order });
+        }
+        for (const k of arm.keys) if (!stmtArms.has(k)) stmtArms.set(k, first);
+      }
+    }
+    if (!ln(last).trimEnd().endsWith("{")) return;
+    const ind = indentOf(ln(first));
     const body = joined.replace(/\{\s*$/, "");
     const o = opener(body);
     let block: Block | null = null;
@@ -216,17 +252,7 @@ export function indexTemplate(text: string): TemplateIndex {
       const name = trimmed.slice(0, trimmed.indexOf(": "));
       if (!top.block.fields.has(name)) top.block.fields.set(name, i);
     } else stmtKind = "plain";
-    if (top?.arms != null && d === top.contentIndent) {
-      const arm = armOf(trimmed);
-      if (arm !== null) {
-        const same = SAME_AS.exec(arm.rest.trimEnd());
-        if (same !== null) {
-          const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
-          sameAs.push({ line: i, target: top.arms.get(same[1] ?? "") ?? null, order });
-        }
-        if (!top.arms.has(arm.key)) top.arms.set(arm.key, i);
-      }
-    }
+    stmtArms = top?.arms != null && d === top.contentIndent ? top.arms : null;
     kinds[i] = stmtKind;
     if (stmtKind !== "comment" && line.trimEnd().endsWith("{")) finish(i);
   }

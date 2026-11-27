@@ -4026,18 +4026,8 @@ type tiff.Jpeg = JPEG {
           }[component_count]
         }
       }
-      0xffc1 => same as case 0xffc0
-      0xffc2 => same as case 0xffc0
-      0xffc3 => same as case 0xffc0
-      0xffc5 => same as case 0xffc0
-      0xffc6 => same as case 0xffc0
-      0xffc7 => same as case 0xffc0
-      0xffc9 => same as case 0xffc0
-      0xffca => same as case 0xffc0
-      0xffcb => same as case 0xffc0
-      0xffcd => same as case 0xffc0
-      0xffce => same as case 0xffc0
-      0xffcf => same as case 0xffc0
+      0xffc1, 0xffc2, 0xffc3, 0xffc5, 0xffc6, 0xffc7, 0xffc9, 0xffca, 0xffcb, 0xffcd, 0xffce,
+          0xffcf => same as case 0xffc0
       0xffc4 => Body (contents contents) {
         length: u16be
         contents: sized(length - 2) repeat(until end) HuffmanTable

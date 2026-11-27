@@ -297,3 +297,45 @@ test("a field read by an arm the same as another lands in that other arm", () =>
   const n = findLine(idx, [node("file", "ELF"), node("table", "Symbol"), node("value", "u32 le")], () => null);
   assert.equal(line(SHORT, n), "      value: u32le");
 });
+
+// A switch whose arms share `same as` lines, one of them folded because its
+// keys do not fit on one line.
+const GROUPED = `template macho
+
+root MachO {
+  kind: u32be
+  command: switch kind {
+    29 => Signature {
+      offset: u32le
+    }
+    30, 38, 41 => same as case 29
+    2 => u8be
+    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36,
+        37, 39, 40 => same as case 29, but big-endian
+    "a, b", 'fmt ' => same as case 29
+    _ => bytes[0]
+  }
+}
+`;
+
+test("a line of several keys is one same-as line, folded or not", () => {
+  const idx = indexTemplate(GROUPED);
+  const text = (n: number | null): string | null => line(GROUPED, n);
+  assert.deepEqual(
+    idx.sameAs.map((s) => [text(s.line)?.trim().slice(0, 10), text(s.target)?.trim(), s.order]),
+    [
+      ["30, 38, 41", "29 => Signature {", null],
+      ["12, 13, 14", "29 => Signature {", "big"],
+      ['"a, b", \'f', "29 => Signature {", null],
+    ],
+  );
+  // The folded line's second half is not a statement of its own.
+  const folded = GROUPED.split("\n").findIndex((l) => l.trimStart().startsWith("37, 39"));
+  assert.equal(idx.stmtEnd.get(folded), undefined);
+});
+
+test("a field read through any key of a shared line is found in the arm it names", () => {
+  const idx = indexTemplate(GROUPED);
+  const n = findLine(idx, [node("file", "MachO"), node("command", "Signature"), node("offset", "u32 be")], () => null);
+  assert.equal(line(GROUPED, n), "      offset: u32le");
+});

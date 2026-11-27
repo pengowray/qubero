@@ -32,7 +32,8 @@
 //! arm         := key "=>" ty                        one arm on each line, or all on one
 //!                                                   line with commas between them
 //!              | "_ =>" ty                          any other value; always the last arm
-//!              | key "=>" same | "_ =>" same
+//!              | key {"," key} "=>" same            every arm whose key is listed
+//!              | "_ =>" same
 //! same        := "same as case" key                 the arm above whose line starts with
 //!                                                   that key is this arm's type too
 //!              | "same as case" key ", but big-endian"
@@ -43,6 +44,10 @@
 //!
 //! A `same as` line points only at an arm written out in full, never at
 //! another `same as` line, and only at an arm that takes more than one line.
+//! Arms that would each be the same `same as` line are one line, with their
+//! keys in the order of the arms, where the first of them would be. When a
+//! choice has a key twice, only arms next to each other share a line, since
+//! the first arm with the key is the one read.
 //! In an arm `but big-endian` points at, every `le` and `be` on something one
 //! byte wide or narrower is as that arm writes it, since that narrow it says
 //! which end of the byte a field is taken from rather than byte order. Such an
@@ -702,25 +707,89 @@ fn line_part(p: &LinePart) -> String {
 ///
 /// A diagram key ([`ty_text`]) writes every arm out, so the keys stay what
 /// they were.
+///
+/// Arms that are the same `same as` line are written as one, with their keys
+/// in the order the arms are in, where the first of them is:
+/// `30, 38, 41 => same as case 29`. Both `switch` and `match` take the first
+/// arm whose key is the value, so the order of the arms matters only when a
+/// key is there twice. In such a choice only arms next to each other are put
+/// on one line. The `_` arm is always last and on its own.
 fn write_choice(out: &mut Vec<String>, ind: usize, head: &str, on: &str, cases: &[(String, &Ty)], default: &Ty, tail: &str) {
     out.push(format!("{}{head}{on} {{", pad(ind)));
     let keyed = WRITING_KEY.with(|k| k.get());
     let mut written: Vec<Written> = Vec::new();
-    let arms = cases.iter().map(|(k, t)| (k.as_str(), *t)).chain(std::iter::once(("_", default)));
-    for (key, ty) in arms {
+    // Each arm's key, and either the lines it is written as or the `same as`
+    // it is.
+    let mut arms: Vec<(&str, Result<Vec<String>, String>)> = Vec::new();
+    for (key, ty) in cases.iter().map(|(k, t)| (k.as_str(), *t)).chain(std::iter::once(("_", default))) {
         if !keyed {
             if let Some(same) = same_as(&mut written, ty) {
-                out.push(format!("{}{key} => {same}", pad(ind + 1)));
+                arms.push((key, Err(same)));
                 continue;
             }
         }
-        let start = out.len();
-        write_ty(out, ind + 1, &format!("{key} => "), ty, "");
-        if out.len() - start > 1 {
+        let mut lines = Vec::new();
+        write_ty(&mut lines, ind + 1, &format!("{key} => "), ty, "");
+        if lines.len() > 1 {
             written.push(Written { key: key.to_string(), ty, big: None, little: None });
+        }
+        arms.push((key, Ok(lines)));
+    }
+    let unique = {
+        let mut keys: Vec<&str> = cases.iter().map(|(k, _)| k.as_str()).collect();
+        keys.sort_unstable();
+        keys.windows(2).all(|w| w[0] != w[1])
+    };
+    // The `_` arm is the last one and is never put with others.
+    let cases_end = arms.len() - 1;
+    let mut done = vec![false; arms.len()];
+    for i in 0..arms.len() {
+        if done[i] {
+            continue;
+        }
+        match &arms[i].1 {
+            Ok(lines) => out.extend(lines.iter().cloned()),
+            Err(same) => {
+                let mut keys = vec![arms[i].0];
+                if i < cases_end {
+                    for j in i + 1..cases_end {
+                        if done[j] {
+                            continue;
+                        }
+                        if arms[j].1.as_ref().err() == Some(same) {
+                            keys.push(arms[j].0);
+                            done[j] = true;
+                        } else if !unique {
+                            break;
+                        }
+                    }
+                }
+                write_keys(out, ind + 1, &keys, &format!(" => {same}"));
+            }
         }
     }
     out.push(format!("{}}}{tail}", pad(ind)));
+}
+
+/// Keys with commas between them and then `tail`, folded between keys the way
+/// [`wrap_line`] folds any line, four spaces further in. `tail` stays whole on
+/// the last line, so `=> same as case 128` is never broken.
+fn write_keys(out: &mut Vec<String>, ind: usize, keys: &[&str], tail: &str) {
+    let mut line = pad(ind);
+    let mut empty = true;
+    for (n, key) in keys.iter().enumerate() {
+        let piece = if n + 1 == keys.len() { format!("{key}{tail}") } else { format!("{key},") };
+        if !empty && line.chars().count() + 1 + piece.chars().count() > WIDTH {
+            out.push(std::mem::replace(&mut line, format!("{}    ", pad(ind))));
+            empty = true;
+        }
+        if !empty {
+            line.push(' ');
+        }
+        line.push_str(&piece);
+        empty = false;
+    }
+    out.push(line);
 }
 
 /// An arm of a choice that was written out in full, and the same type set to
@@ -2327,6 +2396,52 @@ mod tests {
         // little-endian.
         let text = choice(vec![(1, arm(Endian::Big)), (2, arm(Endian::Little))]);
         assert!(!text.contains("same as"), "{text}");
+    }
+
+    /// Arms that are the same `same as` line share one, in key order, where
+    /// the first of them is, even with another arm between them.
+    #[test]
+    fn arms_the_same_as_one_arm_share_a_line() {
+        let text = choice(vec![
+            (1, header(Endian::Little, 32)),
+            (2, header(Endian::Little, 32)),
+            (3, header(Endian::Big, 32)),
+            (4, header(Endian::Little, 32)),
+            (5, header(Endian::Big, 32)),
+        ]);
+        assert!(text.contains("\n    2, 4 => same as case 1\n    3, 5 => same as case 1, but big-endian\n    _ => bytes[0]\n"), "{text}");
+        // The `_` arm stays last and on its own line.
+        let root = Ty::switch(E::field("kind"), vec![(1, header(Endian::Big, 32)), (2, header(Endian::Big, 32))], header(Endian::Big, 32));
+        let text = render(&Template::new("demo", Ty::structure("File", vec![("kind", Ty::u8()), ("header", root)])));
+        assert!(text.contains("\n    2 => same as case 1\n    _ => same as case 1\n"), "{text}");
+    }
+
+    /// A key that is there twice makes the order of the arms count, so only
+    /// arms next to each other share a line.
+    #[test]
+    fn a_choice_with_a_key_twice_keeps_its_arms_in_order() {
+        let text = choice(vec![
+            (1, header(Endian::Little, 32)),
+            (2, header(Endian::Little, 32)),
+            (3, header(Endian::Little, 32)),
+            (4, Ty::u8()),
+            (2, header(Endian::Little, 32)),
+        ]);
+        assert!(text.contains("\n    2, 3 => same as case 1\n    4 => u8be\n    2 => same as case 1\n"), "{text}");
+    }
+
+    /// A list of keys too long for one line is folded the way any long line
+    /// is, four spaces in, between keys, and never inside the `same as`.
+    #[test]
+    fn a_long_list_of_keys_is_folded() {
+        let arms: Vec<(i128, Ty)> = (0..40).map(|k| (10 + k, header(Endian::Little, 32))).collect();
+        let text = choice(arms);
+        let at = text.find("    11, 12, 13").expect("one line of keys");
+        let lines: Vec<&str> = text[at..].lines().take_while(|l| !l.trim_start().starts_with('_')).collect();
+        assert!(lines.len() > 1, "{text}");
+        assert!(lines.iter().all(|l| l.chars().count() <= WIDTH), "{text}");
+        assert!(lines[1].starts_with("        "), "{text}");
+        assert!(lines.last().is_some_and(|l| l.ends_with("49 => same as case 10")), "{text}");
     }
 
     #[test]
