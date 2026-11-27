@@ -28,6 +28,12 @@ pub const EACH: u8 = 2;
 /// types. A template that names a type as itself would otherwise never end.
 const NAMED_DEPTH: u32 = 16;
 
+/// How many structures built while the file is read are kept before they are
+/// all dropped. Some are built once per node, such as one `Symbol` for every
+/// symbol of a traced deflate stream, and keeping each one would hold every
+/// one of them for as long as the reading lasts.
+const BUILT_CAP: usize = 4096;
+
 struct Marks {
     /// Held so that the key, the address of this structure, cannot be reused
     /// by another structure while the entry is here.
@@ -39,6 +45,10 @@ struct Marks {
     /// [`super::consumers`] for this structure, worked out the first time a
     /// node read asks.
     consumers: Option<Box<[Option<usize>]>>,
+    /// Whether the walk of the whole template reached this structure. The
+    /// others were built while the file was read, and are dropped in bulk
+    /// past [`BUILT_CAP`].
+    kept: bool,
 }
 
 /// The positions in one template's structures. See the module note.
@@ -46,6 +56,8 @@ struct Marks {
 pub struct Positions {
     by_def: FxHashMap<usize, Marks>,
     filled: bool,
+    /// How many entries the walk of the whole template made.
+    kept: usize,
 }
 
 fn key(def: &Arc<StructDef>) -> usize {
@@ -65,13 +77,17 @@ impl Positions {
             return;
         }
         self.filled = true;
-        let mut w = Walk { t, p: self, scope: Vec::new(), placers: Vec::new() };
+        let mut w = Walk { t, p: self, scope: Vec::new(), placers: Vec::new(), named: Default::default() };
         w.ty(&t.root, 0);
         let mut names: Vec<&String> = t.types.keys().collect();
         names.sort();
         for n in names {
             w.ty(&t.types[n], 0);
         }
+        for m in self.by_def.values_mut() {
+            m.kept = true;
+        }
+        self.kept = self.by_def.len();
     }
 
     /// [`AT`] and [`EACH`] for field `i` of `def`.
@@ -89,7 +105,10 @@ impl Positions {
     fn ensure(&mut self, t: &Template, def: &Arc<StructDef>) -> &mut Marks {
         self.fill(t);
         if !self.by_def.get(&key(def)).is_some_and(|m| m.walked) {
-            let mut w = Walk { t, p: self, scope: Vec::new(), placers: Vec::new() };
+            if self.by_def.len() > self.kept + BUILT_CAP {
+                self.by_def.retain(|_, m| m.kept);
+            }
+            let mut w = Walk { t, p: self, scope: Vec::new(), placers: Vec::new(), named: Default::default() };
             w.def(def);
         }
         self.by_def.get_mut(&key(def)).expect("walked")
@@ -101,6 +120,7 @@ impl Positions {
             flags: vec![0; def.fields.len()].into_boxed_slice(),
             walked: false,
             consumers: None,
+            kept: false,
         })
     }
 
@@ -265,6 +285,9 @@ struct Walk<'a, 'p> {
     /// offsets from, innermost last, for a gather that starts at
     /// [`Step::Placer`].
     placers: Vec<Vec<&'a Ty>>,
+    /// The named types this walk has gone into already. Everything under one
+    /// is walked the first time, so going in again finds nothing new.
+    named: rustc_hash::FxHashSet<&'a str>,
 }
 
 impl<'a> Walk<'a, '_> {
@@ -276,7 +299,7 @@ impl<'a> Walk<'a, '_> {
                     self.def(s);
                 }
             }
-            Ty::Named(n) if depth < NAMED_DEPTH => {
+            Ty::Named(n) if depth < NAMED_DEPTH && self.named.insert(&**n) => {
                 if let Some(inner) = self.t.types.get(&**n) {
                     self.ty(inner, depth + 1);
                 }
@@ -521,6 +544,25 @@ fn deep<'a>(t: &'a Template, ty: &'a Ty, name: &str, seen: &mut Vec<usize>, out:
                 deep(t, &f.ty, name, seen, out);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::template::{Endian::Big, Expr as E, Ty as T};
+
+    /// A structure built for every node read, the way a traced stream builds
+    /// one per symbol, is not kept for the whole reading.
+    #[test]
+    fn structures_built_while_reading_are_not_all_kept() {
+        let t = Template::new("t", T::structure("Root", vec![("n", T::u8())]));
+        let mut p = Positions::of(&t);
+        for _ in 0..3 * BUILT_CAP {
+            let Ty::Struct(s) = T::structure("Built", vec![("at", T::u32(Big)), ("x", T::at(E::field("at"), T::u8()))]) else { panic!() };
+            assert_eq!(p.flags(&t, &s, 0), AT);
+        }
+        assert!(p.by_def.len() <= p.kept + BUILT_CAP + 1, "{}", p.by_def.len());
     }
 }
 

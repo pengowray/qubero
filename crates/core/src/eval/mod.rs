@@ -1484,8 +1484,10 @@ impl Evaluator {
     /// structure out once.
     fn in_parent(&self, path: &[usize]) -> (Option<usize>, Option<bool>, bool, bool) {
         let Some((&last, parent)) = path.split_last() else { return (None, None, false, false) };
-        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else {
-            return (None, None, false, self.each_locates(parent));
+        let s = match self.memo.get(parent).map(|r| &r.ty) {
+            Some(Ty::Struct(s)) => s,
+            Some(Ty::Array { .. } | Ty::Repeat { .. }) => return (None, None, false, self.each_locates(parent)),
+            _ => return (None, None, false, false),
         };
         let name = s.fields.get(last).map(|f| &f.name);
         let contents = match (&s.contents, name) {
@@ -1497,13 +1499,12 @@ impl Evaluator {
         (p.consumer(&self.template, s, last), machinery::hint(s, last), contents, locates)
     }
 
-    /// Whether every element of the list at `list` is a position: the list is
+    /// Whether every element of the list at `list`, which is an `Array` or a
+    /// `Repeat`, is a position: the list is
     /// a field of a structure, or what an `At` in one points at, and that
     /// field is marked [`machinery::EACH`].
+    #[inline(never)]
     fn each_locates(&self, list: &[usize]) -> bool {
-        if !matches!(self.memo.get(list).map(|r| &r.ty), Some(Ty::Array { .. } | Ty::Repeat { .. })) {
-            return false;
-        }
         let mut field = list;
         loop {
             let Some((&i, parent)) = field.split_last() else { return false };
