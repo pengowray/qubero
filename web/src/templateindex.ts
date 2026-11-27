@@ -311,6 +311,70 @@ function inOrder(said: string, order: ByteOrder): string {
   return said.replace(/(\d+)(le|be)(?![a-z0-9])/g, (m: string, bits: string) => (Number(bits) > 8 ? bits + to : m));
 }
 
+/** The byte orders of the numbers wider than a byte in some type text, first
+ *  one first: `u32be` and a node's `u32 be` are big, `u8le` is none. */
+function wideOrders(said: string): ByteOrder[] {
+  const out: ByteOrder[] = [];
+  for (const m of said.matchAll(/(\d+) ?(le|be)(?![a-z0-9])/g)) {
+    if (Number(m[1]) > 8) out.push(m[2] === "be" ? "big" : "little");
+  }
+  return out;
+}
+
+/** What a field's line says its type is: the text after the field's name. */
+function typeText(index: TemplateIndex, line: number): string {
+  const l = index.lines[line] ?? "";
+  const at = l.indexOf(": ");
+  return at < 0 ? "" : l.slice(at + 2);
+}
+
+/**
+ * The byte order a field was read in, when that is not the order its line
+ * writes: the field was read through a `same as ..., but little-endian` line
+ * (an arm's or a type's) that points at the arm or type the line is in.
+ * Null when the line is in no such arm or type, when it writes no number wider
+ * than a byte, or when the order it was read in is the one it writes.
+ *
+ * The order it was read in comes from the node's own type (`u32 le`) or,
+ * when that names no byte order (an enumeration's name), from the types of
+ * the other fields of the same structure, which `siblings` is asked for only
+ * then. A field whose type and line differ
+ * in byte order can only have been read through such a line, and such a line
+ * sets every number in the arm to one order, so one of them is enough.
+ */
+export function readAs(
+  index: TemplateIndex,
+  line: number,
+  node: { name: string; type: string },
+  siblings: () => readonly { name: string; type: string }[],
+): ByteOrder | null {
+  const reached = index.sameAs.some((s) => {
+    if (s.order === null || s.target === null) return false;
+    const [a, z] = fieldSpan(index, s.target);
+    return line >= a && line <= z;
+  });
+  if (!reached) return null;
+  const written = wideOrders(typeText(index, line));
+  if (written.length === 0) return null;
+  const differs = (c: { type: string }, at: number): ByteOrder | null => {
+    const was = wideOrders(c.type)[0];
+    const says = wideOrders(typeText(index, at))[0];
+    return was !== undefined && says !== undefined && was !== says ? was : null;
+  };
+  let read: ByteOrder | null = null;
+  if (wideOrders(node.type).length > 0) read = differs(node, line);
+  else {
+    // Asked for only here, since they may not have been read yet.
+    const block = index.blocks.find((b) => b.fields.get(node.name) === line);
+    for (const c of siblings()) {
+      const at = block?.fields.get(c.name);
+      read = at === undefined ? null : differs(c, at);
+      if (read !== null) break;
+    }
+  }
+  return read !== null && written.some((w) => w !== read) ? read : null;
+}
+
 /** The lines a field covers: its own statement and every line nested under it. */
 export function fieldSpan(index: TemplateIndex, line: number): readonly [number, number] {
   const d = indentOf(index.lines[line] ?? "");
@@ -424,9 +488,18 @@ export function findLine(
   chain: readonly ChainNode[],
   children: (depth: number) => readonly { name: string; type: string }[] | null,
 ): number | null {
+  return findLineAt(index, chain, children)?.line ?? null;
+}
+
+/** [`findLine`]'s line, and the place in `chain` of the node it declares. */
+export function findLineAt(
+  index: TemplateIndex,
+  chain: readonly ChainNode[],
+  children: (depth: number) => readonly { name: string; type: string }[] | null,
+): { line: number; depth: number } | null {
   const head = chain[0];
   if (head === undefined) return null;
-  let line: number | null = null;
+  let found: { line: number; depth: number } | null = null;
   let scope: [number, number][] = [];
   let blocks: readonly Block[] = index.root !== null && index.root.name === head.type ? [index.root] : blocksNamed(index, head.type, []);
   for (let i = 1; i < chain.length; i++) {
@@ -439,16 +512,16 @@ export function findLine(
       if (having.length > 1) {
         const kids = children(i - 1);
         chosen = kids === null ? null : bestFit(index, having, kids);
-        if (chosen === null) return line;
+        if (chosen === null) return found;
       }
       if (chosen !== null) {
-        line = chosen.fields.get(n.name)!;
-        scope = scopeOf(index, line);
+        found = { line: chosen.fields.get(n.name)!, depth: i };
+        scope = scopeOf(index, found.line);
       }
     }
     blocks = blocksNamed(index, n.type, scope);
   }
-  return line;
+  return found;
 }
 
 /** A run of a line with one colour. `cls` is empty for plain text. */

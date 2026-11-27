@@ -5054,4 +5054,8 @@ export const SIDEBAR = {
   atCursor: "At cursor",
   template: "Template",
   noTemplate: "No template for this file.",
+  /** At the end of the Template tab's marked line, when the field was read
+   *  through a `same as ..., but big-endian` line and its numbers are in the
+   *  other byte order from the one the marked line writes. */
+  readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
 } as const;
