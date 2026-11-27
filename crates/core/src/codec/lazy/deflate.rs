@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use super::input::RunInput;
 use super::seekable::{seekable, Kind};
-use super::{wrapper, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
+use super::{wrapper, Checkpoint, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
-use crate::codec::inflate::{self, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, note_head, BlockStart, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
 /// A deflate, zlib or gzip run's index pass, done a step at a time: each
@@ -22,6 +22,8 @@ use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES}
 pub(super) struct DeflatePass {
     codec: Codec,
     packed: Arc<Vec<u8>>,
+    /// Where the index reads the run from once it is made.
+    input: RunInput,
     framing: Framing,
     limits: Limits,
     pub(super) phase: Phase,
@@ -55,7 +57,7 @@ impl DeflatePass {
     /// [`DeflatePass::known_large`] does. The trailer gives the size modulo
     /// 4 GiB, so a size past the cap there is past it in fact; a trailer that
     /// is wrong about it fails the check at the end either way.
-    pub(super) fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<DeflatePass, Refusal> {
+    pub(super) fn new(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<DeflatePass, Refusal> {
         let wrapper = wrapper(codec).ok_or(Refusal::Failed)?;
         if packed.len() > CAP_BYTES {
             return Err(Refusal::TooLarge);
@@ -66,12 +68,12 @@ impl DeflatePass {
             trace.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
         let mut sink = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
-        sink.marks = Some(Checkpoints::new(limits.spacing, limits.checkpoints));
+        sink.marks = Some(Checkpoints::new(&limits));
         sink.blocks = Some(BlockMarks::new(limits.block_marks));
         sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
         sink.mid_block = true;
         let phase = Phase::Whole { sink, trace, from: None };
-        let pass = DeflatePass { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
+        let pass = DeflatePass { codec, packed, input, framing, limits, phase, furthest: 0, most: 0 };
         let says = match pass.packed.len().checked_sub(4) {
             Some(at) if wrapper == Wrapper::Gzip => u32::from_le_bytes(pass.packed[at..].try_into().expect("four bytes")),
             _ => 0,
@@ -90,7 +92,7 @@ impl DeflatePass {
     pub(super) fn known_large(mut self) -> DeflatePass {
         if matches!(self.phase, Phase::Whole { from: None, .. }) {
             let mut sink = WindowSink::new(Vec::new(), 0, self.limits.lazy, true);
-            sink.marks = Some(Checkpoints::new(self.limits.spacing, self.limits.checkpoints));
+            sink.marks = Some(Checkpoints::new(&self.limits));
             sink.blocks = Some(BlockMarks::new(self.limits.block_marks));
             sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
             sink.mid_block = true;
@@ -169,6 +171,9 @@ impl DeflatePass {
                         self.phase = self.past_the_cap(sink);
                         Ok(Stepped::Working)
                     }
+                    // The pass's trace goes on to the end of a block when
+                    // it turns coarse.
+                    Ok(Ended::Coarse(_)) => Err(Refusal::Failed),
                     Err(other) => Err(other),
                 }
             }
@@ -182,6 +187,7 @@ impl DeflatePass {
                         Ok(Stepped::Working)
                     }
                     Ok(Ended::Stream(blocks_end)) => self.finish(sink, blocks_end).map(Stepped::Done),
+                    Ok(Ended::Coarse(_)) => Err(Refusal::Failed),
                     Err(Refusal::TooLarge) => Err(Refusal::TooLargeLazy),
                     Err(other) => Err(other),
                 }
@@ -222,8 +228,9 @@ impl DeflatePass {
         if !inflate::trailer_agrees(&self.framing, &self.packed[self.framing.trailer()], len, || sums.crc, || sums.adler) {
             return Err(Refusal::Failed);
         }
-        let checkpoints = sink.marks.take().expect("set when the pass started").list;
-        let mut s = seekable(self.codec, RunInput::held(self.packed.clone()), Kind::Deflate(self.framing), len, checkpoints, self.limits);
+        let mut checkpoints = sink.marks.take().expect("set when the pass started").list;
+        self.copy_heads(&mut checkpoints);
+        let mut s = seekable(self.codec, self.input.clone(), Kind::Deflate(self.framing), len, checkpoints, self.limits);
         s.blocks = sink.blocks.take().expect("set when the pass started");
         s.blocks_end = blocks_end;
         s.crc32 = Some(sums.crc);
@@ -232,14 +239,37 @@ impl DeflatePass {
     }
 }
 
-/// Where each block starts, as a bit of the run and a byte of the output,
-/// recorded by the index pass. Holds every block's start until there are more
-/// than `max`, and from then on the start of every `stride`th block. Block 0's
-/// start is always kept.
+impl DeflatePass {
+    /// Give each checkpoint inside a block a copy of the block's header and
+    /// tables, which a decode starting there reads again, so that it need
+    /// not read the run as far back as the block's start. The checkpoints
+    /// inside one block share one copy.
+    fn copy_heads(&self, checkpoints: &mut [Checkpoint]) {
+        let mut last: Option<(u64, Arc<[u8]>)> = None;
+        for c in checkpoints {
+            let Start::Deflate { block: Some(h), head, .. } = &mut c.start else { continue };
+            let copy = match &last {
+                Some((at, copy)) if *at == *h => copy.clone(),
+                _ => {
+                    let from = (*h / 8) as usize;
+                    let copy: Arc<[u8]> = self.packed[from..(from + MAX_HEAD_BYTES).min(self.packed.len())].into();
+                    last = Some((*h, copy.clone()));
+                    copy
+                }
+            };
+            *head = Some(copy);
+        }
+    }
+}
+
+/// Where each block starts, as a bit of the run and a byte of the output, and
+/// what its header says, recorded by the index pass. Holds every block's
+/// start until there are more than `max`, and from then on the start of every
+/// `stride`th block. Block 0's start is always kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BlockMarks {
     /// The start of blocks 0, `stride`, 2 × `stride` and so on.
-    pub(super) list: Vec<(u64, u64)>,
+    pub(super) list: Vec<BlockStart>,
     /// How many blocks have started, kept or not.
     pub(super) count: u64,
     pub(super) stride: u64,
@@ -257,7 +287,7 @@ impl BlockMarks {
     /// blocks whose number is a multiple of the stride.
     fn record(&mut self, in_bit: u64, out: u64) {
         if self.count % self.stride == 0 {
-            self.list.push((in_bit, out));
+            self.list.push(BlockStart::new(in_bit, out));
             if self.list.len() > self.max {
                 let mut i = 0;
                 self.list.retain(|_| {
@@ -396,7 +426,7 @@ impl Sink for WindowSink {
             let keep = (WINDOW as u64).min(out) as usize;
             let window = &self.hist[self.hist.len() - keep..];
             let blocks = self.blocks.as_ref().map_or(0, |b| b.count);
-            marks.offer(in_bit, out, || Start::Deflate { block, blocks, window: window.into() });
+            marks.offer(in_bit, in_bit, out, || Start::Deflate { block, head: None, blocks, window: window.into() });
         }
         // After the checkpoint, so that a step ending here takes the one a
         // pass in one go would have taken, and the step after does not take
@@ -414,5 +444,14 @@ impl Sink for WindowSink {
             blocks.record(in_bit, out);
         }
         ControlFlow::Continue(())
+    }
+
+    /// Kept with the block's start, when it is kept. A step carrying on
+    /// inside a block reads its header again, and records the same.
+    #[inline]
+    fn head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if let Some(blocks) = &mut self.blocks {
+            note_head(&mut blocks.list, in_bit, last, btype);
+        }
     }
 }

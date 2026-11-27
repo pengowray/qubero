@@ -230,6 +230,8 @@ impl Measuring {
                 self.from = Some(sink.stopped.ok_or(Refusal::Failed)?);
                 Ok(Measured::Working)
             }
+            // A trace that is off never turns coarse.
+            Ended::Coarse(_) => Err(Refusal::Failed),
         }
     }
 
@@ -550,6 +552,67 @@ pub(crate) trait Sink {
     fn boundary(&mut self, _in_bit: u64, _block: Option<u64>) -> ControlFlow<()> {
         ControlFlow::Continue(())
     }
+
+    /// The block whose header starts at bit `in_bit` says whether it is the
+    /// last and how it is coded, which the decoder has just read: called for
+    /// every block, a block a decode starts inside of included, after
+    /// [`Sink::boundary`] was told of its start.
+    #[inline]
+    fn head(&mut self, _in_bit: u64, _last: bool, _btype: u32) {}
+}
+
+/// Where a deflate block starts, as a bit of the run and a byte of the
+/// output, and the BFINAL and BTYPE its header gives, once the decoder has
+/// read them. What a list of blocks needs to say what each is without
+/// reading the run again.
+///
+/// The two take the top three bits of the word that holds the bit, which no
+/// run's bit reaches: a trace counts a run's bits in 32 (`RawStep`), and an
+/// indexed run is at most 512 MiB, 2^32 bits. So a start is 16 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlockStart {
+    word: u64,
+    /// How many bytes of output come before the block.
+    pub(crate) out: u64,
+}
+
+impl BlockStart {
+    const BITS: u64 = (1 << 61) - 1;
+
+    /// A block that starts at bit `in_bit` of the run, after `out` bytes of
+    /// output, whose header has not been read yet.
+    pub(crate) fn new(in_bit: u64, out: u64) -> BlockStart {
+        debug_assert!(in_bit <= BlockStart::BITS);
+        BlockStart { word: in_bit, out }
+    }
+
+    /// The bit of the run the block's header starts at.
+    #[inline]
+    pub(crate) fn bit(self) -> u64 {
+        self.word & BlockStart::BITS
+    }
+
+    /// Whether the block says it is the last, and how it is coded: 0 for a
+    /// stored block, 1 for fixed codes and 2 for codes of its own.
+    pub(crate) fn head(self) -> (bool, u32) {
+        (self.word >> 63 == 1, ((self.word >> 61) & 3) as u32)
+    }
+
+    /// Record what the block's header says, when the header is this
+    /// block's.
+    fn set_head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if self.bit() == in_bit {
+            self.word = in_bit | u64::from(last) << 63 | (u64::from(btype) & 3) << 61;
+        }
+    }
+}
+
+/// Record what a block's header says on the last of `starts`, when that is
+/// the block whose header starts at bit `in_bit`.
+pub(crate) fn note_head(starts: &mut [BlockStart], in_bit: u64, last: bool, btype: u32) {
+    if let Some(s) = starts.last_mut() {
+        s.set_head(in_bit, last, btype);
+    }
 }
 
 /// Every byte of the output in one vector, up to `cap`.
@@ -616,9 +679,8 @@ pub(crate) struct CountSink {
     pub(crate) len: u64,
     pub(crate) cap: u64,
     pub(crate) stop_at: Option<u64>,
-    /// Where each block starts, as the bit of the run and the byte of the
-    /// output, when asked for.
-    pub(crate) starts: Option<Vec<(u64, u64)>>,
+    /// Where each block starts, and what its header says, when asked for.
+    pub(crate) starts: Option<Vec<BlockStart>>,
     pub(crate) stopped: Option<Resume>,
 }
 
@@ -664,9 +726,16 @@ impl Sink for CountSink {
             return ControlFlow::Break(());
         }
         if let (None, Some(starts)) = (block, &mut self.starts) {
-            starts.push((in_bit, self.len));
+            starts.push(BlockStart::new(in_bit, self.len));
         }
         ControlFlow::Continue(())
+    }
+
+    #[inline]
+    fn head(&mut self, in_bit: u64, last: bool, btype: u32) {
+        if let Some(starts) = &mut self.starts {
+            note_head(starts, in_bit, last, btype);
+        }
     }
 }
 
@@ -688,6 +757,20 @@ pub(crate) enum Ended {
     Stream(u64),
     /// The sink said to stop, at the bit this gives.
     Stopped(u64),
+    /// The trace turned coarse inside a block, at the bit this gives, and the
+    /// builder said to stop there ([`TraceBuilder::stopping_when_coarse`]).
+    /// Its last step is the opaque one over the block's codes, and the block
+    /// is left open, for the caller to close where it knows the block ends.
+    Coarse(u64),
+}
+
+/// Why a block's codes stopped before its end of block code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// The sink said to, between two codes.
+    Sink,
+    /// The trace turned coarse, and its builder stops there.
+    Coarse,
 }
 
 /// How far a decode may read past where it stops: the longest stretch of a
@@ -839,6 +922,7 @@ pub(crate) fn run<K: Sink>(
         let at = bits.pos();
         let btype = bits.read(2)?;
         b.push(at, out.len(), StepKind::Header(StepField::Btype, btype));
+        out.head(block_in, last, btype);
         let (kind, flow) = match btype {
             0 => {
                 // Nothing starts a decode inside a stored block.
@@ -862,13 +946,16 @@ pub(crate) fn run<K: Sink>(
             }
             _ => return Err(Refusal::Failed),
         };
-        if flow.is_break() {
+        if let ControlFlow::Break(stop) = flow {
             let at = bits.pos();
+            b.finish_at(at, out.len());
+            if stop == Stop::Coarse {
+                return Ok(Ended::Coarse(at));
+            }
             // Left open when the decode carrying on will close it.
             if b.paused.is_none() {
                 b.close_block(at, out.len(), kind, false);
             }
-            b.finish_at(at, out.len());
             return Ok(Ended::Stopped(at));
         }
         b.close_block(bits.pos(), out.len(), kind, last);
@@ -876,22 +963,29 @@ pub(crate) fn run<K: Sink>(
             break;
         }
     }
+    let blocks_end = bits.pos();
+    stream_tail(b, blocks_end, end, out.len());
+    Ok(Ended::Stream(blocks_end))
+}
+
+/// The steps after a stream's last block, which ends at bit `blocks_end`,
+/// with `out` bytes of output, and where the trace ends: bit `end`, the end
+/// of the run the decode was given, or the byte after the last block when
+/// that is further.
+pub(crate) fn stream_tail(b: &mut TraceBuilder, blocks_end: u64, end: u64, out: u64) {
     // The bits between the last block and the byte boundary, which the format
     // does not use and a decoder reads past.
-    let at = bits.pos();
-    let blocks_end = at;
-    let skipped = bits.align();
-    if skipped > 0 {
-        b.push(at, out.len(), StepKind::Header(StepField::Padding, 0));
+    let aligned = blocks_end.div_ceil(8) * 8;
+    if aligned > blocks_end {
+        b.push(blocks_end, out, StepKind::Header(StepField::Padding, 0));
     }
     // Anything after the stream inside the run the template named. A zlib
     // trailer arrives here as its own step; anything else is bytes nobody
     // claimed, and saying so is better than pretending the run ended early.
-    if bits.pos() < end {
-        b.push(bits.pos(), out.len(), StepKind::Opaque);
+    if aligned < end {
+        b.push(aligned, out, StepKind::Opaque);
     }
-    b.finish_at(end.max(bits.pos()), out.len());
-    Ok(Ended::Stream(blocks_end))
+    b.finish_at(end.max(aligned), out);
 }
 
 /// Start recording again once a block left open has had its tables read
@@ -1020,7 +1114,8 @@ fn dynamic_tables(bits: &mut LowBits, out_at: u64, b: &mut TraceBuilder) -> Resu
 /// The symbols of one Huffman-coded block, up to and including its end mark.
 /// `block` is the bit the block's header starts at, which is what a sink
 /// keeping places to start again from has to know. `Break` is the sink saying
-/// to stop before the symbol at `bits.pos()`.
+/// to stop before the symbol at `bits.pos()`, or the trace turning coarse
+/// there, for a builder that stops when it does.
 ///
 /// `paused` is where the block's symbols started, for a decode carrying on
 /// part-way through them into a trace that already has the ones before.
@@ -1034,7 +1129,7 @@ fn symbols<K: Sink>(
     dist: &Code,
     coarse: &mut bool,
     paused: Option<Paused>,
-) -> Result<ControlFlow<()>, Refusal> {
+) -> Result<ControlFlow<Stop>, Refusal> {
     let (sym_start, sym_in, sym_out) = match paused {
         Some(p) => (p.first_step, p.in_bits, p.out_bytes),
         None => (b.steps(), bits.pos(), out.len()),
@@ -1052,13 +1147,16 @@ fn symbols<K: Sink>(
             b.coarsen();
             b.truncate(sym_start);
             b.push(sym_in, sym_out, StepKind::Opaque);
+            if b.stops_when_coarse() {
+                return Ok(ControlFlow::Break(Stop::Coarse));
+            }
         }
         let at = bits.pos();
         if out.boundary(at, Some(block)).is_break() {
             if b.is_carried_on() {
                 b.paused = Some(Paused { first_step: sym_start, in_bits: sym_in, out_bytes: sym_out });
             }
-            return Ok(ControlFlow::Break(()));
+            return Ok(ControlFlow::Break(Stop::Sink));
         }
         let sym = lit.decode(bits)?;
         match sym {

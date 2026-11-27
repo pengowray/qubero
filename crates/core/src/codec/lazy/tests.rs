@@ -12,7 +12,21 @@ use crate::codec::{BlockKind, Step, StepField, StepKind};
 /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
 /// than 12 of them, and the cache holds 40 KiB.
 fn small() -> Limits {
-    Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, whole_steps: crate::codec::MAX_STEPS, block_marks: MAX_BLOCK_MARKS, span: 64 << 10, measure: crate::codec::CAP_BYTES as u64 }
+    Limits {
+        whole: 64 << 10,
+        lazy: 4 << 20,
+        spacing: 8 << 10,
+        in_spacing: 8 << 10,
+        checkpoints: 12,
+        span_cache: 40 << 10,
+        span_steps: 1_000_000,
+        whole_steps: crate::codec::MAX_STEPS,
+        block_marks: MAX_BLOCK_MARKS,
+        span: 64 << 10,
+        measure: crate::codec::CAP_BYTES as u64,
+        unit_input: 16 << 20,
+        span_input: 16 << 20,
+    }
 }
 
 fn rand_from(mut seed: u64) -> impl FnMut() -> u64 {
@@ -642,6 +656,94 @@ fn a_run_of_empty_blocks_under_the_cap_comes_back_whole_in_steps_of_bits() {
     }
 }
 
+/// Noise that no encoder can pack.
+fn noise(len: usize, seed: u64) -> Vec<u8> {
+    let mut rand = rand_from(seed);
+    (0..len).map(|_| rand() as u8).collect()
+}
+
+/// A checkpoint is due by the run's input as well as by the output, so a
+/// span's input is bounded however little the span makes: 160,000 empty
+/// fixed blocks, which make nothing, stored blocks, and noise packed as well
+/// as an encoder can, each over 200 KB of input. With room for every
+/// checkpoint, no span reads more than the input spacing and the longest
+/// stretch no checkpoint can be put inside, a stored block. A byte is never
+/// read from a span of no output, and such a span's trace names its bits as
+/// the whole trace does.
+#[test]
+fn checkpoints_are_taken_by_input_as_well_as_output() {
+    let data = mixed(100_000, 109);
+    let noise = noise(300_000, 113);
+    let limits = Limits { checkpoints: 1000, ..small() };
+    let stored = inflate::DEFLATE_MARGIN as u64 * 8;
+    let runs = [
+        ("empty blocks", deflate_around(&[&data[..50_000], &data[50_000..]], &empty_blocks(160_000)), &data),
+        ("stored blocks", miniz_oxide::deflate::compress_to_vec(&noise, 0), &noise),
+        ("noise", miniz_oxide::deflate::compress_to_vec(&noise, 9), &noise),
+    ];
+    for (what, raw, out) in runs {
+        assert!(raw.len() > 200_000, "{what}: {} bytes", raw.len());
+        let s = indexed(Codec::Deflate, &raw, limits);
+        let by_output = indexed(Codec::Deflate, &raw, Limits { in_spacing: u64::MAX, ..limits });
+        // A stored block is never stopped in, so its spans are its blocks
+        // either way, and noise packs to about as much as it comes to.
+        let more = if what == "empty blocks" { 10 } else { 0 };
+        assert!(s.spans() >= by_output.spans() + more, "{what}: {} spans, {} by the output alone", s.spans(), by_output.spans());
+        let marks = s.marks();
+        let ends = marks.iter().skip(1).map(|m| m.0).chain([raw.len() as u64 * 8]);
+        for (k, (m, end)) in marks.iter().zip(ends).enumerate() {
+            assert!(end - m.0 <= limits.in_spacing * 8 + stored, "{what}: span {k} reads {} bits", end - m.0);
+        }
+        reads_back(&s, out, 127);
+        for (k, m) in marks.iter().enumerate() {
+            if m.1 < s.len() {
+                let holding = s.span_of_byte(m.1).expect("a span holds it");
+                assert!(s.span_bytes(holding).contains(&m.1), "{what}: byte {} of span {k} read from span {holding}", m.1);
+            }
+        }
+        let (_, whole) = crate::codec::decode_traced(Codec::Deflate, &raw).expect("decodes whole");
+        let mut empty = 0;
+        for k in (0..s.spans()).filter(|&k| s.span_bytes(k).is_empty()) {
+            empty += 1;
+            let t = s.span_trace(k).expect("traces");
+            t.check_tiles().unwrap_or_else(|e| panic!("{what}: span {k}: {e}"));
+            let end = marks.get(k + 1).map_or(raw.len() as u64 * 8, |m| m.0);
+            for bit in (marks[k].0..end).step_by(((end - marks[k].0) / 30).max(1) as usize) {
+                assert_eq!(t.map_in(bit), whole.map_in(bit), "{what}: span {k}, bit {bit}");
+                assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{what}: span {k}, bit {bit}");
+            }
+        }
+        assert_eq!(empty > 10, what == "empty blocks", "{what}: {empty} spans of no output");
+    }
+}
+
+/// Thinning doubles both spacings, and a checkpoint is then due by either
+/// at twice the distance. A place offered twice is kept once.
+#[test]
+fn thinning_doubles_both_spacings() {
+    let limits = Limits { spacing: 100, in_spacing: 10, checkpoints: 4, ..small() };
+    let mut marks = Checkpoints::new(&limits);
+    let unit = || Start::Unit(0);
+    // A checkpoint every 100 bytes of output, at one byte of input each.
+    for i in 0..5u64 {
+        marks.offer(i * 8, i * 8, i * 100, unit);
+        marks.offer(i * 8, i * 8, i * 100, unit);
+    }
+    let kept = |m: &Checkpoints| m.list.iter().map(|c| (c.in_bit, c.out)).collect::<Vec<_>>();
+    assert_eq!(kept(&marks), [(0, 0), (16, 200), (32, 400)]);
+    assert_eq!((marks.spacing, marks.in_spacing), (200, 160));
+    // By the output, the next is due 200 bytes on; by the input, 20 bytes on.
+    marks.offer(40, 40, 599, unit);
+    marks.offer(32 + 159, 32 + 159, 400, unit);
+    assert_eq!(kept(&marks).len(), 3);
+    marks.offer(32 + 160, 32 + 160, 400, unit);
+    assert_eq!(kept(&marks).last(), Some(&(192, 400)));
+    // The fifth, thinned out with every second one, the first kept.
+    marks.offer(200, 200, 600, unit);
+    assert_eq!(kept(&marks), [(0, 0), (32, 400), (200, 600)]);
+    assert_eq!((marks.spacing, marks.in_spacing), (400, 320));
+}
+
 /// A pass told the run is large starts with the trace off and comes to the
 /// same index as one that found out at the cap; one told so of a run
 /// under the cap indexes it all the same. A gzip run's trailer tells it.
@@ -961,12 +1063,17 @@ fn a_run_of_empty_zstd_frames_is_indexed_in_many_steps() {
     ]
     .concat();
     let packed = Arc::new(packed);
+    // Room for every checkpoint, the ones the empty frames' input makes
+    // included, so that none is thinned out and the one looked for below
+    // is kept.
+    let limits = Limits { checkpoints: 64, ..small() };
     for told in [false, true] {
         let start = || {
-            let pass = Indexing::new(Codec::Zstd, packed.clone(), small()).expect("starts");
+            let pass = Indexing::new(Codec::Zstd, packed.clone(), limits).expect("starts");
             if told { pass.known_large() } else { pass }
         };
         let Ok(Decoded::Indexed(one)) = in_steps(start(), u64::MAX).0 else { panic!("told {told}: not indexed in one go") };
+        assert!(one.marks().windows(2).any(|w| w[0].1 == w[1].1), "told {told}: no span of empty frames alone");
         let skips_at = zstd_of(&data[..20_000], 20_000, false).len() as u64 * 8;
         assert!(one.marks().iter().any(|m| m.0 == skips_at), "told {told}: no checkpoint at the first skippable frame");
         let mut pass = start();
@@ -1413,6 +1520,8 @@ fn a_deflate_span_from_a_window_is_the_span_from_the_whole_run() {
         assert!(s.spans() > 4, "{codec:?}: {} spans", s.spans());
         for k in 0..s.spans() {
             let (code, head) = span_copies(&s, &packed, k);
+            // The checkpoint's own copy of the header is the run's bytes.
+            assert_eq!(s.checkpoints[k].head().map(|(b, at)| (b.to_vec(), at)), head, "{codec:?} span {k}");
             let input = inflate::Input::new(window(&code, &packed), head.as_ref().map(|h| window(h, &packed)));
             let want = s.span_bytes(k);
             let mut bytes = vec![0u8; (want.end - want.start) as usize];
@@ -1457,12 +1566,12 @@ fn deflate_blocks_from_a_window_are_the_blocks_from_the_whole_run() {
         let b = s.block(i).expect("a block");
         let to = if i + 1 < s.blocks() { b.in_bits.end.div_ceil(8) as usize } else { packed.len() };
         let code = copy_of(&packed, (b.in_bits.start / 8) as usize, to);
-        let t = s.block_trace_from(i, inflate::Input::new(window(&code, &packed), None)).unwrap_or_else(|e| panic!("block {i}: {e:?}"));
+        let t = s.block_trace_from(i, inflate::Input::new(window(&code, &packed), None), true).unwrap_or_else(|e| panic!("block {i}: {e:?}"));
         assert!(shape(&t) == shape(&s.block_trace(i).expect("traces")), "block {i}: the traces differ");
     }
     for g in 0..s.blocks.list.len() {
-        let to = s.blocks.list.get(g + 1).map_or(packed.len(), |m| m.0.div_ceil(8) as usize);
-        let code = copy_of(&packed, (s.blocks.list[g].0 / 8) as usize, to);
+        let to = s.blocks.list.get(g + 1).map_or(packed.len(), |m| m.bit().div_ceil(8) as usize);
+        let code = copy_of(&packed, (s.blocks.list[g].bit() / 8) as usize, to);
         let got = s.group_from(g, inflate::Input::new(window(&code, &packed), None)).expect("found again");
         assert_eq!(got, s.group_from(g, inflate::Input::whole(&packed)).expect("found again"), "group {g}");
     }
@@ -1513,7 +1622,7 @@ fn zstd_walk_in_windows(packed: &[u8], size: usize) -> (Vec<u8>, Trace, [usize; 
             out.extend_from_slice(bytes);
             Ok(())
         };
-        match walk.run(window(&copy, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut sink).expect("walks") {
+        match walk.run(window(&copy, packed), 20_000, 1 << 20, &mut b, &mut |_| Ok(()), &mut sink).expect("walks") {
             Walked::Ended(end) => return (out, zstd_done(b, packed.len(), end), asked),
             Walked::Stopped => (from, to) = (walk.reached(), walk.reached() + size),
             Walked::Needs(need) => {
@@ -1528,7 +1637,7 @@ fn zstd_walk_in_windows(packed: &[u8], size: usize) -> (Vec<u8>, Trace, [usize; 
                 }] += 1;
                 if need.len() > 1 {
                     let short = copy_of(packed, need.start, need.end - 1);
-                    let again = walk.run(window(&short, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut |_| panic!("decoded from a short window"));
+                    let again = walk.run(window(&short, packed), 20_000, 1 << 20, &mut b, &mut |_| Ok(()), &mut |_| panic!("decoded from a short window"));
                     assert_eq!(again, Ok(Walked::Needs(need.clone())));
                 }
                 (from, to) = (need.start, need.end.max(need.start + size));
@@ -1584,7 +1693,7 @@ fn a_zstd_span_from_a_window_is_the_span_from_the_whole_run() {
             let mut bytes = vec![0u8; got.len()];
             s.read(want.start, &mut bytes).expect("reads");
             assert!(got == bytes, "skippable {skippable}, span {k}: the bytes differ");
-            let t = zstd::span_trace(window(&copy, &packed), range, c.out, small().span).expect("traces");
+            let t = zstd::span_trace(window(&copy, &packed), range.start, &[], range, c.out, small().span).expect("traces");
             assert!(shape(&t) == shape(&s.span_trace(k).expect("traces")), "skippable {skippable}, span {k}: the traces differ");
         }
     }
@@ -1631,12 +1740,23 @@ pub(crate) struct Lossy {
     bytes: Vec<u8>,
     chunk: u64,
     pub(crate) held: std::sync::Mutex<std::collections::BTreeSet<u64>>,
+    /// What it says it holds at once, as a store does; it drops nothing to
+    /// keep to it.
+    limit: Option<u64>,
 }
 
 impl Lossy {
-    /// A source that holds none of its chunks yet.
+    /// A source that holds none of its chunks yet, and says it holds any
+    /// read whole.
     pub(crate) fn new(bytes: Vec<u8>, chunk: u64) -> Arc<Lossy> {
-        Arc::new(Lossy { bytes, chunk, held: Default::default() })
+        Arc::new(Lossy { bytes, chunk, held: Default::default(), limit: None })
+    }
+
+    /// The same, saying it holds at most `limit` bytes at once, so that an
+    /// index reading through it is held to the limits on what one read
+    /// gathers.
+    pub(crate) fn keeping(bytes: Vec<u8>, chunk: u64, limit: u64) -> Arc<Lossy> {
+        Arc::new(Lossy { bytes, chunk, held: Default::default(), limit: Some(limit) })
     }
 
     pub(crate) fn feed(&self, missing: &[crate::source::Missing]) {
@@ -1657,6 +1777,10 @@ impl Lossy {
 impl crate::source::Source for Lossy {
     fn len_bytes(&self) -> u64 {
         self.bytes.len() as u64
+    }
+
+    fn resident_limit(&self) -> Option<u64> {
+        self.limit
     }
 
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<crate::source::Missing> {
@@ -1717,7 +1841,7 @@ fn read_waiting(s: &Seekable, lossy: &Lossy, at: u64, out: &mut [u8]) -> Vec<Vec
 #[test]
 fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed() {
     let data = mixed(300_000, 61);
-    let mut inside_blocks = 0;
+    let (mut inside_blocks, mut header_before) = (0, 0);
     for (codec, packed, limits) in [
         (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6), Limits { spacing: 16 << 10, ..small() }),
         (Codec::Zstd, zstd_of(&data, 30_000, true), small()),
@@ -1742,20 +1866,19 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
             assert!(named.windows(2).all(|w| w[0].chunk < w[1].chunk), "{codec:?} span {k}: {named:?}");
             // What is named is the span's own bytes, in the file, past what
             // comes before the run: for deflate from its checkpoint's byte to
-            // the byte of the next one's bit, with the header of the block the
-            // checkpoint is inside; for zstd its frames. An xz read names only
-            // the blocks it decodes, which are inside the span.
-            let mut range = s.span_in(k);
+            // the byte of the next one's bit, and not the header of the block
+            // the checkpoint is inside, which the checkpoint keeps a copy of;
+            // for zstd its frames, without the skippable frame in front of the
+            // first. An xz read names only the blocks it decodes, which are
+            // inside the span.
+            let mut range = if codec == Codec::Zstd { s.frames_in(k) } else { s.span_in(k) };
             if codec == Codec::Zlib {
                 range.end = s.checkpoints.get(k + 1).map_or(packed.len(), |n| n.in_bit.div_ceil(8) as usize);
             }
-            let mut whole = lossy.chunks(run_at + range.start..run_at + range.end);
+            let whole = lossy.chunks(run_at + range.start..run_at + range.end);
             if let (Codec::Zlib, Some(h)) = (codec, s.checkpoints[k].block()) {
                 inside_blocks += 1;
-                let head = (h / 8) as usize;
-                whole.extend(lossy.chunks(run_at + head..run_at + (head + inflate::MAX_HEAD_BYTES).min(packed.len())));
-                whole.sort_by_key(|m| m.chunk);
-                whole.dedup();
+                header_before += (run_at + (h / 8) as usize + inflate::MAX_HEAD_BYTES <= whole[0].chunk as usize * 1024) as usize;
             }
             match codec {
                 Codec::Xz => assert!(named.iter().all(|m| whole.contains(m)), "{codec:?} span {k}: {named:?} is not in {whole:?}"),
@@ -1772,9 +1895,9 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
         assert!(lock(&s.spans).take(k as u64).is_none(), "{codec:?}: span {k} was cached from nothing");
         assert_eq!(xz_decoded(&s, k).unwrap_or(0), 0, "{codec:?}: span {k} was decoded from nothing");
     }
-    // Deflate spans that start inside a block, which read the block's header
-    // from before their own bytes.
-    assert!(inside_blocks > 3, "{inside_blocks} deflate spans start inside a block");
+    // Deflate spans that start inside a block, some of them chunks past the
+    // block's header, which they read from the checkpoint's copy.
+    assert!(inside_blocks > 3 && header_before > 0, "{inside_blocks} deflate spans start inside a block, {header_before} chunks past its header");
 }
 
 /// An xz span read part of the way keeps what it decoded when a later read
@@ -1847,12 +1970,14 @@ fn traces_and_blocks_through_an_input_missing_chunks_wait_for_them() {
     }
     for i in (0..s.blocks()).step_by(5) {
         lossy.drop_all();
-        let (b, asked) = waiting(&lossy, || s.block(i).map_err(missing));
+        // A block reads the run only to find a start that was thinned out
+        // (see `a_block_reads_none_of_the_run`), and its trace always does.
+        let (b, _) = waiting(&lossy, || s.block(i).map_err(missing));
         assert_eq!(b, held.block(i).unwrap(), "block {i}");
-        named += asked;
         lossy.drop_all();
-        let (t, _) = waiting(&lossy, || s.block_trace(i).map_err(missing));
+        let (t, asked) = waiting(&lossy, || s.block_trace(i).map_err(missing));
         assert!(shape(&t) == shape(&held.block_trace(i).unwrap()), "block {i}");
+        named += asked;
         let mid = (b.in_bits.start + b.in_bits.end) / 2;
         lossy.drop_all();
         assert_eq!(waiting(&lossy, || s.block_of_bit(mid)).0, Some(i), "bit {mid}");
@@ -1863,4 +1988,354 @@ fn traces_and_blocks_through_an_input_missing_chunks_wait_for_them() {
         assert_eq!(waiting(&lossy, || s.map_out(byte)).0, held.map_out(byte).unwrap(), "byte {byte}");
     }
     assert!(named > 10, "only {named} reads named chunks");
+}
+
+/// A skippable zstd frame of `len` bytes of noise.
+fn skippable_frame(len: usize, seed: u64) -> Vec<u8> {
+    [&0x184d_2a50u32.to_le_bytes()[..], &(len as u32).to_le_bytes(), &noise(len, seed)].concat()
+}
+
+/// Limits under which a frame or block of 32 KiB of input or more is large,
+/// and the frames or blocks of a span of small ones take less than twice
+/// that.
+fn by_input() -> Limits {
+    Limits { spacing: 64 << 10, in_spacing: 32 << 10, checkpoints: 64, span: 1 << 20, ..small() }
+}
+
+/// A zstd run of small frames and a large one, with long skippable frames in
+/// front of one frame and after the last: the large frame is a span of its
+/// own, the long skippable frames start a span, and those at the end are a
+/// span of no output. No other span's frames take twice the input spacing,
+/// and every span reads back and traces as the whole run does.
+fn frames_large_and_small() -> (Vec<u8>, std::ops::Range<usize>, [usize; 2]) {
+    let text = mixed(240_000, 131);
+    let parts = [
+        zstd_of(&text[..120_000], 10_000, true),
+        zstd_of(&noise(100_000, 137), 100_000, true),
+        zstd_of(&text[120_000..180_000], 10_000, false),
+        skippable_frame(100_000, 139),
+        zstd_of(&text[180_000..], 10_000, true),
+        skippable_frame(40_000, 149),
+    ];
+    let at = |i: usize| parts[..i].iter().map(Vec::len).sum::<usize>();
+    // The large frame without the skippable frame in front of it, where the
+    // long skippable frame starts, and where those at the end do.
+    (parts.concat(), at(1) + 12..at(2), [at(3), at(5)])
+}
+
+#[test]
+fn a_large_zstd_frame_is_a_span_of_its_own() {
+    let (packed, frame, [skip, tail]) = frames_large_and_small();
+    let s = indexed(Codec::Zstd, &packed, by_input());
+    let starts: Vec<usize> = s.marks().iter().map(|m| (m.0 / 8) as usize).collect();
+    for at in [frame.start - 12, frame.end, skip, tail] {
+        assert!(starts.contains(&at), "no checkpoint at byte {at}: {starts:?}");
+    }
+    let k = s.span_of_bit(frame.start as u64 * 8).expect("a span");
+    assert_eq!(s.frames_in(k), frame, "the large frame's span");
+    let last = s.spans() - 1;
+    assert_eq!((s.span_bytes(last).is_empty(), s.frames_in(last).len(), s.span_in(last).start), (true, 0, tail), "the skippable frames at the end");
+    for k in 0..s.spans() {
+        let n = s.frames_in(k).len();
+        assert!(n < 2 * (32 << 10) || s.frames_in(k) == frame, "span {k}'s frames take {n} bytes");
+    }
+    let (bytes, whole) = crate::codec::decode_traced(Codec::Zstd, &packed).expect("decodes whole");
+    reads_back(&s, &bytes, 151);
+    traces_agree(&s, &whole, 157);
+    // The pass in steps, and told the run is large, comes to the same.
+    for told in [false, true] {
+        let pass = Indexing::new(Codec::Zstd, Arc::new(packed.clone()), by_input()).expect("starts");
+        let pass = if told { pass.known_large() } else { pass };
+        let Ok(Decoded::Indexed(ours)) = in_steps_of(pass, 3000, 8 * 2000).0 else { panic!("told {told}: not indexed") };
+        assert_eq!(ours.marks(), s.marks(), "told {told}");
+    }
+}
+
+/// A read of a zstd span's bytes reads its frames and none of the skippable
+/// frames in front of them, however long; the span's trace reads a piece of
+/// them and their headers. Both name only those chunks.
+#[test]
+fn a_zstd_span_read_skips_the_skippable_frames_in_front() {
+    let (packed, _, [skip, _]) = frames_large_and_small();
+    let mut s = indexed(Codec::Zstd, &packed, by_input());
+    let held = indexed(Codec::Zstd, &packed, by_input());
+    let k = s.span_of_bit(skip as u64 * 8).expect("a span");
+    assert_eq!(s.span_in(k).start, skip);
+    let frames = s.frames_in(k);
+    assert_eq!(frames.start, skip + 100_008 + 12, "the frame after both skippable frames");
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file, 1024);
+    s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+    let want = s.span_bytes(k);
+    let mut got = vec![0u8; (want.end - want.start) as usize];
+    let asked = read_waiting(&s, &lossy, want.start, &mut got);
+    let mut expect = vec![0u8; got.len()];
+    held.read(want.start, &mut expect).expect("reads");
+    assert!(got == expect);
+    assert_eq!(asked, [lossy.chunks(run_at + frames.start..run_at + frames.end)], "the read names the frames' chunks alone");
+    lossy.drop_all();
+    let mut named = Vec::new();
+    let t = loop {
+        match s.span_trace(k) {
+            Ok(t) => break t,
+            Err(ReadError::Missing(m)) => {
+                assert!(named.len() < 10, "asked {named:?}");
+                lossy.feed(&m);
+                named.extend(m);
+            }
+            Err(ReadError::Refused(why)) => panic!("refused: {why:?}"),
+        }
+    };
+    assert!(shape(&t) == shape(&held.span_trace(k).unwrap()), "the traces differ");
+    let piece = lossy.chunks(run_at + skip..run_at + skip + zstd::FRONT_PIECE);
+    let second = lossy.chunks(run_at + skip + 100_008..run_at + skip + 100_008 + 8);
+    let frames = lossy.chunks(run_at + frames.start..run_at + frames.end);
+    assert!(named.iter().all(|m| piece.contains(m) || second.contains(m) || frames.contains(m)), "the trace read {named:?}");
+}
+
+/// An xz block of the input spacing or more, among small ones, is a span of
+/// its own, and every span reads back and traces as the whole stream does.
+#[test]
+fn a_large_xz_block_is_a_span_of_its_own() {
+    use crate::codec::xz::tests::{pack, wrap};
+    let text = mixed(200_000, 163);
+    let mut data: Vec<Vec<u8>> = text.chunks(10_000).map(<[u8]>::to_vec).collect();
+    data.insert(8, noise(60_000, 167));
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.iter().map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.clone())).collect();
+    let packed = wrap(&blocks, true);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let large = l.blocks[8].at..l.blocks[9].at;
+    assert!(large.len() > 60_000 && (0..l.blocks.len()).filter(|&i| i != 8).all(|i| l.block_len(i) < 32 << 10));
+    let s = indexed(Codec::Xz, &packed, by_input());
+    let k = s.span_of_bit(large.start as u64 * 8).expect("a span");
+    assert_eq!(s.span_in(k), large, "the large block's span");
+    assert_eq!(s.span_units(k, &l), 8..9);
+    for k in 0..s.spans() {
+        let n = s.span_in(k).len();
+        assert!(n < 2 * (32 << 10) + 1024 || s.span_in(k) == large, "span {k} takes {n} bytes");
+    }
+    let (bytes, whole) = crate::codec::decode_traced(Codec::Xz, &packed).expect("decodes whole");
+    reads_back(&s, &bytes, 173);
+    traces_agree(&s, &whole, 179);
+}
+
+/// The pass keeps what each kept block start's header says, so a block of an
+/// index reads none of the run: through an input holding none of it, every
+/// block is the block the whole trace has. Once block starts are thinned
+/// out, only a block whose start or end was dropped reads the run, to find
+/// it again.
+#[test]
+fn a_block_reads_none_of_the_run() {
+    let data = mixed(300_000, 199);
+    let packed = flushed(&data, 6, 3000);
+    let (_, whole) = crate::codec::decode_traced(Codec::Deflate, &packed).expect("decodes whole");
+    let mut kinds = [0usize; 3];
+    for limits in [small(), Limits { block_marks: 4, ..small() }] {
+        let mut s = indexed(Codec::Deflate, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        s.set_input(RunInput::new(Lossy::new(file, 1024), run_at as u64, packed.len() as u64));
+        let stride = s.blocks.stride;
+        let kept = |i: u64| i % stride == 0 || i == s.blocks();
+        for (i, want) in whole.blocks().iter().enumerate() {
+            let i = i as u64;
+            match s.block(i) {
+                Ok(got) => {
+                    assert!(kept(i) && kept(i + 1), "block {i} of every {stride} kept");
+                    assert_eq!((got.kind, got.last, &got.in_bits, &got.out_bytes), (want.kind, want.last, &want.in_bits, &want.out_bytes), "block {i}");
+                    kinds[match got.kind {
+                        BlockKind::Stored => 0,
+                        BlockKind::Fixed => 1,
+                        _ => 2,
+                    }] += 1;
+                }
+                Err(ReadError::Missing(_)) => assert!(!kept(i) || !kept(i + 1), "block {i} of every {stride} kept read the run"),
+                Err(ReadError::Refused(why)) => panic!("block {i}: refused: {why:?}"),
+            }
+        }
+    }
+    assert!(kinds[0] > 0 && kinds[2] > 0, "stored, fixed and dynamic blocks: {kinds:?}");
+}
+
+/// A block of more codes than a block's trace may hold is decoded only until
+/// its trace turns coarse: the opaque step then runs on to the block's end,
+/// which the index knows, and the trace is the one a decode to the block's
+/// end makes, the last block's padding and what follows it included. The
+/// block is read only as far as the codes before that point can reach, and
+/// for a long block that is well short of its end.
+#[test]
+fn a_block_trace_stops_where_it_turns_coarse() {
+    let data = mixed(300_000, 211);
+    let limits = Limits { span_steps: 200, ..small() };
+    let reach = inflate::MAX_HEAD_BYTES + 200 * 6;
+    let (mut coarse, mut short) = (0, 0);
+    for (codec, packed) in [(Codec::Deflate, flushed(&data, 6, 6000)), (Codec::Gzip, gzip_of(&data, 6)), (Codec::Zlib, wrapped(Codec::Zlib, &fixed_only(&data), &data))] {
+        let held = indexed(codec, &packed, limits);
+        let mut s = indexed(codec, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::new(file, 1024);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        for i in 0..s.blocks() {
+            let b = held.block(i).expect("a block");
+            let to_the_end = held.block_trace_from(i, inflate::Input::whole(&packed), false).expect("traces");
+            lossy.drop_all();
+            let mut named = Vec::new();
+            let t = loop {
+                match s.block_trace(i) {
+                    Ok(t) => break t,
+                    Err(ReadError::Missing(m)) => {
+                        lossy.feed(&m);
+                        named.extend(m);
+                    }
+                    Err(ReadError::Refused(why)) => panic!("{codec:?} block {i}: refused: {why:?}"),
+                }
+            };
+            assert!(shape(&t) == shape(&to_the_end), "{codec:?} block {i}: the traces differ");
+            t.check_tiles().unwrap_or_else(|e| panic!("{codec:?} block {i}: {e}"));
+            if to_the_end.coarse() {
+                coarse += 1;
+                let from = run_at + (b.in_bits.start / 8) as usize;
+                assert!(named.iter().all(|m| (m.chunk as usize * 1024) < from + reach), "{codec:?} block {i}: read {named:?} from byte {from}");
+                short += ((b.in_bits.end / 8) as usize + run_at > from + reach + 2048) as usize;
+            }
+        }
+    }
+    assert!(coarse > 10 && short > 5, "{coarse} coarse blocks, {short} of them read well short of their end");
+}
+
+/// A run in a file read from a store that keeps `limit` bytes at once, with
+/// all of the file's chunks loaded.
+fn from_a_store(packed: &[u8], limit: u64) -> RunInput {
+    let (file, run_at) = in_a_file(packed);
+    let n = file.len();
+    let lossy = Lossy::keeping(file, 1024, limit);
+    lossy.feed(&lossy.chunks(0..n));
+    RunInput::new(lossy, run_at as u64, packed.len() as u64)
+}
+
+/// A zstd frame or an xz block whose input passes the limit on one, which a
+/// read of its span reads whole, is refused as too large when the run is
+/// read from a store that keeps only part of the file: in one pass, in steps
+/// and told the run is large. Read from a copy in memory, the same run
+/// indexes and reads back as before, and so does one that is held whole.
+#[test]
+fn a_frame_or_block_too_large_to_read_at_once_is_refused_only_from_a_store() {
+    let limits = Limits { unit_input: 80_000, ..by_input() };
+    let (frames, large, _) = frames_large_and_small();
+    assert!(large.len() > 100_000);
+    let text = mixed(200_000, 163);
+    let mut data: Vec<Vec<u8>> = text.chunks(10_000).map(<[u8]>::to_vec).collect();
+    data.insert(8, noise(100_000, 167));
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.iter().map(|c| (crate::codec::xz::tests::pack(c, 3, 0, 2, 1 << 16, None), c.clone())).collect();
+    let stream = crate::codec::xz::tests::wrap(&blocks, true);
+    for (codec, packed) in [(Codec::Zstd, &frames), (Codec::Xz, &stream)] {
+        let refused = decode_or_index_through(codec, Arc::new(packed.clone()), from_a_store(packed, 32 << 20), limits);
+        assert_eq!(refused.err(), Some(Refusal::TooLarge), "{codec:?}");
+        let s = indexed(codec, packed, limits);
+        let (bytes, _) = crate::codec::decode_traced(codec, packed).expect("decodes whole");
+        reads_back(&s, &bytes, 181);
+        let whole = Limits { whole: 1 << 20, ..limits };
+        let held = decode_or_index_through(codec, Arc::new(packed.clone()), from_a_store(packed, 32 << 20), whole);
+        assert!(matches!(held, Ok(Decoded::Whole(..))), "{codec:?}: a run held whole has no span to read");
+    }
+    for told in [false, true] {
+        let pass = Indexing::through(Codec::Zstd, Arc::new(frames.clone()), from_a_store(&frames, 32 << 20), limits).expect("starts");
+        let pass = if told { pass.known_large() } else { pass };
+        assert_eq!(in_steps_of(pass, 3000, 8 * 2000).0.err(), Some(Refusal::TooLarge), "told {told}");
+    }
+}
+
+/// A zstd or xz span that thinning has made larger than one read may gather
+/// is refused when its bytes or its trace are read from a store that keeps
+/// only part of the file, before anything is read. An xz read gathers a
+/// block at a time instead, so it reads the span's bytes all the same, and
+/// no answer names more chunks than the limit covers. A span under the limit
+/// reads, and from a copy in memory every span does.
+#[test]
+fn a_span_past_what_one_read_may_gather_is_refused_from_a_store() {
+    let text = mixed(400_000, 191);
+    let thinned = Limits { spacing: 16 << 10, in_spacing: 16 << 10, checkpoints: 6, ..small() };
+    for (codec, packed) in [(Codec::Zstd, zstd_of(&text, 10_000, true)), (Codec::Xz, xz_of(&text, 10_000))] {
+        // The limit on one read does not change where the spans are, so it
+        // is set to put about half of them over it.
+        let s = indexed(codec, &packed, thinned);
+        let mut sizes: Vec<usize> = (0..s.spans()).map(|k| if codec == Codec::Zstd { s.frames_in(k).len() } else { s.span_in(k).len() }).collect();
+        sizes.sort_unstable();
+        let limits = Limits { span_input: sizes[sizes.len() / 2], ..thinned };
+        let held = indexed(codec, &packed, limits);
+        reads_back(&held, &text, 193);
+        let mut s = indexed(codec, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::keeping(file, 1024, 32 << 20);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        let (mut over, mut under) = (0, 0);
+        for k in 0..s.spans() {
+            let want = s.span_bytes(k);
+            let gathers = match codec {
+                Codec::Zstd => s.frames_in(k).len(),
+                _ => s.span_in(k).len(),
+            };
+            lossy.drop_all();
+            let mut got = vec![0u8; (want.end - want.start) as usize];
+            if gathers > limits.span_input {
+                over += 1;
+                assert_eq!(s.span_trace(k).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                if codec == Codec::Zstd {
+                    assert_eq!(s.read(want.start, &mut got).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                    continue;
+                }
+            } else {
+                under += 1;
+                let t = loop {
+                    match s.span_trace(k) {
+                        Ok(t) => break t,
+                        Err(ReadError::Missing(m)) => lossy.feed(&m),
+                        Err(ReadError::Refused(why)) => panic!("{codec:?} span {k}: refused: {why:?}"),
+                    }
+                };
+                assert!(shape(&t) == shape(&held.span_trace(k).unwrap()), "{codec:?} span {k}");
+                lossy.drop_all();
+            }
+            let asked = read_waiting(&s, &lossy, want.start, &mut got);
+            assert!(got == text[want.start as usize..want.end as usize], "{codec:?} span {k}");
+            for named in &asked {
+                assert!(named.len() <= limits.span_input / 1024 + 2, "{codec:?} span {k}: {} chunks named at once", named.len());
+            }
+        }
+        assert!(over > 0 && under > 0, "{codec:?}: {over} spans over the limit, {under} under it");
+    }
+}
+
+/// A stretch between two kept deflate block starts longer than the limit on
+/// one read, which only a run of more blocks than are kept has, is refused
+/// when the blocks in it are looked for from a store that keeps only part of
+/// the file. Read from a copy in memory, they are found as before.
+#[test]
+fn a_long_stretch_between_kept_block_starts_is_refused_from_a_store() {
+    let data = mixed(300_000, 197);
+    let packed = flushed(&data, 1, 2000);
+    let limits = Limits { block_marks: 4, unit_input: 20_000, ..small() };
+    let held = indexed(Codec::Deflate, &packed, limits);
+    let mut s = indexed(Codec::Deflate, &packed, limits);
+    s.set_input(from_a_store(&packed, 32 << 20));
+    let stride = s.blocks.stride;
+    let stretch = |g: usize| s.blocks.list.get(g + 1).map_or(packed.len() as u64 * 8, |m| m.bit()).div_ceil(8) - s.blocks.list[g].bit() / 8;
+    let (mut over, mut under) = (0, 0);
+    for g in 0..s.blocks.list.len() {
+        let i = g as u64 * stride + 1;
+        if i >= s.blocks() {
+            continue;
+        }
+        match stretch(g) > 20_000 {
+            true => {
+                over += 1;
+                assert_eq!(s.block(i).err(), Some(ReadError::Refused(Refusal::TooLarge)), "block {i}");
+            }
+            false => {
+                under += 1;
+                assert_eq!(s.block(i), held.block(i), "block {i}");
+            }
+        }
+        assert!(held.block(i).is_ok(), "block {i}");
+    }
+    assert!(over > 0, "{over} stretches over the limit, {under} under it");
 }

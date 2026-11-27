@@ -48,6 +48,23 @@ impl RunInput {
         self.len == 0
     }
 
+    /// The most bytes the source the run is read from holds at once, when it
+    /// holds only part of the file, as the browser's chunk store does. Only
+    /// then is a read of the run held to [`Limits::unit_input`] and
+    /// [`Limits::span_input`]: a copy held in memory answers any read whole.
+    ///
+    /// [`Limits::unit_input`]: super::Limits::unit_input
+    /// [`Limits::span_input`]: super::Limits::span_input
+    pub fn resident_limit(&self) -> Option<u64> {
+        self.source.resident_limit()
+    }
+
+    /// Whether a read of `bytes` of the run at once is more than `limit`
+    /// allows, which it can be only when the source has a resident limit.
+    pub(super) fn too_much(&self, bytes: usize, limit: usize) -> bool {
+        bytes > limit && self.resident_limit().is_some()
+    }
+
     /// Bytes `at..at + out.len()` of the run, or every chunk of the source
     /// the read is missing, all at once. On a miss `out` holds zeroes where
     /// the missing chunks are. Bytes past the run's end are not read, and

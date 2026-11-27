@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::deflate::{BlockMarks, WindowSink};
 use super::input::{refused_as_none, Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
-use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
+use crate::codec::inflate::{self, BlockStart, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
+use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, Window};
 use crate::source::Missing;
 
 /// A compressed run that comes to more than can be held whole, read through
@@ -52,7 +52,7 @@ pub struct Seekable {
     traced: Mutex<Option<(usize, Arc<Trace>)>>,
     /// Block starts found again by decoding: one list for each kept start,
     /// keyed by that start's place in `blocks.list`.
-    groups: Mutex<Recent<Arc<[(u64, u64)]>>>,
+    groups: Mutex<Recent<Arc<[BlockStart]>>>,
     block_traces: Mutex<Recent<Arc<Trace>>>,
 }
 
@@ -212,7 +212,13 @@ impl Seekable {
             let dst = &mut out[to..to + take];
             match &self.kind {
                 // Decoded only as far as this read reaches.
-                Kind::Xz(l) => super::xz::read_span_through(&self.prefixes, &self.input, l, self.span_units(k, l), k, from, dst)?,
+                Kind::Xz(l) => {
+                    let most = match self.input.resident_limit() {
+                        Some(_) => self.limits.span_input,
+                        None => usize::MAX,
+                    };
+                    super::xz::read_span_through(&self.prefixes, &self.input, l, self.span_units(k, l), k, from, dst, most)?
+                }
                 _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
             }
             pos += take as u64;
@@ -225,6 +231,25 @@ impl Seekable {
     pub(super) fn span_in(&self, k: usize) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |c| (c.in_bit / 8) as usize);
         (self.checkpoints[k].in_bit / 8) as usize..end
+    }
+
+    /// The bytes of the run zstd span `k`'s frames take: from where its first
+    /// frame starts itself, past the skippable frames in front of it, to the
+    /// next checkpoint. What a read of its bytes reads.
+    pub(super) fn frames_in(&self, k: usize) -> std::ops::Range<usize> {
+        let range = self.span_in(k);
+        self.checkpoints[k].own().unwrap_or(range.start).min(range.end)..range.end
+    }
+
+    /// Refused as [`Refusal::TooLarge`] when a span read would gather more
+    /// than [`Limits::span_input`] of the run at once from a source that
+    /// keeps only part of the file. Only thinning makes a zstd or xz span
+    /// that large; a deflate span never is.
+    fn at_once(&self, bytes: usize) -> Result<(), Refusal> {
+        match self.input.too_much(bytes, self.limits.span_input) {
+            true => Err(Refusal::TooLarge),
+            false => Ok(()),
+        }
     }
 
     /// The xz blocks span `k` holds, as numbers in the stream's index.
@@ -260,7 +285,8 @@ impl Seekable {
                 self.deflate_span(k, copies.input(self.input.len()))?
             }
             Kind::Zstd => {
-                let (range, out) = (self.span_in(k), self.checkpoints[k].out);
+                let (range, out) = (self.frames_in(k), self.checkpoints[k].out);
+                self.at_once(range.len())?;
                 let copy = self.input.copy(range.clone())?;
                 super::zstd::decode_span(copy.window(self.input.len()), range, out, want, self.limits.span)?
             }
@@ -273,16 +299,15 @@ impl Seekable {
     }
 
     /// What a decode or a trace of deflate span `k` reads, copied through
-    /// the run's input, all of it or none: from the byte its checkpoint's bit
-    /// is in to the byte holding the bit before the next checkpoint's (or to
-    /// the run's end, for the last span), and the header of the block the
-    /// checkpoint is inside, [`MAX_HEAD_BYTES`] of it.
-    fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies, Vec<Missing>> {
+    /// the run's input: from the byte its checkpoint's bit is in to the byte
+    /// holding the bit before the next checkpoint's (or to the run's end, for
+    /// the last span). The header of the block the checkpoint is inside is
+    /// the checkpoint's own copy.
+    fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies<'_>, Vec<Missing>> {
         let c = &self.checkpoints[k];
         let to = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |n| n.in_bit.div_ceil(8) as usize);
-        let head = c.block().map(|h| (h / 8) as usize..(h / 8) as usize + MAX_HEAD_BYTES);
-        let [code, head] = self.input.copies([Some((c.in_bit / 8) as usize..to), head])?;
-        Ok(DeflateCopies { code: code.expect("asked for"), head })
+        let code = self.input.copy((c.in_bit / 8) as usize..to)?;
+        Ok(DeflateCopies { code, head: c.head() })
     }
 
     /// Deflate span `k`, decoded from `input`: from checkpoint `k`'s bit to
@@ -333,12 +358,19 @@ impl Seekable {
         let t = Arc::new(match &self.kind {
             Kind::Deflate(_) => self.deflate_span_trace(k, self.deflate_span_copies(k)?.input(len))?,
             Kind::Zstd => {
-                let range = self.span_in(k);
-                let copy = self.input.copy(range.clone())?;
-                super::zstd::span_trace(copy.window(len), range, c.out, self.limits.span)?
+                // The skippable frames in front of the span's first frame are
+                // read a header at a time, and their first piece with the
+                // frames, so that a span behind a short one reads at once.
+                let (front, frames) = (self.span_in(k).start, self.frames_in(k));
+                self.at_once(frames.len())?;
+                let first = (front < frames.start).then(|| front..frames.start.min(front + super::zstd::FRONT_PIECE));
+                let [copy, first] = self.input.copies([Some(frames.clone()), first])?;
+                let skips = super::zstd::skippable_starts(&self.input, front, frames.start, first)?;
+                super::zstd::span_trace(copy.expect("asked for").window(len), front, &skips, frames, c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
                 let range = self.span_in(k);
+                self.at_once(range.len())?;
                 let copy = self.input.copy(range.clone())?;
                 super::xz::span_trace(copy.window(len), l, k, range, self.span_units(k, l), c.out)?
             }
@@ -415,23 +447,24 @@ impl Seekable {
     /// Block `i`: where it is in the run and in the output, how it is coded
     /// and whether it says it is the last. Its `steps` are empty; they are in
     /// [`Seekable::block_trace`].
+    ///
+    /// The pass kept what each kept start's header says, so this reads none
+    /// of the run, unless block starts were thinned and the start of block
+    /// `i` or `i + 1` is found again by decoding (see [`Seekable::group`]).
     pub fn block(&self, i: u64) -> Result<Block, ReadError> {
-        let (in_start, out_start) = self.block_start(i)?;
+        let start = self.block_start(i)?;
         let (in_end, out_end) = match i + 1 < self.blocks.count {
-            true => self.block_start(i + 1)?,
+            true => self.block_start(i + 1).map(|s| (s.bit(), s.out))?,
             false => (self.blocks_end, self.len),
         };
-        // BFINAL and BTYPE, the first three bits of the block header, low bit
-        // first, read from the run through its input.
-        let head = self.input.copy((in_start / 8) as usize..(in_start + 3).div_ceil(8) as usize)?;
-        let bit = |k: u64| ((k / 8) as usize).checked_sub(head.at).and_then(|i| head.bytes.get(i)).map_or(0, |b| (b >> (k % 8)) & 1);
-        let kind = match bit(in_start + 1) | bit(in_start + 2) << 1 {
+        let (last, btype) = start.head();
+        let kind = match btype {
             0 => BlockKind::Stored,
             1 => BlockKind::Fixed,
             2 => BlockKind::Dynamic,
             _ => return Err(Refusal::Failed.into()),
         };
-        Ok(Block { steps: 0..0, kind, last: bit(in_start) == 1, in_bits: in_start..in_end, out_bytes: out_start..out_end })
+        Ok(Block { steps: 0..0, kind, last, in_bits: start.bit()..in_end, out_bytes: start.out..out_end })
     }
 
     /// The block that bit `bit` of the run belongs to. None for a bit of the
@@ -442,15 +475,15 @@ impl Seekable {
     pub fn block_of_bit(&self, bit: u64) -> Result<Option<u64>, Vec<Missing>> {
         let list = &self.blocks.list;
         match list.first() {
-            Some(first) if bit >= first.0 && bit < self.blocks_end => {}
+            Some(first) if bit >= first.bit() && bit < self.blocks_end => {}
             _ => return Ok(None),
         }
-        let g = list.partition_point(|m| m.0 <= bit) - 1;
+        let g = list.partition_point(|m| m.bit() <= bit) - 1;
         if self.blocks.stride == 1 {
             return Ok(Some(g as u64));
         }
         let Some(starts) = refused_as_none(self.group(g))? else { return Ok(None) };
-        Ok(Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.0 <= bit) as u64 - 1))
+        Ok(Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.bit() <= bit) as u64 - 1))
     }
 
     /// Where the deflate data is inside the run's wrapper. Refused for a zstd
@@ -462,9 +495,8 @@ impl Seekable {
         }
     }
 
-    /// Where block `i` starts: the bit of its header and how much output
-    /// comes before it.
-    fn block_start(&self, i: u64) -> Result<(u64, u64), ReadError> {
+    /// Where block `i` starts, and what its header says.
+    fn block_start(&self, i: u64) -> Result<BlockStart, ReadError> {
         if i >= self.blocks.count {
             return Err(Refusal::Failed.into());
         }
@@ -479,31 +511,38 @@ impl Seekable {
     /// The start of every block from kept start `g` up to the next kept start,
     /// found by decoding from start `g` and counting the output. The run is
     /// read through its input from start `g` to the next kept start, or to
-    /// the run's end.
-    fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, ReadError> {
+    /// the run's end. A stretch past [`Limits::unit_input`] is refused as
+    /// [`Refusal::TooLarge`] when the source keeps only part of the file.
+    fn group(&self, g: usize) -> Result<Arc<[BlockStart]>, ReadError> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
         }
-        let &(in_bit, _) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
-        let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.0.div_ceil(8) as usize);
+        let in_bit = self.blocks.list.get(g).ok_or(Refusal::Failed)?.bit();
+        let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.bit().div_ceil(8) as usize);
+        // Only a hostile run, of more blocks than are kept, has a long
+        // stretch between two kept starts.
+        if self.input.too_much(to - (in_bit / 8) as usize, self.limits.unit_input) {
+            return Err(Refusal::TooLarge.into());
+        }
         let code = self.input.copy((in_bit / 8) as usize..to)?;
-        let starts: Arc<[(u64, u64)]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
+        let starts: Arc<[BlockStart]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
         lock(&self.groups).put(g as u64, starts.clone(), 1);
         Ok(starts)
     }
 
     /// [`Seekable::group`] decoded from `input`, which has to hold the run
     /// from kept start `g` to the next kept start. The list is not cached.
-    pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<(u64, u64)>, Refusal> {
-        let &(in_bit, out) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
-        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.0), starts: Some(Vec::new()), stopped: None };
+    pub(super) fn group_from(&self, g: usize, input: Input<'_>) -> Result<Vec<BlockStart>, Refusal> {
+        let &kept = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
+        let (in_bit, out) = (kept.bit(), kept.out);
+        let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: self.blocks.list.get(g + 1).map(|m| m.bit()), starts: Some(Vec::new()), stopped: None };
         let f = self.framing()?;
         inflate::run(input, f.start, f.end, &mut sink, &mut TraceBuilder::off(), Some(Resume { in_bit, block: None }))?;
         let starts = sink.starts.take().unwrap_or_default();
         // The same decoder read these bits on the index pass, so a different
         // count is the decoder disagreeing with itself.
         let want = self.blocks.stride.min(self.blocks.count - g as u64 * self.blocks.stride);
-        if starts.len() as u64 != want || starts.first() != Some(&(in_bit, out)) {
+        if starts.len() as u64 != want || starts.first() != Some(&kept) {
             return Err(Refusal::Failed);
         }
         Ok(starts)
@@ -517,35 +556,55 @@ impl Seekable {
     ///
     /// In a block of more than [`Limits::span_steps`] codes, the codes are one
     /// opaque step, as they are in a whole run's trace past
-    /// [`crate::codec::MAX_STEPS`].
+    /// [`crate::codec::MAX_STEPS`]. The decode stops where the trace turns
+    /// coarse, and the opaque step runs on to the block's end, which the
+    /// index knows.
     ///
     /// The block is read through the run's input, from its first byte to the
-    /// byte holding its last bit, or to the run's end for the last block.
+    /// byte holding its last bit, or for a Huffman-coded block, as far as
+    /// [`Limits::span_steps`] codes reach at most: [`MAX_HEAD_BYTES`] for its
+    /// header and tables, and 48 bits a code. So under the default limits a
+    /// block's trace reads at most about 6 MB of the run.
     pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, ReadError> {
         if let Some(t) = lock(&self.block_traces).get(i) {
             return Ok(t);
         }
         let block = self.block(i)?;
-        let to = match i + 1 < self.blocks.count {
-            true => block.in_bits.end.div_ceil(8) as usize,
-            false => self.input.len() as usize,
-        };
-        let code = self.input.copy((block.in_bits.start / 8) as usize..to)?;
-        let t = Arc::new(self.block_trace_from(i, Input::new(code.window(self.input.len()), None))?);
+        let from = (block.in_bits.start / 8) as usize;
+        let mut to = block.in_bits.end.div_ceil(8) as usize;
+        if block.kind != BlockKind::Stored {
+            to = to.min(from + MAX_HEAD_BYTES + self.limits.span_steps.saturating_mul(6));
+        }
+        let code = self.input.copy(from..to)?;
+        let t = Arc::new(self.block_trace_from(i, Input::new(code.window(self.input.len()), None), true)?);
         lock(&self.block_traces).put(i, t.clone(), t.len());
         Ok(t)
     }
 
     /// [`Seekable::block_trace`] decoded from `input`, which has to hold
-    /// block `i`. The trace is not cached.
-    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, ReadError> {
+    /// block `i`, or with `stop`, as much of it as is decoded before the
+    /// trace turns coarse. The trace is not cached. Without `stop`, a coarse
+    /// block is decoded to its end, which gives the same trace.
+    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>, stop: bool) -> Result<Trace, ReadError> {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
         let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
         let mut sink = CountSink { len: out, cap: u64::MAX, stop_at: next, starts: None, stopped: None };
         let mut b = TraceBuilder::with_budget(self.limits.span_steps).starting_at(in_bit, out);
+        if stop {
+            b = b.stopping_when_coarse();
+        }
         let f = self.framing()?;
-        inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))?;
+        if let Ended::Coarse(_) = inflate::run(input, f.start, f.end, &mut sink, &mut b, Some(Resume { in_bit, block: None }))? {
+            // What a decode to the block's end would have done: the opaque
+            // step runs to the block's end, and so does the trace, or for the
+            // last block, on to the end of the deflate data.
+            b.close_block(block.in_bits.end, block.out_bytes.end, block.kind, block.last);
+            match next {
+                Some(end) => b.finish_at(end, block.out_bytes.end),
+                None => inflate::stream_tail(&mut b, block.in_bits.end, f.end, block.out_bytes.end),
+            }
+        }
         let t = b.done();
         match t.blocks() {
             [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => Ok(t),
@@ -553,11 +612,13 @@ impl Seekable {
         }
     }
 
-    /// How many bytes the checkpoints' windows, the block starts and the span
-    /// cache hold, for tests and for saying what a run costs.
+    /// How many bytes the checkpoints' windows and header copies, the block
+    /// starts and the span cache hold, for tests and for saying what a run
+    /// costs. Checkpoints inside one block share a header copy, which counts
+    /// for each of them.
     pub fn held_bytes(&self) -> usize {
-        self.checkpoints.iter().map(|c| c.window().len()).sum::<usize>()
-            + self.blocks.list.len() * std::mem::size_of::<(u64, u64)>()
+        self.checkpoints.iter().map(|c| c.window().len() + c.head().map_or(0, |h| h.0.len())).sum::<usize>()
+            + self.blocks.list.len() * std::mem::size_of::<BlockStart>()
             + lock(&self.spans).weight
             + lock(&self.prefixes).weight
     }
@@ -570,19 +631,21 @@ impl Seekable {
     }
 }
 
-/// Copies of what a deflate decode reads, made through the run's input: its
-/// codes, and the header and tables of the block it starts inside, when it
-/// starts inside one.
-struct DeflateCopies {
+/// What a deflate decode reads: its codes, copied through the run's input,
+/// and the checkpoint's copy of the header and tables of the block it starts
+/// inside, when it starts inside one, with the byte of the run that starts
+/// at.
+struct DeflateCopies<'a> {
     code: Copied,
-    head: Option<Copied>,
+    head: Option<(&'a [u8], usize)>,
 }
 
-impl DeflateCopies {
+impl DeflateCopies<'_> {
     /// The copies as the input [`inflate::run`] reads, in a run `run_len`
     /// bytes long.
     fn input(&self, run_len: u64) -> Input<'_> {
-        Input::new(self.code.window(run_len), self.head.as_ref().map(|h| h.window(run_len)))
+        let head = self.head.and_then(|(bytes, at)| Window::of(bytes, at, run_len as usize));
+        Input::new(self.code.window(run_len), head)
     }
 }
 
