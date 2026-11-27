@@ -59,6 +59,7 @@ function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
     read_at: null,
     read_as: null,
     consumed_by: null,
+    locates: false,
     machinery: null,
     contents: false,
     framed: false,

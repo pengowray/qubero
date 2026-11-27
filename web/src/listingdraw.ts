@@ -9,6 +9,7 @@
 // `DrawContext`, read fresh for each paint.
 
 import { formatAddress, formatBytes, formatLimit, formatOffset, percentText, RESIDENT_BYTES } from "./doc.ts";
+import { positionValue } from "./format.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { CodecKind, Doc, TemplateNode } from "./doc.ts";
 import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
@@ -340,10 +341,10 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
       : n.colour !== undefined
         ? n.colour
         : says(n)
-          ? n.value
+          ? (positionValue(n) ?? n.value)
           : n.composite
             ? countText(item.shownChildren ?? n.child_count, childWord(n))
-            : n.value;
+            : (positionValue(n) ?? n.value);
   const value = el("span", "rp-value", said);
   // The limit a reason leaves out, such as how much of the file the editor
   // keeps in memory, on hover.

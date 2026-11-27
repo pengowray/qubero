@@ -3,6 +3,7 @@
 // dialog sits to one side so the view behind it shows what changed.
 
 import { el } from "./dom.ts";
+import type { AddressBase } from "./format.ts";
 import type { RightColumn } from "./hexview.ts";
 import { loadSignatures, type Compiled } from "./signatures.ts";
 import { searchTemplates, spacedPattern, type Reason, type TemplateEntry } from "./templatesearch.ts";
@@ -28,6 +29,13 @@ export type ListingColumns = "cursor" | "all";
 export type ListingHost = {
   columns(): ListingColumns;
   setColumns(c: ListingColumns): void;
+};
+
+/** The base addresses, and field values that are offsets, are written in.
+ *  It applies to every view. */
+export type AddressHost = {
+  base(): AddressBase;
+  setBase(b: AddressBase): void;
 };
 
 /** A template the chooser lists beyond the built-ins and the bundled format
@@ -75,6 +83,7 @@ export class SettingsDialog {
   private readonly modeGroup: HTMLElement;
   private readonly rowGroup: HTMLElement;
   private readonly listingGroup: HTMLElement;
+  private readonly baseGroup: HTMLElement;
   private readonly textToggle: HTMLButtonElement;
   private readonly fieldsToggle: HTMLButtonElement;
   private readonly condensed: HTMLInputElement;
@@ -87,6 +96,7 @@ export class SettingsDialog {
     private readonly hex: HexHost,
     private readonly glyphs: HTMLSelectElement,
     private readonly listing: ListingHost,
+    private readonly addresses: AddressHost,
   ) {
     this.entries = [...entries].sort((a, b) => a.label.localeCompare(b.label));
 
@@ -134,6 +144,21 @@ export class SettingsDialog {
       el("div", { className: "set-foot" }, this.convert, this.convertHexpat),
     );
 
+    // ---- addresses ----
+    this.baseGroup = segmented(
+      SETTINGS.addressesAs,
+      [
+        { value: "hex", text: SETTINGS.hex },
+        { value: "dec", text: SETTINGS.decimal },
+      ],
+      (v) => {
+        this.addresses.setBase(v === "dec" ? "dec" : "hex");
+        this.syncHex();
+        // The template list writes where a signature matched.
+        this.render();
+      },
+    );
+
     // ---- hex view ----
     this.modeGroup = segmented(
       SETTINGS.bytesAs,
@@ -163,6 +188,8 @@ export class SettingsDialog {
     const hexPane = el(
       "section",
       { className: "set-pane set-hex" },
+      el("h3", { textContent: SETTINGS.addressesHeading }),
+      el("div", { className: "set-field" }, el("span", { className: "set-label", textContent: SETTINGS.addressesAs }), this.baseGroup),
       el("h3", { textContent: SETTINGS.hexHeading }),
       el("div", { className: "set-field" }, el("span", { className: "set-label", textContent: SETTINGS.bytesAs }), this.modeGroup),
       el("div", { className: "set-field" }, el("span", { className: "set-label", textContent: SETTINGS.perRow }), this.rowGroup),
@@ -272,6 +299,7 @@ export class SettingsDialog {
 
   /** Show what the hex view is set to now. */
   syncHex(): void {
+    pressSegment(this.baseGroup, this.addresses.base());
     pressSegment(this.modeGroup, this.hex.mode());
     pressSegment(this.listingGroup, this.listing.columns());
     const per = this.hex.bytesPerRow();

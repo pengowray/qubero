@@ -9,6 +9,7 @@
 // screen depends on which answer came last.
 
 import { el } from "./dom.ts";
+import { formatOffset } from "./format.ts";
 import type { Doc, Identification, TemplateChoice, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
 import { wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
@@ -424,7 +425,7 @@ const bytesAt = (m: SigMatch): string => {
 /** Where the bytes on a match row sit, with the bytes themselves beside it:
  *  an address the way the rest of the app writes one, or a distance from the
  *  end. */
-const whereAt = (m: SigMatch): string => (m.fromEnd ? `in the last ${m.offset.toLocaleString("en")} bytes` : `@0x${m.offset.toString(16)}`);
+const whereAt = (m: SigMatch): string => (m.fromEnd ? `in the last ${m.offset.toLocaleString("en")} bytes` : formatOffset(m.offset * 8));
 /** A PRONOM pattern as spaced hex. A pattern with wildcards or ranges in it is
  *  shown as written, since spacing it by pairs would split its syntax. */
 const hexOf = (pattern: string): string => (/^[0-9A-Fa-f]+$/.test(pattern) ? pattern.replace(/(..)(?=.)/g, "$1 ") : pattern);

@@ -97,6 +97,122 @@ pub fn names_in(e: &Expr) -> Vec<Arc<str>> {
     out
 }
 
+/// For each field of `def`, whether a later sibling uses its value as a
+/// position: where an `At` reads its contents, the table a `PointerList`
+/// takes its offsets from, where a `Chain` starts, and the base a
+/// `PointerList`, `Chain` or `Gather` adds to every offset it reads.
+///
+/// A view uses this to write such a value in the same base as the addresses
+/// beside it, so `program_header_offset` can be matched by eye to the address
+/// of the table it points at.
+///
+/// Only the terms a position is made of by adding count. In `base + index *
+/// stride` the index and the stride are a count and a length, and writing
+/// them as addresses would say they point somewhere. A field named on the
+/// right of a subtraction is left out for the same reason: `end - size` is a
+/// position, `size` is not. A `Gather`'s offsets are read inside each record
+/// it walks to, so they name no sibling, and a `Stitched` run's parts are
+/// placed from inside its records the same way.
+pub fn locators(def: &StructDef) -> Vec<bool> {
+    let mut out = vec![false; def.fields.len()];
+    let mut names: Vec<Arc<str>> = Vec::new();
+    for (i, f) in def.fields.iter().enumerate() {
+        names.clear();
+        ty_positions(&f.ty, &mut names);
+        // Most fields place nothing, and a structure of thousands of fields
+        // asked once per field would otherwise cost the square of that.
+        if names.is_empty() {
+            continue;
+        }
+        for (j, g) in def.fields.iter().enumerate().take(i) {
+            if names.iter().any(|n| *n == g.name) {
+                out[j] = true;
+            }
+        }
+    }
+    out
+}
+
+/// [`locators`] for field `i` alone, which is what a node read asks: one pass
+/// over the fields after it rather than over every pair.
+pub fn locates(def: &StructDef, i: usize) -> bool {
+    let Some(name) = def.fields.get(i).map(|f| &f.name) else { return false };
+    let mut names: Vec<Arc<str>> = Vec::new();
+    def.fields.iter().skip(i + 1).any(|f| {
+        names.clear();
+        ty_positions(&f.ty, &mut names);
+        names.iter().any(|n| n == name)
+    })
+}
+
+/// Every sibling name this type reads as a position. See [`locators`].
+fn ty_positions(ty: &Ty, out: &mut Vec<Arc<str>>) {
+    match ty {
+        Ty::At { at, inner, .. } => {
+            position_terms(at, out);
+            ty_positions(inner, out);
+        }
+        Ty::PointerList { offsets, adjust, elem, .. } => {
+            out.push(offsets.clone());
+            position_terms(adjust, out);
+            ty_positions(elem, out);
+        }
+        Ty::Chain { first, adjust, elem, .. } => {
+            position_terms(first, out);
+            position_terms(adjust, out);
+            ty_positions(elem, out);
+        }
+        Ty::Gather { adjust, elem, .. } => {
+            position_terms(adjust, out);
+            ty_positions(elem, out);
+        }
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => ty_positions(elem, out),
+        Ty::Sized { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::When { inner, .. }
+        | Ty::Enum { inner, .. }
+        | Ty::Flags { inner, .. }
+        | Ty::Nullable { inner, .. } => ty_positions(inner, out),
+        Ty::Switch { cases, default, .. } => {
+            for (_, t) in cases.iter() {
+                ty_positions(t, out);
+            }
+            ty_positions(default, out);
+        }
+        Ty::Match { cases, default, .. } => {
+            for (_, t) in cases.iter() {
+                ty_positions(t, out);
+            }
+            ty_positions(default, out);
+        }
+        // A structure's fields name their own siblings, as in `ty_refs`.
+        _ => {}
+    }
+}
+
+/// The sibling names a position expression is made of by adding them. See
+/// [`locators`] for what is left out and why.
+fn position_terms(e: &Expr, out: &mut Vec<Arc<str>>) {
+    match e {
+        Expr::Ref(n) => out.push(n.clone()),
+        // `offsets[i]`: the array holds the positions.
+        Expr::Elem { array, .. } => out.push(array.clone()),
+        // A path of one step is a sibling read by name. A longer one names a
+        // field inside a sibling, and the sibling is not itself the number.
+        Expr::Sibling(path) | Expr::Within(path) if path.len() == 1 => out.push(Arc::from(path[0].as_str())),
+        Expr::Add(a, b) | Expr::Min(a, b) | Expr::Max(a, b) | Expr::Or(a, b) => {
+            position_terms(a, out);
+            position_terms(b, out);
+        }
+        Expr::Sub(a, _) => position_terms(a, out),
+        Expr::Cond { then, otherwise, .. } => {
+            position_terms(then, out);
+            position_terms(otherwise, out);
+        }
+        _ => {}
+    }
+}
+
 /// What the template itself says about field `i`: `Some(true)` for machinery,
 /// `Some(false)` for payload, `None` when it has no opinion and [`consumers`]
 /// is all there is to go on.
@@ -405,6 +521,45 @@ mod tests {
             ],
         ));
         assert_eq!(consumers(&s), vec![Some(1), None]);
+    }
+
+    /// The offset an `At` reads from is a position; the count beside it, the
+    /// index and stride multiplied into it, and a length subtracted from it
+    /// are not.
+    #[test]
+    fn positions_are_the_terms_an_offset_is_added_from() {
+        let s = def(&T::structure(
+            "Header",
+            vec![
+                ("table_offset", T::u32(Big)),
+                ("count", T::u16(Big)),
+                ("index", T::u16(Big)),
+                ("stride", T::u16(Big)),
+                ("end", T::u32(Big)),
+                ("size", T::u32(Big)),
+                ("table", T::at(E::field("table_offset"), T::array(T::u8(), E::field("count")))),
+                ("entry", T::at(E::field("table_offset").add(E::field("index").mul(E::field("stride"))), T::u8())),
+                ("tail", T::at(E::field("end").sub(E::field("size")), T::u8())),
+            ],
+        ));
+        assert_eq!(locators(&s), vec![true, false, false, false, true, false, false, false, false]);
+        let each: Vec<bool> = (0..s.fields.len()).map(|i| locates(&s, i)).collect();
+        assert_eq!(each, locators(&s));
+    }
+
+    #[test]
+    fn an_offset_table_and_a_chain_start_are_positions() {
+        let s = def(&T::structure(
+            "Body",
+            vec![
+                ("count", T::u16(Big)),
+                ("pointers", T::array(T::u16(Big), E::field("count"))),
+                ("cells", T::pointer_list("pointers", crate::template::Anchor::Window, E::lit(0), T::u8())),
+                ("first", T::u32(Big)),
+                ("records", T::chain(E::field("first"), &["next"], crate::template::Anchor::File, T::u8())),
+            ],
+        ));
+        assert_eq!(locators(&s), vec![false, true, false, true, false]);
     }
 
     #[test]

@@ -60,6 +60,9 @@ pub(crate) struct SpanDto {
     /// every field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) worth: Option<SpanWorthDto>,
+    /// True when a sibling uses this field's value as a position, so the value
+    /// can be written in the base addresses are written in.
+    pub(crate) locates: bool,
 }
 
 /// See `qubero_core::eval::SpanWorth`.
@@ -193,6 +196,7 @@ pub(crate) fn span_dto(s: Span) -> SpanDto {
             size_bits: e.size_bits as f64,
         }),
         worth: s.worth.map(|w| SpanWorthDto { name: w.name, value: w.value }),
+        locates: s.locates,
         placed_by: s.placed_by.map(|p| SpanPointerDto {
             label: p.label,
             path: p.path,

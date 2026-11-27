@@ -82,6 +82,9 @@ pub struct Span {
     /// The chip shows both, so a reader does not have to open the listing to
     /// find the number the stored one stands for.
     pub worth: Option<SpanWorth>,
+    /// True when a sibling uses this field's value as a position. See
+    /// `NodeInfo::locates`.
+    pub locates: bool,
 }
 
 /// A value worked out from one stored field. See [`Span::worth`].
@@ -1245,6 +1248,7 @@ impl Evaluator {
             element: self.element_of(doc, path, info.offset_bits)?,
             placed_by: self.pointer_placing(doc, path, info.offset_bits)?,
             worth: self.worth_of(doc, path)?,
+            locates: info.locates,
         })
     }
 

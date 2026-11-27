@@ -54,6 +54,9 @@ pub(crate) struct NodeDto {
     /// an index among the parent's children. Null for a field no sibling
     /// reads, which is most of them.
     pub(crate) consumed_by: Option<f64>,
+    /// True when a sibling uses this field's value as a position in the file,
+    /// so the value can be written in the base addresses are written in.
+    pub(crate) locates: bool,
     /// What the template says about this field over the top of that: true for
     /// machinery, false for payload, null when it has no opinion.
     pub(crate) machinery: Option<bool>,
@@ -252,6 +255,7 @@ pub(crate) fn dto(n: NodeInfo) -> NodeDto {
         read_at: n.read_at.map(|at| at as f64),
         read_as: n.read_as,
         consumed_by: n.consumed_by.map(|i| i as f64),
+        locates: n.locates,
         machinery: n.machinery,
         contents: n.contents,
         inline: n.inline,

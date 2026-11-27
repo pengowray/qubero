@@ -30,6 +30,7 @@ import type { ChipEl } from "./hexchips.ts";
 import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.ts";
 import { RowHeights, type StructuralExtra } from "./rowheights.ts";
 import { HEXGLYPHS } from "./strings.ts";
+import { getAddressBase } from "./format.ts";
 import type { Cell } from "./doc.ts";
 import { ValueFetch } from "./valuefetch.ts";
 import { fieldStep, stepDepth, type FieldAt } from "./fieldstep.ts";
@@ -760,6 +761,13 @@ export class HexView {
       this.arrangement = "unknown";
     }
     this.fitRows();
+  }
+
+  /** Draw again for a change of the base addresses are written in: the
+   *  address column's width, its digits and the chips' offset values. */
+  redrawAddresses(): void {
+    this.remeasure();
+    this.render();
   }
 
   setRightColumn(c: RightColumn): void {
@@ -1907,7 +1915,7 @@ export class HexView {
     return {
       bpr,
       len,
-      addrWidth: Math.max(8, len.toString(16).length),
+      addrWidth: Math.max(8, len.toString(getAddressBase() === "dec" ? 10 : 16).length),
       start,
       windowBytes,
       bytes,

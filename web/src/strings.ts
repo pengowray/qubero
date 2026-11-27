@@ -1,7 +1,7 @@
 // Text that more than one view shows. Two views naming the same thing two ways
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
-import { ADDRESS_MARK, formatBytes, formatOffset } from "./format.ts";
+import { ADDRESS_MARK, byteDigits, formatBytes, formatOffset, getAddressBase } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
 import type { CodecKind, FieldTime, Shape, StringInsideKind } from "./doc.ts";
@@ -787,7 +787,7 @@ export const UNPACKED = {
   /** One end of that range: `@0x1a3.5` is bit 5 of byte 0x1a3. Marked like
    *  every other address, since it is one, and it is read beside byte counts
    *  and code numbers that are not. */
-  bit: (bit: number): string => `${ADDRESS_MARK}0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
+  bit: (bit: number): string => `${ADDRESS_MARK}${byteDigits(Math.floor(bit / 8))}.${bit % 8}`,
   /**
    * The stretch of the compressed run a step read, noun and all: `bits @0x1a3.5
    * to @0x1a4.2` is half-open, from the first bit up to but not including the
@@ -4286,12 +4286,18 @@ export const SETTINGS = {
   chipTitle: "Change the template. It applies to every view.",
   gearLabel: "Settings",
   gearTitle: "Settings: template, hex view and listing",
+  gotoPlaceholder: (dec: boolean): string => (dec ? "Go to offset (decimal)" : "Go to offset (hex)"),
+  gotoLabel: (dec: boolean): string => (dec ? "Go to offset, decimal" : "Go to offset, hexadecimal"),
 
   // ---- the dialog ----
 
   title: "Settings",
   closeLabel: "Close settings",
   close: "Close",
+
+  addressesHeading: "Addresses",
+  addressesAs: "Addresses and offsets as",
+  decimal: "Decimal",
 
   hexHeading: "Hex view",
   bytesAs: "Show bytes as",
@@ -4331,7 +4337,8 @@ export const SETTINGS = {
 
   reasonExt: (ext: string): string => `.${ext}`,
   reasonStart: (bytes: string): string => `starts ${bytes}`,
-  reasonAt: (offset: number, bytes: string): string => `at 0x${offset.toString(16).toUpperCase()}: ${bytes}`,
+  reasonAt: (offset: number, bytes: string): string =>
+    `at ${getAddressBase() === "hex" ? `0x${offset.toString(16).toUpperCase()}` : offset}: ${bytes}`,
   reasonEnd: (bytes: string): string => `ends ${bytes}`,
 
   signatures: (n: number): string => `Signatures with no template (${n})`,

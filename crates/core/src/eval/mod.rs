@@ -402,6 +402,11 @@ pub struct NodeInfo {
     /// Whether it is folded is the view's to decide, since that depends on
     /// where the two of them end up on screen. See [`crate::machinery`].
     pub consumed_by: Option<usize>,
+    /// True when a sibling uses this field's value as a position in the file:
+    /// where an `At` reads, where a chain starts, the offsets of a pointer
+    /// list. A view writes such a value in the base its addresses are in. See
+    /// [`crate::machinery::locators`].
+    pub locates: bool,
     /// True when this node's own bytes include punctuation its children do not
     /// account for: the braces of a JSON object, the brackets of an array. The
     /// children of such a node tile what is between them and nothing else, so
@@ -1192,7 +1197,7 @@ impl Evaluator {
             Some((at, bits)) => ((at, bits / 8), reading.1, reading.2),
             None => reading,
         };
-        let (consumed_by, mut machinery, contents) = self.in_parent(path);
+        let (consumed_by, mut machinery, contents, locates) = self.in_parent(path);
         // A node nothing declared says for itself whether it is plumbing.
         if r.machinery {
             machinery = Some(true);
@@ -1323,6 +1328,7 @@ impl Evaluator {
             list,
             line,
             consumed_by,
+            locates,
             // The braces of an object and the brackets of an array are the
             // node's own, and its members account for everything between them.
             framed: matches!(&r.ty, Ty::Json(shape, _) if shape.composite()) && child_count > 0,
@@ -1468,15 +1474,16 @@ impl Evaluator {
     /// handful of type enums over the few dozen fields a structure has; a run
     /// long enough to care about is a list, and lists stop at the first line
     /// here.
-    fn in_parent(&self, path: &[usize]) -> (Option<usize>, Option<bool>, bool) {
-        let Some((&last, parent)) = path.split_last() else { return (None, None, false) };
-        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None, false) };
+    fn in_parent(&self, path: &[usize]) -> (Option<usize>, Option<bool>, bool, bool) {
+        let Some((&last, parent)) = path.split_last() else { return (None, None, false, false) };
+        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None, false, false) };
         let name = s.fields.get(last).map(|f| &f.name);
         let contents = match (&s.contents, name) {
             (Some(c), Some(n)) => **n == **c,
             _ => false,
         };
-        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last), contents)
+        let locates = machinery::locates(s, last);
+        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last), contents, locates)
     }
 
     /// The whole text of a text field, decoded in its own encoding, up to the

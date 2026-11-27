@@ -30,6 +30,7 @@ import type { OutlineHeading } from "./outline.ts";
 import type { Span } from "./doc.ts";
 import type { Frame } from "./hexview.ts";
 import { chipsHead, NO_TEMPLATE } from "./strings.ts";
+import { getAddressBase } from "./format.ts";
 import type { ChipMeasure } from "./chipfit.ts";
 import { pinnedNoteKey, planRowChips, rowNoteKey, valsBeforeChips, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
@@ -764,14 +765,20 @@ export class HexRows {
     // draw and a draw is once per frame of a scroll, so the walk is skipped
     // outright where the column is not headed rather than thrown away after.
     const head = f.fields && !f.below ? chipsHead(chipSpans(f.byRow)) : "";
-    const shape = `${f.addrWidth}|${f.bpr}|${f.binary}|${f.showText}|${f.fields}|${f.below}|${head}`;
+    const dec = getAddressBase() === "dec";
+    const shape = `${f.addrWidth}|${f.bpr}|${f.binary}|${f.showText}|${f.fields}|${f.below}|${dec}|${head}`;
     if (shape === this.headerShape) return;
     this.headerShape = shape;
     const columns = document.createElement("span");
     columns.textContent =
       " ".repeat(f.addrWidth) +
       "  " +
-      Array.from({ length: f.bpr }, (_, i) => (f.binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
+      Array.from({ length: f.bpr }, (_, i) => {
+        // Decimal past 99 is three digits over a two-digit column, so those
+        // columns go unheaded rather than misaligned.
+        const label = dec ? (i < 100 ? String(i).padStart(2, "0") : "  ") : (HEX[i] ?? "");
+        return f.binary ? label.padEnd(8) : label;
+      }).join(" ");
     this.header.replaceChildren(columns);
     if (f.showText) {
       // Nothing to label, but the width has to be held so the heading over the
@@ -841,7 +848,7 @@ export class HexRows {
     let height = f.rowHeight * at.segs.length;
     for (const h of at.headHeights) height += h;
     const addr = (parts.lines[0] as LineParts).addr;
-    setText(addr, rowStart.toString(16).padStart(f.addrWidth, "0"));
+    setText(addr, rowStart.toString(getAddressBase() === "dec" ? 10 : 16).padStart(f.addrWidth, "0"));
     // Which bytes a row stands for only changes when the view moves. A
     // cursor key leaves every address where it was, and writing them all
     // again would be the largest part of the redraw it causes.

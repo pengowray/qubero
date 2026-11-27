@@ -35,7 +35,42 @@ export const ADDRESS_MARK = "@";
 export function offsetDigits(bits: number): string {
   const byte = Math.floor(bits / 8);
   const rem = bits % 8;
-  return `0x${byte.toString(16)}${rem === 0 ? "" : `+${rem}b`}`;
+  return `${byteDigits(byte)}${rem === 0 ? "" : `+${rem}b`}`;
+}
+
+/** The base addresses are written in, and field values that are offsets with
+ *  them. The reader picks it in Settings; `main.ts` sets it at start. */
+export type AddressBase = "hex" | "dec";
+
+let addressBase: AddressBase = "hex";
+
+export function setAddressBase(base: AddressBase): void {
+  addressBase = base;
+}
+
+export function getAddressBase(): AddressBase {
+  return addressBase;
+}
+
+/** A whole-byte position in the chosen base: `0x1f` or `31`. */
+export function byteDigits(byte: number | bigint): string {
+  return addressBase === "hex" ? `0x${byte.toString(16)}` : byte.toString(10);
+}
+
+/**
+ * The value of a field the template uses as a position, written the way
+ * addresses are: `0x40` where addresses are hex. Null where the plain value
+ * should stand: the field is not a position, not an unsigned number, or
+ * addresses are decimal, which is how the value is written anyway.
+ *
+ * Worked out from `edit_text`, the decimal digits the editor starts from, so
+ * a 64-bit offset keeps every digit.
+ */
+export function positionValue(node: { readonly locates?: boolean; readonly kind: string; readonly edit_text: string }): string | null {
+  if (addressBase !== "hex" || !node.locates || node.kind !== "uint") return null;
+  const digits = node.edit_text;
+  if (!/^\d+$/.test(digits)) return null;
+  return `0x${BigInt(digits).toString(16)}`;
 }
 
 /**

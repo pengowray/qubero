@@ -1075,6 +1075,20 @@ mod tests {
         assert_eq!(ev.node(&d, &[7, 16, 1, 0, 4]).unwrap().value, Value::Int(2));
     }
 
+    /// The two table offsets in the header are positions, and the count and
+    /// entry size beside them are not, so a view can write the offsets in the
+    /// base its addresses are in.
+    #[test]
+    fn the_header_table_offsets_are_positions() {
+        let T::Struct(s) = body(64, Little) else { panic!("not a structure") };
+        let marked: Vec<&str> = s.fields.iter().zip(crate::machinery::locators(&s)).filter(|(_, l)| *l).map(|(f, _)| &*f.name).collect();
+        assert!(marked.contains(&"program_header_offset"), "{marked:?}");
+        assert!(marked.contains(&"section_header_offset"), "{marked:?}");
+        assert!(!marked.contains(&"program_header_count"), "{marked:?}");
+        assert!(!marked.contains(&"section_header_entry_size"), "{marked:?}");
+        assert!(!marked.contains(&"section_name_table"), "{marked:?}");
+    }
+
     /// A table a header points at is somewhere for a reason, and the reason is
     /// a field of the header. Asked of the table itself, which is the node the
     /// cursor lands on: the field that declares it covers no bytes.
