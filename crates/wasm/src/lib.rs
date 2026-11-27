@@ -806,7 +806,7 @@ impl Editor {
         // The trace that names the bit: the whole run's, or for a run too
         // large to hold whole, the span's that read it. Kept across the read
         // of the run below, since a span's trace is made when asked for.
-        let (trace, index, want_bytes) = {
+        let (trace, index, bytes) = {
             let Some(e) = &self.sheets[home].eval else { return none() };
             let Some(sp) = e.space(core) else { return none() };
             if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
@@ -818,12 +818,11 @@ impl Editor {
                 Err(missing) => return reply::<Option<DecodedStepDto>>(Err(EvalError::Pending(missing))),
             };
             let Some(index) = trace.index_in(bit as u64) else { return none() };
-            let Some(step) = trace.step(index) else { return none() };
-            // As much of the run as the step reaches, and no more. Bit
-            // positions count from the front of the run, so a prefix ending
-            // after the step is all the walk can touch.
-            let want = step.in_bits.end.div_ceil(8);
-            (trace, index, want)
+            // The bytes of the run the step's bits are in, at most 7, and none
+            // for a step that is not a code: however deep in the run the step
+            // is, only the chunks those bytes are in are read.
+            let Some(bytes) = inflate::step_bytes(&trace, index) else { return none() };
+            (trace, index, bytes)
         };
         // The compressed bytes, which the space does not hold: what it holds is
         // what came out. They are a field of the reading that opened the
@@ -833,11 +832,11 @@ impl Editor {
         let at = &mut self.sheets[home];
         let Some(e) = &mut at.eval else { return none() };
         e.begin_slice();
-        let run = match e.field_bytes(&at.doc, &origin, want_bytes) {
-            Ok((bytes, _)) => bytes,
+        let window = match e.field_bytes_at(&at.doc, &origin, bytes.start, bytes.end - bytes.start) {
+            Ok((window, _)) => window,
             Err(err) => return reply::<Option<DecodedStepDto>>(Err(err)),
         };
-        reply(Ok(inflate::decode_step(&run, &trace, index).map(decoded_step_dto)))
+        reply(Ok(inflate::decode_step_at(&window, bytes.start, &trace, index).map(decoded_step_dto)))
     }
 
     /// The `Decoded` node a space was unpacked from, as a path in the reading

@@ -1563,6 +1563,14 @@ impl Evaluator {
     /// file at the same offset is other bytes entirely. `true` says the field
     /// runs on past what came back.
     pub fn field_bytes<S: Source>(&mut self, doc: &Document<S>, path: &[usize], limit: u64) -> R<(Vec<u8>, bool)> {
+        self.field_bytes_at(doc, path, 0, limit)
+    }
+
+    /// [`Evaluator::field_bytes`] from byte `from` of the field's value on, at
+    /// most `limit` bytes of it, so that a few bytes deep in a long field read
+    /// only the chunks they are in. Nothing comes back for a `from` at or past
+    /// the value's end.
+    pub fn field_bytes_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, limit: u64) -> R<(Vec<u8>, bool)> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo[path].clone();
@@ -1575,8 +1583,9 @@ impl Evaluator {
             (None, Some(span)) => (r.offset + span.start * 8, span.len),
             (None, None) => (r.offset, size / 8),
         };
-        let want = len.min(limit);
-        Ok((self.read(doc, &r, at, want * 8)?, len > want))
+        let from = from.min(len);
+        let want = (len - from).min(limit);
+        Ok((self.read(doc, &r, at + from * 8, want * 8)?, len - from > want))
     }
 
     /// Encode `text` for the field at `path`, ready to be written.

@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use qubero_core::checksum::{adler32, crc32, crc32_update};
+use qubero_core::codec::{self, inflate, Codec, StepKind};
 use qubero_wasm::Editor;
 use serde_json::Value;
 
@@ -277,8 +278,9 @@ fn tab_bytes(ed: &mut Editor, tab: u32, at: usize, n: usize) -> Vec<u8> {
 /// store keeps; then it was refused for that. Now the pass over it takes its
 /// place and reads the run into it a window at a time, a quarter of the
 /// store, so the contents list, and Open unpacked gives a tab. The code
-/// panel's read of the run from its front to a step near its end is still
-/// one call, and is still refused with the reason.
+/// panel's read of a step near the run's end used to read the run from its
+/// front to the step in one call, and was refused for that; now it reads only
+/// the bytes the step is in, and nothing for a step that is not a code.
 #[test]
 fn a_zip_entry_longer_than_the_store_lists_a_window_at_a_time() {
     let text = long_lines();
@@ -299,11 +301,153 @@ fn a_zip_entry_longer_than_the_store_lists_a_window_at_a_time() {
     assert_eq!(tab_bytes(&mut ed, tab, 0, 64), text[..64]);
     assert_eq!(tab_bytes(&mut ed, tab, text.len() - 64, 64), text[text.len() - 64..]);
 
-    let run_bits = feeder.node(&mut ed, &data)["size_bits"].as_f64().unwrap();
-    let reply = feeder.ask(&mut ed, |ed| ed.decode_step(tab, run_bits - 64.0));
-    assert_eq!(reply["status"], "error", "{reply}");
-    let said = reply["message"].as_str().unwrap();
-    assert!(said.starts_with("Can't load ") && said.ends_with(" of the file at once: the editor keeps at most 1 MiB in memory"), "{said}");
+    // The trace of a run this long stops naming codes before its end, past
+    // `MAX_STEPS`, so a step near the end is a coarse block's one step and
+    // not a code. The code panel answers null for it at once, with none of
+    // the run in the store, rather than reading the run up to the step.
+    let run_bits = feeder.node(&mut ed, &data)["size_bits"].as_f64().unwrap() as u64;
+    let packed = miniz_oxide::deflate::compress_to_vec(&text, 1);
+    assert_eq!(run_bits, packed.len() as u64 * 8);
+    let (_, trace) = codec::decode_traced(Codec::Deflate, &packed).expect("the run inflates");
+    let near_end = run_bits - 64;
+    let k = trace.index_in(near_end).expect("a step near the end");
+    assert!(trace.coarse() && inflate::step_bytes(&trace, k).is_none(), "{:?}", trace.step(k));
+    for c in 0..16 {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, near_end as f64));
+    assert_eq!(reply["status"], "ok", "{reply}");
+    assert!(reply["node"].is_null(), "{reply}");
+}
+
+/// Whether a code the editor took apart, as the JSON it answers with, is
+/// `want`.
+fn code_is(got: &Value, want: &inflate::DecodedCode) -> bool {
+    let n = |k: &str| got.get(k).and_then(Value::as_f64);
+    n("symbol") == Some(f64::from(want.symbol))
+        && n("code_bits") == Some(f64::from(want.code_bits))
+        && n("extra_bits") == Some(f64::from(want.extra_bits))
+        && n("extra") == Some(f64::from(want.extra))
+        && n("value") == Some(f64::from(want.value))
+        && n("entry") == want.entry.map(f64::from)
+        && n("entry_child") == want.entry_child.map(f64::from)
+}
+
+/// A code deep in a deflated zip entry several times longer than the chunk
+/// store, taken apart for the code panel, with only the chunks of the file's
+/// front in the store. The editor reads the bytes the code is in, so its one
+/// "pending" reply names only the chunks those bytes are in, not the run's
+/// chunks from its front to the code; and once they are fed, what it answers
+/// is what taking the code apart against the whole run gives.
+#[test]
+fn a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes() {
+    let text = lines(100_000);
+    let name = b"lines.txt";
+    let file = zip_of(name, &text);
+    // The entry's run, which starts after the 30 bytes of its local header
+    // and its name.
+    let packed = miniz_oxide::deflate::compress_to_vec(&text, 1);
+    let run_at = (30 + name.len()) as u64;
+    assert_eq!(file[run_at as usize..][..packed.len()], packed[..]);
+    let store = 4;
+    assert!(packed.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", packed.len());
+    let mut ed = unfed(&file, store as u32, "zip");
+    let mut feeder = Feeder::new(&file);
+    let body = feeder.child_named(&mut ed, &[0, 0], "body");
+    let data = feeder.child_named(&mut ed, &body, "data");
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &data));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+
+    // A match three quarters of the way along the run, taken apart against
+    // the whole of it.
+    let (_, trace) = codec::decode_traced(Codec::Deflate, &packed).expect("the run inflates");
+    assert!(!trace.coarse(), "the trace stopped naming codes");
+    let deep = packed.len() as u64 * 8 * 3 / 4;
+    let k = trace.steps().position(|s| matches!(s.kind, StepKind::Match { .. }) && s.in_bits.start >= deep).expect("a match that deep");
+    let step = trace.step(k).unwrap();
+    let want = inflate::decode_step(&packed, &trace, k).expect("the whole run takes the code apart");
+    let want_distance = want.distance.as_ref().expect("a match has a distance");
+
+    // The chunks of the file the code's bits are in, which are past the
+    // first `store` chunks; feeding those pushes everything else out.
+    let own: Vec<u64> = ((run_at * 8 + step.in_bits.start) / 8 / CHUNK as u64..=(run_at * 8 + step.in_bits.end - 1) / 8 / CHUNK as u64).collect();
+    assert!(own[0] >= store as u64, "the code is in chunk {}, among the first {store}", own[0]);
+    for c in 0..store as u64 {
+        feed(&mut ed, &file, c);
+    }
+    for &c in &own {
+        assert!(!ed.has_chunk(0, c as f64), "chunk {c} is still in the store");
+    }
+    let bit = step.in_bits.start as f64;
+    let reply = parse(&ed.decode_step(tab, bit));
+    assert_eq!(reply["status"], "pending", "{reply}");
+    assert_eq!(chunks_of(&reply), own, "{reply}");
+    for &c in &own {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, bit));
+    assert_eq!(reply["status"], "ok", "{reply}");
+    let got = &reply["node"];
+    assert_eq!(got["kind"], "match", "{got}");
+    assert_eq!(got["block"].as_f64(), Some(f64::from(want.block)), "{got}");
+    assert_eq!(got["block_kind"], want.block_kind.as_str(), "{got}");
+    assert_eq!(got["bits"].as_f64(), Some(f64::from(want.bits())), "{got}");
+    assert_eq!(want.bits() as u64, step.in_bits.end - step.in_bits.start);
+    assert!(code_is(&got["symbol"], &want.symbol), "{got} is not {want:?}");
+    assert!(code_is(&got["distance"], want_distance), "{got} is not {want:?}");
+    // And the run between the file's front and the code was never loaded.
+    for c in store as u64..own[0] {
+        assert!(!ed.has_chunk(0, c as f64), "chunk {c} was loaded");
+    }
+}
+
+/// The same for a run whose stream is past 64 MiB and is read through an
+/// index rather than held whole, as most runs longer than the store are. The
+/// trace that names the code is its block's, made from the index's own copy
+/// of the run, and of the file only the bytes the code is in are read. The
+/// run is the zlib of a tar of zeros, written by hand as one block in the
+/// fixed codes, so a code that deep is known: a length of 258, then a
+/// distance of 1.
+#[test]
+fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
+    let file = zlib_of_a_tar_of_zeros(70 << 20);
+    let store = 2;
+    assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store as u32, "zlib");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[6]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+
+    // The step that wrote a byte six sevenths of the way along the stream.
+    let reply = feeder.ask(&mut ed, |ed| ed.map_out(tab, (60 << 20) as f64));
+    let step = &reply["node"];
+    assert_eq!(step["kind"], "match", "{reply}");
+    let bits = |k: &str| step[k].as_f64().unwrap() as u64;
+    let (run_at, start, end) = (bits("run_offset_bits"), bits("in_start"), bits("in_end"));
+    assert_eq!(end - start, 13, "{step}");
+    let own: Vec<u64> = ((run_at + start) / 8 / CHUNK as u64..=(run_at + end - 1) / 8 / CHUNK as u64).collect();
+    assert!(own[0] >= store as u64, "the code is in chunk {}, among the first {store}", own[0]);
+    for c in 0..store as u64 {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, start as f64));
+    assert_eq!(reply["status"], "pending", "{reply}");
+    assert_eq!(chunks_of(&reply), own, "{reply}");
+    for &c in &own {
+        feed(&mut ed, &file, c);
+    }
+    let reply = parse(&ed.decode_step(tab, start as f64));
+    assert_eq!(reply["status"], "ok", "{reply}");
+    let got = &reply["node"];
+    assert_eq!(got["kind"], "match", "{got}");
+    assert_eq!(got["block_kind"], "fixed", "{got}");
+    assert_eq!(got["bits"].as_f64(), Some(13.0), "{got}");
+    // Length code 285 is 8 bits and means 258 outright; distance code 0 is 5
+    // bits and means 1. A fixed block's tables come from no step of the run.
+    let length = inflate::DecodedCode { symbol: 285, code_bits: 8, extra_bits: 0, extra: 0, value: 258, entry: None, entry_child: None };
+    let distance = inflate::DecodedCode { symbol: 0, code_bits: 5, extra_bits: 0, extra: 0, value: 1, entry: None, entry_child: None };
+    assert!(code_is(&got["symbol"], &length), "{got}");
+    assert!(code_is(&got["distance"], &distance), "{got}");
 }
 
 /// A .gz of two members, the first longer than the chunk store. A member is

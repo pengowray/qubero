@@ -342,7 +342,8 @@ block's tables from the trace's head steps (`rebuild`), not from the run. It
 takes a window and the byte the window starts at. Then, in part 4, the wasm
 crate's `decode_step` reads the run from byte `in_bits.start / 8` to byte
 `in_bits.end.div_ceil(8)`, at most 7 bytes, instead of reading with
-`field_bytes` from the run's front.
+`field_bytes` from the run's front. Part 4 was built on 2026-11-28; see item 4
+of "Order of work".
 
 ### Built (part 3)
 
@@ -496,8 +497,10 @@ this: `fetchChunk` fetches any chunk a reply names as a chunk of the file,
 - **Edits.** Any edit drops every index (`Spaces::forget`), and the wasm
   crate's `ensure_open` opens a stale tab's stream again before answering
   anything about it. A handle made before an edit still reads the original
-  file at the place it was given, never the edited bytes, and nothing reads
-  through it once the edit is made.
+  file at the place it was given, never the edited bytes. A few calls still
+  read through it after the edit: `open_again` answers from the stale tab
+  while the stream is opened again (`selection_text`, for one). That is
+  harmless, since the source does not change and the old index matches it.
 
 ### A step
 
@@ -1183,7 +1186,8 @@ which holds the same copy once the pass starts.
 ## Order of work
 
 Each part builds, passes its tests and can be merged on its own, in this
-order. Each part needs only the parts before it.
+order. Each part needs only the parts before it. "Review before part 7"
+changes parts 6 to 10: read it first.
 
 1. **Refuse a read that can never fit.** `Source::resident_limit`, the check
    in `read_in`, `Refusal::TooMuchAtOnce` before the reads of a whole run and
@@ -1210,7 +1214,19 @@ order. Each part needs only the parts before it.
    (part 3)" under "The decoders read a window".
 4. **`decode_step` reads only its trace step.** The wasm crate reads at most
    7 bytes of the run. Fixes: the code panel on a trace step deep in a long
-   run.
+   run. **Done 2026-11-28.** `inflate::step_bytes` gives the bytes of the run
+   a step's bits are in, and `Evaluator::field_bytes_at` reads them, so the
+   wasm crate's `decode_step` calls `decode_step_at` with those bytes. A step
+   that is not a code, such as a stored block's payload or a coarse block's
+   one step, now answers null without reading any of the run; before, the
+   run up to the step was read first, and could be refused as too much at
+   once. Tested by
+   `a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes`
+   in `crates/wasm/tests/open_space_waits.rs`: a store of 4 chunks, a run of
+   20, and a code three quarters of the way along it. And for a run read
+   through an index, whose trace is its block's, by
+   `a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes`: a store of 2
+   chunks and the zlib of 70 MiB of tar, about 7 chunks.
 5. **`Missing` as "not yet".** `RunInput`; the `Seekable` keeps one, made over
    its copy (an `ArcSource`), so that until part 7 no read of a `Seekable`
    finds a chunk missing; `ReadError`; every row of the table in "Everything
@@ -1368,6 +1384,86 @@ event, and checks that:
 
 Before part 1 the same script shows the stuck row, which is the reproduction
 in the browser.
+
+## Review before part 7 (2026-11-28)
+
+A review of this design against the code, before part 7 was built, found the
+shared store sound. No lock is held across a read of input, so the `Mutex` is
+never entered twice on the one thread, and nothing in the store points back at
+a tab or an evaluator. It asked for the changes below, which are now part of
+the plan.
+
+**Before part 7 lifts the 64 MiB compressed limit:**
+
+- **A tab passes the store's limit on.** `SpaceSource::Lazy` and
+  `SpaceSource::Joined` answer `resident_limit()` with the span cache's size
+  when the source under their `RunInput` has a limit, and `ChunkStore::behind`
+  and `RunInput` pass that limit on. `file_bytes_at_once` counts a lazy
+  space's bytes. Today `ChunkStore::behind` answers `None` and `SpaceSource`
+  does not override it, so a reading over a tab skips part 1's check and part
+  2's gathering. Once a tab's missing chunks are the file's, a whole-run read
+  in a tab (a 40 MiB bzip2 member in a .tar.gz, a stored zip entry's checksum)
+  would wait for ever.
+- **The fallback copy keeps the 64 MiB limit.** `run_input` refuses a copy
+  over `CAP_BYTES` as `TooLarge`, a `RunInput` reports the bytes it owns, and
+  `Indexes` weighs them. Native tests read through an `ArcSource`, which
+  shares, so the handle path runs outside the browser too. `MemSource` gives
+  no handle.
+
+**Before the web side of part 7 ships:**
+
+- **The text loops fetch the file's chunks.** `textWindow`, the line index,
+  `textBack` and the strings scan in `web/src/doc.ts` pass each missing chunk
+  to `ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)`, which is a range of the tab.
+  After part 7 the chunks are the file's, so these call `fileChunks(missing)`.
+- **One fetch per stretch of missing chunks.** `RunInput::read` asks which
+  chunks are missing before it copies anything (a new `Source::missing`), and
+  `Doc.read` fetches a stretch of neighbouring chunks with `fetchRun` and
+  redraws once. A 16 MiB span fetched chunk by chunk is 256 fetches and 256
+  redraws, and each redraw copies the chunks present so far.
+- **Tabs read large ranges in pieces.** `hexview`, `inspector`, `contentcard`,
+  `strideraster` and `openplan` await `ensureRange` and then read in one call.
+  On a tab, a range whose input is larger than the store is never present all
+  at once. They call a new `readLoaded(at, len)` instead, which reads a few
+  MiB at a time, waits on `fileChunks` between pieces, and returns the bytes
+  joined. `ensureRange` stays for the file's own tab.
+
+**Part 6:** `unit_input` and `span_input` apply only when the source under the
+`RunInput` has a resident limit. A fallback copy, an `ArcSource` and native
+reads keep today's behaviour, so part 6 refuses nothing that opens today.
+
+**Order:**
+
+- Part 7 is merged in three steps. 7a: `Source::share`, the shared store,
+  `source_offset_of`, `run_input`, and the `Seekable` reading through its
+  handle, with the 64 MiB limit unchanged, plus the first two changes above.
+  7b: the passes read windows, answer `NeedsInput`, and are kept across
+  `Pending`. 7c: `Limits::input`, the `Indexes` weights, and the web changes
+  above.
+- Part 10 (joined streams) comes before part 8 (xz's layout). A BAM past
+  64 MiB is common, and xz already works from a gathered copy.
+- Part 9 is put off. A gzip member past 64 MiB of output is never measured
+  (`expr.rs`), so part 9 saves only the walk's copy. Dropping the walk's bytes
+  before its current step saves most of that for less work.
+
+**Later, not needed for part 7:**
+
+- Any edit drops every index, and with runs up to 512 MiB that is many rounds
+  for each open tab. `Indexes` could be keyed by source offset, length and
+  codec for runs with a handle, since a handle reads the original source.
+- `impl Source for &S` and `Gathered` (`gather.rs`) must forward `share`, or
+  the copy is made with no sign of it.
+- Runs in a stitched space (a PNG's zlib stream across IDAT chunks) and stored
+  parts stay on the copy, so they stay at 64 MiB. Part 10 covers `Joined`,
+  not `Stitch`.
+- A .gz of several members where one passes 64 MiB of output is not measured.
+- xz reads a block's whole LZMA2 data again on each later read of a span.
+  `Lzma2::chunk_in` takes a window, so the prefix could read on from where it
+  stopped.
+- Every lazy space opened keeps its `Seekable`, with its 16 MiB span cache and
+  its prefix cache, until `forget`. The new weighing does not count them.
+- Every field read in the evaluator takes the store's lock. Measure listing
+  speed before and after, as part 3 did.
 
 ## Still to do
 
