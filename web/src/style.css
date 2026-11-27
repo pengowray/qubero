@@ -7196,7 +7196,8 @@ summary.kp-group-heading:hover {
 }
 @media (max-width: 720px) {
   .set-body {
-    grid-template-columns: 1fr;
+    /* minmax(0, ...) so a long template name cannot widen the column past the dialog. */
+    grid-template-columns: minmax(0, 1fr);
   }
   .set-template {
     order: -1;
