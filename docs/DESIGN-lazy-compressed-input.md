@@ -1043,7 +1043,7 @@ it out) does not mean the store is too small. So:
   512 MiB run takes about 170 rounds at one per 3 MiB, which is under 512 as
   things are, but a backstop is meant to stop a wait that has stopped moving.
 
-These changes land with part 7 or before it.
+These changes landed with part 7b; see "Built (part 7b)".
 
 ### `ensureRange` on a tab
 
@@ -1885,23 +1885,31 @@ differs from the text above:
   pass is the call's own, `index_steps` also records the pass's progress,
   as it does when a go runs out, so `Evaluator::unpacking` answers while
   the pass waits for chunks.
-- **The web is unchanged.** The wasm crate's `Editor::unpacking` answers
-  after a "pending" reply too. The listing still shows `REPORT.reading`
-  while a pass waits for chunks: `slice_reply` includes `unpacking` only in
-  a "working" reply, and `flatten.ts` reads `unpacking` only from a
-  "working" reply. To show the percentage while the pass waits,
-  `slice_reply` has to include `unpacking` in a "pending" reply and
-  `Flattener.kids` has to read it there. Until then, the stream's row in the
-  listing switches between `REPORT.reading` and `REPORT.unpacking` with its
-  percentage from one reply to the next while a pass runs, and so does the
-  status bar after Open unpacked, between `UNPACKED.loading` and
-  `UNPACKED.unpacking`. Before 7b the gather's "pending" replies all came
-  before the pass's "working" replies; now a "pending" reply comes each time
-  a step's window reaches chunks that are not loaded, about once for every
-  3 MiB of the run in the browser (an estimate from `READ_AHEAD`). The
-  listing change, `Doc.openSpace` returning the progress with a "pending"
-  reply, and the changes to `waitToOpen` and the status bar are left for
-  7c, with the rest of the web side.
+- **What the listing and the status bar say while a pass waits.** Before
+  7b the gather's "pending" replies all came before the pass's "working"
+  replies. Now a "pending" reply comes each time a step's window reaches
+  chunks that are not loaded, about once for every 3 MiB of the run in the
+  browser (an estimate from `READ_AHEAD`). So that the listing and the
+  status bar do not switch words from one reply to the next, a "pending"
+  reply from a pass is answered the way a "working" one is, as "The
+  browser" asks:
+  - `slice_reply` gives a "pending" reply `ready` (the children before the
+    first that waits) and `unpacking` when `Evaluator::unpacking` names a
+    pass, and `Doc.handleReply` and `Flattener.kids` pass them on. The rows
+    above the stream stay drawn, and its waiting row says
+    `REPORT.unpacking` with its percentage. Before, the rows above it went
+    and came back with each window.
+  - `Doc.openSpace` returns the progress with a "pending" reply. The status
+    bar says `UNPACKED.unpacking` on it once a pass has said how far it has
+    got, and `UNPACKED.loading` only before that.
+  - `waitToOpen` takes progress that has moved since the last reply as the
+    core getting further, whether the reply is "pending" or "working": it
+    clears the chunks loaded for the wait and starts `MAX_ROUNDS` again.
+  Tested by
+  `a_gzip_members_header_lists_while_its_stream_waits_for_the_next_window`
+  in `crates/wasm/tests/open_space_waits.rs` and four tests at the end of
+  `web/test/openwait.test.ts`. `runCheckLoaded` and the text loops still
+  count rounds with no progress to go by; see "Still to do".
 - **`UNFINISHED_PASSES` stays at 2.** A pass past the cap now holds less
   than 10 MiB: its checkpoints' windows (at most 8 MiB), its block starts
   (at most 1 MiB), its window of output, its window of the run and its
@@ -2013,6 +2021,12 @@ differs from the text above:
   from the beginning, as this item said before part 2: the third entry's call
   carries on one of the other two passes until a place is free, so the third
   entry shows no percentage until its own pass starts.
+- **Rounds with no progress to go by.** `runCheckLoaded`, `ensureTabRange`
+  and the text loops in `web/src/doc.ts` give up after `MAX_ROUNDS` loads
+  however far the core gets. A check of a long run read a window at a time
+  takes a round each time it waits for chunks, so once 7c lifts the 64 MiB
+  limit a long enough run could reach the backstop. They could pass on
+  progress as `waitToOpen`'s callers do.
 - **`CHUNK_CAPACITY`.** A larger store would let `unit_input` grow. That is a
   choice about the browser's memory, not part of this design.
 
