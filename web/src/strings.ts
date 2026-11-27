@@ -4302,8 +4302,8 @@ export const SETTINGS = {
   columnNote: "Saved separately for files with a template and files without one.",
 
   listingHeading: "Listing",
-  listingColumns: "Show address, type and size on",
-  listingColumnsCursor: "Row at cursor",
+  listingColumns: "Address, size and number type",
+  listingColumnsCursor: "Selected row",
   listingColumnsAll: "Every row",
 
   templateHeading: "Template",
