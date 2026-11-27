@@ -362,7 +362,7 @@ fn info_stream() -> T {
 /// the IR reaches a string by the offset another field holds, so the two are
 /// read side by side rather than joined.
 fn named_stream() -> T {
-    T::inline_structure("PdbNamedStream", vec![("name_offset", T::u32(Little)), ("stream", T::u32(Little))])
+    T::inline_structure("PdbNamedStream", vec![("name_offset", T::u32(Little)), ("stream", T::u32(Little))]).positions(&["name_offset"])
         .counted_as("name")
 }
 
@@ -819,4 +819,10 @@ mod tests {
         assert_eq!(e.node(&d, &[records.as_slice(), &[1, 2]].concat()).unwrap().size_bits, 4 * 8);
     }
 
+    /// Where a stream's name is in the names buffer is a position. The stream
+    /// number beside it is not.
+    #[test]
+    fn a_named_stream_name_offset_is_a_position() {
+        crate::machinery::assert_marks(&pdb(), "PdbNamedStream", &["name_offset"], &["stream"]);
+    }
 }

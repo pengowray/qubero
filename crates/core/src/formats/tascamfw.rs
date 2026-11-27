@@ -499,13 +499,14 @@ fn font_range() -> T {
         vec![
             ("first_code_point", T::u32(Big)),
             ("last_code_point", T::u32(Big)),
+            // Counted from the start of the font map.
             ("font_offset", T::u32(Big)),
             ("font_length", T::u32(Big)),
             ("font_index", T::u32(Big)),
             ("unknown_14", T::u32(Big)),
             ("unknown_18", T::u32(Big)),
         ],
-    )
+    ).positions(&["font_offset"])
 }
 
 /// One of the map's fonts: where the first range that names it says, and as
@@ -990,5 +991,12 @@ mod tests {
         assert!(text.starts_with("push"), "{text}");
         let padding = extent(&mut ev, &d, &app, &["padding"]);
         assert_eq!(padding, (flash.len() as u64 - 16, 16));
+    }
+
+    /// Where a font is in the font map is a position. The code points and
+    /// the length beside it are not.
+    #[test]
+    fn a_font_range_offset_is_a_position() {
+        crate::machinery::assert_marks(&tascamfw(), "FontRange", &["font_offset"], &["font_length", "first_code_point"]);
     }
 }
