@@ -96,6 +96,7 @@ pub fn zc() -> Template {
                 ),
             ],
         )
+        .positions(&["data_info_pointer"])
         .field_valid("data_info_pointer", Valid::Eq(E::lit(DATA_INFO_AT)))
         .field_valid("file_type", Valid::Range { min: E::lit(129), max: E::lit(132) })
         .field_valid("padding", Valid::Eq(E::lit(0)))
@@ -184,6 +185,7 @@ fn data_info() -> T {
             ),
         ],
     )
+    .positions(&["data_pointer"])
     .field_valid("divratio", Valid::Min(E::lit(1)))
     .field_doc("data_pointer", "Offset of the first interval code: 0x0120 in types 129 to 131, 0x0150 or more in type 132.")
     .field_doc(
@@ -707,5 +709,12 @@ mod tests {
         assert!(is_named_zc(&binary, binary.len() as u64));
         assert_eq!(super::super::sniff_named(&binary, binary.len() as u64, "A1011811.zc"), Some("zc"));
         assert!(!is_named_zc(&wrong, wrong.len() as u64));
+    }
+
+    #[test]
+    fn the_two_pointers_are_positions() {
+        let t = zc();
+        crate::machinery::assert_marks(&t, "Anabat", &["data_info_pointer"], &["file_type"]);
+        crate::machinery::assert_marks(&t, "DataInfo", &["data_pointer"], &["divratio"]);
     }
 }

@@ -65,6 +65,7 @@ fn ssnd() -> T {
             ("samples", sample_table()),
         ],
     )
+    .positions(&["offset"])
 }
 
 /// The samples, read as what the `COMM` chunk earlier in the file said they
@@ -385,5 +386,15 @@ mod tests {
         assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[3, 0, 3]).unwrap().size_bits, 8);
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().value, Value::Str("me".into()));
+    }
+
+    /// Where the first sample is, counted from the end of the `SSND` header,
+    /// is a position. The block size beside it is not, and neither is a
+    /// marker's position, which counts sample frames.
+    #[test]
+    fn the_sound_data_offset_is_a_position() {
+        let t = aiff();
+        crate::machinery::assert_marks(&t, "SoundData", &["offset"], &["block_size"]);
+        crate::machinery::assert_marks(&t, "Marker", &[], &["position"]);
     }
 }

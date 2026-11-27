@@ -339,7 +339,8 @@ fn md3() -> Template {
                 ("end_offset", T::u32(Little)),
                 ("data", T::bytes(E::Remaining)),
             ],
-        ),
+        )
+        .positions(&["frames_offset", "tags_offset", "surfaces_offset", "end_offset"]),
     )
 }
 
@@ -380,7 +381,9 @@ fn u32_header(name: &str, kind: &str, magic: &'static [u8], names: &[&str]) -> T
     let mut fields = vec![("magic", T::magic(magic))];
     fields.extend(names.iter().map(|&field| (field, T::u32(Little))));
     fields.push(("data", T::bytes(E::Remaining)));
-    Template::new(name, T::structure(kind, fields))
+    // Each `_offset` in these headers counts from the start of the file.
+    let offsets: Vec<&str> = names.iter().copied().filter(|n| n.ends_with("_offset")).collect();
+    Template::new(name, T::structure(kind, fields).positions(&offsets))
 }
 
 fn assbin() -> Template {
@@ -463,7 +466,8 @@ fn usdc() -> Template {
                 ("table_of_contents_offset", T::u64(Little)),
                 ("data", T::bytes(E::Remaining)),
             ],
-        ),
+        )
+        .positions(&["table_of_contents_offset"]),
     )
 }
 
@@ -482,5 +486,16 @@ mod tests {
                 "{name} is not offered by the app"
             );
         }
+    }
+
+    /// The offsets in a model header are positions, and the counts beside
+    /// them are not.
+    #[test]
+    fn header_offsets_are_positions() {
+        use crate::machinery::assert_marks;
+        assert_marks(&md2(), "Md2Header", &["skins_offset", "end_offset"], &["skin_count", "frame_size"]);
+        assert_marks(&md3(), "Md3Header", &["frames_offset", "end_offset"], &["frame_count"]);
+        assert_marks(&iqm(), "IqmHeader", &["text_offset", "extension_offset"], &["text_count", "file_size"]);
+        assert_marks(&usdc(), "UsdCrate", &["table_of_contents_offset"], &["version"]);
     }
 }

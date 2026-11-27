@@ -151,6 +151,7 @@ fn contents(e: Endian) -> T {
         ],
     )
     .machinery(&["next_segment_offset", "raw_data_offset"])
+    .positions(&["next_segment_offset", "raw_data_offset"])
 }
 
 /// A segment's raw data: which layout it has, and the data read that way.
@@ -1395,5 +1396,12 @@ mod tests {
         let (d, mut ev) = file(&[segment(META | NEW_LIST | RAW | INTERLEAVED_FLAG, false, &meta, &raw, None)]);
         assert_eq!(layout(&mut ev, &d, 0), "not known");
         assert_eq!(data(&mut ev, &d, 0).type_name, "bytes[]");
+    }
+
+    /// The two offsets in a lead-in count from its end, and are positions.
+    /// The version beside them is not.
+    #[test]
+    fn the_lead_in_offsets_are_positions() {
+        crate::machinery::assert_marks(&tdms(), "SegmentContents", &["next_segment_offset", "raw_data_offset"], &["version"]);
     }
 }

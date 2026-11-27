@@ -195,6 +195,7 @@ fn attrs() -> T {
             ("attrs", T::array(attr(), E::field("count"))),
         ],
     )
+    .positions(&["data_start"])
 }
 
 /// One attribute: the run of its header, then the data it points at. The
@@ -441,5 +442,10 @@ mod tests {
         let mut ev = Evaluator::new(appledouble());
         assert_eq!(ev.node(&d, &[5]).unwrap().child_count, 2);
         assert!(ev.node(&d, &[5, 1, 7, 0]).is_ok());
+    }
+
+    #[test]
+    fn the_attribute_data_start_is_a_position() {
+        crate::machinery::assert_marks(&appledouble(), "ExtendedAttributes", &["data_start"], &["data_length", "total_size"]);
     }
 }

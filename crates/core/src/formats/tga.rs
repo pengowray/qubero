@@ -110,6 +110,7 @@ fn footer() -> T {
             ("signature", T::magic(b"TRUEVISION-XFILE.\0")),
         ],
     )
+    .positions(&["extension_offset", "developer_offset"])
 }
 
 fn nothing() -> T {
@@ -176,5 +177,10 @@ mod tests {
         assert_eq!(signature.value, Value::Magic { ok: true, bytes: b"TRUEVISION-XFILE.\0".to_vec(), expected: b"TRUEVISION-XFILE.\0".to_vec() });
         // Looking for it costs no bytes of its own.
         assert_eq!(ev.node(&d, &[14]).unwrap().size_bits, 0);
+    }
+
+    #[test]
+    fn the_footer_offsets_are_positions() {
+        crate::machinery::assert_marks(&tga(), "Footer", &["extension_offset", "developer_offset"], &["signature"]);
     }
 }
