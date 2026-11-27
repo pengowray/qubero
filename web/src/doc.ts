@@ -3963,7 +3963,7 @@ export class Doc {
   }
 
   /** The backstop for a wait over this file (see `roundLimit`). */
-  private roundLimit(): number {
+  roundLimit(): number {
     return roundLimit(this.blob.size, CHUNK_SIZE);
   }
 
