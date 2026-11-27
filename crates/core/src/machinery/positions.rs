@@ -341,7 +341,16 @@ impl<'a> Walk<'a, '_> {
         self.p.entry(def).walked = true;
         for n in &def.positions {
             if let Some(i) = def.fields.iter().position(|f| f.name == *n) {
-                self.p.mark(def, i, AT);
+                // A declared list of numbers, such as the chunk offsets of an
+                // MP4 `stco`, holds a position in each element.
+                let mut es = Vec::new();
+                elems_here(self.t, &def.fields[i].ty, 0, &mut es);
+                let numbers = !es.is_empty() && es.iter().all(|e| {
+                    let mut ss = Vec::new();
+                    structs_here(self.t, e, 0, &mut ss);
+                    ss.is_empty()
+                });
+                self.p.mark(def, i, if numbers { AT | EACH } else { AT });
             }
         }
         let mut ts = Vec::new();
@@ -547,6 +556,28 @@ fn deep<'a>(t: &'a Template, ty: &'a Ty, name: &str, seen: &mut Vec<usize>, out:
     }
 }
 
+/// Asserts that in every structure called `structure` that template `t`
+/// reaches, the fields in `marked` hold a position and the fields in
+/// `unmarked` do not. Each name has to be a field of at least one of them.
+#[cfg(test)]
+pub(crate) fn assert_marks(t: &Template, structure: &str, marked: &[&str], unmarked: &[&str]) {
+    let p = Positions::of(t);
+    let defs: Vec<&Marks> = p.by_def.values().filter(|m| m._def.name == structure).collect();
+    assert!(!defs.is_empty(), "{}: no structure {structure}", t.name);
+    for (names, want) in [(marked, true), (unmarked, false)] {
+        for n in names {
+            let mut found = false;
+            for m in &defs {
+                if let Some(i) = m._def.fields.iter().position(|f| &*f.name == *n) {
+                    found = true;
+                    assert_eq!(m.flags[i] & AT != 0, want, "{}: {structure}.{n}", t.name);
+                }
+            }
+            assert!(found, "{}: {structure} has no field {n}", t.name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +594,26 @@ mod tests {
             assert_eq!(p.flags(&t, &s, 0), AT);
         }
         assert!(p.by_def.len() <= p.kept + BUILT_CAP + 1, "{}", p.by_def.len());
+    }
+
+    /// A declared list of numbers holds a position in each element. A
+    /// declared list of structures does not: its elements are records, and
+    /// the positions in them are their own fields.
+    #[test]
+    fn a_declared_list_of_numbers_is_a_position_in_each_element() {
+        let rec = T::structure("Rec", vec![("n", T::u8())]);
+        let root = T::structure(
+            "Root",
+            vec![("count", T::u8()), ("offsets", T::array(T::u32(Big), E::field("count"))), ("records", T::array(rec, E::field("count"))), ("first", T::u32(Big))],
+        )
+        .positions(&["offsets", "records", "first"]);
+        let t = Template::new("t", root.clone());
+        let Ty::Struct(s) = &root else { panic!() };
+        let mut p = Positions::of(&t);
+        assert_eq!(p.flags(&t, s, 0), 0);
+        assert_eq!(p.flags(&t, s, 1), AT | EACH);
+        assert_eq!(p.flags(&t, s, 2), AT);
+        assert_eq!(p.flags(&t, s, 3), AT);
     }
 }
 
