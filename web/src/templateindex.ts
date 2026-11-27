@@ -636,7 +636,7 @@ function fieldAbove(chain: readonly ChainNode[], children: Children, depth: numb
 }
 
 /** True when two structures are written the same from their names on. */
-function sameText(index: TemplateIndex, a: Block, b: Block): boolean {
+export function sameText(index: TemplateIndex, a: Block, b: Block): boolean {
   if (a === b) return true;
   if (a.name !== b.name || a.head !== b.head) return false;
   const fromA = (index.stmtEnd.get(a.open) ?? a.open) + 1;
