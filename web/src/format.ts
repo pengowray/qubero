@@ -63,13 +63,20 @@ export function byteDigits(byte: number | bigint): string {
  * should stand: the field is not a position, not a whole number of zero or
  * more, or addresses are decimal, which is how the value is written anyway.
  * A signed offset is a position too: a CDF writes its offsets as `Int64`, and
- * the -1 that means "nowhere" stays decimal.
+ * the -1 that means "nowhere" stays decimal. `value` is the text the field
+ * is shown as, where the caller has it apart from `edit_text`.
  *
  * Worked out from `edit_text`, the decimal digits the editor starts from, so
  * a 64-bit offset keeps every digit.
  */
-export function positionValue(node: { readonly locates?: boolean; readonly kind: string; readonly edit_text: string }): string | null {
-  if (addressBase !== "hex" || !node.locates || (node.kind !== "uint" && node.kind !== "int")) return null;
+export function positionValue(node: { readonly locates?: boolean; readonly kind: string; readonly edit_text: string; readonly value?: string }): string | null {
+  if (addressBase !== "hex" || !node.locates) return null;
+  // An enum is a number with names for some of its values: an HDF5 address
+  // names only the value that means "undefined". A value with a name keeps
+  // the name, so only one that is shown as its bare digits is rewritten.
+  // The core writes a value that has no name as `75668 (unknown)`.
+  const named = node.kind === "enum" && node.value !== undefined && node.value !== node.edit_text && node.value !== `${node.edit_text} (unknown)`;
+  if ((node.kind !== "uint" && node.kind !== "int" && node.kind !== "enum") || named) return null;
   const digits = node.edit_text;
   if (!/^\d+$/.test(digits)) return null;
   return `0x${BigInt(digits).toString(16)}`;
