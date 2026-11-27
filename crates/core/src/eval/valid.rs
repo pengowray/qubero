@@ -325,7 +325,7 @@ fn branching(ty: &Ty) -> bool {
 fn float_of(v: &Value) -> Option<f64> {
     match v {
         Value::Float(f) => Some(*f),
-        Value::Unset(inner) => float_of(inner),
+        Value::Unset { value, .. } => float_of(value),
         _ => None,
     }
 }

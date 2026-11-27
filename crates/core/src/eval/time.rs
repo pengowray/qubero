@@ -264,7 +264,7 @@ impl Evaluator {
             // A slot the format leaves empty is still the number written there,
             // and a format that has both a sentinel of its own and a declared
             // unset value should have them agree.
-            Value::Unset(inner) => number(inner),
+            Value::Unset { value, .. } => number(value),
             other => number(other),
         })
     }

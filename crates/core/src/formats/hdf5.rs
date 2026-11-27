@@ -376,11 +376,11 @@ fn superblock_v2() -> T {
 /// read here as the eight bytes it always is.
 ///
 /// All ones is the undefined address, the file's way of writing "nothing
-/// here", and it reads as unset rather than as 18446744073709551615. Every
-/// other value shows as the number it is. Not an enum with one name: an enum
+/// here", and it reads as "undefined", the specification's word, rather than
+/// as 18446744073709551615. Every other value shows as the number it is. Not an enum with one name: an enum
 /// calls every real address an unknown value.
 pub(super) fn addr() -> T {
-    T::unset_int(T::u64(Little), UNDEFINED)
+    T::unset_int_named(T::u64(Little), UNDEFINED, "undefined")
 }
 
 /// A length, which the superblock sizes separately from an address and which
@@ -3162,6 +3162,28 @@ pub(crate) mod tests {
         object.push(6);
         let (_, value) = read(&f, &object);
         assert!(matches!(value, Value::Bytes { len: 0, .. }), "{value:?}");
+    }
+
+
+    /// The undefined address reads as "undefined", the specification's word,
+    /// and is still unset underneath. A real address is the number it is and
+    /// is marked as a position.
+    #[test]
+    fn an_undefined_address_reads_undefined() {
+        let doc = Document::new(MemSource(one_link_file()));
+        let mut ev = Evaluator::new(hdf5());
+        let field = |ev: &mut Evaluator, name: &str| {
+            let n = ev.node(&doc, &[2]).expect("superblock").child_count as usize;
+            (0..n).map(|i| ev.node(&doc, &[2, i]).expect("field")).find(|f| f.name == name).expect(name)
+        };
+        let free = field(&mut ev, "free_space_address");
+        assert_eq!(free.value, Value::Unset { value: Box::new(Value::UInt(u64::MAX as u128)), name: Some("undefined".into()) });
+        assert_eq!(free.value.as_int(), Some(UNDEFINED));
+        let spans = ev.spans(&doc, 32 * 8, 40 * 8, 8).expect("spans");
+        assert!(spans.iter().any(|s| s.value == free.value), "{spans:?}");
+        let end = field(&mut ev, "end_of_file_address");
+        assert_eq!(end.value, Value::UInt(304));
+        assert!(end.locates);
     }
 
 

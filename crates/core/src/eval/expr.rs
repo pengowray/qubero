@@ -57,7 +57,7 @@ pub(super) enum Leaf {
 pub(super) fn real_reading(v: &Value) -> Option<f64> {
     match v {
         Value::Float(f) => Some(*f),
-        Value::Unset(inner) => real_reading(inner),
+        Value::Unset { value, .. } => real_reading(value),
         Value::Str(_) | Value::Bytes { .. } => None,
         other => other.as_int().map(|i| i as f64),
     }

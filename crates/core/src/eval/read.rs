@@ -578,9 +578,9 @@ impl Evaluator {
             }
             // The number, and whether it is the one that means nothing was
             // filled in.
-            Ty::Nullable { inner, unset } => {
+            Ty::Nullable { inner, unset, name } => {
                 let v = self.primitive_value(doc, at, r, inner, size)?;
-                if unset.matches(&v) { Value::Unset(Box::new(v)) } else { v }
+                if unset.matches(&v) { Value::Unset { value: Box::new(v), name: name.clone() } } else { v }
             }
             Ty::Fixed { bits, frac, endian, signed } => {
                 let buf = self.read(doc, r, r.offset, size)?;

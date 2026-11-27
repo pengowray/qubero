@@ -17,19 +17,19 @@ root switch peek(u64be) {
         group_leaf_k: u16le
         group_internal_k: u16le
         file_consistency_flags: u32le
-        base_address: u64le unset 18446744073709551615
-        free_space_address: u64le unset 18446744073709551615
-        end_of_file_address: u64le unset 18446744073709551615
-        driver_info_address: u64le unset 18446744073709551615
+        base_address: u64le unset 18446744073709551615 "undefined"
+        free_space_address: u64le unset 18446744073709551615 "undefined"
+        end_of_file_address: u64le unset 18446744073709551615 "undefined"
+        driver_info_address: u64le unset 18446744073709551615 "undefined"
         root_group: Link (positions link_name_offset) {
           link_name_offset: u64le
-          object_header_address: u64le unset 18446744073709551615
+          object_header_address: u64le unset 18446744073709551615 "undefined"
           cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
           reserved: u32le
           scratch: switch cache_type {
             1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
-              cached_btree_address: u64le unset 18446744073709551615
-              cached_heap_address: u64le unset 18446744073709551615
+              cached_btree_address: u64le unset 18446744073709551615 "undefined"
+              cached_heap_address: u64le unset 18446744073709551615 "undefined"
             }
             2 => LinkCache (positions link_value_offset) {
               link_value_offset: u32le
@@ -57,19 +57,19 @@ root switch peek(u64be) {
         file_consistency_flags: u32le
         indexed_storage_internal_k: u16le
         reserved_3: u16le
-        base_address: u64le unset 18446744073709551615
-        free_space_address: u64le unset 18446744073709551615
-        end_of_file_address: u64le unset 18446744073709551615
-        driver_info_address: u64le unset 18446744073709551615
+        base_address: u64le unset 18446744073709551615 "undefined"
+        free_space_address: u64le unset 18446744073709551615 "undefined"
+        end_of_file_address: u64le unset 18446744073709551615 "undefined"
+        driver_info_address: u64le unset 18446744073709551615 "undefined"
         root_group: Link (positions link_name_offset) {
           link_name_offset: u64le
-          object_header_address: u64le unset 18446744073709551615
+          object_header_address: u64le unset 18446744073709551615 "undefined"
           cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
           reserved: u32le
           scratch: switch cache_type {
             1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
-              cached_btree_address: u64le unset 18446744073709551615
-              cached_heap_address: u64le unset 18446744073709551615
+              cached_btree_address: u64le unset 18446744073709551615 "undefined"
+              cached_heap_address: u64le unset 18446744073709551615 "undefined"
             }
             2 => LinkCache (positions link_value_offset) {
               link_value_offset: u32le
@@ -88,10 +88,10 @@ root switch peek(u64be) {
         offset_size: u8be
         length_size: u8be
         file_consistency_flags: u8be
-        base_address: u64le unset 18446744073709551615
-        superblock_extension_address: u64le unset 18446744073709551615
-        end_of_file_address: u64le unset 18446744073709551615
-        root_group_object_header_address: u64le unset 18446744073709551615
+        base_address: u64le unset 18446744073709551615 "undefined"
+        superblock_extension_address: u64le unset 18446744073709551615 "undefined"
+        end_of_file_address: u64le unset 18446744073709551615 "undefined"
+        root_group_object_header_address: u64le unset 18446744073709551615 "undefined"
         checksum: u32le
         root_group: switch root_group_object_header_address {
           0xffffffffffffffff => bytes[0]
@@ -120,19 +120,19 @@ root switch peek(u64be) {
           group_leaf_k: u16le
           group_internal_k: u16le
           file_consistency_flags: u32le
-          base_address: u64le unset 18446744073709551615
-          free_space_address: u64le unset 18446744073709551615
-          end_of_file_address: u64le unset 18446744073709551615
-          driver_info_address: u64le unset 18446744073709551615
+          base_address: u64le unset 18446744073709551615 "undefined"
+          free_space_address: u64le unset 18446744073709551615 "undefined"
+          end_of_file_address: u64le unset 18446744073709551615 "undefined"
+          driver_info_address: u64le unset 18446744073709551615 "undefined"
           root_group: Link (positions link_name_offset) {
             link_name_offset: u64le
-            object_header_address: u64le unset 18446744073709551615
+            object_header_address: u64le unset 18446744073709551615 "undefined"
             cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
             reserved: u32le
             scratch: switch cache_type {
               1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
-                cached_btree_address: u64le unset 18446744073709551615
-                cached_heap_address: u64le unset 18446744073709551615
+                cached_btree_address: u64le unset 18446744073709551615 "undefined"
+                cached_heap_address: u64le unset 18446744073709551615 "undefined"
               }
               2 => LinkCache (positions link_value_offset) {
                 link_value_offset: u32le
@@ -160,19 +160,19 @@ root switch peek(u64be) {
           file_consistency_flags: u32le
           indexed_storage_internal_k: u16le
           reserved_3: u16le
-          base_address: u64le unset 18446744073709551615
-          free_space_address: u64le unset 18446744073709551615
-          end_of_file_address: u64le unset 18446744073709551615
-          driver_info_address: u64le unset 18446744073709551615
+          base_address: u64le unset 18446744073709551615 "undefined"
+          free_space_address: u64le unset 18446744073709551615 "undefined"
+          end_of_file_address: u64le unset 18446744073709551615 "undefined"
+          driver_info_address: u64le unset 18446744073709551615 "undefined"
           root_group: Link (positions link_name_offset) {
             link_name_offset: u64le
-            object_header_address: u64le unset 18446744073709551615
+            object_header_address: u64le unset 18446744073709551615 "undefined"
             cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
             reserved: u32le
             scratch: switch cache_type {
               1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
-                cached_btree_address: u64le unset 18446744073709551615
-                cached_heap_address: u64le unset 18446744073709551615
+                cached_btree_address: u64le unset 18446744073709551615 "undefined"
+                cached_heap_address: u64le unset 18446744073709551615 "undefined"
               }
               2 => LinkCache (positions link_value_offset) {
                 link_value_offset: u32le
@@ -191,10 +191,10 @@ root switch peek(u64be) {
           offset_size: u8be
           length_size: u8be
           file_consistency_flags: u8be
-          base_address: u64le unset 18446744073709551615
-          superblock_extension_address: u64le unset 18446744073709551615
-          end_of_file_address: u64le unset 18446744073709551615
-          root_group_object_header_address: u64le unset 18446744073709551615
+          base_address: u64le unset 18446744073709551615 "undefined"
+          superblock_extension_address: u64le unset 18446744073709551615 "undefined"
+          end_of_file_address: u64le unset 18446744073709551615 "undefined"
+          root_group_object_header_address: u64le unset 18446744073709551615 "undefined"
           checksum: u32le
           root_group: switch root_group_object_header_address {
             0xffffffffffffffff => bytes[0]
@@ -282,7 +282,7 @@ type ArrayElement = switch datatype.properties.base.class {
         {
       1 => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -298,7 +298,7 @@ type ArrayElement = switch datatype.properties.base.class {
       }
       _ => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -349,7 +349,7 @@ type ArrayElement = switch datatype.properties.base.class {
                 16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
                     (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -371,7 +371,7 @@ type ArrayElement = switch datatype.properties.base.class {
                 16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
                     (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -450,7 +450,7 @@ type BTree2 {
   depth: u16le
   split_percent: u8be
   merge_percent: u8be
-  root_node_address: u64le unset 18446744073709551615
+  root_node_address: u64le unset 18446744073709551615 "undefined"
   root_record_count: u16le
   record_count: u64le
   checksum: u32le
@@ -491,7 +491,7 @@ type BTree2Node = switch peek(u32be) {
     level: computed child_level
     records: (bytes[record_size])[child_records]
     children: BTree2Child {
-      address: u64le unset 18446744073709551615
+      address: u64le unset 18446744073709551615 "undefined"
       child_records: u(child_records_size * 8)le
       total_records: switch 1 < level {
         1 => u(levels[level - 1].total_records_size * 8)le
@@ -606,7 +606,7 @@ type Datatype {
           1 => switch base.size {
             16 => sized(base.size) GlobalHeapId (named by object) {
               length: u32le
-              collection_address: u64le unset 18446744073709551615
+              collection_address: u64le unset 18446744073709551615 "undefined"
               object_index: u32le
               collection: switch collection_address {
                 0 => bytes[0]
@@ -626,7 +626,7 @@ type Datatype {
           _ => switch base.size {
             16 => sized(base.size) GlobalHeapId (named by object) {
               length: u32le
-              collection_address: u64le unset 18446744073709551615
+              collection_address: u64le unset 18446744073709551615 "undefined"
               object_index: u32le
               collection: switch collection_address {
                 0 => bytes[0]
@@ -698,7 +698,7 @@ type ElementsBeside = switch earlier(body.class) {
     1 => switch element_size {
       16 => sized(element_size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -717,7 +717,7 @@ type ElementsBeside = switch earlier(body.class) {
     _ => switch element_size {
       16 => sized(element_size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -777,7 +777,7 @@ type ElementsInside = switch datatype.class {
     1 => switch element_size {
       16 => sized(element_size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -796,7 +796,7 @@ type ElementsInside = switch datatype.class {
     _ => switch element_size {
       16 => sized(element_size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -850,7 +850,7 @@ type ExtensibleArray {
   data_block_size: u64le
   max_index_set: u64le
   entry_count: u64le
-  index_block_address: u64le unset 18446744073709551615
+  index_block_address: u64le unset 18446744073709551615 "undefined"
   checksum: u32le
   index_block: switch index_block_address {
     0xffffffffffffffff => bytes[0]
@@ -859,9 +859,9 @@ type ExtensibleArray {
       signature: magic "EAIB"
       version: u8be
       client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
-      header_address: u64le unset 18446744073709551615
+      header_address: u64le unset 18446744073709551615 "undefined"
       entries: sized(entry_size) Entry {
-        chunk_address: u64le unset 18446744073709551615
+        chunk_address: u64le unset 18446744073709551615 "undefined"
         filtered: switch client_id {
           1 => Filtered (inline) {
             chunk_size: u((entry_size - 12) * 8)le
@@ -887,7 +887,7 @@ type ExtensibleArray {
         }
       }[index_block_entries]
       data_blocks: DataBlockPointer (machinery block_entries) {
-        address: u64le unset 18446744073709551615
+        address: u64le unset 18446744073709551615 "undefined"
         block_entries: computed data_block_min_entries << log2(2 * (index + 2) / 3)
         block: switch address {
           0xffffffffffffffff => bytes[0]
@@ -895,10 +895,10 @@ type ExtensibleArray {
             signature: magic "EADB"
             version: u8be
             client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
-            header_address: u64le unset 18446744073709551615
+            header_address: u64le unset 18446744073709551615 "undefined"
             block_offset: u(ceil(max_entry_count_bits / 8) * 8)le
             entries: sized(entry_size) Entry {
-              chunk_address: u64le unset 18446744073709551615
+              chunk_address: u64le unset 18446744073709551615 "undefined"
               filtered: switch client_id {
                 1 => Filtered (inline) {
                   chunk_size: u((entry_size - 12) * 8)le
@@ -929,7 +929,7 @@ type ExtensibleArray {
       }[2 * (secondary_block_min_pointers - 1)]
       secondary_blocks: SecondaryBlockPointer (machinery super_block data_block_count
           block_entries page_entries page_count) {
-        address: u64le unset 18446744073709551615
+        address: u64le unset 18446744073709551615 "undefined"
         super_block: computed index + 2 * log2(secondary_block_min_pointers)
         data_block_count: computed 1 << super_block / 2
         block_entries: computed data_block_min_entries << (super_block + 1) / 2
@@ -942,11 +942,11 @@ type ExtensibleArray {
             signature: magic "EASB"
             version: u8be
             client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
-            header_address: u64le unset 18446744073709551615
+            header_address: u64le unset 18446744073709551615 "undefined"
             block_offset: u(ceil(max_entry_count_bits / 8) * 8)le
             page_bitmap: u8be[data_block_count * ceil(page_count / 8)]
             data_blocks: DataBlockPointer (machinery position) {
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               position: computed index
               block: switch address {
                 0xffffffffffffffff => bytes[0]
@@ -957,11 +957,11 @@ type ExtensibleArray {
                   client_id: u8be enum ArrayClient {
                     0 = chunks, unfiltered, 1 = chunks, filtered
                   }
-                  header_address: u64le unset 18446744073709551615
+                  header_address: u64le unset 18446744073709551615 "undefined"
                   block_offset: u(ceil(max_entry_count_bits / 8) * 8)le
                   entries: switch 1 - (page_count < 0) - (0 < page_count) {
                     1 => sized(entry_size) Entry {
-                      chunk_address: u64le unset 18446744073709551615
+                      chunk_address: u64le unset 18446744073709551615 "undefined"
                       filtered: switch client_id {
                         1 => Filtered (inline) {
                           chunk_size: u((entry_size - 12) * 8)le
@@ -995,7 +995,7 @@ type ExtensibleArray {
                       & 1 {
                     1 => Page {
                       entries: sized(entry_size) Entry {
-                        chunk_address: u64le unset 18446744073709551615
+                        chunk_address: u64le unset 18446744073709551615 "undefined"
                         filtered: switch client_id {
                           1 => Filtered (inline) {
                             chunk_size: u((entry_size - 12) * 8)le
@@ -1045,7 +1045,7 @@ type FixedArray {
   entry_size: u8be
   page_bits: u8be
   max_entry_count: u64le
-  data_block_address: u64le unset 18446744073709551615
+  data_block_address: u64le unset 18446744073709551615 "undefined"
   checksum: u32le
   data_block: switch data_block_address {
     0xffffffffffffffff => bytes[0]
@@ -1054,14 +1054,14 @@ type FixedArray {
       signature: magic "FADB"
       version: u8be
       client_id: u8be enum ArrayClient {0 = chunks, unfiltered, 1 = chunks, filtered}
-      header_address: u64le unset 18446744073709551615
+      header_address: u64le unset 18446744073709551615 "undefined"
       page_entries: computed 1 << page_bits
       page_count: computed (page_entries < max_entry_count) *
           ceil(max_entry_count / page_entries)
       page_bitmap: u8be[ceil(page_count / 8)]
       entries: switch 1 - (page_count < 0) - (0 < page_count) {
         1 => sized(entry_size) Entry {
-          chunk_address: u64le unset 18446744073709551615
+          chunk_address: u64le unset 18446744073709551615 "undefined"
           filtered: switch client_id {
             1 => Filtered (inline) {
               chunk_size: u((entry_size - 12) * 8)le
@@ -1093,7 +1093,7 @@ type FixedArray {
           switch page_bitmap[index / 8] >> 7 - (index - index / 8 * 8) & 1 {
         1 => Page {
           entries: sized(entry_size) Entry {
-            chunk_address: u64le unset 18446744073709551615
+            chunk_address: u64le unset 18446744073709551615 "undefined"
             filtered: switch client_id {
               1 => Filtered (inline) {
                 chunk_size: u((entry_size - 12) * 8)le
@@ -1136,9 +1136,9 @@ type FractalHeap (positions huge_object_btree_address free_space_manager_address
   }
   max_managed_object_size: u32le
   next_huge_object_id: u64le
-  huge_object_btree_address: u64le unset 18446744073709551615
+  huge_object_btree_address: u64le unset 18446744073709551615 "undefined"
   managed_free_space: u64le
-  free_space_manager_address: u64le unset 18446744073709551615
+  free_space_manager_address: u64le unset 18446744073709551615 "undefined"
   managed_space: u64le
   allocated_managed_space: u64le
   direct_block_iterator_offset: u64le
@@ -1152,7 +1152,7 @@ type FractalHeap (positions huge_object_btree_address free_space_manager_address
   max_direct_block_size: u64le
   max_heap_size: u16le
   starting_rows: u16le
-  root_block_address: u64le unset 18446744073709551615
+  root_block_address: u64le unset 18446744073709551615 "undefined"
   current_rows: u16le
   filtered_root: switch io_filter_length {
     0 => bytes[0]
@@ -1200,7 +1200,7 @@ type GlobalHeap {
 type HeapDirectBlock (positions heap_header_address) {
   signature: magic "FHDB"
   version: u8be
-  heap_header_address: u64le unset 18446744073709551615
+  heap_header_address: u64le unset 18446744073709551615 "undefined"
   block_offset: bytes[(max_heap_size + 7) / 8]
   checksum: switch flags / 2 - flags / 4 * 2 {1 => u32le, _ => bytes[0]}
   links: repeat(until end) switch peek(u8le) {
@@ -1243,7 +1243,7 @@ type HeapDirectBlock (positions heap_header_address) {
             value: bytes[value_length]
           }
           _ => HardLink {
-            object_header_address: u64le unset 18446744073709551615
+            object_header_address: u64le unset 18446744073709551615 "undefined"
             object: switch object_header_address {
               0xffffffffffffffff => bytes[0]
               _ => at(object_header_address from origin) ObjectHeader
@@ -1258,10 +1258,10 @@ type HeapDirectBlock (positions heap_header_address) {
 type HeapIndirectBlock (positions heap_header_address) {
   signature: magic "FHIB"
   version: u8be
-  heap_header_address: u64le unset 18446744073709551615
+  heap_header_address: u64le unset 18446744073709551615 "undefined"
   block_offset: bytes[(max_heap_size + 7) / 8]
   children: HeapBlock {
-    address: u64le unset 18446744073709551615
+    address: u64le unset 18446744073709551615 "undefined"
     row: computed index / table_width
     block_size: switch row {
       0 => computed starting_block_size
@@ -1304,7 +1304,7 @@ type LocalHeap (positions free_list_offset) {
   reserved: bytes[3]
   data_segment_size: u64le
   free_list_offset: u64le
-  data_segment_address: u64le unset 18446744073709551615
+  data_segment_address: u64le unset 18446744073709551615 "undefined"
   data: switch data_segment_address {
     0xffffffffffffffff => bytes[0]
     _ => at(data_segment_address from origin) bytes[data_segment_size]
@@ -1420,7 +1420,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
         descriptor.datatype.properties.base.bit_field & 0x0f {
       1 => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1436,7 +1436,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
       }
       _ => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1487,7 +1487,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
                 16 => sized(descriptor.datatype.properties.base.properties.base.size)
                     GlobalHeapId (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -1509,7 +1509,7 @@ type MemberArrayElement = switch descriptor.datatype.properties.base.class {
                 16 => sized(descriptor.datatype.properties.base.properties.base.size)
                     GlobalHeapId (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -1612,7 +1612,7 @@ type MemberElement = switch descriptor.datatype.class {
     16 => sized(descriptor.datatype.size) switch descriptor.datatype.bit_field & 0x0f {
       1 => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1628,7 +1628,7 @@ type MemberElement = switch descriptor.datatype.class {
       }
       _ => GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1686,7 +1686,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
     1 => switch descriptor.datatype.properties.base.size {
       16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1706,7 +1706,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
     _ => switch descriptor.datatype.properties.base.size {
       16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -1757,7 +1757,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
                 16 => sized(descriptor.datatype.properties.base.properties.base.size)
                     GlobalHeapId (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -1779,7 +1779,7 @@ type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
                 16 => sized(descriptor.datatype.properties.base.properties.base.size)
                     GlobalHeapId (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -1917,10 +1917,10 @@ type Message (named by type, contents body) {
         bit 0 = creation order tracked, bit 1 = creation order indexed
       }
       max_creation_index: switch flags / 1 - flags / 2 * 2 {1 => u64le, _ => bytes[0]}
-      fractal_heap_address: u64le unset 18446744073709551615
-      name_index_btree_address: u64le unset 18446744073709551615
+      fractal_heap_address: u64le unset 18446744073709551615 "undefined"
+      name_index_btree_address: u64le unset 18446744073709551615 "undefined"
       creation_order_index_address: switch flags / 2 - flags / 4 * 2 {
-        1 => u64le unset 18446744073709551615
+        1 => u64le unset 18446744073709551615 "undefined"
         _ => bytes[0]
       }
       heap: switch fractal_heap_address {
@@ -1996,7 +1996,7 @@ type Message (named by type, contents body) {
           value: bytes[value_length]
         }
         _ => HardLink {
-          object_header_address: u64le unset 18446744073709551615
+          object_header_address: u64le unset 18446744073709551615 "undefined"
           object: switch object_header_address {
             0xffffffffffffffff => bytes[0]
             _ => at(object_header_address from origin) ObjectHeader
@@ -2013,7 +2013,7 @@ type Message (named by type, contents body) {
             0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
           }
           reserved: bytes[5]
-          address: u64le unset 18446744073709551615
+          address: u64le unset 18446744073709551615 "undefined"
           dimensions: u32le[dimensionality]
           element_size: switch layout_class / 2 {1 => u32le, _ => bytes[0]}
           storage: switch layout_class {
@@ -2057,7 +2057,7 @@ type Message (named by type, contents body) {
               }
             }
             1 => Contiguous {
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               size: u64le
               data: switch address {
                 0xffffffffffffffff => bytes[0]
@@ -2075,7 +2075,7 @@ type Message (named by type, contents body) {
             }
             2 => Chunked {
               dimensionality: u8be
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               chunk_dimensions: u32le[dimensionality - 1]
               element_size: u32le
               chunks: switch address {
@@ -2105,7 +2105,7 @@ type Message (named by type, contents body) {
               }
             }
             1 => Contiguous {
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               size: u64le
               data: switch address {
                 0xffffffffffffffff => bytes[0]
@@ -2157,7 +2157,7 @@ type Message (named by type, contents body) {
                 }
                 _ => bytes[0]
               }
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               datatype: at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
                   aside
               chunks: switch index_type {
@@ -2269,7 +2269,7 @@ type Message (named by type, contents body) {
               }
             }
             3 => Virtual {
-              collection_address: u64le unset 18446744073709551615
+              collection_address: u64le unset 18446744073709551615 "undefined"
               object_index: u32le
               collection: switch collection_address {
                 0xffffffffffffffff => bytes[0]
@@ -2359,7 +2359,7 @@ type Message (named by type, contents body) {
       comment: text until 0x00 utf8
     }
     16 => Continuation {
-      offset: u64le unset 18446744073709551615
+      offset: u64le unset 18446744073709551615 "undefined"
       length: u64le
       messages: switch version {
         2 => switch offset {
@@ -2377,8 +2377,8 @@ type Message (named by type, contents body) {
       }
     }
     17 => SymbolTable (positions btree_address) {
-      btree_address: u64le unset 18446744073709551615
-      heap_address: u64le unset 18446744073709551615
+      btree_address: u64le unset 18446744073709551615 "undefined"
+      heap_address: u64le unset 18446744073709551615 "undefined"
       heap: switch heap_address {
         0xffffffffffffffff => bytes[0]
         _ => at(heap_address from origin) LocalHeap
@@ -2418,10 +2418,10 @@ type MessageV2 = Message (named by type, contents body) {
         bit 0 = creation order tracked, bit 1 = creation order indexed
       }
       max_creation_index: switch flags / 1 - flags / 2 * 2 {1 => u64le, _ => bytes[0]}
-      fractal_heap_address: u64le unset 18446744073709551615
-      name_index_btree_address: u64le unset 18446744073709551615
+      fractal_heap_address: u64le unset 18446744073709551615 "undefined"
+      name_index_btree_address: u64le unset 18446744073709551615 "undefined"
       creation_order_index_address: switch flags / 2 - flags / 4 * 2 {
-        1 => u64le unset 18446744073709551615
+        1 => u64le unset 18446744073709551615 "undefined"
         _ => bytes[0]
       }
       heap: switch fractal_heap_address {
@@ -2497,7 +2497,7 @@ type MessageV2 = Message (named by type, contents body) {
           value: bytes[value_length]
         }
         _ => HardLink {
-          object_header_address: u64le unset 18446744073709551615
+          object_header_address: u64le unset 18446744073709551615 "undefined"
           object: switch object_header_address {
             0xffffffffffffffff => bytes[0]
             _ => at(object_header_address from origin) ObjectHeader
@@ -2514,7 +2514,7 @@ type MessageV2 = Message (named by type, contents body) {
             0 = compact, 1 = contiguous, 2 = chunked, 3 = virtual
           }
           reserved: bytes[5]
-          address: u64le unset 18446744073709551615
+          address: u64le unset 18446744073709551615 "undefined"
           dimensions: u32le[dimensionality]
           element_size: switch layout_class / 2 {1 => u32le, _ => bytes[0]}
           storage: switch layout_class {
@@ -2558,7 +2558,7 @@ type MessageV2 = Message (named by type, contents body) {
               }
             }
             1 => Contiguous {
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               size: u64le
               data: switch address {
                 0xffffffffffffffff => bytes[0]
@@ -2576,7 +2576,7 @@ type MessageV2 = Message (named by type, contents body) {
             }
             2 => Chunked {
               dimensionality: u8be
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               chunk_dimensions: u32le[dimensionality - 1]
               element_size: u32le
               chunks: switch address {
@@ -2606,7 +2606,7 @@ type MessageV2 = Message (named by type, contents body) {
               }
             }
             1 => Contiguous {
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               size: u64le
               data: switch address {
                 0xffffffffffffffff => bytes[0]
@@ -2658,7 +2658,7 @@ type MessageV2 = Message (named by type, contents body) {
                 }
                 _ => bytes[0]
               }
-              address: u64le unset 18446744073709551615
+              address: u64le unset 18446744073709551615 "undefined"
               datatype: at(start of earlier(body.bit_field_rest) - 2 from origin) Datatype
                   aside
               chunks: switch index_type {
@@ -2770,7 +2770,7 @@ type MessageV2 = Message (named by type, contents body) {
               }
             }
             3 => Virtual {
-              collection_address: u64le unset 18446744073709551615
+              collection_address: u64le unset 18446744073709551615 "undefined"
               object_index: u32le
               collection: switch collection_address {
                 0xffffffffffffffff => bytes[0]
@@ -2860,7 +2860,7 @@ type MessageV2 = Message (named by type, contents body) {
       comment: text until 0x00 utf8
     }
     16 => Continuation {
-      offset: u64le unset 18446744073709551615
+      offset: u64le unset 18446744073709551615 "undefined"
       length: u64le
       messages: switch version {
         2 => switch offset {
@@ -2878,8 +2878,8 @@ type MessageV2 = Message (named by type, contents body) {
       }
     }
     17 => SymbolTable (positions btree_address) {
-      btree_address: u64le unset 18446744073709551615
-      heap_address: u64le unset 18446744073709551615
+      btree_address: u64le unset 18446744073709551615 "undefined"
+      heap_address: u64le unset 18446744073709551615 "undefined"
       heap: switch heap_address {
         0xffffffffffffffff => bytes[0]
         _ => at(heap_address from origin) LocalHeap
@@ -2900,14 +2900,14 @@ type Node = switch peek(u32be) {
     node_type: u8be enum NodeType {0 = group, 1 = chunk}
     node_level: u8be
     entries_used: u16le
-    left_sibling: u64le unset 18446744073709551615
-    right_sibling: u64le unset 18446744073709551615
+    left_sibling: u64le unset 18446744073709551615 "undefined"
+    right_sibling: u64le unset 18446744073709551615 "undefined"
     entries: switch node_type {
       1 => Entry {
         chunk_size: u32le
         filter_mask: u32le
         offsets: u64le[dimensionality]
-        child_address: u64le unset 18446744073709551615
+        child_address: u64le unset 18446744073709551615 "undefined"
         child: switch node_level {
           0 => switch child_address {
             0xffffffffffffffff => bytes[0]
@@ -2936,7 +2936,7 @@ type Node = switch peek(u32be) {
       _ => Entry (named by key_name, contents child) {
         name_offset: u64le
         key_name: at(data_segment_address + name_offset from origin) text until 0x00 utf8
-        child_address: u64le unset 18446744073709551615
+        child_address: u64le unset 18446744073709551615 "undefined"
         child: switch child_address {
           0xffffffffffffffff => bytes[0]
           _ => at(child_address from origin) Node
@@ -2961,13 +2961,13 @@ type Node = switch peek(u32be) {
     symbol_count: u16le
     symbols: Link (named by name, contents object, positions link_name_offset) {
       link_name_offset: u64le
-      object_header_address: u64le unset 18446744073709551615
+      object_header_address: u64le unset 18446744073709551615 "undefined"
       cache_type: u32le enum CacheType {0 = nothing cached, 1 = group, 2 = symbolic link}
       reserved: u32le
       scratch: switch cache_type {
         1 => GroupCache (inline, positions cached_btree_address cached_heap_address) {
-          cached_btree_address: u64le unset 18446744073709551615
-          cached_heap_address: u64le unset 18446744073709551615
+          cached_btree_address: u64le unset 18446744073709551615 "undefined"
+          cached_heap_address: u64le unset 18446744073709551615 "undefined"
         }
         2 => LinkCache (positions link_value_offset) {
           link_value_offset: u32le
@@ -3071,7 +3071,7 @@ type SequenceElements = switch datatype.properties.base.class {
     1 => switch datatype.properties.base.size {
       16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -3090,7 +3090,7 @@ type SequenceElements = switch datatype.properties.base.class {
     _ => switch datatype.properties.base.size {
       16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
         length: u32le
-        collection_address: u64le unset 18446744073709551615
+        collection_address: u64le unset 18446744073709551615 "undefined"
         object_index: u32le
         collection: switch collection_address {
           0 => bytes[0]
@@ -3141,7 +3141,7 @@ type SequenceElements = switch datatype.properties.base.class {
                 16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
                     (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]
@@ -3163,7 +3163,7 @@ type SequenceElements = switch datatype.properties.base.class {
                 16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
                     (named by object) {
                   length: u32le
-                  collection_address: u64le unset 18446744073709551615
+                  collection_address: u64le unset 18446744073709551615 "undefined"
                   object_index: u32le
                   collection: switch collection_address {
                     0 => bytes[0]

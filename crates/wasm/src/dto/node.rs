@@ -187,7 +187,7 @@ pub(crate) fn shown(v: &Value) -> (&'static str, String, String) {
         // A slot the file left at its format's "nobody filled this in" value.
         // The editor still starts from the number that is written there, so
         // opening the field shows what would be overwritten.
-        Value::Unset(inner) => ("unset", "unset".into(), shown(inner).2),
+        Value::Unset { value, name } => ("unset", qubero_core::eval::unset_reading(name.as_deref()).into(), shown(value).2),
         Value::Str(s) => ("str", s.clone(), s.clone()),
         Value::Magic { bytes, .. } => {
             // How a signature reads is core's answer, not this crate's, so

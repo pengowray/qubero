@@ -229,14 +229,14 @@ fn stream_info() -> T {
         vec![
             ("min_block_size", T::u16(Big)),
             ("max_block_size", T::u16(Big)),
-            ("min_frame_size", T::unset_int(bits(24), 0)),
-            ("max_frame_size", T::unset_int(bits(24), 0)),
+            ("min_frame_size", T::unset_int_named(bits(24), 0, "unknown")),
+            ("max_frame_size", T::unset_int_named(bits(24), 0, "unknown")),
             ("sample_rate", bits(20)),
             ("channels_minus1", bits(3)),
             ("channels", T::computed(E::field("channels_minus1").add(E::lit(1)))),
             ("bits_per_sample_minus1", bits(5)),
             ("bits_per_sample", T::computed(E::field("bits_per_sample_minus1").add(E::lit(1)))),
-            ("total_samples", T::unset_int(bits(36), 0)),
+            ("total_samples", T::unset_int_named(bits(36), 0, "unknown")),
             (
                 "duration",
                 T::when(
@@ -255,12 +255,12 @@ fn stream_info() -> T {
     ])
     .field_doc("min_block_size", "Fewest samples per channel in any frame except the last.")
     .field_doc("max_block_size", "Most samples per channel in any frame.")
-    .field_doc("min_frame_size", "Size of the smallest frame in bytes. Unset (0) if unknown.")
-    .field_doc("max_frame_size", "Size of the largest frame in bytes. Unset (0) if unknown.")
+    .field_doc("min_frame_size", "Size of the smallest frame in bytes. 0 if unknown.")
+    .field_doc("max_frame_size", "Size of the largest frame in bytes. 0 if unknown.")
     .field_doc("sample_rate", "Samples per second, per channel.")
     .field_doc("channels_minus1", "Number of channels minus 1.")
     .field_doc("bits_per_sample_minus1", "Bits per sample minus 1.")
-    .field_doc("total_samples", "Samples per channel in the whole stream. Unset (0) if unknown.")
+    .field_doc("total_samples", "Samples per channel in the whole stream. 0 if unknown.")
     .field_doc("duration", "Length of the audio in seconds: total_samples divided by sample_rate.")
     .field_doc("md5", "MD5 of the decoded audio: the samples interleaved, signed and little-endian. All zeros if the encoder did not compute it.")
 }
@@ -289,7 +289,7 @@ fn seek_table() -> T {
     .counted_as("seek point")
     .positions(&["stream_offset"])
     .reads_as(&[("sample_number", "sample {}", ""), ("stream_offset", "offset {}", ""), ("frame_samples", "{} samples", "")])
-    .field_doc("sample_number", "Number of the first sample in the target frame. Unset (all ones) for a placeholder point, which reserves space for a seek point added later.")
+    .field_doc("sample_number", "Number of the first sample in the target frame. All ones for a placeholder point, which reserves space for a seek point added later.")
     .field_doc("stream_offset", "Where the target frame starts, in bytes from the start of the first frame.")
     .field_doc("frame_samples", "Samples per channel in the target frame.");
     T::structure_named("SeekTable", "", "points", vec![("points", T::array(point, E::Remaining.div(E::lit(18))))])
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(int(&mut e, &d, &["metadata_blocks", "1", "data", "points", "1", "stream_offset"]), 12_345);
         assert_eq!(int(&mut e, &d, &["metadata_blocks", "1", "data", "points", "1", "sample_number"]), 40_960);
         let placeholder = path(&mut e, &d, &["metadata_blocks", "1", "data", "points", "2", "sample_number"]);
-        assert!(matches!(e.node(&d, &placeholder).unwrap().value, crate::eval::Value::Unset(_)));
+        assert!(matches!(e.node(&d, &placeholder).unwrap().value, crate::eval::Value::Unset { .. }));
     }
 
     /// The comment block's lengths are little-endian, unlike everything else

@@ -1173,7 +1173,7 @@ fn named_value(v: &Value) -> Option<String> {
             Some(String::from_utf8_lossy(preview).into_owned())
         }
         Value::Magic { bytes, .. } if bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') => Some(String::from_utf8_lossy(bytes).into_owned()),
-        Value::Unset(inner) => named_value(inner),
+        Value::Unset { value, .. } => named_value(value),
         _ => None,
     }
 }

@@ -684,3 +684,37 @@ fn a_span_carries_what_is_worked_out_from_it_alone() {
     assert!(all[1].worth.is_none());
     assert!(all[2].worth.is_none());
 }
+
+/// A named unset value reads as the format's word for it, and is still the
+/// number underneath to everything that compares or switches on it.
+#[test]
+fn a_named_unset_value_reads_as_its_name_and_is_still_unset() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("kind", T::unset_int_named(T::u8(), 255, "missing")),
+                ("plain", T::unset_int(T::u8(), 255)),
+                ("is_missing", T::computed(E::field("kind").equals(E::lit(255)))),
+                ("body", T::switch(E::field("kind"), vec![(255, T::u16(Big))], T::u8())),
+            ],
+        ),
+    );
+    let d = doc(&[255, 255, 0, 7]);
+    let mut ev = Evaluator::new(t);
+    let kind = ev.node(&d, &[0]).unwrap();
+    assert_eq!(kind.value, Value::Unset { value: Box::new(Value::UInt(255)), name: Some("missing".into()) });
+    assert_eq!(kind.value.as_int(), Some(255));
+    assert_eq!(super::listing::brief(&kind.value), "missing");
+    let plain = ev.node(&d, &[1]).unwrap();
+    assert_eq!(super::listing::brief(&plain.value), "unset");
+    // Expressions see the number: the comparison holds and the switch takes
+    // the arm for 255.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(1));
+    let body = ev.node(&d, &[3]).unwrap();
+    assert_eq!((body.value.clone(), body.size_bits), (Value::UInt(7), 16));
+    // The hex view's span carries the same value, name and all.
+    let spans = ev.spans(&d, 0, 8, 10).unwrap();
+    assert_eq!(spans[0].value, kind.value);
+}

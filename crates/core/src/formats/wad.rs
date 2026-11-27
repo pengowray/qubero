@@ -723,7 +723,7 @@ mod tests {
         let d = Document::new(MemSource(build(&[(&line, b"LINEDEFS")])));
         let mut ev = Evaluator::new(wad());
         assert_eq!(ev.node(&d, &[4, 0, 0, 5]).unwrap().value, Value::UInt(0));
-        assert!(matches!(ev.node(&d, &[4, 0, 0, 6]).unwrap().value, Value::Unset(_)));
+        assert!(matches!(ev.node(&d, &[4, 0, 0, 6]).unwrap().value, Value::Unset { .. }));
     }
 
     #[test]
