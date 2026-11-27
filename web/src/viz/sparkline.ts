@@ -1,30 +1,24 @@
-// Sparkline of one field across a run of records, beside the field's value in
-// the listing.
+// Sparkline of a list of numbers, beside the list's row in the listing.
 //
 // Candidate `record-small-multiples` in docs/DESIGN-diagrams.md, section 4.2,
 // the run sparkline of its first-batch slice (section 5.3, agent I). The
 // heading tile grid is `recordtiles.ts`.
 //
-// A list of records repeats the same fields in every record: each PNG chunk
-// has a `length`, each MIDI event a `delta`, each ZIP entry its sizes. The
-// listing shows one record's value per row, so seeing how the value moves
-// across the list means reading every record. The sparkline puts the whole
-// run on one line beside the first record's value: one point per record, in
-// file order, with the smallest and largest value written at the two ends. A
-// run longer than the line is pixels wide is drawn as the smallest and
-// largest value in each pixel's stretch of records (`sparkmath.ts`), so a
-// spike in a run of thousands is still there.
+// The listing shows one element per row, so seeing how the numbers of a list
+// move means reading every row. The sparkline puts the whole list on one
+// line on the list's own row: one point per element, in file order, with the
+// smallest and largest value written at the two ends. A list longer than the
+// line is pixels wide is drawn as the smallest and largest value in each
+// pixel's stretch of elements (`sparkmath.ts`), so a spike in a list of
+// thousands is still there.
 //
-// Where it is drawn. On the rows of the first record of a list only
-// (`viz/rowglyphs.ts`): the run belongs to the list, and repeating it on every
-// record's row would be the same line two hundred times. The point for the
-// record the cursor is in is marked, whichever view moved the cursor, so the
-// line still says where a reader is in the run. Only for a number that varies
-// across at least three records, and not for a checksum, whose values are
-// meant to look like noise. The records of a list need not all be of one type:
-// the field is found in each by its name, so a ZIP's `compressed_size` is one
-// run across its local file headers, data descriptors and central directory
-// entries, and a record without the field is left out of the line.
+// Where it is drawn. On the row of a list whose elements are numbers, at
+// least three of them, that vary. Until 2026-11-27 it sat beside a number in
+// the first record of a list of records and showed that field across the
+// records; the owner read that as a picture of the one integer beside it and
+// asked for it on arrays of numbers only. The table view is where one field
+// is compared across records. The point for the element the cursor is in is
+// marked, whichever view moved the cursor.
 //
 // The run is read a slice at a time with the page given its turn in between
 // (`readahead.ts`), so opening a directory of thousands of records does not
@@ -42,21 +36,17 @@ import "uplot/dist/uPlot.min.css";
 import type uPlotType from "uplot";
 import type { Doc, TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
-import { isElementName } from "../elementname.ts";
 import { bitSizeText, VIZ } from "../strings.ts";
 import { linkedFor } from "./linked.ts";
 import { goToField } from "./pick.ts";
 import { registerRowGlyph } from "./rowglyphs.ts";
 import { recordsOf, queued, walk, WAIT, type Wait, type Walk } from "./readahead.ts";
-import { binOf, binRecords, envelope, findStep, parseNumber, sameRun, shortNumber, worthDrawing, type Envelope, type Step } from "./sparkmath.ts";
+import { binOf, binRecords, envelope, parseNumber, sameRun, shortNumber, worthDrawing, type Envelope } from "./sparkmath.ts";
 import { recordWord } from "./tilelayout.ts";
 import { hideTip, tipAt, tipCard } from "./tip.ts";
 
 /** Records read for one run. */
 const READ_MAX = 4096;
-/** How far above the field the record may be: a ZIP entry's sizes are in its
- *  `body`, two steps down. */
-const RECORD_DEPTH_MAX = 3;
 /** The line's size, in CSS pixels: as tall as the row's text, and about as
  *  wide as a short value. */
 const W = 72;
@@ -81,86 +71,35 @@ export type Run = {
  *  like noise. */
 const CHECKSUM_NAME = /^(crc\d*|adler\d*|checksum|hash|md5|sha\d*)(_|$)|_(crc\d*|checksum|hash)$/i;
 
-/** Whether a row could have a sparkline, from the node alone: a number with
- *  bytes, with a first element of a list a few steps above it. */
+/** Whether a row could have a sparkline, from the node alone: a list with
+ *  bytes and at least three elements. Whether those elements are numbers is
+ *  not known until they are read (`runOf`). */
 function candidate(n: TemplateNode): boolean {
-  if (n.composite || n.size_bits === 0) return false;
-  if (n.kind !== "uint" && n.kind !== "int" && n.kind !== "float") return false;
-  const p = n.path;
-  for (let d = 1; d <= RECORD_DEPTH_MAX && p.length - d - 1 >= 0; d++) if (p[p.length - d - 1] === 0) return true;
-  return false;
+  return n.list && n.composite && n.size_bits > 0 && n.child_count >= 3;
 }
 
 /**
- * The run the field at `n` is one value of: the list whose first record holds
- * it, and the same field in every record, found by the names of the steps
- * from the record down to it (`findStep`). Null where there is no run worth a
- * line. Read a slice at a time (`readahead.ts`): a directory of thousands of
- * records takes longer than a press may.
+ * The run of numbers the list at `n` holds, one point per element. Null where
+ * the elements are not numbers, or there is no run worth a line. Read a slice
+ * at a time (`readahead.ts`): a list of thousands takes longer than a press
+ * may.
+ *
+ * Only on a list of numbers. The line used to sit beside a number in the
+ * first record of a list and show that field across every record, which read
+ * as a picture of the one number it was next to.
  */
 async function runOf(w: Walk, n: TemplateNode): Promise<Run | null | Wait> {
-  const doc = w.doc;
-  const p = n.path;
-  for (let d = 1; d <= RECORD_DEPTH_MAX && p.length - d - 1 >= 0; d++) {
-    const recordPath = p.slice(0, p.length - d);
-    if (recordPath[recordPath.length - 1] !== 0) continue;
-    const rec = doc.templateNode(recordPath);
-    if (rec.status !== "ok") return WAIT;
-    if (!isElementName(rec.node.name)) continue;
-    const up = doc.templateNode(recordPath.slice(0, -1));
-    if (up.status !== "ok") return WAIT;
-    const list = up.node;
-    if (!list.list || list.child_count < 3) continue;
-    // The steps from the record down to the field.
-    const steps: Step[] = [];
-    for (let s = recordPath.length + 1; s <= p.length; s++) {
-      const at = doc.templateNode(p.slice(0, s));
-      if (at.status !== "ok") return WAIT;
-      steps.push({ name: at.node.name, index: p[s - 1] as number });
-    }
-    const records = await recordsOf(w, list, Math.min(list.child_count, READ_MAX));
-    if (records === WAIT || !w.alive()) return WAIT;
-    const points: Point[] = [];
-    for (const [i, r] of records.entries()) {
-      let at: TemplateNode | undefined = r;
-      for (const step of steps) {
-        if (at === undefined || !at.composite) {
-          at = undefined;
-          break;
-        }
-        const next = childAt(doc, at, step);
-        if (next === WAIT_CHILD) return WAIT;
-        at = next;
-      }
-      if (at === undefined) continue;
-      const value = parseNumber(at.edit_text);
-      if (value !== null) points.push({ record: i, name: r.name, node: at, value });
-      await w.step();
-      if (!w.alive()) return WAIT;
-    }
-    const values = points.map((q) => q.value);
-    if (!worthDrawing(values)) return null;
-    return { list, field: n, records: records.length, points, min: Math.min(...values), max: Math.max(...values), env: envelope(values, W) };
+  const records = await recordsOf(w, n, Math.min(n.child_count, READ_MAX));
+  if (records === WAIT || !w.alive()) return WAIT;
+  const points: Point[] = [];
+  for (const [i, r] of records.entries()) {
+    if (r.composite || (r.kind !== "uint" && r.kind !== "int" && r.kind !== "float")) return null;
+    const value = parseNumber(r.edit_text);
+    if (value !== null) points.push({ record: i, name: r.name, node: r, value });
   }
-  return null;
-}
-
-const WAIT_CHILD = Symbol("wait for a child");
-
-/** The child of `parent` that is `step`'s field: one call for the child at
- *  the step's place, which is where it is in most records, and a read of the
- *  first children only when that one has another name. */
-function childAt(doc: Doc, parent: TemplateNode, step: Step): TemplateNode | undefined | typeof WAIT_CHILD {
-  if (step.index < parent.child_count) {
-    const one = doc.templateChildren(parent.path, step.index, step.index + 1);
-    if (one.status === "ok" && one.node[0]?.name === step.name) return one.node[0];
-    if (one.status !== "ok" && one.status !== "error") return WAIT_CHILD;
-  }
-  const kids = doc.templateChildren(parent.path, 0, Math.min(parent.child_count, 64));
-  if (kids.status === "error") return undefined;
-  if (kids.status !== "ok") return WAIT_CHILD;
-  const at = findStep(kids.node, step);
-  return at === null ? undefined : kids.node[at];
+  const values = points.map((q) => q.value);
+  if (!worthDrawing(values)) return null;
+  return { list: n, field: n, records: records.length, points, min: Math.min(...values), max: Math.max(...values), env: envelope(values, W) };
 }
 
 type UPlot = typeof uPlotType;
