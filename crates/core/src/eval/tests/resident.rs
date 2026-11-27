@@ -463,6 +463,52 @@ fn a_run_longer_than_the_store_is_read_from_the_store_once_indexed() {
     assert!(waited >= 3, "{waited} waits: the reads found their chunks in the store");
 }
 
+/// Whether `got` is the failure of a read that can never fit, against the
+/// limit of an index that keeps 64 KiB decoded.
+fn cannot_fit<T: std::fmt::Debug>(got: R<T>) -> bool {
+    match got {
+        Err(EvalError::Failed(why)) => why.starts_with("Can't load ") && why.ends_with(" of the file at once: the editor keeps at most 64 KiB in memory"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A read of a stream read through an index from the store, made in one
+/// call, such as a field read whole where a tab reads the stream in the
+/// file's reading, that is longer than the index keeps decoded can never
+/// find all its spans decoded at once: each span it decodes pushes out the
+/// ones before it, whose chunks the store has pushed out too. It fails with
+/// the reason, as such a read of the file does, instead of asking for the
+/// same chunks for ever. A read that fits waits for its chunks and reads.
+/// The same holds for a read of a part of a joined stream that is read
+/// through the part's index.
+#[test]
+fn a_read_in_one_call_longer_than_an_index_keeps_fails_with_the_reason() {
+    let content = hex_lines(12_000);
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&content, 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    let mut d = stored(&bytes, 48);
+    let mut ev = Evaluator::new(one_run(packed.len(), Codec::Zlib));
+    ev.spaces.set_lazy_limits(small_lazy());
+    fed(&mut d, &bytes, |d| ev.node(d, &[1, 0])).unwrap();
+    let Some(Opened::Space(id)) = ev.spaces.get(&[1]) else { panic!("the stream did not open") };
+    assert!(cannot_fit(fed(&mut d, &bytes, |d| ev.read_in(d, id, 0, content.len() as u64 * 8))));
+    let (at, n) = (1000, 48 << 10);
+    let got = fed(&mut d, &bytes, |d| ev.read_in(d, id, at as u64 * 8, n as u64 * 8)).unwrap();
+    assert!(got == content[at..at + n], "48 KiB at {at} differ");
+
+    // The joined stream of a gzip's members, its one member past the cap.
+    let bytes = gzip_member(&content);
+    let mut d = stored(&bytes, 48);
+    let mut ev = Evaluator::new(crate::formats::gzip());
+    ev.spaces.set_lazy_limits(small_lazy());
+    let joined = fed(&mut d, &bytes, |d| ev.node(d, &[1, 0])).unwrap().space;
+    assert!(ev.spaces.stitch(joined).is_some(), "not a stitched space");
+    assert!(cannot_fit(fed(&mut d, &bytes, |d| ev.read_in(d, joined, 0, content.len() as u64 * 8))));
+    let got = fed(&mut d, &bytes, |d| ev.read_in(d, joined, at as u64 * 8, n as u64 * 8)).unwrap();
+    assert!(got == content[at..at + n], "48 KiB of the joined stream at {at} differ");
+}
+
 /// A gzip past the cap opens as a stream joined from its one member and read
 /// a part at a time, the way Open unpacked opens one. The member's index
 /// reads its run from the store, so the joined stream keeps as much as that

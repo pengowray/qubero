@@ -787,12 +787,32 @@ pub(super) fn read_indexed(index: &crate::codec::lazy::Seekable, at: u64, n: u64
     let mut bytes = vec![0u8; ((at + n).div_ceil(8) - first) as usize];
     match index.read(first, &mut bytes) {
         Ok(()) => {}
-        Err(crate::codec::lazy::ReadError::Missing(missing)) => return Err(EvalError::Pending(missing)),
+        Err(crate::codec::lazy::ReadError::Missing(missing)) => return pending_unless_too_much(index, bytes.len() as u64, missing),
         Err(crate::codec::lazy::ReadError::Refused(_)) => return fail("unpacking failed"),
     }
     let mut buf = vec![0u8; bytes_for(n)];
     crate::bits::copy_bits(&bytes, at % 8, &mut buf, 0, n);
     Ok(buf)
+}
+
+/// The answer to a read of `needed` bytes of a stream read through `index`
+/// that found chunks of the file `missing`: `Pending` with them, or, for a
+/// read of more than the index keeps decoded at once
+/// ([`Seekable::resident_limit`]), the failure a read of the file that can
+/// never fit gets. Such a read decodes spans that push out the ones before
+/// them, whose chunks the store has pushed out too, so it would ask for the
+/// same chunks for ever. A read of a whole run is made a window at a time
+/// instead (see `Evaluator::gathers`), so only a read that has to be made in
+/// one call gets here with that much.
+///
+/// [`Seekable::resident_limit`]: crate::codec::lazy::Seekable::resident_limit
+#[cold]
+#[inline(never)]
+pub(super) fn pending_unless_too_much<T>(index: &crate::codec::lazy::Seekable, needed: u64, missing: Vec<crate::source::Missing>) -> R<T> {
+    match index.resident_limit() {
+        Some(limit) if needed > limit => too_much_at_once(needed, limit),
+        _ => Err(EvalError::Pending(missing)),
+    }
 }
 
 /// A size in MiB, or in KiB under 1 MiB, to a tenth, with a tenth of nought

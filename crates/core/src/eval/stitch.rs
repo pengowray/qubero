@@ -580,16 +580,18 @@ impl Evaluator {
     }
 
     /// Bytes `from..from + take` of packed part `i`, read through its index.
-    /// A chunk of the file the part's run is missing is `Pending`, and only
-    /// the decoder refusing the run is the part's failure. Out of line for
-    /// the same reason as [`Self::part_refusal`].
+    /// A chunk of the file the part's run is missing is `Pending`, unless the
+    /// read is longer than the index keeps decoded at once and can never
+    /// fit, which fails as such a read of the file does. Only the decoder
+    /// refusing the run is the part's failure. Out of line for the same
+    /// reason as [`Self::part_refusal`].
     #[cold]
     #[inline(never)]
     fn read_part_index(&self, stitch: &Stitch, i: usize, index: &Seekable, from: u64, take: u64) -> R<Vec<u8>> {
         let mut got = vec![0u8; take as usize];
         match index.read(from, &mut got) {
             Ok(()) => Ok(got),
-            Err(lazy::ReadError::Missing(missing)) => Err(EvalError::Pending(missing)),
+            Err(lazy::ReadError::Missing(missing)) => super::read::pending_unless_too_much(index, take, missing),
             Err(lazy::ReadError::Refused(why)) => self.part_refusal(stitch, i, why),
         }
     }
