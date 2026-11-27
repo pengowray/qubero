@@ -169,31 +169,23 @@ class ImageCard {
       this.set({ status: "too-large", bytes: len });
       return;
     }
-    // The bytes are read the way every other view reads them, and a file
-    // being streamed may not have them all yet: wait for it to change and
-    // ask again, until it has.
-    try {
-      await doc.ensureRange(0, len);
-    } catch {
-      // A chunk that would not load reads as zeros, and the decode below says
-      // what it makes of that.
-    }
-    let read = doc.read(0, len);
-    while (!read.complete) {
-      await new Promise<void>((resolve) => {
-        const stop = doc.onChange(() => {
-          stop();
-          resolve();
-        });
-      });
-      read = doc.read(0, len);
-    }
+    // Read in pieces, since a picture can be longer than the store keeps,
+    // and so can the file under a tab's picture. Bytes that will not load,
+    // because a chunk cannot be read or a piece needs more of the file at
+    // once than the store keeps, leave the picture undecoded until an edit
+    // asks for it again.
     const at = doc.pieceCount;
+    const read = await doc.readLoaded(0, len).catch(() => null);
+    if (read === null || !read.complete) {
+      this.set({ status: "failed" });
+      this.decodedAt = at;
+      return;
+    }
     this.set({ status: "decoding" });
     const type = IMAGE_TEMPLATES.get(doc.template ?? "") ?? "application/octet-stream";
-    // `read` allocates a buffer of exactly this length, so the buffer is the
-    // bytes; the cast is for a type that allows it to be shared, which this
-    // one never is.
+    // `readLoaded` allocates a buffer of exactly this length, so the buffer is
+    // the bytes; the cast is for a type that allows it to be shared, which
+    // this one never is.
     const url = URL.createObjectURL(new Blob([read.bytes.buffer as ArrayBuffer], { type }));
     const img = new Image();
     img.src = url;

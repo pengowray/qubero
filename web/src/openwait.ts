@@ -4,6 +4,7 @@
 // asking and the giving up can be tested on their own.
 
 import type { Unpacking } from "./doc.ts";
+import { ChunkWait, MAX_ROUNDS } from "./chunkwait.ts";
 
 /** What one ask of the core for a stream came to. */
 export type OpenStep<T> =
@@ -29,43 +30,47 @@ export type OpenHooks<T> = {
   /** The core asked again for chunks that loaded for this wait, with no
    *  unpacking done in between: they were pushed out of the store before it
    *  could use them, so loading them again would go round for ever. Also
-   *  said after `MAX_ROUNDS` loads. */
+   *  said after `limit` loads with no progress (see `WaitOptions`). */
   readonly lost: () => void;
   /** A chunk could not be read from the file. */
   readonly failed: (error: unknown) => void;
 };
 
-/**
- * How many times one wait loads chunks, since the pass it carries last said
- * it got further, before it gives up. A backstop only:
- * a stream that needs more chunks at once than the store keeps is stopped by
- * the rule in `waitToOpen` within a round or two, and every other round loads
- * chunks this wait had not loaded since the core last got further.
- */
-export const MAX_ROUNDS = 512;
+/** How `waitToOpen` goes about it, beyond what it is told to do. */
+export type WaitOptions = {
+  /** How a "working" answer is asked again: after a timeout of 0 unless
+   *  given. */
+  readonly later?: (then: () => void) => void;
+  /** The most rounds of loading since the core last said it got further:
+   *  `MAX_ROUNDS` unless given. A wait whose answers carry no progress
+   *  passes `roundLimit` of its file, so that one which keeps loading chunks
+   *  it has not loaded before is not stopped part way. */
+  readonly limit?: number;
+};
 
 /**
  * Carry a stream on from `first`, the answer to the press, until it opens or
  * will not. A "working" answer is asked again after `later`; a "pending" one
  * once `load` has the chunks it names.
  *
- * The rule for giving up is the one `Doc.textWindow` uses, widened: there a
- * round that asks for the same chunks as the one before it ends the loop.
- * Here any chunk asked for again after it loaded ends it, unless the core
- * said it got further in between. A stream that needs more chunks at once
- * than the store keeps asks each time for the ones the last load pushed out,
- * which is a different list each time, so the narrower rule never stops it.
+ * It gives up by the rule in `ChunkWait`: any chunk asked for again after it
+ * loaded ends the wait, unless the core got further in between. A "pending"
+ * answer whose progress has moved is the core getting further, and starts
+ * the count of rounds again. A "working" answer lets the chunks loaded so
+ * far be asked for again, and the count goes on. A stream that needs more
+ * chunks at once than the store keeps asks each time for the ones the last
+ * load pushed out, which is a different list each time, so comparing each
+ * list with the one before it would never stop it.
  */
 export function waitToOpen<T>(
   first: OpenStep<T>,
   ask: () => OpenStep<T>,
   load: (chunks: readonly number[]) => Promise<void>,
   hooks: OpenHooks<T>,
-  later: (then: () => void) => void = (then) => void setTimeout(then, 0),
+  opts: WaitOptions = {},
 ): void {
-  /** Chunks loaded for this wait since the core last said it got further. */
-  const loaded = new Set<number>();
-  let rounds = 0;
+  const later = opts.later ?? ((then: () => void): void => void setTimeout(then, 0));
+  const wait = new ChunkWait({ limit: opts.limit ?? MAX_ROUNDS });
   /** How far the pass this wait carries had read, the last time it said. A
    *  pass reading its run a window at a time waits for the next window's
    *  chunks with no "working" answer in between, and each wait that says it
@@ -86,31 +91,21 @@ export function waitToOpen<T>(
     }
     if (step.kind === "working") {
       further(step.unpacking);
-      loaded.clear();
+      wait.worked();
       hooks.working(step.unpacking);
       later(again);
       return;
     }
-    const { chunks } = step;
-    if (further(step.unpacking)) {
-      loaded.clear();
-      rounds = 0;
-    }
-    rounds += 1;
-    if (chunks.length === 0 || rounds > MAX_ROUNDS || chunks.some((c) => loaded.has(c))) {
+    if (further(step.unpacking)) wait.gotFurther();
+    const chunks = wait.next(step.chunks);
+    if (chunks === null) {
       hooks.lost();
       return;
     }
     hooks.loading(step.unpacking ?? null);
-    load(chunks).then(
-      () => {
-        for (const c of chunks) loaded.add(c);
-        again();
-      },
-      (error: unknown) => {
-        if (hooks.live()) hooks.failed(error);
-      },
-    );
+    load(chunks).then(again, (error: unknown) => {
+      if (hooks.live()) hooks.failed(error);
+    });
   };
   take(first);
 }

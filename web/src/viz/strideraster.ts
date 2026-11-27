@@ -196,9 +196,14 @@ class StrideState {
     this.lag = { status: "computing" };
     this.changed();
     const n = Math.min(len, LAG_WINDOW);
+    // Bytes that did not all load would be zeros where they are missing, and
+    // the peaks found in them would be wrong, so that is a failure too.
     void this.doc
-      .ensureRange(0, n)
-      .then(() => runPeriodicity({ id: 0, bytes: this.doc.read(0, n).bytes, maxLag: Math.min(MAX_STRIDE, Math.floor(n / 3)) }))
+      .readLoaded(0, n)
+      .then((read) => {
+        if (!read.complete) throw new Error("the sample did not load");
+        return runPeriodicity({ id: 0, bytes: read.bytes, maxLag: Math.min(MAX_STRIDE, Math.floor(n / 3)) });
+      })
       .then((res) => {
         this.lag = { status: "done", r: res.r, peaks: res.peaks, sample: n };
         const best = res.peaks[0];
