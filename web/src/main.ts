@@ -9,6 +9,7 @@ import type { ReportHost } from "./report/section.ts";
 import { RV } from "./report/text.ts";
 import { COUNT_TURN_MS, countLimit } from "./diagramcounts.ts";
 import { Inspector } from "./inspector.ts";
+import { TemplatePanel } from "./templatepanel.ts";
 import { saveBlob, saveDoc, type SaveOutcome } from "./save.ts";
 import { askSaveAs, type SaveAsChoice } from "./saveasdialog.ts";
 import { FolderList } from "./folderview.ts";
@@ -28,7 +29,7 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateSignatureMismatch, templateTypeName } from "./filetype.ts";
-import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, roleLabel, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin, childWord, TABLE } from "./strings.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, roleLabel, SAVE_AS, SETTINGS, SIDEBAR, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin, childWord, TABLE } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
@@ -302,11 +303,42 @@ function openEmbedded(bytes: Uint8Array, name: string, origin: string): void {
 
 /** A section that can be folded down to its title bar, and remembers whether
  *  it was. */
-function panel(title: string, content: HTMLElement, onToggle: () => void): HTMLElement {
+/** One tab of the right sidebar. `shown` is told when it is shown or hidden. */
+type SideTab = { readonly id: string; readonly label: string; readonly content: HTMLElement; readonly shown?: (visible: boolean) => void };
+
+/** The right sidebar: a chevron that folds it away, and tabs that pick which
+ *  panel fills it. Folded, the bar names the tab that will come back. */
+function panel(tabs: readonly SideTab[], onToggle: () => void): HTMLElement {
   const key = "qubero.panel.right";
+  const tabKey = "qubero.panel.right.tab";
   const chevron = el("span", { className: "panel-chevron" });
-  const toggle = el("button", { type: "button", className: "panel-toggle" }, chevron, title);
-  const section = el("section", { className: "panel panel-right" }, el("header", { className: "panel-bar" }, toggle), content);
+  const name = el("span", { className: "panel-name" });
+  const toggle = el("button", { type: "button", className: "panel-toggle" }, chevron, name);
+  // Drawn as the toolbar's view switcher, since both pick what a pane shows.
+  const seg = el("span", { className: "tb-views panel-tabs" });
+  const buttons = tabs.map((t) => {
+    const b = el("button", { type: "button", className: "tb-view", textContent: t.label });
+    b.addEventListener("click", () => {
+      rememberChoice(tabKey, t.id);
+      pick(t.id);
+      onToggle();
+    });
+    seg.append(b);
+    return b;
+  });
+  const section = el("section", { className: "panel panel-right" }, el("header", { className: "panel-bar" }, toggle, seg), ...tabs.map((t) => t.content));
+  const pick = (id: string): void => {
+    tabs.forEach((t, i) => {
+      const on = t.id === id;
+      buttons[i]?.setAttribute("aria-pressed", String(on));
+      buttons[i]?.classList.toggle("is-on", on);
+      t.content.hidden = !on;
+      if (on) name.textContent = t.label;
+    });
+    // Told after every tab is settled, so a panel that measures itself when
+    // shown is already in the layout.
+    for (const t of tabs) t.shown?.(t.id === id);
+  };
   const apply = (collapsed: boolean): void => {
     section.classList.toggle("is-collapsed", collapsed);
     chevron.textContent = collapsed ? "\u25c2" : "\u25be";
@@ -314,6 +346,7 @@ function panel(title: string, content: HTMLElement, onToggle: () => void): HTMLE
     toggle.title = collapsed ? "Expand" : "Collapse";
   };
   apply(storedText(key) === "collapsed");
+  pick(storedChoice(tabKey, tabs.map((t) => t.id), tabs[0]?.id ?? ""));
   toggle.addEventListener("click", () => {
     const collapsed = !section.classList.contains("is-collapsed");
     rememberChoice(key, collapsed ? "collapsed" : "open");
@@ -429,6 +462,8 @@ function buildDocument(tab: Tab): Page {
   doc.onRefuseEdit = (why) => say(why, true);
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
+  const templatePanel = new TemplatePanel(doc);
+  inspector.onFollow = (bitOffset, pinned) => (pinned === null ? templatePanel.setOffset(bitOffset) : templatePanel.setPath(pinned));
   const structure = new ListingReport(doc);
   // The listing is for a field's name and value. Its address, type and size
   // are on the row under the pointer or the cursor unless the reader asks for
@@ -1060,8 +1095,12 @@ function buildDocument(tab: Tab): Page {
   if (!doc.isFile) {
     structure.setMatched(doc.template !== null);
     showMember(doc.template);
+    templatePanel.sniffed();
   } else
   void doc.sniffTemplate().then(async (name) => {
+    // Set before the template is, in the same task, so the panel never draws
+    // its no-template line for a file that has one.
+    templatePanel.sniffed();
     const templated = name !== null;
     structure.setMatched(templated);
     if (name !== null) {
@@ -2285,6 +2324,7 @@ function buildDocument(tab: Tab): Page {
       keepCounting = false;
       syncColumn();
       strings.templateChanged();
+      templatePanel.templateChanged();
       hideInsideBox.hidden = strings.el.hidden || doc.template === null;
       // The diagram is a picture of the template and of nothing else, so a new
       // template is the one thing that changes it. Only while it is showing:
@@ -2391,7 +2431,13 @@ function buildDocument(tab: Tab): Page {
     structure.onPick({ path, startBit, endBit });
   };
   listPane.onClose = () => relayout();
-  const right = panel("At cursor", inspector.el, relayout);
+  const right = panel(
+    [
+      { id: "cursor", label: SIDEBAR.atCursor, content: inspector.el },
+      { id: "template", label: SIDEBAR.template, content: templatePanel.el, shown: (v) => templatePanel.setVisible(v) },
+    ],
+    relayout,
+  );
   // One element per tab, so switching is a matter of hiding one and showing
   // another: everything inside keeps where it was scrolled to and what it had
   // folded away.

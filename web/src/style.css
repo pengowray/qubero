@@ -1369,7 +1369,78 @@ button.welcome-crystal {
   width: auto;
   padding: 8px 2px;
 }
+/* The right sidebar's tabs share the bar with the chevron. Open, the tabs name
+   the panels and the chevron stands alone; folded, the tabs go and the bar
+   names the tab that comes back. */
+.panel-right:not(.is-collapsed) .panel-toggle {
+  width: auto;
+}
+.panel-right:not(.is-collapsed) .panel-name,
+.panel.is-collapsed .panel-tabs {
+  display: none;
+}
+.panel-tabs {
+  margin: 3px 0;
+  font-size: 12px;
+}
+
+/* ---- the Template tab ---- */
+.templatepanel {
+  --tp-line: 18px; /* LINE in templatepanel.ts sizes chunks not yet drawn */
+  /* The inspector's width, so switching tabs does not move the hex view. */
+  width: 22rem;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tp-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.tp-text {
+  padding: 0 8px;
+  box-sizing: content-box;
+}
+.tp-line {
+  height: var(--tp-line);
+  line-height: var(--tp-line);
+  white-space: pre;
+}
+/* The line that declares the field at the cursor: the selection's own fill,
+   not bold, so the line keeps its width. */
+.tp-line.is-at {
+  background: var(--accent-soft);
+}
+.tp-kw,
+.tp-comment {
+  color: var(--muted);
+}
+/* Muted text on the marked line's fill is under 4.5:1 in both themes. */
+.tp-line.is-at .tp-kw,
+.tp-line.is-at .tp-comment {
+  color: color-mix(in srgb, var(--muted) 60%, var(--fg));
+}
+.tp-field {
+  color: var(--accent);
+}
+.tp-decl {
+  font-weight: 600;
+}
+.tp-empty {
+  color: var(--muted);
+  font-family: var(--sans);
+  padding: 4px 0;
+}
 @media (max-width: 700px) {
+  .templatepanel {
+    width: auto;
+  }
   .panel-right {
     border-left: 0;
     border-top: 1px solid var(--line);

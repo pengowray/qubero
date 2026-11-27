@@ -349,6 +349,9 @@ export class Inspector {
   /** The reader is pointing at a row naming another field, or has moved off it.
    *  Null means nothing is being pointed at. */
   onHoverField: (path: readonly number[] | null) => void = () => {};
+  /** The panel was moved to an offset (`pinned` null) or to one field. Told
+   *  whichever reading is showing, for the sidebar's other tab to follow. */
+  onFollow: (bitOffset: number, pinned: readonly number[] | null) => void = () => {};
   /** Asked for when the reader opens a field's bytes as their own document. */
   onOpenTab: (bytes: Uint8Array, name: string, origin: string) => void = () => {};
   /** A compressed run was asked for as a document of its own. */
@@ -643,6 +646,7 @@ export class Inspector {
     this.offset = bitOffset;
     this.pinned = null;
     this.render();
+    this.onFollow(bitOffset, null);
   }
 
   /** What the hex view has selected. Several runs read as one number, in the
@@ -667,6 +671,7 @@ export class Inspector {
   setPath(path: readonly number[]): void {
     this.pinned = path;
     this.render();
+    this.onFollow(this.offset, path);
   }
 
   /** Drop a rejection message and put the stored value back. */
