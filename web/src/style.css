@@ -5598,6 +5598,16 @@ table.rec tr.is-on td {
   border: 1px solid var(--muted);
   border-radius: 2px;
 }
+/* A field whose length, count, type or position another field decided: a
+   corner folded in the muted colour, the way a spreadsheet marks a cell that
+   has a note, because the tooltip is where the fields are named. A background
+   and not a glyph, so the chip is the size it was before the answer arrived.
+   The hover rule repeats it because `.hv-chip:hover` sets the whole
+   background. */
+.hv-chip.hv-chip-derived,
+.hv-chip.hv-chip-derived:hover {
+  background-image: linear-gradient(225deg, var(--muted) 0 4px, transparent 4.5px);
+}
 .hv-chip-opens {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--field-color) 70%, var(--fg));
 }

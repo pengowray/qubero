@@ -28,7 +28,7 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateSignatureMismatch, templateTypeName } from "./filetype.ts";
-import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin, childWord, TABLE } from "./strings.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, roleLabel, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin, childWord, TABLE } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
@@ -544,28 +544,31 @@ function buildDocument(tab: Tab): Page {
    * of a compressed stream is at an offset of that stream, and pointing at the
    * byte of the file with the same number would point at some other field.
    */
-  const refreshLinks = (): void => {
-    // The field the arrows are drawn for is the one the cursor is in, so this
-    // is also where every diagram piece is told what is selected
-    // (`viz/linked.ts`), whether or not the arrows are on.
-    publishSelection();
-    if (!view.links.enabled) return;
-    const path = linkPath;
-    if (path === null || !inFile(path)) {
-      view.links.setPlan({ target: null, parent: null, from: [] });
-      view.render();
-      return;
-    }
+  /**
+   * What the overlay draws for one field: the field, the structure it is in,
+   * and the fields that decided its shape.
+   *
+   * `climb` is for the field at the cursor: when the field itself has nothing
+   * to say, the nearest structure above it that has is asked instead. A field
+   * the pointer is resting on is asked only about itself and gets no outline
+   * round its structure, so its arrows are the ones its chip's mark promises
+   * and nothing else.
+   *
+   * `known` is where the field is when the caller can already see it: a
+   * section of a megabyte of code is on screen long before the core has
+   * finished reading it, and what placed it is known from its header alone.
+   */
+  const linkPlanFor = (path: readonly number[], climb: boolean, known: { startBit: number; endBit: number } | null = null): LinkPlan => {
     const self = doc.templateNode(path);
     const target =
       self.status === "ok"
         ? { startBit: self.node.offset_bits, endBit: self.node.offset_bits + self.node.size_bits }
-        : null;
+        : known;
     // The structure the field is part of, outlined so that a length four rows
     // up reads as a length of this record rather than of the file. The root is
     // not a structure the reader can see the edges of, so it is left out.
     let parent: LinkPlan["parent"] = null;
-    if (path.length > 0) {
+    if (climb && path.length > 0) {
       const up = doc.templateNode(path.slice(0, -1));
       if (up.status === "ok" && up.node.size_bits > 0) {
         parent = {
@@ -583,10 +586,11 @@ function buildDocument(tab: Tab): Page {
     // grid would carry arrows the panel beside it has folded away.
     const from: LinkEnd[] = [];
     const seen = new Set<string>();
-    for (let i = path.length; i >= 0 && from.length === 0; i--) {
+    for (let i = path.length; i >= (climb ? 0 : path.length) && from.length === 0; i--) {
       const at = path.slice(0, i);
       const step = doc.templateNode(at);
-      if (step.status !== "ok") continue;
+      const stepBit = step.status === "ok" ? step.node.offset_bits : i === path.length && known !== null ? known.startBit : null;
+      if (stepBit === null) continue;
       const reply = doc.origins(at);
       if (reply.status !== "ok") continue;
       for (const o of reply.node) {
@@ -604,11 +608,26 @@ function buildDocument(tab: Tab): Page {
           label: o.label,
           startBit: n.node.offset_bits,
           endBit: n.node.offset_bits + n.node.size_bits,
-          decidesBit: step.node.offset_bits,
+          decidesBit: stepBit,
         });
       }
     }
-    view.links.setPlan({ target, parent, from });
+    return { target, parent, from };
+  };
+
+  const refreshLinks = (): void => {
+    // The field the arrows are drawn for is the one the cursor is in, so this
+    // is also where every diagram piece is told what is selected
+    // (`viz/linked.ts`), whether or not the arrows are on.
+    publishSelection();
+    if (!view.links.enabled) return;
+    const path = linkPath;
+    if (path === null || !inFile(path)) {
+      view.links.setPlan({ target: null, parent: null, from: [] });
+      view.render();
+      return;
+    }
+    view.links.setPlan(linkPlanFor(path, true));
     view.render();
   };
 
@@ -1404,6 +1423,30 @@ function buildDocument(tab: Tab): Page {
   // How many of the fields it would have drawn were nowhere on screen. Said
   // rather than left out: an arrow that is not there because the field is a
   // thousand rows away looks exactly like no dependency at all.
+  // A field's chip in the hex view says which fields decided its length,
+  // count, type or position: a corner mark, their names in its tooltip, and
+  // arrows from them while the pointer rests on it, whether or not the
+  // Dependencies button is on.
+  view.originOf = (path) => {
+    if (doc.template === null || !inFile(path)) return null;
+    const reply = doc.origins(path);
+    if (reply.status === "pending" || reply.status === "working") return undefined;
+    if (reply.status !== "ok") return null;
+    const lines: string[] = [];
+    for (const o of reply.node) {
+      if (o.role === "points" || o.path.length === 0) continue;
+      const n = inFile(o.path) ? doc.templateNode(o.path) : null;
+      const at = n !== null && n.status === "ok" ? formatOffset(n.node.offset_bits) : null;
+      lines.push(LINKS.origin(roleLabel(o.role), o.label, o.value, at));
+    }
+    return lines.length === 0 ? null : lines.join("\n");
+  };
+  view.onFieldRest = (path, range) => {
+    if (path === null || doc.template === null || !inFile(path)) return view.previewLinks(null);
+    const plan = linkPlanFor(path, false, range);
+    view.previewLinks(plan.from.length === 0 ? null : plan);
+  };
+
   view.links.onOffScreen = (ends) => {
     linksNote.textContent = LINKS.offScreen(
       ends.map((e) => ({ name: e.end.label, at: formatOffset(e.end.startBit), above: e.above })),

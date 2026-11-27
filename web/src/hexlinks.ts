@@ -70,6 +70,10 @@ export class HexLinks {
   readonly el: SVGSVGElement;
   private plan: LinkPlan = { target: null, parent: null, from: [] };
   private on = false;
+  /** The plan for the field the pointer is resting on in the grid, drawn in
+   *  place of the cursor's while it is set, and drawn whether or not the
+   *  arrows are switched on. See `setPreview`. */
+  private preview: LinkPlan | null = null;
   /** Bytes the grid is showing, so a field far off screen is known to be off
    *  screen without probing for a box that cannot exist. */
   private window = { start: 0, end: 0, bpr: 16 };
@@ -105,6 +109,20 @@ export class HexLinks {
 
   get enabled(): boolean {
     return this.on;
+  }
+
+  /**
+   * The arrows for the field under the pointer, or null to take them away.
+   *
+   * The Dependencies button is off for most readers, because arrows for every
+   * move of the cursor are a lot of ink. A pointer resting on one field is a
+   * question about that field, so its arrows are drawn for as long as it rests
+   * there. Returns whether anything changed.
+   */
+  setPreview(plan: LinkPlan | null): boolean {
+    if (plan === this.preview) return false;
+    this.preview = plan;
+    return true;
   }
 
   /** The field the cursor moved to, and what it depends on. */
@@ -152,8 +170,13 @@ export class HexLinks {
    * every frame to size an overlay that then drew nothing.
    */
   draw(box: () => { width: number; height: number }): void {
-    if (!this.on && this.hover === null) {
+    if (!this.on && this.hover === null && this.preview === null) {
       if (this.el.firstElementChild?.nextElementSibling !== undefined) this.clearShapes();
+      // A preview that has gone takes its off-screen line with it.
+      if (this.missed !== "") {
+        this.missed = "";
+        this.onOffScreen([]);
+      }
       return;
     }
     const { width, height } = box();
@@ -164,16 +187,22 @@ export class HexLinks {
     if (this.hover !== null) {
       for (const b of this.boxes(this.hover.startBit, this.hover.endBit)) parts.push(this.outline(b, "hv-link-hover"));
     }
-    if (!this.on) {
+    const plan = this.preview ?? (this.on ? this.plan : null);
+    if (plan === null) {
       this.el.replaceChildren(arrowDefs(), ...parts);
+      // A preview that has gone takes its off-screen line with it.
+      if (this.missed !== "") {
+        this.missed = "";
+        this.onOffScreen([]);
+      }
       return;
     }
-    const target = this.plan.target === null ? [] : this.boxes(this.plan.target.startBit, this.plan.target.endBit);
+    const target = plan.target === null ? [] : this.boxes(plan.target.startBit, plan.target.endBit);
     // The structure as one box round the lot of it. A record of six hundred
     // bytes covers twenty rows, and twenty separate outlines read as twenty
     // things rather than as the edge of one.
-    if (this.plan.parent !== null) {
-      const bounds = bound(this.boxes(this.plan.parent.startBit, this.plan.parent.endBit));
+    if (plan.parent !== null) {
+      const bounds = bound(this.boxes(plan.parent.startBit, plan.parent.endBit));
       if (bounds !== null) parts.push(this.outline(bounds, "hv-link-parent"));
     }
     // Only where the arrows land. The field at the cursor is already marked
@@ -182,7 +211,7 @@ export class HexLinks {
     const head = target[0] ?? null;
     if (head !== null) parts.push(this.outline(head, "hv-link-target"));
     const missed: { end: LinkEnd; above: boolean }[] = [];
-    for (const end of this.plan.from) {
+    for (const end of plan.from) {
       const boxes = this.boxes(end.startBit, end.endBit);
       const source = boxes[0] ?? null;
       // Where the arrow lands: the first byte of whatever this field decided

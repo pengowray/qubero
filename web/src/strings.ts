@@ -3556,6 +3556,11 @@ export const STORED_PATHS = {
 export const LINKS = {
   button: "Dependencies",
   title: "Draw arrows from the fields the field at the cursor depends on, and outline the structure it is in",
+  /** One line of a field chip's tooltip in the hex view: a field that decided
+   *  this one's length, count, type or position. `role` is `roleLabel`'s word
+   *  and `at` the deciding field's address, null when it is not in the file. */
+  origin: (role: string, name: string, value: string, at: string | null): string =>
+    `${role} from ${name}${value === "" ? "" : ` = ${value}`}${at === null ? "" : `, at ${at}`}`,
   /**
    * A dependency the overlay could not draw because the field it leaves from
    * is not on screen.

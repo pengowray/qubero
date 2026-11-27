@@ -25,7 +25,8 @@ import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.ts";
 import { chipCursorBit, placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
 import { ASCII_GLYPHS, glyphOf, HEX, type GlyphSet } from "./hexcell.ts";
 import { HexRows } from "./hexrows.ts";
-import { HexLinks } from "./hexlinks.ts";
+import { HexLinks, type LinkPlan } from "./hexlinks.ts";
+import type { ChipEl } from "./hexchips.ts";
 import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.ts";
 import { RowHeights, type StructuralExtra } from "./rowheights.ts";
 import { HEXGLYPHS } from "./strings.ts";
@@ -488,6 +489,7 @@ export class HexView {
       value: this.pickValue,
       heading: this.pressHeading,
       isTable: (path) => this.tableAt(path),
+      originNote: (path) => this.originNotes.get(path.join(".")) ?? null,
     });
     this.rowsEl = document.createElement("div");
     this.rowsEl.className = "hv-rows";
@@ -544,6 +546,9 @@ export class HexView {
     this.el.addEventListener("relayout", () => this.relayout());
     this.rowsEl.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     this.rowsEl.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    this.rowsEl.addEventListener("pointerover", (e) => this.onChipOver(e));
+    this.rowsEl.addEventListener("pointerout", (e) => this.onChipOut(e));
+    this.rowsEl.addEventListener("pointerdown", () => this.restOn(null), true);
     this.rowsEl.addEventListener("pointerup", (e) => this.onPointerUp(e));
     this.rowsEl.addEventListener("pointercancel", (e) => this.onPointerUp(e));
     this.track.addEventListener("pointerdown", (e) => this.onTrackDown(e));
@@ -551,6 +556,7 @@ export class HexView {
     this.track.addEventListener("pointerup", (e) => this.onTrackUp(e));
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
     doc.onChange(() => {
+      this.forgetOrigins();
       this.fetch.forgetAll();
       // An insert or a delete moves every later byte onto a different row, so
       // what those rows were measured at belongs to bytes that are no longer
@@ -2084,6 +2090,125 @@ export class HexView {
     return { width: this.rowsEl.clientWidth, height: this.viewH + this.band };
   }
 
+  // ----- which fields decided a field -----
+
+  /** What `originOf` said for each field asked so far, by path. Null is a
+   *  field nothing decided. A field not in here has not been asked. */
+  private readonly originNotes = new Map<string, string | null>();
+  private originsQueued = false;
+  /** The chip the pointer is on, and the timer that waits for it to rest. */
+  private restingOn: string | null = null;
+  private restTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The fields that decided this field's length, count, type or position, a
+   *  line each, for its chip's tooltip. Null when nothing decided it and
+   *  undefined when the bytes that would say are not loaded yet. Set by the
+   *  page, which has the template. */
+  originOf: (path: readonly number[]) => string | null | undefined = () => null;
+  /** The pointer came to rest on a field's chip, or left it (null). `range`
+   *  is the bits the chip stands for. */
+  onFieldRest: (path: readonly number[] | null, range: { startBit: number; endBit: number } | null) => void = () => {};
+
+  /** Forget every answer, after an edit or a change of template. */
+  forgetOrigins(): void {
+    this.originNotes.clear();
+  }
+
+  /**
+   * Ask about the chips on screen that have not been asked about, a few
+   * milliseconds at a time and off the frame that drew them, and mark the
+   * ones that turned out to have an answer.
+   *
+   * Asked here rather than while the chips are filled: the question is a call
+   * into the core for each field, six hundred fields can be on screen, and a
+   * wheel notch draws them all. An answer changes a chip's class and tooltip
+   * and nothing about its size, so no row moves when it arrives.
+   */
+  private learnOrigins(): void {
+    if (this.originsQueued) return;
+    this.originsQueued = true;
+    setTimeout(() => {
+      this.originsQueued = false;
+      if (this.el.hidden || !this.el.isConnected) return;
+      // What is kept is for the chips on screen; a long session over a large
+      // file should not hold an answer for every field it scrolled past.
+      if (this.originNotes.size > 20000) this.originNotes.clear();
+      const until = performance.now() + 6;
+      let more = false;
+      for (const chip of this.rowsEl.querySelectorAll<ChipEl>("button.hv-chip")) {
+        const path = chip._path;
+        if (path === undefined || chip.hidden) continue;
+        const key = path.join(".");
+        if (this.originNotes.has(key)) continue;
+        if (performance.now() > until) {
+          more = true;
+          break;
+        }
+        const note = this.originOf(path);
+        if (note === undefined) continue;
+        this.originNotes.set(key, note);
+        // Written onto the chip here, as `fillChip` will write it from now
+        // on. A row whose chips say what they said last frame is not filled
+        // again, so drawing the view again would not put the mark there.
+        // Not the chip that names a pointer: it is about the field that
+        // points here, and `fillLead` leaves it unmarked for the same reason.
+        if (note !== null && !chip.classList.contains("hv-chip-from") && !chip.classList.contains("hv-chip-derived")) {
+          chip.classList.add("hv-chip-derived");
+          chip.title = `${chip.title}\n${note}`;
+        }
+      }
+      if (more) this.learnOrigins();
+    }, 60);
+  }
+
+  private chipAt(e: PointerEvent): ChipEl | null {
+    if (e.pointerType !== "mouse" || !(e.target instanceof Element)) return null;
+    const chip = e.target.closest<ChipEl>("button.hv-chip");
+    return chip !== null && chip._path !== undefined ? chip : null;
+  }
+
+  private onChipOver(e: PointerEvent): void {
+    const chip = this.chipAt(e);
+    if (chip !== null && e.buttons === 0) {
+      this.restOn(chip._path ?? null, chip._from === undefined || chip._to === undefined ? null : { startBit: chip._from, endBit: chip._to });
+    }
+  }
+
+  private onChipOut(e: PointerEvent): void {
+    const chip = this.chipAt(e);
+    if (chip === null) return;
+    // Moving between the name and the value of one chip is not leaving it.
+    if (e.relatedTarget instanceof Node && chip.contains(e.relatedTarget)) return;
+    this.restOn(null);
+  }
+
+  /** The pointer is on this field's chip, or on none. The page hears once it
+   *  has stayed a moment: arrows that flash as the pointer crosses the column
+   *  on its way somewhere else are noise. */
+  private restOn(path: readonly number[] | null, range: { startBit: number; endBit: number } | null = null): void {
+    const key = path === null ? null : path.join(".");
+    if (key === this.restingOn) return;
+    this.restingOn = key;
+    if (this.restTimer !== null) clearTimeout(this.restTimer);
+    this.restTimer = null;
+    if (path === null) {
+      this.onFieldRest(null, null);
+      return;
+    }
+    this.restTimer = setTimeout(() => {
+      this.restTimer = null;
+      this.onFieldRest(path, range);
+    }, 160);
+  }
+
+  /** Draw the arrows for a field the pointer is resting on, or take them
+   *  away. The overlay alone is redrawn, as `markHover` does. */
+  previewLinks(plan: LinkPlan | null): void {
+    if (!this.links.setPreview(plan)) return;
+    if (this.el.hidden || !this.el.isConnected) return;
+    this.links.draw(() => this.overlayBox());
+  }
+
   /**
    * Mark the field the reader is pointing at in the sidebar, or clear it.
    *
@@ -2136,6 +2261,7 @@ export class HexView {
     // switched off, which is what it is unless the reader asked for it.
     this.links.setWindow(f.start * 8, endBit, f.bpr);
     this.links.draw(() => this.overlayBox());
+    this.learnOrigins();
   }
 
   render(): void {

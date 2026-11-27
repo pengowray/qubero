@@ -104,10 +104,17 @@ export function fillPlain(el: ChipEl, cls: string, text: string, title: string):
  * because the answer needs the file, and this module is loaded by the tests
  * under `node --test`, which have neither the file nor a DOM.
  */
-export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isTable?: (path: readonly number[]) => boolean): void {
+export function fillChip(
+  el: ChipEl,
+  c: Chip,
+  text: ChipText,
+  extra = false,
+  isTable?: (path: readonly number[]) => boolean,
+  originNote?: (path: readonly number[]) => string | null,
+): void {
   const s = c.span;
   if (c.lead !== undefined) {
-    fillLead(el, c, text);
+    fillLead(el, c, text, originNote);
     return;
   }
   const { name, detail } = text;
@@ -136,6 +143,13 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
   // the value, in the colour this variable carries, for the same reason the
   // two marks above are the stylesheet's.
   if (s.colour !== undefined) cls += " hv-chip-colour";
+  // A field whose length, count, type or position another field decided. The
+  // mark is a corner the stylesheet paints as a background, so it takes no
+  // room: a chip that grew when the answer arrived would move its row. The
+  // answer is asked of the page for the same reason `isTable` is, and is null
+  // until the page has worked it out (`HexView.learnOrigins`).
+  const origin = s.gap || c.carried ? null : (originNote?.(s.path) ?? null);
+  if (origin !== null) cls += " hv-chip-derived";
   if (el.className !== cls) el.className = cls;
   if (s.colour !== undefined) el.style.setProperty("--chip-colour", s.colour);
   else el.style.removeProperty("--chip-colour");
@@ -181,6 +195,8 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
   // What is wrong with the value, on its own line: the mark on the chip only
   // says look here, and this is the hover that says what at.
   if (s.problem !== undefined) title = `${title}\n${s.problem.text}`;
+  // Which fields decided this one, a line each: the words for the corner mark.
+  if (origin !== null) title = `${title}\n${origin}`;
   if (el.title !== title) el.title = title;
   if (label === null) el.removeAttribute("aria-label");
   else el.setAttribute("aria-label", label);
@@ -220,9 +236,13 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isT
  * placed it (`← [0] image description`). Pressing it selects that element, or
  * goes to that offset.
  */
-function fillLead(el: ChipEl, c: Chip, text: ChipText): void {
+function fillLead(el: ChipEl, c: Chip, text: ChipText, originNote?: (path: readonly number[]) => string | null): void {
   const s = c.span;
-  const cls = c.lead === "from" ? "hv-chip hv-chip-lead hv-chip-from" : "hv-chip hv-chip-lead";
+  // The chip that starts a list element says what placed that element, the
+  // way a field's chip does: a section's label is where a reader looks to
+  // find out which header put the section there.
+  const origin = c.lead === "from" ? null : (originNote?.(s.path) ?? null);
+  const cls = c.lead === "from" ? "hv-chip hv-chip-lead hv-chip-from" : `hv-chip hv-chip-lead${origin === null ? "" : " hv-chip-derived"}`;
   if (el.className !== cls) el.className = cls;
   el.style.removeProperty("--chip-colour");
   setText(el.firstElementChild as HTMLElement, text.name);
@@ -231,7 +251,7 @@ function fillLead(el: ChipEl, c: Chip, text: ChipText): void {
   const title =
     c.lead === "from"
       ? `The offset at ${at}, in ${s.name}, points here. Click to go to it.`
-      : `${s.name}: ${chipDetail({ ...s, kind: "bytes" })} from ${at}. Click to select it.`;
+      : `${s.name}: ${chipDetail({ ...s, kind: "bytes" })} from ${at}. Click to select it.${origin === null ? "" : `\n${origin}`}`;
   if (el.title !== title) el.title = title;
   el.setAttribute("aria-label", c.lead === "from" ? `Pointed to from ${s.name}` : `Start of ${s.name}`);
   el._path = s.path;
@@ -268,6 +288,7 @@ export function fillNote(
   tail: boolean,
   onPick: ChipPick,
   isTable?: (path: readonly number[]) => boolean,
+  originNote?: (path: readonly number[]) => string | null,
 ): void {
   const n = b === null ? 0 : b.shown;
   const rest = b !== null && b.shown < b.entries.length;
@@ -291,7 +312,7 @@ export function fillNote(
   // its width whether or not this row has a field.
   el.classList.toggle("hv-empty", want === 0 && (vals === null || vals.classList.contains("hv-empty")));
   for (let i = 0; i < n && b !== null; i++) {
-    fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued, isTable);
+    fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued, isTable, originNote);
   }
   let at = n;
   if (rest && b !== null) {

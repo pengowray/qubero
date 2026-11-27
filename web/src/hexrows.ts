@@ -51,6 +51,10 @@ export type RowPicks = {
   /** Whether a list reads as a table, for the mark on a run's chip. Answered
    *  by the page, which has the file the question is about. */
   readonly isTable: (path: readonly number[]) => boolean;
+  /** The fields that decided a field's length, count, type or position, as
+   *  the lines of its tooltip. Null for a field nothing decided and for one
+   *  the page has not asked about yet. */
+  readonly originNote: (path: readonly number[]) => string | null;
 };
 
 /**
@@ -1007,7 +1011,7 @@ export class HexRows {
     if (chipsChanged) {
       parts.noteKey = key;
       for (const [j, b] of planned.blocks.entries()) {
-        fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1, this.picks.field, this.picks.isTable);
+        fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1, this.picks.field, this.picks.isTable, this.picks.originNote);
       }
     }
     if (block !== null && (chipsChanged || valsChanged)) orderVals(block, planned.blocks[0], vals);
@@ -1030,7 +1034,7 @@ export class HexRows {
     const pinnedKey = pinnedNoteKey(this.carried);
     if (pinnedKey !== this.pinnedKey) {
       this.pinnedKey = pinnedKey;
-      fillNote(this.pinned, this.carried, true, false, this.picks.field, this.picks.isTable);
+      fillNote(this.pinned, this.carried, true, false, this.picks.field, this.picks.isTable, this.picks.originNote);
     }
   }
 }
