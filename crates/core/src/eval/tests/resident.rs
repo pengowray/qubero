@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use crate::codec::{Codec, Refusal};
 use crate::eval::space::Opened;
+use crate::eval::SpaceSource;
 use crate::source::ChunkStore;
 
 const CHUNK: u64 = 1024;
@@ -63,7 +64,19 @@ fn fed_noting<T>(d: &mut Document<ChunkStore>, bytes: &[u8], asked: &mut Vec<Vec
 /// `Busy`, and with exactly the chunks named fed on `Pending`. The same
 /// chunk asked for many times over fails the test. Hands back the answer
 /// and how many goes ran out.
-fn in_goes<T>(ev: &mut Evaluator, d: &mut Document<ChunkStore>, bytes: &[u8], slice: u64, mut ask: impl FnMut(&mut Evaluator, &Document<ChunkStore>) -> R<T>) -> (R<T>, usize) {
+fn in_goes<T>(ev: &mut Evaluator, d: &mut Document<ChunkStore>, bytes: &[u8], slice: u64, ask: impl FnMut(&mut Evaluator, &Document<ChunkStore>) -> R<T>) -> (R<T>, usize) {
+    in_goes_noting(ev, d, bytes, slice, &mut Vec::new(), ask)
+}
+
+/// The same, keeping the chunks each `Pending` named in `asked`.
+fn in_goes_noting<T>(
+    ev: &mut Evaluator,
+    d: &mut Document<ChunkStore>,
+    bytes: &[u8],
+    slice: u64,
+    asked: &mut Vec<Vec<u64>>,
+    mut ask: impl FnMut(&mut Evaluator, &Document<ChunkStore>) -> R<T>,
+) -> (R<T>, usize) {
     ev.set_slice(Some(slice));
     let mut times: BTreeMap<u64, usize> = BTreeMap::new();
     let mut busy = 0;
@@ -71,6 +84,7 @@ fn in_goes<T>(ev: &mut Evaluator, d: &mut Document<ChunkStore>, bytes: &[u8], sl
         ev.begin_slice();
         match ask(ev, d) {
             Err(EvalError::Pending(missing)) => {
+                asked.push(missing.iter().map(|m| m.chunk).collect());
                 for m in missing {
                     let n = times.entry(m.chunk).or_default();
                     *n += 1;
@@ -275,8 +289,10 @@ fn paged(count: usize) -> Template {
 /// Opening a joined stream as a document reads every part, and the parts
 /// add up to more than the store keeps. The walk over them keeps the parts
 /// read so far from one call to the next, so it opens, held whole. Past the
-/// cap it would be read a part at a time from copies, which would come to
-/// more than the cap, so it is refused as too large before anything is read.
+/// cap it is read a part at a time, each page where it is in the store, and
+/// opens too. In memory, with no handle onto the file, it would be read
+/// from copies of the pages, which come to more than the cap, so it is
+/// refused as too large.
 #[test]
 fn a_joined_stream_whose_parts_add_up_to_more_than_the_store_opens() {
     let bytes = noise(6 * 1024);
@@ -294,9 +310,54 @@ fn a_joined_stream_whose_parts_add_up_to_more_than_the_store_opens() {
     let mut d = stored(&bytes, 4);
     let mut ev = Evaluator::new(paged(6));
     ev.spaces.set_whole_cap(5 * 1024);
-    assert_eq!(fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap(), None);
+    let id = fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opened");
+    let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+    assert_eq!(joined.owned_bytes(), 0, "the stream holds copies of pages");
+    assert_eq!(joined_reads(&joined, &mut d, &bytes, 2048).0, bytes);
+    let mut ev = Evaluator::new(paged(6));
+    ev.spaces.set_whole_cap(5 * 1024);
+    assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
     assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
-    assert!((0..6).all(|c| !d.source().has(c)), "a page was read");
+}
+
+/// All of the joined stream `joined`, read in order `piece` bytes at a
+/// time, as a tab's reads are made: each read asked again, with exactly the
+/// chunks it names fed, until it reads. Also how many chunks the widest
+/// answer named. A chunk asked for many times over fails the test.
+fn joined_reads(joined: &crate::eval::Joined, d: &mut Document<ChunkStore>, bytes: &[u8], piece: usize) -> (Vec<u8>, usize) {
+    let mut all = Vec::with_capacity(joined.len() as usize);
+    let mut widest = 0;
+    for at in (0..joined.len()).step_by(piece) {
+        let (got, named) = joined_read(joined, d, bytes, at, piece.min((joined.len() - at) as usize));
+        all.extend(got);
+        widest = widest.max(named);
+    }
+    (all, widest)
+}
+
+/// `n` bytes of the joined stream `joined` at `at`, the same way, and how
+/// many chunks the widest answer named. Each answer is checked against what
+/// the stream says the read would find missing.
+fn joined_read(joined: &crate::eval::Joined, d: &mut Document<ChunkStore>, bytes: &[u8], at: u64, n: usize) -> (Vec<u8>, usize) {
+    use crate::codec::lazy::ReadError;
+    let mut asked = Vec::new();
+    let got = fed_noting(d, bytes, &mut asked, |_| {
+        let mut out = vec![0u8; n];
+        let said = joined.missing(at, n as u64);
+        match joined.read(at, &mut out) {
+            Ok(()) => {
+                assert!(said.is_empty(), "{said:?} said to be missing at {at}, and the read found none");
+                Ok(out)
+            }
+            Err(ReadError::Missing(missing)) => {
+                assert_eq!(said, missing, "{n} bytes at {at}");
+                Err(EvalError::Pending(missing))
+            }
+            Err(ReadError::Refused(why)) => panic!("{n} bytes at {at}: {why:?}"),
+        }
+    })
+    .unwrap();
+    (got, asked.iter().map(Vec::len).max().unwrap_or(0))
 }
 
 /// BGZF blocks that unpack to four times what they take up in the file, read
@@ -515,7 +576,8 @@ fn a_read_in_one_call_longer_than_an_index_keeps_fails_with_the_reason() {
 /// index keeps decoded, and a read of it names chunks of the file the store
 /// has pushed out, and gives the member's bytes once they are fed. Opening
 /// it reads the joined stream's first bytes after the walk over its parts has
-/// finished, which can wait for chunks, and the walk is made again then.
+/// finished, which can wait for chunks, and the next call opens the stream
+/// that walk made.
 #[test]
 fn a_gzip_past_the_cap_opens_as_a_joined_stream_read_from_the_store() {
     use crate::codec::lazy::ReadError;
@@ -530,6 +592,7 @@ fn a_gzip_past_the_cap_opens_as_a_joined_stream_read_from_the_store() {
     // stream read a part at a time may not pass between its parts' runs.
     ev.spaces.set_whole_cap(200 << 10);
     let id = fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opens");
+    assert_eq!(ev.spaces.walks.get(), 1, "joined more than once");
     let source = ev.space(id).unwrap().source().clone();
     assert!(matches!(source, SpaceSource::Joined(_)), "not read a part at a time");
     assert_eq!(source.resident_limit(), Some(64 << 10));
@@ -969,4 +1032,157 @@ fn a_gzip_member_past_the_copy_limit_opens_as_a_joined_stream_through_its_handle
     let mut ev = reading(Limits { copy_input: 1 << 20, ..limits });
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None, "in memory");
     assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge), "in memory");
+}
+
+// ----- joined streams read through handles onto the store -----
+
+/// BGZF blocks of a couple of kilobytes each, read as a stream joined a part
+/// at a time because the stream is past the cap, whose runs come to three
+/// times the store and to more than the cap. Each block's run is read
+/// through a handle onto the store, so the joined stream holds no copy of
+/// any of them, and the cap on copies does not refuse it as it did. The walk
+/// that checks each block's length reads every run once, a window of runs a
+/// round, and the stream then reads a block at a time from the store: each
+/// read names the chunks of every block it reaches, all at once, and gives
+/// the bytes and steps the same stream gives held whole.
+#[test]
+fn a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles() {
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::{bgzf_block, EOF_BLOCK};
+    // Two bits of noise a byte, which packs to about a quarter.
+    let pieces: Vec<Vec<u8>> = (0..100).map(|i| noise(2048 + i).iter().map(|b| b & 3).collect()).collect();
+    let mut bytes: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
+    bytes.extend_from_slice(&EOF_BLOCK);
+    let capacity = 16;
+    assert!(bytes.len() > 3 * capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
+    let text = pieces.concat();
+    let whole_cap = 16 << 10;
+    let mut whole = Evaluator::new(crate::formats::bgzf());
+    let held = whole.open_space(&doc(&bytes), 0, &[1]).unwrap().expect("opens whole");
+    let held = whole.space(held).unwrap();
+    assert_eq!(held.bytes(), text);
+    for slice in [None, Some(100)] {
+        let mut d = stored(&bytes, capacity);
+        let mut ev = Evaluator::new(crate::formats::bgzf());
+        ev.set_stream_limits(Limits::default(), whole_cap);
+        ev.spaces.set_cache_cap(8 << 10);
+        let mut asked = Vec::new();
+        let opened = match slice {
+            None => fed_noting(&mut d, &bytes, &mut asked, |d| ev.open_space(d, 0, &[1])).unwrap(),
+            Some(n) => in_goes_noting(&mut ev, &mut d, &bytes, n, &mut asked, |ev, d| ev.open_space(d, 0, &[1])).0.unwrap(),
+        };
+        let id = opened.unwrap_or_else(|| panic!("goes of {slice:?}: refused as {:?}", ev.open_refusal(&[1])));
+        assert_eq!(ev.spaces.walks.get(), 1, "goes of {slice:?}: joined more than once");
+        // A window is a quarter of the store, and the chunks of the run a
+        // walk waits on may straddle it.
+        let widest = asked.iter().map(Vec::len).max().unwrap_or(0);
+        assert!(widest <= 6, "goes of {slice:?}: an answer named {widest} chunks");
+        let space = ev.space(id).unwrap();
+        let SpaceSource::Joined(joined) = space.source().clone() else { panic!("held whole") };
+        assert_eq!(joined.owned_bytes(), 0, "goes of {slice:?}: the stream holds copies of runs");
+        // Half the store, less two blocks' runs of about 600 bytes.
+        let limit = joined.resident_limit().expect("a limit on one read");
+        assert!((6 << 10..8 << 10).contains(&limit), "a limit of {limit}");
+
+        for at in [text.len() / 2, 0, text.len() - 2000, text.len() / 3] {
+            let (got, widest) = joined_read(&joined, &mut d, &bytes, at as u64, 2000);
+            assert!(got == text[at..at + 2000], "goes of {slice:?}: 2000 bytes at {at} differ");
+            assert!(widest <= 3, "goes of {slice:?}: a read of two blocks named {widest} chunks");
+        }
+        let (got, widest) = joined_reads(&joined, &mut d, &bytes, 6 << 10);
+        assert!(got == text, "goes of {slice:?}: the stream read in pieces differs");
+        assert!(widest <= 8, "goes of {slice:?}: a read of 6 KiB named {widest} chunks");
+        // Each block is decoded when a read reaches it, and kept as a
+        // stitched space keeps its parts, the ones read longest ago going
+        // first.
+        let (cached, peak) = joined.cached();
+        assert!(cached.len() <= 4 && peak <= 8 << 10, "goes of {slice:?}: {} blocks, {peak} bytes kept decoded", cached.len());
+
+        // A byte's step needs its block's run to make the block's trace.
+        for byte in [0, 12_345, text.len() as u64 / 2, text.len() as u64 - 1] {
+            let mut waits = 0;
+            let step = loop {
+                match space.map_out(byte) {
+                    Ok(step) => break step,
+                    Err(missing) => {
+                        waits += 1;
+                        assert!(waits < 4 && missing.len() <= 2, "byte {byte}: {missing:?}");
+                        for m in missing {
+                            feed(&mut d, &bytes, m.chunk);
+                        }
+                    }
+                }
+            };
+            assert_eq!(step, held.map_out(byte).unwrap(), "goes of {slice:?}: byte {byte}");
+        }
+    }
+    // A block whose trailer claims one byte more than it unpacks to refuses
+    // the stream, as it does read from copies.
+    let mut spoiled = bytes.clone();
+    let end = (0..=50).map(|i| bgzf_block(&pieces[i]).len()).sum::<usize>();
+    spoiled[end - 4..end].copy_from_slice(&(pieces[50].len() as u32 + 1).to_le_bytes());
+    let mut d = stored(&spoiled, capacity);
+    let mut ev = Evaluator::new(crate::formats::bgzf());
+    ev.set_stream_limits(Limits::default(), whole_cap);
+    assert_eq!(fed(&mut d, &spoiled, |d| ev.open_space(d, 0, &[1])).unwrap(), None);
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::Failed));
+    // In memory, with no handle onto the file, the blocks' runs are copied,
+    // which comes to more than the cap.
+    let mut ev = Evaluator::new(crate::formats::bgzf());
+    ev.set_stream_limits(Limits::default(), whole_cap);
+    assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
+}
+
+/// Pages stored as they sit, past the cap and three times the store, joined
+/// and read a part at a time: each page is read where it is in the store, so
+/// the walk reads none of them and the stream holds none of them. Opening
+/// the stream then looks at its first bytes to see what they are, as many as
+/// one read of the stream may ask for, and waits for their chunks. The next
+/// call opens the stream the walk made, rather than joining it again.
+///
+/// A page an edit has written into is read from a copy, which has the
+/// edited bytes. In memory, with no handle onto the file, every page would
+/// be copied, which comes to more than the cap, so the stream is refused as
+/// too large.
+#[test]
+fn a_joined_stream_of_stored_pages_past_the_store_and_the_cap_opens_through_handles() {
+    use crate::codec::lazy::Limits;
+    let pages = 48;
+    let bytes = noise(pages * 1024);
+    let capacity = 16;
+    let whole_cap = 8 << 10;
+    let mut d = stored(&bytes, capacity);
+    let mut ev = Evaluator::new(paged(pages));
+    ev.set_stream_limits(Limits::default(), whole_cap);
+    let mut asked = Vec::new();
+    let id = fed_noting(&mut d, &bytes, &mut asked, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opened");
+    assert_eq!(ev.spaces.walks.get(), 1, "joined more than once");
+    assert_eq!(asked, [(0..8).collect::<Vec<u64>>()], "the first 8 KiB, and nothing else");
+    let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+    assert_eq!(joined.owned_bytes(), 0, "the stream holds copies of pages");
+    assert_eq!(joined.resident_limit(), Some(8 << 10), "half the store");
+    for at in [30 << 10, 5000, (pages << 10) - 3000] {
+        let (got, widest) = joined_read(&joined, &mut d, &bytes, at as u64, 3000);
+        assert!(got == bytes[at..at + 3000], "3000 bytes at {at} differ");
+        assert!(widest <= 4, "3000 bytes at {at} named {widest} chunks");
+    }
+    let (got, widest) = joined_reads(&joined, &mut d, &bytes, 8 << 10);
+    assert!(got == bytes, "the stream read in pieces differs");
+    assert_eq!(widest, 8);
+
+    // An edit inside page 3, and the stream opened again.
+    d.overwrite_bytes(3 * 1024 + 10, b"edited");
+    ev.invalidate_from((3 * 1024 + 10) * 8);
+    let id = fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opened again");
+    let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+    assert_eq!(joined.owned_bytes(), 1024, "a copy of the edited page, and of nothing else");
+    let mut edited = bytes.clone();
+    edited[3 * 1024 + 10..3 * 1024 + 16].copy_from_slice(b"edited");
+    assert!(joined_reads(&joined, &mut d, &bytes, 4 << 10).0 == edited, "the stream differs from the edited file");
+
+    let mut ev = Evaluator::new(paged(pages));
+    ev.set_stream_limits(Limits::default(), whole_cap);
+    assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
 }
