@@ -5062,13 +5062,13 @@ export const SIDEBAR = {
   atCursor: "At cursor",
   template: "Template",
   noTemplate: "No template for this file.",
-  /** At the end of the Template tab's marked line, when the field was read
-   *  through a `same as ..., but big-endian` line and its numbers are in the
-   *  other byte order from the one the marked line writes. */
+  /** On the Template tab's marked line, after the number type it is about,
+   *  when the field was read through a `same as ..., but big-endian` line and
+   *  its numbers are in the other byte order from the one the line writes. */
   readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
-  /** At the end of a field's line in the Template tab, after a click on it
-   *  found no such field in this file: its switch arm is not the one taken,
-   *  its list is empty, or it is optional and absent. */
+  /** On a field's line in the Template tab, after the field's name and type,
+   *  when a click on it found no such field in this file: its switch arm is
+   *  not the one taken, its list is empty, or it is optional and absent. */
   notInFile: "not in this file",
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
@@ -5078,7 +5078,10 @@ export const SIDEBAR = {
     list === "" ? `not found in the first ${n.toLocaleString()} fields` : `not found in the first ${n.toLocaleString()} elements of ${list}`,
   /** The Template tab's copy button, as its tooltip and accessible name. */
   copyTemplate: "Copy the template text",
-  /** After the template text was put on the clipboard. */
-  copied: (lines: number): string => `Copied ${lines.toLocaleString()} lines of template text.`,
-  copyFailed: "Couldn't copy to the clipboard.",
+  /** Beside the Template tab's copy button, after the template text was put
+   *  on the clipboard. The button says what was copied. */
+  copied: (lines: number): string => `Copied ${lines.toLocaleString()} lines.`,
+  /** In the same place, when the clipboard refused the text. Short enough to
+   *  fit between the tabs and the button. */
+  copyFailed: "Couldn't copy.",
 } as const;

@@ -53,6 +53,8 @@ export type TemplateIndex = {
   readonly typeSpans: ReadonlyMap<string, readonly [number, number]>;
   /** The block `root X {` opens, when the root is a structure. */
   readonly root: Block | null;
+  /** The line `root ...` is on, or null when there is none. */
+  readonly rootLine: number | null;
   /** Per line that starts a statement, the last line of that statement. */
   readonly stmtEnd: ReadonlyMap<number, number>;
   /** Every `2 => same as case 1` line, and every `type B = same as type A`
@@ -184,6 +186,7 @@ export function indexTemplate(text: string): TemplateIndex {
   /** `same as type` lines, whose type may be written further down. */
   const sameType: { line: number; target: string; order: ByteOrder | null }[] = [];
   let root: Block | null = null;
+  let rootLine: number | null = null;
   const stack: Frame[] = [];
   /** The statement being read: its first line and kind. */
   let stmt = -1;
@@ -277,6 +280,7 @@ export function indexTemplate(text: string): TemplateIndex {
     if (d === 0) {
       closeTopType(i - 1);
       const t = /^(type|root) ([^\s({=]+)/.exec(line) as [string, string, string] | null;
+      if (line.startsWith("root ")) rootLine ??= i;
       if (t !== null) {
         if (t[1] === "type") topType = { name: t[2], start: i };
         decls[i]?.push([t[1].length + 1, t[1].length + 1 + t[2].length]);
@@ -312,7 +316,7 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs, alias, armOf, opens };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, rootLine, stmtEnd, sameAs, alias, armOf, opens };
 }
 
 /** The byte order a block is also read in: the order of a `same as case N,
@@ -390,9 +394,9 @@ export function readAs(
   if (wideOrders(node.type).length > 0) read = differs(node, line);
   else {
     // Asked for only here, since they may not have been read yet.
-    const block = index.blocks.find((b) => b.fields.get(node.name) === line);
+    const block = index.blocks.find((b) => b.fields.get(fieldOf(node.name)) === line);
     for (const c of siblings()) {
-      const at = block?.fields.get(c.name);
+      const at = block?.fields.get(fieldOf(c.name));
       read = at === undefined ? null : differs(c, at);
       if (read !== null) break;
     }
@@ -457,6 +461,20 @@ export type Kid = { readonly name: string; readonly type: string; readonly value
  *  known yet. */
 export type Children = (depth: number) => readonly Kid[] | null;
 
+/** The field name a node's name is for. A structure `named by` one of its own
+ *  fields gives its node the field's name and that field's value, `body
+ *  __TEXT` for the field `body`, and a field's name in the text has no spaces. */
+export function fieldOf(name: string): string {
+  const sp = name.indexOf(" ");
+  return sp < 0 ? name : name.slice(0, sp);
+}
+
+/** The count after a structure's closing `}` when the structure is written as
+ *  a list's element, `[remaining / 12]` for `}[remaining / 12]`, or null. */
+function countOf(index: TemplateIndex, b: Block): string | null {
+  return /^\s*\}(\[.*\])/.exec(index.lines[b.end] ?? "")?.[1] ?? null;
+}
+
 /** What a field's type text says first, spaces dropped: `u64 le` is `u64le`. */
 const squash = (s: string): string => s.replace(/\s+/g, "");
 
@@ -479,7 +497,7 @@ function fits(index: TemplateIndex, blocks: readonly Block[], children: readonly
     let score = 0;
     let other = 0;
     for (const c of children) {
-      const at = b.fields.get(c.name);
+      const at = b.fields.get(fieldOf(c.name));
       if (at === undefined) continue;
       score++;
       other++;
@@ -629,7 +647,7 @@ function fieldAbove(chain: readonly ChainNode[], children: Children, depth: numb
     if (chain[d]?.list) continue;
     const kids = children(d);
     if (kids === null) return null;
-    const kid = kids.find((k) => k.name === name);
+    const kid = kids.find((k) => fieldOf(k.name) === name);
     if (kid !== undefined) return kid;
   }
   return null;
@@ -648,6 +666,33 @@ export function sameText(index: TemplateIndex, a: Block, b: Block): boolean {
     if ((index.lines[fromA + k] ?? "").slice(da) !== (index.lines[fromB + k] ?? "").slice(db)) return false;
   }
   return true;
+}
+
+/**
+ * Of several structures `chain[i - 1]` may be, the ones written as what that
+ * node is: an element of a list, or a value on its own. A structure closed
+ * with `}[count]` is written as a list's element, and one closed with `}[0]`
+ * has no elements. An arm closed with `}` is a value on its own when another
+ * arm of the same switch is written as a list's element. All of `blocks` are
+ * kept when none is left.
+ */
+function shaped(index: TemplateIndex, chain: readonly ChainNode[], i: number, blocks: readonly Block[]): readonly Block[] {
+  const node = chain[i - 1];
+  if (node === undefined) return blocks;
+  // A node placed by `at(...)` comes after a node of the same name for the
+  // placing, so the list is above both.
+  let j = i - 2;
+  while (j >= 0 && chain[j]?.name === node.name) j--;
+  const element = chain[j]?.list === true;
+  const kept = blocks.filter((b) => {
+    const count = countOf(index, b);
+    if (!element) return count === null;
+    if (count === "[0]") return false;
+    if (count !== null) return true;
+    const choice = index.armOf.get(b.open);
+    return choice === undefined || !blocks.some((o) => index.armOf.get(o.open) === choice && countOf(index, o) !== null);
+  });
+  return kept.length > 0 ? kept : blocks;
 }
 
 /** A line found for the node at `depth` in the chain. */
@@ -684,6 +729,7 @@ function choose(
   const possible = left.filter((_, k) => verdicts[k] !== false);
   if (taken.length > 0) left = taken;
   else if (possible.length > 0) left = possible;
+  if (left.length > 1) left = shaped(index, chain, i, left);
   if (left.length > 1) {
     const kids = children(i - 1);
     if (kids !== null) left = fits(index, left, kids);
@@ -695,6 +741,20 @@ function choose(
   }
   const first = left[0];
   return first !== undefined && left.every((b) => sameText(index, b, first)) ? first : null;
+}
+
+/** For a root written as a switch, `root switch peek(u64be) {`, the structures
+ *  called `name` that are its arms or arms of switches in its arms. The value
+ *  the switch reads is not a field of the file, so [`choose`] tells these
+ *  apart by the root's children. */
+function rootArms(index: TemplateIndex, name: string): readonly Block[] {
+  const root = index.rootLine;
+  if (root === null) return [];
+  return (index.byName.get(name) ?? []).filter((b) => {
+    let line = b.open;
+    for (let choice = index.armOf.get(line); choice !== undefined; choice = index.armOf.get(line)) line = choice.line;
+    return line === root && line !== b.open;
+  });
 }
 
 /** [`findLineAt`] from `chain[from]` on, with `start` the structures
@@ -716,14 +776,15 @@ function walk(
     const parent = chain[i - 1];
     if (n === undefined || parent === undefined) break;
     if (!parent.list && blocks.length > 0) {
-      const having = blocks.filter((b) => b.fields.has(n.name));
+      const field = fieldOf(n.name);
+      const having = blocks.filter((b) => b.fields.has(field));
       let chosen: Block | null = having.length === 1 ? (having[0] ?? null) : null;
       if (having.length > 1) {
         chosen = choose(index, chain, children, i, having, scope);
         if (chosen === null) return found;
       }
       if (chosen !== null) {
-        found = { line: chosen.fields.get(n.name)!, depth: i };
+        found = { line: chosen.fields.get(field)!, depth: i };
         scope = scopeOf(index, found.line);
       }
     }
@@ -758,7 +819,8 @@ export function findLine(index: TemplateIndex, chain: readonly ChainNode[], chil
 export function findLineAt(index: TemplateIndex, chain: readonly ChainNode[], children: Children): Found | null {
   const head = chain[0];
   if (head === undefined) return null;
-  const blocks = index.root !== null && index.root.name === head.type ? [index.root] : blocksNamed(index, head.type, []);
+  let blocks = index.root !== null && index.root.name === head.type ? [index.root] : rootArms(index, head.type);
+  if (blocks.length === 0) blocks = blocksNamed(index, head.type, []);
   return walk(index, chain, children, 1, blocks, null, [], false);
 }
 

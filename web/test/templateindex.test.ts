@@ -683,3 +683,118 @@ test("a field whose unset value has a name is found, and the name is not a keywo
     ],
   );
 });
+
+// HDF5's root: a switch on bytes the file has not read as a field, whose arms
+// write `HDF5` twice, and a third `HDF5` written inside the second arm.
+const ROOTSWITCH = `template hdf5
+
+root switch peek(u64be) {
+  0x894844460d0a1a0a => HDF5 {
+    signature: magic 89 48 44 46 0D 0A 1A 0A
+    superblock_version: u8be
+  }
+  _ => HDF5 {
+    user_block: bytes[find(89 48 44 46 0D 0A 1A 0A)]
+    file: origin HDF5 {
+      signature: magic 89 48 44 46 0D 0A 1A 0A
+      superblock_version: u8be
+      // Only in this one.
+      extra: u8be
+    }
+  }
+}
+`;
+
+test("a root written as a switch on an expression is one of that switch's arms", () => {
+  const idx = indexTemplate(ROOTSWITCH);
+  const lines = ROOTSWITCH.split("\n");
+  const first = lines.findIndex((l) => l.includes("signature:"));
+  const inner = lines.findIndex((l, i) => i > first && l.includes("signature:"));
+  const kids = (depth: number): ChainNode[] | null => (depth === 0 ? [node("signature", "magic[8]"), node("superblock_version", "u8")] : null);
+  assert.equal(findLine(idx, [node("file", "HDF5"), node("signature", "magic[8]")], kids), first);
+  assert.equal(findLine(idx, [node("file", "HDF5"), node("superblock_version", "u8")], kids), first + 1);
+  // A file with bytes before the signature takes the other arm.
+  const later = (depth: number): ChainNode[] | null => (depth === 0 ? [node("user_block", "bytes[]"), node("file", "HDF5")] : null);
+  assert.equal(line(ROOTSWITCH, findLine(idx, [node("file", "HDF5"), node("user_block", "bytes[]")], later)), "    user_block: bytes[find(89 48 44 46 0D 0A 1A 0A)]");
+  assert.equal(findLine(idx, [node("file", "HDF5"), node("file", "HDF5"), node("signature", "magic[8]")], later), inner);
+});
+
+// ICC's XYZType: one XYZNumber on its own, or a list of them, by a sum on the
+// size. TIFF's strip offsets: one arm per number width, and one with no
+// elements at all.
+const SHAPES = `template shapes
+
+root T {
+  xyz: switch remaining / 12 {
+    1 => XYZNumber (inline) {
+      x: i32be
+      y: i32be
+    }
+    _ => XYZNumber (inline) {
+      x: i32be
+      y: i32be
+    }[remaining / 12]
+  }
+  values: switch entries[tag = 0x0111].type {
+    3 => Piece (inline) {
+      offset: u16le
+    }[count]
+    4 => Piece (inline) {
+      offset: u32le
+    }[count]
+    _ => Piece (inline) {
+      offset: u32le
+    }[0]
+  }
+}
+`;
+
+test("arms of a switch on an expression are told apart by whether the node is a list's element", () => {
+  const idx = indexTemplate(SHAPES);
+  const lines = SHAPES.split("\n");
+  const after = (s: string, field: string): number => {
+    const from = lines.findIndex((l) => l.includes(s));
+    return lines.findIndex((l, i) => i > from && l.includes(field));
+  };
+  const one = [node("file", "T"), node("xyz", "XYZNumber"), node("y", "i32 be")];
+  assert.equal(findLine(idx, one, () => null), after("1 => XYZNumber", "y:"));
+  const many = [node("file", "T"), node("xyz", "XYZNumber[]", true), node("[1]", "XYZNumber"), node("y", "i32 be")];
+  assert.equal(findLine(idx, many, () => null), after("_ => XYZNumber", "y:"));
+  // An arm written as `[0]` has no elements, and the number's width picks
+  // between the other two.
+  const wide = [node("file", "T"), node("values", "Piece[]", true), node("[0]", "Piece"), node("offset", "u32 le")];
+  assert.equal(findLine(idx, wide, (d) => (d === 2 ? [node("offset", "u32 le")] : null)), after("4 => Piece", "offset:"));
+  const narrow = [node("file", "T"), node("values", "Piece[]", true), node("[0]", "Piece"), node("offset", "u16 le")];
+  assert.equal(findLine(idx, narrow, (d) => (d === 2 ? [node("offset", "u16 le")] : null)), after("3 => Piece", "offset:"));
+  // Without the children, the two arms that are lists of elements stay a tie.
+  assert.equal(line(SHAPES, findLine(idx, wide, () => null)), "  values: switch entries[tag = 0x0111].type {");
+});
+
+// Mach-O's load commands: a structure named by one of its own fields is a
+// node called `body __TEXT` for the field `body`.
+const NAMEDBY = `template macho
+
+root MachO {
+  commands: LoadCommand {
+    kind: u32le
+    body: switch kind {
+      1 => Segment (named by name) {
+        name: text[16] padded with 0x00 ascii
+        size: u64le
+      }
+      2 => Path (named by name) {
+        name: text[4] ascii
+      }
+    }
+  }[2]
+}
+`;
+
+test("a node named by one of its fields is found by its field's name", () => {
+  const idx = indexTemplate(NAMEDBY);
+  const kids = (depth: number): { name: string; type: string; value?: string }[] | null =>
+    depth === 2 ? [{ name: "kind", type: "u32 le", value: "1" }, { name: "body __TEXT", type: "Segment" }] : null;
+  const chain = [node("file", "MachO"), node("commands", "LoadCommand[]", true), node("[1]", "LoadCommand"), node("body __TEXT", "Segment")];
+  assert.equal(line(NAMEDBY, findLine(idx, chain, kids)), "    body: switch kind {");
+  assert.equal(line(NAMEDBY, findLine(idx, [...chain, node("size", "u64 le")], kids)), "        size: u64le");
+});
