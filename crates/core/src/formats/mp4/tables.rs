@@ -110,7 +110,7 @@ fn compact_sample_sizes() -> T {
 }
 
 fn chunk_offsets(wide: bool) -> T {
-    counted_full_box(if wide { "ChunkOffsets64" } else { "ChunkOffsets32" }, if wide { T::u64(Big) } else { u32be() })
+    counted_full_box(if wide { "ChunkOffsets64" } else { "ChunkOffsets32" }, if wide { T::u64(Big) } else { u32be() }).positions(&["entries"])
 }
 
 fn sync_samples(name: &str) -> T {
@@ -283,7 +283,9 @@ fn aux_info_offsets() -> T {
     let mut fields = full_box_flags("AuxInfoFlags", &[(0, "type present")]);
     fields.extend(aux_info_type());
     fields.extend(vec![("entry_count", u32be()), ("offsets", T::array(by_version(u32be(), T::u64(Big)), E::field("entry_count")))]);
-    T::structure("AuxInfoOffsets", fields)
+    // Each offset counts from the start of the file in a moov, and from the
+    // fragment's base data offset in a traf.
+    T::structure("AuxInfoOffsets", fields).positions(&["offsets"])
 }
 
 /// Whether this sample table has a box of type `kind`.
@@ -641,5 +643,30 @@ mod tests {
         assert_eq!(node.size_bits, 8);
         let sample = ev.node(&d, &p[..p.len() - 1]).unwrap();
         assert!(sample.name.contains(&format!("sample {total}")), "{}", sample.name);
+    }
+
+    /// Each chunk offset of an `stco` or a `co64` is a position, so a view
+    /// writes it in the base its addresses are in. The entry count is not.
+    #[test]
+    fn each_chunk_offset_is_a_position() {
+        let entry = boxed(b"zzzz", &[0, 0, 0, 0, 0, 0, 0, 1]);
+        for wide in [false, true] {
+            let file = with_mdat(|at| track(&entry, &u32s(&[0, 2, 2, 2]), &[(1, 1)], at, wide), &[0, 2], &[1, 2, 3, 4]);
+            let d = Document::new(MemSource(file));
+            let mut ev = Evaluator::new(mp4());
+            let stco = ["0", "body", "0", "body", "0", "body", "0", "body", "0", "body", "boxes", "3", "body"];
+            let at = |names: &[&'static str]| -> Vec<&'static str> { stco.iter().chain(names).copied().collect() };
+            let first = walk(&mut ev, &d, &at(&["entries", "0"]));
+            assert!(ev.node(&d, &first).unwrap().locates, "wide {wide}");
+            let count = walk(&mut ev, &d, &at(&["entry_count"]));
+            assert!(!ev.node(&d, &count).unwrap().locates, "wide {wide}");
+        }
+        let t = mp4();
+        crate::machinery::assert_marks(&t, "AuxInfoOffsets", &["offsets"], &["entry_count"]);
+        crate::machinery::assert_marks(&t, "ItemLocation", &["base_offset"], &["extent_count"]);
+        crate::machinery::assert_marks(&t, "ExifItem", &["tiff_header_offset"], &[]);
+        crate::machinery::assert_marks(&t, "TrackFragmentHeader", &["base_data_offset"], &["default_sample_size"]);
+        crate::machinery::assert_marks(&t, "RandomAccessEntry", &["moof_offset"], &["time"]);
+        crate::machinery::assert_marks(&t, "SegmentIndex", &["first_offset"], &["reference_count"]);
     }
 }

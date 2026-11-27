@@ -93,6 +93,7 @@ fn tfhd() -> T {
         ("default_sample_flags", T::when(flag(5), sample_flags())),
     ]);
     T::structure("TrackFragmentHeader", fields)
+        .positions(&["base_data_offset"])
         .field_doc("base_data_offset", "Where in the file this fragment's data offsets count from. Without it they count from the start of the moof.")
 }
 
@@ -230,6 +231,7 @@ fn tfra() -> T {
             ("sample_number", width("length_size_of_sample_num")),
         ],
     )
+    .positions(&["moof_offset"])
     .field_doc("time", "When the sample plays, in the media's timescale.")
     .field_doc("moof_offset", "The file offset of the moof that holds the sample.")
     .field_doc("traf_number", "Which traf of the moof at moof_offset, counting from 1. trun_number and sample_number then pick the trun and the sample, also counting from 1.");
@@ -280,6 +282,7 @@ fn sidx() -> T {
         ("references", T::array(reference, E::field("reference_count"))),
     ]);
     T::structure("SegmentIndex", fields)
+        .positions(&["first_offset"])
         .field_doc("first_offset", "How many bytes after the end of this box the first subsegment starts.")
 }
 
