@@ -456,6 +456,25 @@ content card, whose height depends on its contents, is measured once it is
 in the document and laid out again; the tops are a running total, so a row
 drawn taller than it was measured at would slide out from under its place.
 
+#### Which columns show
+
+A row's name and its value are what the listing is read for. The address, the
+size and the type of a plain number say how the value is stored, not what it
+is, so they are hidden until the row is hovered or selected. A type that is a
+structure's name or a list's element type stays, since it says what the row
+holds. The setting "Address, size and number type" (`qubero.listing.columns`)
+has "Selected row" (the default) and "Every row"; "Every row" puts the class
+`rp-all` on the listing and the three columns show throughout.
+
+The value column is never given up for another column. Under 700 px the type
+and size columns are not drawn at all, in either setting, and the address sits
+after the name.
+
+A sparkline is drawn for a list of numbers and nothing else
+(`web/src/viz/sparkline.ts`): a list with three or more elements, every one a
+number. It is not drawn for the bytes inside one integer, for text, or for a
+list of structures.
+
 #### What arrives open
 The listing exists to show the file, so it arrives showing it. A reader who
 has to click through folds to reach the bytes will not, and the view is a
@@ -837,6 +856,20 @@ the same wherever it is drawn.
 The right panel folds to a narrow vertical tab that still names it. The bottom
 Structure panel is gone; its tree is the rail's Contents and its Logical mode is
 the rail's Logical tab.
+
+#### Fields another field decided
+
+A chip whose field was placed, sized, counted or typed by another field has a
+small corner mark (`hv-chip-derived`), and its tooltip lists each such field:
+`Position from section_headers[1].offset = 0x120, at @0x114078`. The answer
+comes from `doc.origins(path)` and costs a call into the core per field, so
+the hex view asks for the chips on screen 60 ms after a draw, 6 ms at a time
+(`learnOrigins` in `web/src/hexview.ts`), and writes the mark onto the chips
+directly: a row whose chips say the same thing is not filled again.
+
+Resting the mouse on a marked chip for 160 ms draws the Dependencies arrows
+for that one field (`HexLinks.setPreview`), whether or not the Dependencies
+button is on. Moving off the chip takes them away.
 
 ### Sub-byte fields in the hex view
 A field of three bits that straddles two bytes is normal in these formats, so the
@@ -3850,6 +3883,69 @@ show everything when folding would hide no more than `FOLD_SLACK` (3) rows
 it saved nothing and read "… 1 more fields". The listing's "Show more" rows are
 a window being paged, not a fold, and the treemap pools rectangles by area, so
 neither follows this rule.
+
+### Addresses in hex or decimal
+
+One setting, "Addresses and offsets as" (`qubero.addresses`, hex by default),
+decides how every address is written: the hex view's address column and column
+header, every `@` address, the status bar, the Go to box and the report's
+dumps. `web/src/format.ts` holds the base. Decimal addresses in a column are
+padded with spaces, since `00000064` reads as hex. In the Go to box a leading
+`0x` always means hex and bare digits are read in the chosen base.
+
+A field's value follows the setting when the field holds a position. The core
+marks those fields (`locates` on a node and on a span), worked out once per
+template in `crates/core/src/machinery/positions.rs`:
+
+- a field a later sibling is placed by (`At`, a pointer list's offsets, a
+  chain's first, a gather's adjust);
+- the field a pointer list reads inside each element of a table, and each
+  element of an offsets array;
+- a chain's `next` and a gather's per-record offset;
+- a field the structure declares, for an offset nothing in the template reads
+  through: `Ty::positions(&["file_offset"])`, written `positions file_offset`
+  in the template text.
+
+In a sum only the terms added into the position count, so in
+`offset + index * entry_size` only `offset` is marked. Sizes, counts, memory
+addresses, and offsets counted in sectors, blocks or samples are not marked.
+Neither is an offset into another file or into unpacked data.
+
+`positionValue` in `format.ts` writes a marked whole number of zero or more as
+`0x...` when addresses are hex. An enum-typed field is rewritten only when its
+value has no name.
+
+### The template as text
+
+`crates/core/src/template_text.rs` writes a whole template as text, and the
+right sidebar's Template tab shows it (`web/src/templatepanel.ts`), read-only,
+with the line that declares the field under the cursor marked
+(`web/src/templateindex.ts`). The grammar is in the comment at the top of
+`template_text.rs`. Its rule is that a line has one reading.
+
+A template is not written twice where it says the same thing twice:
+
+- An arm of a `switch` or `match` that repeats an earlier arm is one line,
+  `2 => same as case 1`, and arms pointing at the same arm share a line:
+  `30, 38, 41 => same as case 29`.
+- An arm that is an earlier arm with every number wider than a byte in the
+  other byte order is `2 => same as case 1, but big-endian`. The comparison
+  is on the IR, never on the text.
+- Named types pair the same way: `type tiff.Ifd.be = same as type tiff.Ifd.le,
+  but big-endian`. Each named type the line's type uses is replaced by its own
+  counterpart. Of a pair, the one the root reaches first is written in full.
+- A structure several formats carry is a named type in the format source. The
+  ICC profile is `icc.Profile`, written once and referenced from PNG, JPEG,
+  WebP, TIFF and FLAC.
+
+A field read through a `but ...-endian` line is marked on the written-out
+line, which names the other byte order. The marked line then carries a note
+straight after the number type: `magic: u32be read as little-endian`. The note
+is drawn from a `data-note` attribute, so a selection does not copy it.
+
+Snapshots of the text for several formats are in
+`crates/core/tests/snapshots/template_text/`; regenerate them with
+`UPDATE_SNAPSHOTS=1 cargo test -p qubero-core --test template_text`.
 
 ## Roadmap (not yet built)
 
