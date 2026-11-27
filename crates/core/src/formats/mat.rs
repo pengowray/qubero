@@ -956,7 +956,7 @@ fn linking(e: Endian) -> T {
             .into_iter()
             .map(|n| (n, T::u32(e)))
             .collect(),
-    );
+    ).positions(&["classes", "saveobj_properties", "objects", "properties", "dynamic_properties", "region_6", "region_7", "end"]);
     let name = T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1);
     T::structure(
         "LinkingMetadata",
@@ -1512,5 +1512,7 @@ mod tests {
     #[test]
     fn the_subsystem_offset_is_a_position() {
         crate::machinery::assert_marks(&mat(), "Header", &["subsystem_offset"], &["version"]);
+        crate::machinery::assert_marks(&mat(), "RegionOffsets", &["classes", "end"], &[]);
+        crate::machinery::assert_marks(&mat(), "LinkingMetadata", &[], &["name_count"]);
     }
 }

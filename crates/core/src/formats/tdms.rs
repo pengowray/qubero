@@ -404,6 +404,7 @@ fn strings(e: Endian, count: E, size: E) -> T {
     T::structure(
         "Strings",
         vec![
+            // Each counts from the start of `text`.
             ("offsets", T::array(T::u32(e), count.clone())),
             (
                 "text",
@@ -413,7 +414,7 @@ fn strings(e: Endian, count: E, size: E) -> T {
                 ),
             ),
         ],
-    )
+    ).positions(&["offsets"])
 }
 
 /// A length and that many bytes of UTF-8. Every name, path and text value in
@@ -1403,5 +1404,6 @@ mod tests {
     #[test]
     fn the_lead_in_offsets_are_positions() {
         crate::machinery::assert_marks(&tdms(), "SegmentContents", &["next_segment_offset", "raw_data_offset"], &["version"]);
+        crate::machinery::assert_marks(&tdms(), "Strings", &["offsets"], &[]);
     }
 }
