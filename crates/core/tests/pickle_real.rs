@@ -1738,10 +1738,10 @@ fn a_spelled_array_opens_its_numbers_as_a_space() {
         space.trace().check_tiles().unwrap_or_else(|e| panic!("{name}: {e}"));
         let at = space.run().unwrap().run_offset_bits;
         assert_eq!(at, run.at * 8, "{name}: the run is not where the file wrote it");
-        let first = space.map_out(0).unwrap();
+        let first = space.map_out(0).unwrap().unwrap();
         assert!(first.in_bits.end <= run.len * 8, "{name}: the first byte came from outside the run");
-        assert!(space.map_in(at).is_some(), "{name}: the run's first bit made nothing");
-        assert!(space.map_in(at - 8).is_none(), "{name}: a bit in front of the run is not this space's");
+        assert!(space.map_in(at).unwrap().is_some(), "{name}: the run's first bit made nothing");
+        assert!(space.map_in(at - 8).unwrap().is_none(), "{name}: a bit in front of the run is not this space's");
     }
 }
 

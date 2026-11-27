@@ -263,13 +263,17 @@ impl Space {
     /// apart here. A span's trace replaces its codes with one opaque step once
     /// it passes [`crate::codec::lazy::SPAN_TRACE_STEPS`] steps, which a span
     /// of 1 MiB of literals does.
-    pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
+    ///
+    /// Such a trace is made from the run's compressed bytes, which may be
+    /// missing chunks of the file: the error is those chunks. Nothing when
+    /// the decoder refuses the run there.
+    pub fn trace_at_bit(&self, bit: u64) -> Result<Option<Arc<Trace>>, Vec<Missing>> {
         match self.doc.source() {
-            SpaceSource::Lazy(index) => match index.block_of_bit(bit) {
-                Some(i) => index.block_trace(i).ok(),
+            SpaceSource::Lazy(index) => match index.block_of_bit(bit)? {
+                Some(i) => lazy::refused_as_none(index.block_trace(i)),
                 None => index.trace_at_bit(bit),
             },
-            _ => Some(self.trace.clone()),
+            _ => Ok(Some(self.trace.clone())),
         }
     }
 
@@ -283,17 +287,20 @@ impl Space {
     /// unpacks to names bits of that block's deflate, and [`Space::run_at`]
     /// says where the block's deflate is. A byte of a stored part is the one
     /// step over that part's bytes.
-    pub fn map_out(&self, byte: u64) -> Option<Step> {
+    ///
+    /// A stream read through an index makes the step's trace from its run,
+    /// and the error is the chunks of the file the run is missing.
+    pub fn map_out(&self, byte: u64) -> Result<Option<Step>, Vec<Missing>> {
         match self.doc.source() {
             SpaceSource::Lazy(index) => return index.map_out(byte),
             SpaceSource::Joined(joined) => return joined.map_out(byte),
             SpaceSource::Whole(_) => {}
         }
-        let step = self.trace.map_out(byte)?;
+        let Some(step) = self.trace.map_out(byte) else { return Ok(None) };
         if self.runs.is_empty() {
-            return Some(step);
+            return Ok(Some(step));
         }
-        Some(in_run(step, self.run_at(byte)?))
+        Ok(self.run_at(byte).map(|run| in_run(step, run)))
     }
 
     /// Which step read a bit of the run this space was unpacked from, and so
@@ -308,22 +315,23 @@ impl Space {
     ///
     /// A joined stream has no one run, so there the part whose run holds the
     /// bit answers, with the step's bits counted from that run's start. Nothing
-    /// for a bit no part was read from.
-    pub fn map_in(&self, bit: u64) -> Option<Step> {
+    /// for a bit no part was read from. Missing chunks as for
+    /// [`Space::map_out`].
+    pub fn map_in(&self, bit: u64) -> Result<Option<Step>, Vec<Missing>> {
         if self.runs.is_empty() {
-            let run = self.run?;
-            let in_run = bit.checked_sub(run.run_offset_bits).filter(|&at| at < run.run_bits)?;
+            let Some(run) = self.run else { return Ok(None) };
+            let Some(in_run) = bit.checked_sub(run.run_offset_bits).filter(|&at| at < run.run_bits) else { return Ok(None) };
             return match self.doc.source() {
                 SpaceSource::Lazy(index) => index.map_in(in_run),
-                _ => self.trace.map_in(in_run),
+                _ => Ok(self.trace.map_in(in_run)),
             };
         }
-        let run = self.run_holding(bit)?;
+        let Some(run) = self.run_holding(bit) else { return Ok(None) };
         if let SpaceSource::Joined(joined) = self.doc.source() {
-            let i = self.runs.iter().position(|r| std::ptr::eq(r, run))?;
+            let Some(i) = self.runs.iter().position(|r| std::ptr::eq(r, run)) else { return Ok(None) };
             return joined.map_in(i, bit - run.run_offset_bits);
         }
-        Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
+        Ok(self.trace.map_in(run.in_start + (bit - run.run_offset_bits)).map(|step| in_run(step, run)))
     }
 
     /// Which part of a joined stream was read from bit `bit` of the space the
@@ -555,33 +563,36 @@ impl Joined {
     }
 
     /// Which step of which part produced byte `byte`, as
-    /// [`Space::map_out`] gives it for a joined stream held whole.
-    pub fn map_out(&self, byte: u64) -> Option<Step> {
-        let i = self.part_at(byte)?;
+    /// [`Space::map_out`] gives it for a joined stream held whole. A part
+    /// read through its index may be missing chunks of the file, and the
+    /// error is those chunks.
+    pub fn map_out(&self, byte: u64) -> Result<Option<Step>, Vec<Missing>> {
+        let Some(i) = self.part_at(byte) else { return Ok(None) };
         let (range, bytes) = &self.parts[i];
         let at = byte - range.start;
         let step = match bytes {
             JoinedBytes::Held(_) => {
-                Step { in_bits: 0..(range.end - range.start) * 8, out_bytes: 0..range.end - range.start, kind: StepKind::Stored }
+                Some(Step { in_bits: 0..(range.end - range.start) * 8, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })
             }
             JoinedBytes::Indexed(index) => index.map_out(at)?,
-            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_out(at)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec).and_then(|t| t.map_out(at)),
         };
-        Some(self.shifted(i, step))
+        Ok(step.map(|step| self.shifted(i, step)))
     }
 
-    /// Which step of part `i` read bit `bit` of that part's run.
-    pub fn map_in(&self, i: usize, bit: u64) -> Option<Step> {
-        let (range, bytes) = self.parts.get(i)?;
+    /// Which step of part `i` read bit `bit` of that part's run. Missing
+    /// chunks as for [`Joined::map_out`].
+    pub fn map_in(&self, i: usize, bit: u64) -> Result<Option<Step>, Vec<Missing>> {
+        let Some((range, bytes)) = self.parts.get(i) else { return Ok(None) };
         let step = match bytes {
             JoinedBytes::Held(_) => {
                 let bits = (range.end - range.start) * 8;
-                (bit < bits).then(|| Step { in_bits: 0..bits, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })?
+                (bit < bits).then(|| Step { in_bits: 0..bits, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })
             }
             JoinedBytes::Indexed(index) => index.map_in(bit)?,
-            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec)?.map_in(bit)?,
+            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec).and_then(|t| t.map_in(bit)),
         };
-        Some(self.shifted(i, step))
+        Ok(step.map(|step| self.shifted(i, step)))
     }
 }
 
@@ -616,8 +627,8 @@ pub(super) type RunKey = (u32, u64, u64);
 /// run is indexed once however many things read it: the `Decoded` node over
 /// it, a stitched stream with it as a part, and the tab.
 ///
-/// Each index holds its compressed run, so the total of those is capped, and
-/// the index used longest ago goes first.
+/// Each index reads its compressed run through a copy of it, so the total of
+/// those is capped, and the index used longest ago goes first.
 #[derive(Default)]
 pub(super) struct Indexes {
     entries: Vec<(RunKey, Codec, Arc<Seekable>, u64)>,
@@ -634,8 +645,8 @@ impl Indexes {
     }
 
     fn put(&mut self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
-        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.packed().len()).sum::<usize>();
-        while !self.entries.is_empty() && held(&self.entries) + index.packed().len() > INDEXED_RUN_BYTES {
+        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.input().len()).sum::<u64>();
+        while !self.entries.is_empty() && held(&self.entries) + index.input().len() > INDEXED_RUN_BYTES as u64 {
             let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
             self.entries.swap_remove(oldest);
         }
@@ -2665,7 +2676,7 @@ mod tests {
             }
             let space = e.space(id).unwrap();
             assert_eq!(space.len_bytes(), data.len() as u64);
-            let step = space.map_out(350_000).expect("a step made it");
+            let step = space.map_out(350_000).unwrap().expect("a step made it");
             assert!(step.out_bytes.contains(&350_000), "{template}: {step:?}");
         }
         let (d, mut e, _) = open("xz", xz_of(&data, 30_000));
@@ -2689,18 +2700,18 @@ mod tests {
         let run = SingleRun { run_space: 0, run_offset_bits: field.offset_bits, run_bits: field.size_bits };
         assert_eq!(space.run(), Some(run));
         for byte in 0..text.len() as u64 {
-            let step = space.map_out(byte).unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
+            let step = space.map_out(byte).unwrap().unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
             assert!(step.out_bytes.contains(&byte));
             assert!(matches!(step.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::Stored | StepKind::Pixel));
             assert!(step.in_bits.end <= field.size_bits, "{:?} is past the run's {} bits", step.in_bits, field.size_bits);
             // And the bits it read, as bits of the file, lead back to it.
-            assert_eq!(space.map_in(field.offset_bits + step.in_bits.start), Some(step));
+            assert_eq!(space.map_in(field.offset_bits + step.in_bits.start), Ok(Some(step)));
         }
-        assert_eq!(space.map_out(text.len() as u64), None);
+        assert_eq!(space.map_out(text.len() as u64), Ok(None));
         for bit in 0..field.offset_bits {
-            assert_eq!(space.map_in(bit), None, "bit {bit} is the zlib header's, not the run's");
+            assert_eq!(space.map_in(bit), Ok(None), "bit {bit} is the zlib header's, not the run's");
         }
-        assert_eq!(space.map_in(field.offset_bits + field.size_bits), None, "the Adler-32 after the run");
+        assert_eq!(space.map_in(field.offset_bits + field.size_bits), Ok(None), "the Adler-32 after the run");
     }
 
     /// Editing the file drops the spaces: a decoded byte is worked out from

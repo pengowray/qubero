@@ -390,11 +390,11 @@ fn the_listing_goes_from_mcus_to_blocks_to_codes() {
     let id = ev.open_space(&d, 0, &path).unwrap().unwrap();
     let space = ev.space(id).unwrap();
     for byte in [0u64, 127, 128, 1000, 900 * 128 - 1] {
-        let step = space.map_out(byte).unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
+        let step = space.map_out(byte).unwrap().unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
         assert!(step.out_bytes.contains(&byte));
         assert_eq!(step.out_bytes.end - step.out_bytes.start, 128);
         assert!(!step.in_bits.is_empty());
-        assert_eq!(space.map_in(run.offset_bits + step.in_bits.start), Some(step));
+        assert_eq!(space.map_in(run.offset_bits + step.in_bits.start), Ok(Some(step)));
     }
 }
 

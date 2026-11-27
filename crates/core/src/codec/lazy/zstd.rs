@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use super::input::RunInput;
 use super::seekable::{seekable, Kind};
 use super::{Checkpoints, Decoded, Limits, Progress, Start, Stepped};
 use crate::codec::frames::{self, Walked, ZstdWalk};
@@ -162,7 +163,7 @@ impl ZstdPass {
                     }
                     Some(len) => {
                         let list = std::mem::take(&mut marks.list);
-                        Ok(Stepped::Done(Decoded::Indexed(seekable(Codec::Zstd, self.packed.clone(), Kind::Zstd, len, list, limits))))
+                        Ok(Stepped::Done(Decoded::Indexed(seekable(Codec::Zstd, RunInput::held(self.packed.clone()), Kind::Zstd, len, list, limits))))
                     }
                 }
             }

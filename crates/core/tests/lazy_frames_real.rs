@@ -87,10 +87,10 @@ fn reads_back(codec: Codec, packed: &[u8], whole: &[u8], trace: &Trace) {
     bytes.sort_unstable();
     ins.sort_unstable();
     for byte in bytes {
-        assert_eq!(s.map_out(byte), trace.map_out(byte), "{codec:?}: byte {byte}");
+        assert_eq!(s.map_out(byte), Ok(trace.map_out(byte)), "{codec:?}: byte {byte}");
     }
     for bit in ins {
-        assert_eq!(s.map_in(bit), trace.map_in(bit), "{codec:?}: bit {bit}");
+        assert_eq!(s.map_in(bit), Ok(trace.map_in(bit)), "{codec:?}: bit {bit}");
     }
 }
 

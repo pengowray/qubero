@@ -738,7 +738,7 @@ impl Editor {
         }
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
+        reply(e.map_out(core, byte as u64).map(|s| s.and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
     }
 
     /// `map_out`, including a step whose run is inside another stream rather
@@ -751,7 +751,7 @@ impl Editor {
         }
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(core, byte as u64).and_then(|s| any_space_step_dto(e, core, s, byte as u64))))
+        reply(e.map_out(core, byte as u64).map(|s| s.and_then(|s| any_space_step_dto(e, core, s, byte as u64))))
     }
 
     /// Which step read the bit at `bit` of the file, when that bit is in the
@@ -764,7 +764,7 @@ impl Editor {
         }
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
+        reply(e.map_in(core, bit as u64).map(|s| s.and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
     }
 
     /// Take the deflate symbol at `bit` of the run `space` was unpacked from
@@ -811,7 +811,11 @@ impl Editor {
             if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
                 return none();
             }
-            let Some(trace) = sp.trace_at_bit(bit as u64) else { return none() };
+            let trace = match sp.trace_at_bit(bit as u64) {
+                Ok(Some(trace)) => trace,
+                Ok(None) => return none(),
+                Err(missing) => return reply::<Option<DecodedStepDto>>(Err(EvalError::Pending(missing))),
+            };
             let Some(index) = trace.index_in(bit as u64) else { return none() };
             let Some(step) = trace.step(index) else { return none() };
             // As much of the run as the step reaches, and no more. Bit

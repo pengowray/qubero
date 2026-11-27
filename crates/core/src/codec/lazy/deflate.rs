@@ -4,6 +4,7 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use super::input::RunInput;
 use super::seekable::{seekable, Kind};
 use super::{wrapper, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
@@ -222,7 +223,7 @@ impl DeflatePass {
             return Err(Refusal::Failed);
         }
         let checkpoints = sink.marks.take().expect("set when the pass started").list;
-        let mut s = seekable(self.codec, self.packed.clone(), Kind::Deflate(self.framing), len, checkpoints, self.limits);
+        let mut s = seekable(self.codec, RunInput::held(self.packed.clone()), Kind::Deflate(self.framing), len, checkpoints, self.limits);
         s.blocks = sink.blocks.take().expect("set when the pass started");
         s.blocks_end = blocks_end;
         s.crc32 = Some(sums.crc);

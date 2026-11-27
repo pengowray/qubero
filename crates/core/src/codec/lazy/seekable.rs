@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::deflate::{BlockMarks, WindowSink};
-use super::input::{Copied, ReadError, RunInput};
+use super::input::{refused_as_none, Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
 use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
@@ -13,19 +13,26 @@ use crate::source::Missing;
 /// A compressed run that comes to more than can be held whole, read through
 /// its checkpoints.
 ///
-/// Holds the run itself, which is at most [`CAP_BYTES`]; the checkpoints; where
-/// the blocks start; the spans decoded most recently, up to
-/// [`Limits::span_cache`] (for xz, as much of each as reads have reached);
-/// the trace of the span asked about most recently;
-/// and the traces of the blocks asked about most recently, up to
+/// Holds the checkpoints; where the blocks start; the spans decoded most
+/// recently, up to [`Limits::span_cache`] (for xz, as much of each as reads
+/// have reached); the trace of the span asked about most recently; and the
+/// traces of the blocks asked about most recently, up to
 /// [`Limits::span_steps`] steps between them. Reads take `&self`, as a
 /// [`Source`](crate::source::Source) is read, so the caches are behind locks.
+///
+/// The run's compressed bytes are read through a [`RunInput`], by each read
+/// as it needs them: a span's, a block's, or the stretch between two kept
+/// block starts. A read that finds chunks of them missing answers
+/// [`ReadError::Missing`] and caches nothing. Until the index pass reads
+/// through a handle onto the file as well, the input is over the pass's own
+/// copy of the run, which is at most [`CAP_BYTES`] and never finds a chunk
+/// missing. See `docs/DESIGN-lazy-compressed-input.md`.
 ///
 /// [`CAP_BYTES`]: crate::codec::CAP_BYTES
 pub struct Seekable {
     codec: Codec,
-    packed: Arc<Vec<u8>>,
-    /// Where a span's compressed bytes are read from when it is decoded.
+    /// Where the run's compressed bytes are read from. The bits of every
+    /// trace count from its first byte.
     input: RunInput,
     kind: Kind,
     len: u64,
@@ -61,11 +68,10 @@ pub(super) enum Kind {
 
 /// What a run of no checkpoints but those it was made with comes to: no
 /// spans cached and no span trace made yet, and no deflate blocks.
-pub(super) fn seekable(codec: Codec, packed: Arc<Vec<u8>>, kind: Kind, len: u64, checkpoints: Vec<Checkpoint>, limits: Limits) -> Seekable {
+pub(super) fn seekable(codec: Codec, input: RunInput, kind: Kind, len: u64, checkpoints: Vec<Checkpoint>, limits: Limits) -> Seekable {
     Seekable {
         codec,
-        input: RunInput::held(packed.clone()),
-        packed,
+        input,
         kind,
         len,
         checkpoints,
@@ -86,7 +92,7 @@ impl std::fmt::Debug for Seekable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Seekable")
             .field("codec", &self.codec)
-            .field("packed", &self.packed.len())
+            .field("input", &self.input.len())
             .field("len", &self.len)
             .field("checkpoints", &self.checkpoints.len())
             .field("blocks", &self.blocks.count)
@@ -114,10 +120,10 @@ impl Seekable {
         self.len == 0
     }
 
-    /// The compressed run, from its first byte, which is what the bits of
-    /// every trace count from.
-    pub fn packed(&self) -> &Arc<Vec<u8>> {
-        &self.packed
+    /// Where the compressed run is read from. Its first byte is what the
+    /// bits of every trace count from.
+    pub fn input(&self) -> &RunInput {
+        &self.input
     }
 
     /// The CRC-32 of the whole output, worked out on the pass that indexed
@@ -169,7 +175,7 @@ impl Seekable {
     /// before's, which read them as codes. The wrapper's header is span 0's
     /// and its trailer is the last span's.
     pub fn span_of_bit(&self, bit: u64) -> Option<usize> {
-        if bit >= self.packed.len() as u64 * 8 {
+        if bit >= self.input.len() * 8 {
             return None;
         }
         Some(self.checkpoints.partition_point(|c| c.in_bit <= bit).saturating_sub(1))
@@ -209,7 +215,7 @@ impl Seekable {
     /// The bytes of the run span `k` reads, for a span that starts on a byte:
     /// from its checkpoint's bit to the next one's, and the last to the end.
     pub(super) fn span_in(&self, k: usize) -> std::ops::Range<usize> {
-        let end = self.checkpoints.get(k + 1).map_or(self.packed.len(), |c| (c.in_bit / 8) as usize);
+        let end = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |c| (c.in_bit / 8) as usize);
         (self.checkpoints[k].in_bit / 8) as usize..end
     }
 
@@ -271,12 +277,6 @@ impl Seekable {
         Ok(DeflateCopies { code: code.expect("asked for"), head })
     }
 
-    /// The run's compressed bytes, which every read decodes from: all of
-    /// them, held in memory.
-    fn whole(&self) -> Input<'_> {
-        Input::whole(&self.packed)
-    }
-
     /// Deflate span `k`, decoded from `input`: from checkpoint `k`'s bit to
     /// the next checkpoint's, and the header of the block the checkpoint is
     /// inside. See [`inflate::run`] for what `input` has to hold.
@@ -311,20 +311,28 @@ impl Seekable {
     /// trace is the one a whole run's has over the same frames or blocks,
     /// with the stream's header in span 0 and its index and footer in the
     /// last span.
-    pub fn span_trace(&self, k: usize) -> Result<Arc<Trace>, Refusal> {
+    ///
+    /// The span's compressed bytes are read through the run's input first,
+    /// and a span missing chunks of them is traced once they are there.
+    pub fn span_trace(&self, k: usize) -> Result<Arc<Trace>, ReadError> {
         if let Some((held, t)) = lock(&self.traced).as_ref() {
             if *held == k {
                 return Ok(t.clone());
             }
         }
         let c = self.checkpoints.get(k).ok_or(Refusal::Failed)?;
+        let len = self.input.len();
         let t = Arc::new(match &self.kind {
-            Kind::Deflate(_) => self.deflate_span_trace(k, self.whole())?,
+            Kind::Deflate(_) => self.deflate_span_trace(k, self.deflate_span_copies(k)?.input(len))?,
             Kind::Zstd => {
-                super::zstd::span_trace(self.whole().code(), self.span_in(k), c.out, self.limits.span)?
+                let range = self.span_in(k);
+                let copy = self.input.copy(range.clone())?;
+                super::zstd::span_trace(copy.window(len), range, c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
-                super::xz::span_trace(self.whole().code(), l, k, self.span_in(k), self.span_units(k, l), c.out)?
+                let range = self.span_in(k);
+                let copy = self.input.copy(range.clone())?;
+                super::xz::span_trace(copy.window(len), l, k, range, self.span_units(k, l), c.out)?
             }
         });
         *lock(&self.traced) = Some((k, t.clone()));
@@ -354,31 +362,41 @@ impl Seekable {
         Ok(b.done())
     }
 
-    /// The trace that holds output byte `byte`: its span's.
-    pub fn trace_at_byte(&self, byte: u64) -> Option<Arc<Trace>> {
-        self.span_trace(self.span_of_byte(byte)?).ok()
+    /// The trace that holds output byte `byte`: its span's. Nothing past the
+    /// end, or when the decoder refuses the span; the chunks of the file the
+    /// span's compressed bytes are missing, when they are.
+    pub fn trace_at_byte(&self, byte: u64) -> Result<Option<Arc<Trace>>, Vec<Missing>> {
+        match self.span_of_byte(byte) {
+            Some(k) => refused_as_none(self.span_trace(k)),
+            None => Ok(None),
+        }
     }
 
     /// The trace that names bit `bit` of the run: the span's that read it.
-    pub fn trace_at_bit(&self, bit: u64) -> Option<Arc<Trace>> {
-        self.span_trace(self.span_of_bit(bit)?).ok()
+    /// Nothing and missing chunks as for [`Seekable::trace_at_byte`].
+    pub fn trace_at_bit(&self, bit: u64) -> Result<Option<Arc<Trace>>, Vec<Missing>> {
+        match self.span_of_bit(bit) {
+            Some(k) => refused_as_none(self.span_trace(k)),
+            None => Ok(None),
+        }
     }
 
     /// Which step produced byte `byte` of the output, as
     /// [`Trace::map_out`] says for a whole run.
-    pub fn map_out(&self, byte: u64) -> Option<Step> {
-        self.trace_at_byte(byte)?.map_out(byte)
+    pub fn map_out(&self, byte: u64) -> Result<Option<Step>, Vec<Missing>> {
+        Ok(self.trace_at_byte(byte)?.and_then(|t| t.map_out(byte)))
     }
 
     /// Which step read bit `bit` of the run, as [`Trace::map_in`] says for a
     /// whole run. Asked of the trace of the block holding the bit, which is
     /// the trace the listing and the inspector take a code from, and of the
     /// span's trace for a bit outside every block.
-    pub fn map_in(&self, bit: u64) -> Option<Step> {
-        match self.block_of_bit(bit) {
-            Some(i) => self.block_trace(i).ok()?.map_in(bit),
-            None => self.trace_at_bit(bit)?.map_in(bit),
-        }
+    pub fn map_in(&self, bit: u64) -> Result<Option<Step>, Vec<Missing>> {
+        let trace = match self.block_of_bit(bit)? {
+            Some(i) => refused_as_none(self.block_trace(i))?,
+            None => self.trace_at_bit(bit)?,
+        };
+        Ok(trace.and_then(|t| t.map_in(bit)))
     }
 
     /// How many blocks the run holds.
@@ -389,37 +407,42 @@ impl Seekable {
     /// Block `i`: where it is in the run and in the output, how it is coded
     /// and whether it says it is the last. Its `steps` are empty; they are in
     /// [`Seekable::block_trace`].
-    pub fn block(&self, i: u64) -> Result<Block, Refusal> {
+    pub fn block(&self, i: u64) -> Result<Block, ReadError> {
         let (in_start, out_start) = self.block_start(i)?;
         let (in_end, out_end) = match i + 1 < self.blocks.count {
             true => self.block_start(i + 1)?,
             false => (self.blocks_end, self.len),
         };
         // BFINAL and BTYPE, the first three bits of the block header, low bit
-        // first, read from the run, which is in memory.
-        let bit = |k: u64| self.packed.get((k / 8) as usize).map_or(0, |b| (b >> (k % 8)) & 1);
+        // first, read from the run through its input.
+        let head = self.input.copy((in_start / 8) as usize..(in_start + 3).div_ceil(8) as usize)?;
+        let bit = |k: u64| ((k / 8) as usize).checked_sub(head.at).and_then(|i| head.bytes.get(i)).map_or(0, |b| (b >> (k % 8)) & 1);
         let kind = match bit(in_start + 1) | bit(in_start + 2) << 1 {
             0 => BlockKind::Stored,
             1 => BlockKind::Fixed,
             2 => BlockKind::Dynamic,
-            _ => return Err(Refusal::Failed),
+            _ => return Err(Refusal::Failed.into()),
         };
         Ok(Block { steps: 0..0, kind, last: bit(in_start) == 1, in_bits: in_start..in_end, out_bytes: out_start..out_end })
     }
 
     /// The block that bit `bit` of the run belongs to. None for a bit of the
-    /// gzip or zlib wrapper, or of the padding after the last block.
-    pub fn block_of_bit(&self, bit: u64) -> Option<u64> {
+    /// gzip or zlib wrapper, or of the padding after the last block, and
+    /// when the decoder refuses the stretch of the run the bit is in. Once
+    /// block starts are thinned, finding the block reads that stretch, and
+    /// the chunks of the file it is missing are the error.
+    pub fn block_of_bit(&self, bit: u64) -> Result<Option<u64>, Vec<Missing>> {
         let list = &self.blocks.list;
-        if bit < list.first()?.0 || bit >= self.blocks_end {
-            return None;
+        match list.first() {
+            Some(first) if bit >= first.0 && bit < self.blocks_end => {}
+            _ => return Ok(None),
         }
         let g = list.partition_point(|m| m.0 <= bit) - 1;
         if self.blocks.stride == 1 {
-            return Some(g as u64);
+            return Ok(Some(g as u64));
         }
-        let starts = self.group(g).ok()?;
-        Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.0 <= bit) as u64 - 1)
+        let Some(starts) = refused_as_none(self.group(g))? else { return Ok(None) };
+        Ok(Some(g as u64 * self.blocks.stride + starts.partition_point(|m| m.0 <= bit) as u64 - 1))
     }
 
     /// Where the deflate data is inside the run's wrapper. Refused for a zstd
@@ -433,25 +456,30 @@ impl Seekable {
 
     /// Where block `i` starts: the bit of its header and how much output
     /// comes before it.
-    fn block_start(&self, i: u64) -> Result<(u64, u64), Refusal> {
+    fn block_start(&self, i: u64) -> Result<(u64, u64), ReadError> {
         if i >= self.blocks.count {
-            return Err(Refusal::Failed);
+            return Err(Refusal::Failed.into());
         }
         let stride = self.blocks.stride;
         let (g, j) = ((i / stride) as usize, (i % stride) as usize);
         if j == 0 {
             return Ok(self.blocks.list[g]);
         }
-        self.group(g)?.get(j).copied().ok_or(Refusal::Failed)
+        Ok(self.group(g)?.get(j).copied().ok_or(Refusal::Failed)?)
     }
 
     /// The start of every block from kept start `g` up to the next kept start,
-    /// found by decoding from start `g` and counting the output.
-    fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, Refusal> {
+    /// found by decoding from start `g` and counting the output. The run is
+    /// read through its input from start `g` to the next kept start, or to
+    /// the run's end.
+    fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, ReadError> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
         }
-        let starts: Arc<[(u64, u64)]> = self.group_from(g, self.whole())?.into();
+        let &(in_bit, _) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
+        let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.0.div_ceil(8) as usize);
+        let code = self.input.copy((in_bit / 8) as usize..to)?;
+        let starts: Arc<[(u64, u64)]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
         lock(&self.groups).put(g as u64, starts.clone(), 1);
         Ok(starts)
     }
@@ -482,18 +510,27 @@ impl Seekable {
     /// In a block of more than [`Limits::span_steps`] codes, the codes are one
     /// opaque step, as they are in a whole run's trace past
     /// [`crate::codec::MAX_STEPS`].
-    pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, Refusal> {
+    ///
+    /// The block is read through the run's input, from its first byte to the
+    /// byte holding its last bit, or to the run's end for the last block.
+    pub fn block_trace(&self, i: u64) -> Result<Arc<Trace>, ReadError> {
         if let Some(t) = lock(&self.block_traces).get(i) {
             return Ok(t);
         }
-        let t = Arc::new(self.block_trace_from(i, self.whole())?);
+        let block = self.block(i)?;
+        let to = match i + 1 < self.blocks.count {
+            true => block.in_bits.end.div_ceil(8) as usize,
+            false => self.input.len() as usize,
+        };
+        let code = self.input.copy((block.in_bits.start / 8) as usize..to)?;
+        let t = Arc::new(self.block_trace_from(i, Input::new(code.window(self.input.len()), None))?);
         lock(&self.block_traces).put(i, t.clone(), t.len());
         Ok(t)
     }
 
     /// [`Seekable::block_trace`] decoded from `input`, which has to hold
     /// block `i`. The trace is not cached.
-    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, Refusal> {
+    pub(super) fn block_trace_from(&self, i: u64, input: Input<'_>) -> Result<Trace, ReadError> {
         let block = self.block(i)?;
         let (in_bit, out) = (block.in_bits.start, block.out_bytes.start);
         let next = (i + 1 < self.blocks.count).then_some(block.in_bits.end);
@@ -504,7 +541,7 @@ impl Seekable {
         let t = b.done();
         match t.blocks() {
             [one] if one.in_bits == block.in_bits && one.out_bytes == block.out_bytes => Ok(t),
-            _ => Err(Refusal::Failed),
+            _ => Err(Refusal::Failed.into()),
         }
     }
 

@@ -381,9 +381,9 @@ impl Evaluator {
             return fail("this stream is no longer open");
         };
         Ok(match part {
-            P::Blocks => blocks.extent().map_or(0, |r| r.end - r.start),
-            P::Block(i) => blocks.get(u64::from(i)).map_or(0, |b| b.in_bits.end - b.in_bits.start),
-            P::Symbols(i) => match blocks.trace_of(i) {
+            P::Blocks => blocks.extent()?.map_or(0, |r| r.end - r.start),
+            P::Block(i) => blocks.get(u64::from(i))?.map_or(0, |b| b.in_bits.end - b.in_bits.start),
+            P::Symbols(i) => match blocks.trace_of(i)? {
                 Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.block.in_bits.end - v.symbols_at(&trace)),
                 None => 0,
             },
@@ -402,23 +402,23 @@ impl Evaluator {
     /// How many children a node laid out from a trace has.
     #[cold]
     #[inline(never)]
-    fn traced_count(&self, path: &[usize], part: crate::template::TracedPart) -> u64 {
+    fn traced_count(&self, path: &[usize], part: crate::template::TracedPart) -> R<u64> {
         use crate::template::TracedPart as P;
-        let Some((_, blocks)) = self.blocks_for(path) else { return 0 };
+        let Some((_, blocks)) = self.blocks_for(path) else { return Ok(0) };
         let units = blocks.whole().filter(|t| !t.units().is_empty());
-        match part {
+        Ok(match part {
             P::Blocks => blocks.len(),
             P::Block(i) if units.is_some() => units.and_then(|t| super::traced::UnitsView::of(t, i)).map_or(0, |v| v.len() as u64),
             P::Unit(j) => units.and_then(|t| t.units().get(j as usize)).map_or(0, |u| u.steps.len() as u64),
-            P::Block(i) => match blocks.trace_of(i) {
+            P::Block(i) => match blocks.trace_of(i)? {
                 Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.head.len() as u64 + u64::from(!v.symbols.is_empty())),
                 None => 0,
             },
-            P::Symbols(i) => match blocks.trace_of(i) {
+            P::Symbols(i) => match blocks.trace_of(i)? {
                 Some((trace, j)) => super::traced::BlockView::of(&trace, j).map_or(0, |v| v.symbols.len() as u64),
                 None => 0,
             },
-        }
+        })
     }
 
     /// How many children the node at `path` has, when answering does not mean
@@ -510,7 +510,7 @@ impl Evaluator {
                 super::space::Opened::Space(_) => 1,
                 super::space::Opened::Refused(_) => 0,
             }),
-            Ty::Traced { part } => Ok(self.traced_count(path, *part)),
+            Ty::Traced { part } => self.traced_count(path, *part),
             Ty::Json(shape, _) if shape.composite() => self.json_child_count(doc, path),
             Ty::Pickle(..) => self.pickle_child_count(doc, path),
             _ => Ok(0),

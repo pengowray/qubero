@@ -1704,17 +1704,17 @@ mod tests {
         // Byte 9 is in the second part, page 1, which is eight bytes into the
         // file: one stored step over that page's eight bytes, counted from the
         // page's start.
-        let step = space.map_out(9).unwrap();
+        let step = space.map_out(9).unwrap().unwrap();
         assert_eq!((step.in_bits.clone(), step.out_bytes.clone(), step.kind), (0..64, 8..16, StepKind::Stored));
         let run = space.run_at(9).unwrap();
         assert_eq!((run.run_space, run.run_offset_bits, run.path.as_slice()), (0, 8 * 8, &[PAGES, 1, 0][..]));
-        assert_eq!(e.map_out(id, 9), Some(step));
+        assert_eq!(e.map_out(id, 9).unwrap(), Some(step));
         assert_eq!(e.run_at(id, 9), Some(run));
         // And back: a bit of page 3, the last page of the file, is the first
         // part; a bit of the header is no part at all.
         let space = e.space(id).unwrap();
-        assert_eq!(space.map_in(25 * 8).map(|s| (s.in_bits, s.out_bytes)), Some((0..64, 0..8)));
-        assert_eq!(space.map_in(4 * 8), None);
+        assert_eq!(space.map_in(25 * 8).unwrap().map(|s| (s.in_bits, s.out_bytes)), Some((0..64, 0..8)));
+        assert_eq!(space.map_in(4 * 8), Ok(None));
 
         // A byte of the second BGZF block is a literal of that block's own
         // deflate, at bits counted from where that deflate starts, which is the
@@ -1727,12 +1727,12 @@ mod tests {
         let space = e.space(id).unwrap();
         let run = space.run_at(45).unwrap();
         assert_eq!((run.run_offset_bits, run.path.clone(), run.packed), (hit.run_offset_bits, hit.path, true));
-        let step = space.map_out(45).unwrap();
+        let step = space.map_out(45).unwrap().unwrap();
         assert_eq!(step.kind, StepKind::Literal(b'e'));
         assert!(step.out_bytes.contains(&45));
         assert!(step.in_bits.end <= run.run_bits, "{:?} is past the {} bits of the block's deflate", step.in_bits, run.run_bits);
         // The same bit of the file leads back to the same step.
-        let back = space.map_in(run.run_offset_bits + step.in_bits.start).unwrap();
+        let back = space.map_in(run.run_offset_bits + step.in_bits.start).unwrap().unwrap();
         assert_eq!(back, step);
         assert_eq!(space.run_holding(run.run_offset_bits + step.in_bits.start), Some(run));
         // The end of the first block's deflate reads bits and makes nothing, so
@@ -1740,9 +1740,9 @@ mod tests {
         // from is found by the bit, not by that output.
         let first = &space.runs()[0];
         let end = (first.run_offset_bits..first.run_offset_bits + first.run_bits)
-            .find(|&bit| space.map_in(bit).is_some_and(|s| s.kind == StepKind::EndOfBlock))
+            .find(|&bit| space.map_in(bit).unwrap().is_some_and(|s| s.kind == StepKind::EndOfBlock))
             .expect("the first block's deflate ends");
-        assert_eq!(space.map_in(end).unwrap().out_bytes.start, first.out_bytes.end);
+        assert_eq!(space.map_in(end).unwrap().unwrap().out_bytes.start, first.out_bytes.end);
         assert_eq!(space.run_holding(end), Some(first));
         assert_ne!(space.run_at(first.out_bytes.end), Some(first));
     }

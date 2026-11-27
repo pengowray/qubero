@@ -51,11 +51,11 @@ fn a_gzipped_rubin_raw_opens_as_fits() {
 
     // A byte deep in the stream maps to the deflate code that made it, with
     // its bits counted in the member's compressed run.
-    let step = space.map_out(70_000_000).expect("a step made it");
+    let step = space.map_out(70_000_000).unwrap().expect("a step made it");
     assert!(step.out_bytes.contains(&70_000_000));
     let run = &space.runs()[0];
     assert!(step.in_bits.end <= run.run_bits);
-    assert_eq!(space.map_in(run.run_offset_bits + step.in_bits.start), Some(step));
+    assert_eq!(space.map_in(run.run_offset_bits + step.in_bits.start), Ok(Some(step)));
 
     let (ev, doc) = space.reading().expect("a recognised stream has a reading of its own");
     let hdus = ev.children(doc, &[0], 0, 100).unwrap();

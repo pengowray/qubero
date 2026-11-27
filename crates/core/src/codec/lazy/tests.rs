@@ -221,16 +221,16 @@ fn span_traces_agree_with_the_whole_trace() {
         bytes.sort_unstable();
         bits.sort_unstable();
         for byte in bytes {
-            assert_eq!(s.map_out(byte), whole.map_out(byte), "{codec:?}: byte {byte}");
+            assert_eq!(s.map_out(byte), Ok(whole.map_out(byte)), "{codec:?}: byte {byte}");
         }
         for bit in bits {
-            assert_eq!(s.map_in(bit), whole.map_in(bit), "{codec:?}: bit {bit}");
+            assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{codec:?}: bit {bit}");
         }
         // Every checkpoint's own bit, and the bits either side, which is
         // where a span's trace and the one before it meet.
         for (in_bit, _, block) in s.marks() {
             for bit in [in_bit.saturating_sub(1), in_bit, in_bit + 1].into_iter().chain(block) {
-                assert_eq!(s.map_in(bit), whole.map_in(bit), "{codec:?}: bit {bit} by checkpoint {in_bit}");
+                assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{codec:?}: bit {bit} by checkpoint {in_bit}");
             }
         }
     }
@@ -249,7 +249,7 @@ fn a_code_taken_apart_through_a_span_reads_as_through_the_whole() {
     bits.sort_unstable();
     let mut compared = 0;
     for bit in bits {
-        let t = s.trace_at_bit(bit).expect("a span names it");
+        let t = s.trace_at_bit(bit).unwrap().expect("a span names it");
         let (Some(ours), Some(theirs)) = (t.index_in(bit), whole.index_in(bit)) else { continue };
         let a = inflate::decode_step(&packed, &t, ours);
         let b = inflate::decode_step(&packed, &whole, theirs);
@@ -297,7 +297,7 @@ fn the_blocks_of_an_index_are_the_blocks_of_the_whole_trace() {
                     "{codec:?} level {level}: block {i}"
                 );
                 for bit in [want.in_bits.start, want.in_bits.end - 1] {
-                    assert_eq!(s.block_of_bit(bit), Some(i as u64), "{codec:?} level {level}: bit {bit}");
+                    assert_eq!(s.block_of_bit(bit), Ok(Some(i as u64)), "{codec:?} level {level}: bit {bit}");
                 }
                 let t = s.block_trace(i as u64).expect("traces");
                 t.check_tiles().unwrap_or_else(|e| panic!("{codec:?} level {level} block {i}: {e}"));
@@ -305,13 +305,13 @@ fn the_blocks_of_an_index_are_the_blocks_of_the_whole_trace() {
                 let theirs: Vec<Step> = want.steps.clone().map(|k| whole.step(k as usize).unwrap()).collect();
                 assert!(ours == theirs, "{codec:?} level {level}: block {i}'s steps differ");
             }
-            assert_eq!(s.block(s.blocks()).err(), Some(Refusal::Failed));
+            assert_eq!(s.block(s.blocks()).err(), Some(ReadError::Refused(Refusal::Failed)));
             // Bits outside every block: the wrapper's, and the padding.
             let first = whole.blocks()[0].in_bits.start;
             if first > 0 {
-                assert_eq!(s.block_of_bit(first - 1), None);
+                assert_eq!(s.block_of_bit(first - 1), Ok(None));
             }
-            assert_eq!(s.block_of_bit(whole.blocks().last().unwrap().in_bits.end), None);
+            assert_eq!(s.block_of_bit(whole.blocks().last().unwrap().in_bits.end), Ok(None));
         }
     }
     assert!(most > 100, "at most {most} blocks");
@@ -362,7 +362,7 @@ fn block_starts_thin_out_and_the_rest_are_found_again() {
         let got = s.block(i as u64).expect("a block");
         assert_eq!((&got.in_bits, &got.out_bytes, got.kind), (&want.in_bits, &want.out_bytes, want.kind), "block {i}");
         let mid = (want.in_bits.start + want.in_bits.end) / 2;
-        assert_eq!(s.block_of_bit(mid), Some(i as u64), "bit {mid}");
+        assert_eq!(s.block_of_bit(mid), Ok(Some(i as u64)), "bit {mid}");
     }
 }
 
@@ -763,7 +763,7 @@ fn reads_back(s: &Seekable, data: &[u8], seed: u64) {
 /// maps to the same step through the spans as through the trace of the
 /// whole run.
 fn traces_agree(s: &Seekable, whole: &Trace, seed: u64) {
-    let packed_bits = s.packed().len() as u64 * 8;
+    let packed_bits = s.input().len() * 8;
     for k in 0..s.spans() {
         let t = s.span_trace(k).expect("traces");
         t.check_tiles().unwrap_or_else(|e| panic!("{:?} span {k}: {e}", s.codec()));
@@ -777,14 +777,14 @@ fn traces_agree(s: &Seekable, whole: &Trace, seed: u64) {
     bytes.sort_unstable();
     bits.sort_unstable();
     for byte in bytes {
-        assert_eq!(s.map_out(byte), whole.map_out(byte), "{:?}: byte {byte}", s.codec());
+        assert_eq!(s.map_out(byte), Ok(whole.map_out(byte)), "{:?}: byte {byte}", s.codec());
     }
     for bit in bits {
-        assert_eq!(s.map_in(bit), whole.map_in(bit), "{:?}: bit {bit}", s.codec());
+        assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{:?}: bit {bit}", s.codec());
     }
     for (in_bit, _, _) in s.marks() {
         for bit in [in_bit.saturating_sub(1), in_bit, in_bit + 1] {
-            assert_eq!(s.map_in(bit), whole.map_in(bit), "{:?}: bit {bit} by checkpoint {in_bit}", s.codec());
+            assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{:?}: bit {bit} by checkpoint {in_bit}", s.codec());
         }
     }
 }

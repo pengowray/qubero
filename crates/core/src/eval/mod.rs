@@ -1788,7 +1788,9 @@ impl Evaluator {
         // those as blocks would say something the format does not.
         if let Ty::Traced { part } = ty {
             return match part {
-                TracedPart::Blocks => Some(traced::blocks_unit(self.blocks_for(path).and_then(|(_, b)| b.get(0)).map(|b| b.kind))),
+                // Only a whole trace is asked: a run read through an index
+                // is deflate, whose blocks are blocks whatever their kind.
+                TracedPart::Blocks => Some(traced::blocks_unit(self.blocks_for(path).and_then(|(_, b)| b.whole()?.blocks().first()).map(|b| b.kind))),
                 TracedPart::Block(_) => None,
                 TracedPart::Symbols(_) | TracedPart::Unit(_) => Some("code"),
             };
@@ -1932,7 +1934,7 @@ impl Evaluator {
                 // Where the first block starts, which for a wrapped stream is
                 // past whatever the wrapper put in front of it.
                 let at = match self.blocks_for(parent) {
-                    Some((base, b)) => base + b.get(0).map_or(0, |b| b.in_bits.start),
+                    Some((base, b)) => base + b.first_start()?,
                     None => return fail("this stream is no longer open"),
                 };
                 return Ok(Some(Place {
@@ -3075,15 +3077,26 @@ impl Evaluator {
     /// the run it was read from. [`Space::run`] says where that run is for a
     /// stream unpacked from one, and [`Evaluator::run_at`] for a stream joined
     /// from several, whose step is its part's own.
-    pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
-        self.space(space)?.map_out(byte)
+    ///
+    /// A stream read through an index makes the step's trace from its
+    /// compressed run, and answers `Pending` with the chunks of the file the
+    /// run is missing.
+    pub fn map_out(&self, space: SpaceId, byte: u64) -> R<Option<crate::codec::Step>> {
+        match self.space(space) {
+            Some(s) => s.map_out(byte).map_err(EvalError::Pending),
+            None => Ok(None),
+        }
     }
 
     /// Which step read a bit of the run `space` was unpacked from. `bit` is a
     /// bit of the space the run is a field of, which is where the stream was
-    /// declared, and not a bit of the run.
-    pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
-        self.space(space)?.map_in(bit)
+    /// declared, and not a bit of the run. `Pending` as for
+    /// [`Evaluator::map_out`].
+    pub fn map_in(&self, space: SpaceId, bit: u64) -> R<Option<crate::codec::Step>> {
+        match self.space(space) {
+            Some(s) => s.map_in(bit).map_err(EvalError::Pending),
+            None => Ok(None),
+        }
     }
 
     /// Which run a byte of `space` was read from, when `space` is a stream
@@ -3123,7 +3136,7 @@ impl Evaluator {
         let units = blocks.whole().filter(|t| !t.units().is_empty());
         match part {
             TracedPart::Blocks => {
-                let Some(block) = blocks.get(idx as u64) else { return fail("no such block") };
+                let Some(block) = blocks.get(idx as u64)? else { return fail("no such block") };
                 let at = block.in_bits.start;
                 place(blocks.name(&block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
             }
@@ -3158,7 +3171,7 @@ impl Evaluator {
                 place(name, ty, step.in_bits.start)
             }
             TracedPart::Block(i) => {
-                let Some((trace, j)) = blocks.trace_of(i) else { return fail("no such block") };
+                let Some((trace, j)) = blocks.trace_of(i)? else { return fail("no such block") };
                 let trace = &*trace;
                 let Some(view) = traced::BlockView::of(trace, j) else { return fail("no such block") };
                 let head = view.head.len();
@@ -3186,7 +3199,7 @@ impl Evaluator {
                 }
             }
             TracedPart::Symbols(i) => {
-                let Some((trace, j)) = blocks.trace_of(i) else { return fail("no such block") };
+                let Some((trace, j)) = blocks.trace_of(i)? else { return fail("no such block") };
                 let trace = &*trace;
                 let Some(view) = traced::BlockView::of(trace, j) else { return fail("no such block") };
                 let k = view.symbols.start as usize + idx;

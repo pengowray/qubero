@@ -38,9 +38,9 @@
 use std::ops::{Deref, Range};
 use std::sync::Arc;
 
-use crate::codec::lazy::Seekable;
+use crate::codec::lazy::{refused_as_none, Seekable};
 use crate::codec::{Block, BlockKind, Codec, Step, StepField, StepKind, TableField, Trace, Unit};
-use crate::eval::{Evaluator, Sizing};
+use crate::eval::{EvalError, Evaluator, Sizing, R};
 use crate::template::{Expr as E, Ty as T};
 
 /// Where the `blocks` row and the rows under it get their facts: the trace of
@@ -50,6 +50,10 @@ use crate::template::{Expr as E, Ty as T};
 /// the index has enough: where each block starts and ends, and how it is
 /// coded. The rows inside a block need its steps, which come from a trace of
 /// that block alone. See [`Blocks::trace_of`].
+///
+/// An index reads the run's compressed bytes to say how a block is coded, to
+/// find a block start it let go of, and to trace a block, and those bytes may
+/// be missing chunks of the file: then the answer is `Pending` with them.
 #[derive(Clone, Copy)]
 pub(super) enum Blocks<'a> {
     Whole(&'a Trace),
@@ -66,11 +70,20 @@ impl<'a> Blocks<'a> {
 
     /// Block `i`. For an indexed run its `steps` are empty, and the steps are
     /// in the block's own trace.
-    pub fn get(self, i: u64) -> Option<Block> {
+    pub fn get(self, i: u64) -> R<Option<Block>> {
         match self {
-            Blocks::Whole(t) => t.blocks().get(i as usize).cloned(),
-            Blocks::Indexed(s) => s.block(i).ok(),
+            Blocks::Whole(t) => Ok(t.blocks().get(i as usize).cloned()),
+            Blocks::Indexed(s) => refused_as_none(s.block(i)).map_err(EvalError::Pending),
         }
+    }
+
+    /// Where the first block starts, in bits of the run: past whatever a
+    /// wrapper put in front of it. 0 when there is none. Out of line, since
+    /// placing a stream's `blocks` row is part of every walk into a stream.
+    #[cold]
+    #[inline(never)]
+    pub fn first_start(self) -> R<u64> {
+        Ok(self.get(0)?.map_or(0, |b| b.in_bits.start))
     }
 
     /// The trace of the whole run, for a JPEG scan's units and the bytes its
@@ -84,22 +97,22 @@ impl<'a> Blocks<'a> {
     }
 
     /// Which block holds bit `want` of the run.
-    pub fn at_bit(self, want: u64) -> Option<u64> {
+    pub fn at_bit(self, want: u64) -> R<Option<u64>> {
         match self {
             Blocks::Whole(t) => {
-                let i = t.blocks().partition_point(|b| b.in_bits.start <= want).checked_sub(1)?;
-                (want < t.blocks()[i].in_bits.end).then_some(i as u64)
+                let Some(i) = t.blocks().partition_point(|b| b.in_bits.start <= want).checked_sub(1) else { return Ok(None) };
+                Ok((want < t.blocks()[i].in_bits.end).then_some(i as u64))
             }
-            Blocks::Indexed(s) => s.block_of_bit(want),
+            Blocks::Indexed(s) => s.block_of_bit(want).map_err(EvalError::Pending),
         }
     }
 
     /// From where the first block starts to where the last one ends, in bits
     /// of the run.
-    pub fn extent(self) -> Option<Range<u64>> {
-        let first = self.get(0)?;
-        let last = self.get(self.len().checked_sub(1)?)?;
-        Some(first.in_bits.start..last.in_bits.end)
+    pub fn extent(self) -> R<Option<Range<u64>>> {
+        let Some(last) = self.len().checked_sub(1) else { return Ok(None) };
+        let (Some(first), Some(last)) = (self.get(0)?, self.get(last)?) else { return Ok(None) };
+        Ok(Some(first.in_bits.start..last.in_bits.end))
     }
 
     /// Whether the run's bits are counted from the low bit of a byte. Of the
@@ -123,10 +136,13 @@ impl<'a> Blocks<'a> {
 
     /// The trace that holds block `i`'s steps, and the block's number in
     /// it: the whole trace and `i`, or the block's own trace and 0.
-    pub fn trace_of(self, i: u32) -> Option<(TraceRef<'a>, u32)> {
+    pub fn trace_of(self, i: u32) -> R<Option<(TraceRef<'a>, u32)>> {
         match self {
-            Blocks::Whole(t) => Some((TraceRef::Whole(t), i)),
-            Blocks::Indexed(s) => Some((TraceRef::Block(s.block_trace(u64::from(i)).ok()?), 0)),
+            Blocks::Whole(t) => Ok(Some((TraceRef::Whole(t), i))),
+            Blocks::Indexed(s) => {
+                let trace = refused_as_none(s.block_trace(u64::from(i))).map_err(EvalError::Pending)?;
+                Ok(trace.map(|t| (TraceRef::Block(t), 0)))
+            }
         }
     }
 }
@@ -169,10 +185,9 @@ impl Evaluator {
 
     /// The trace that holds block `i` of the stream above `path`, the
     /// block's number in it, and where the run starts.
-    pub(super) fn block_trace(&self, path: &[usize], i: u32) -> Option<(u64, TraceRef<'_>, u32)> {
-        let (base, blocks) = self.blocks_for(path)?;
-        let (t, j) = blocks.trace_of(i)?;
-        Some((base, t, j))
+    pub(super) fn block_trace(&self, path: &[usize], i: u32) -> R<Option<(u64, TraceRef<'_>, u32)>> {
+        let Some((base, blocks)) = self.blocks_for(path) else { return Ok(None) };
+        Ok(blocks.trace_of(i)?.map(|(t, j)| (base, t, j)))
     }
 }
 
@@ -1069,7 +1084,7 @@ mod tests {
         let (a, b) = (whole.space(a).unwrap(), lazy.space(b).unwrap());
         let mut compared = 0;
         for bit in (0..run.size_bits).step_by(997) {
-            let (ta, tb) = (a.trace_at_bit(bit).unwrap(), b.trace_at_bit(bit).expect("a block or span names it"));
+            let (ta, tb) = (a.trace_at_bit(bit).unwrap().unwrap(), b.trace_at_bit(bit).unwrap().expect("a block or span names it"));
             let (Some(ka), Some(kb)) = (ta.index_in(bit), tb.index_in(bit)) else { continue };
             let plain = |d: crate::codec::inflate::DecodedStep| {
                 let plain = |c: crate::codec::inflate::DecodedCode| crate::codec::inflate::DecodedCode { entry: None, ..c };

@@ -49,7 +49,7 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
         out += blk.unpacked;
     }
     let len = l.total_out;
-    Ok(Decoded::Indexed(seekable(Codec::Xz, packed, Kind::Xz(l), len, marks.list, limits)))
+    Ok(Decoded::Indexed(seekable(Codec::Xz, RunInput::held(packed), Kind::Xz(l), len, marks.list, limits)))
 }
 
 /// Bytes `from..from + dst.len()` of span `k`, whose blocks are `units`,

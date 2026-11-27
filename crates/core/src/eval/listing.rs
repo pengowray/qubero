@@ -1090,7 +1090,7 @@ impl Evaluator {
                 (b.whole().map_or(0, |t| t.units_of(*i as usize).len() as u64), "block")
             }
             (Some(b), Ty::Traced { part: TracedPart::Block(i) }) => (
-                b.trace_of(*i).map_or(0, |(trace, j)| {
+                b.trace_of(*i)?.map_or(0, |(trace, j)| {
                     super::traced::BlockView::of(&trace, j)
                         .filter(|v| !matches!(v.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline))
                         .map_or(0, |v| v.symbols.len() as u64)
@@ -1675,20 +1675,41 @@ impl Evaluator {
         Ok(None)
     }
 
-    /// Which child of `path` covers `bit`, if any.
     /// Which child of a `Traced` node covers a bit of the file, worked out
-    /// from the trace rather than by placing anything.
-    fn traced_at(&self, path: &[usize], part: crate::template::TracedPart, bit: u64) -> Option<usize> {
+    /// from the trace rather than by placing anything. A run read through an
+    /// index reads its compressed bytes to find the block or make its trace,
+    /// and answers `Pending` when chunks of them are missing. Out of line,
+    /// since `child_at` is asked at every level of a walk to the cursor.
+    #[cold]
+    #[inline(never)]
+    fn traced_at(&self, path: &[usize], part: crate::template::TracedPart, bit: u64) -> R<Option<usize>> {
         use crate::template::TracedPart as P;
         // The trace counts bits from the front of the run, and the cursor
         // counts them from the front of the file.
-        let (base, blocks) = self.blocks_for(path)?;
+        let Some((base, blocks)) = self.blocks_for(path) else { return Ok(None) };
         // A stream that fills its bytes from the low bit is counted that way.
         let bit = if blocks.lsb_first() { mirror_in_byte(bit) } else { bit };
-        let want = bit.checked_sub(base)?;
+        let Some(want) = bit.checked_sub(base) else { return Ok(None) };
         let units = blocks.whole().filter(|t| !t.units().is_empty());
+        // What is read from the run, first: the block that holds the bit, or
+        // the trace of the block whose rows are asked about.
+        let held = match part {
+            P::Blocks => return Ok(blocks.at_bit(want)?.map(|i| i as usize)),
+            P::Block(i) if units.is_none() => blocks.trace_of(i)?,
+            P::Symbols(i) => blocks.trace_of(i)?,
+            P::Block(_) | P::Unit(_) => None,
+        };
+        Ok(Self::traced_step_at(part, units, held, want))
+    }
+
+    /// [`Self::traced_at`] once whatever it reads from the run is read:
+    /// `units` the trace of a JPEG scan, `held` the trace of the block a
+    /// `Block` or `Symbols` row of a deflate stream is about, and `want` the
+    /// bit, counted from the front of the run.
+    fn traced_step_at(part: crate::template::TracedPart, units: Option<&crate::codec::Trace>, held: Option<(super::traced::TraceRef<'_>, u32)>, want: u64) -> Option<usize> {
+        use crate::template::TracedPart as P;
         match part {
-            P::Blocks => blocks.at_bit(want).map(|i| i as usize),
+            P::Blocks => None,
             P::Block(i) if units.is_some() => {
                 let trace = units?;
                 let view = super::traced::UnitsView::of(trace, i)?;
@@ -1704,8 +1725,8 @@ impl Evaluator {
                 let k = trace.index_in(want)? as u32;
                 unit.steps.contains(&k).then(|| (k - unit.steps.start) as usize)
             }
-            P::Block(i) => {
-                let (trace, j) = blocks.trace_of(i)?;
+            P::Block(_) => {
+                let (trace, j) = held?;
                 let trace = &*trace;
                 let view = super::traced::BlockView::of(trace, j)?;
                 if want >= view.symbols_at(trace) {
@@ -1714,8 +1735,8 @@ impl Evaluator {
                 let k = trace.index_in(want)?;
                 (view.head.contains(&(k as u32))).then(|| k - view.head.start as usize)
             }
-            P::Symbols(i) => {
-                let (trace, j) = blocks.trace_of(i)?;
+            P::Symbols(_) => {
+                let (trace, j) = held?;
                 let trace = &*trace;
                 let view = super::traced::BlockView::of(trace, j)?;
                 let k = trace.index_in(want)?;
@@ -1730,7 +1751,7 @@ impl Evaluator {
         // halving. So a symbol run of a hundred thousand answers the cursor
         // without placing a single symbol before the one under it.
         if let Ty::Traced { part } = &r.ty {
-            return Ok(self.traced_at(path, *part, bit));
+            return self.traced_at(path, *part, bit);
         }
         // A raster knows which pixel holds a bit the same way it knows where
         // a pixel is, by arithmetic, whatever order it keeps them in.
