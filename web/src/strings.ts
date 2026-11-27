@@ -2326,7 +2326,9 @@ function plural(noun: string): string {
  * ancestor carries, and the line the overview panel opens with.
  *
  * `invalid` and `undefined` are the two tiers, and the difference is who says
- * the value is wrong. The format ruling a value out is a finding; Qubero
+ * the value is wrong. On screen the second tier is "unrecognised": a format
+ * can have "undefined" as a value of its own (an HDF5 address), and one word
+ * for both would give a row two readings. The format ruling a value out is a finding; Qubero
  * having no name for one is not, so only the first is marked in red. See
  * `docs/DESIGN-wrong-values.md`.
  */
@@ -2338,7 +2340,7 @@ export const PROBLEMS = {
   within: (invalid: number, undefined_: number, soFar: boolean): string => {
     const parts: string[] = [];
     if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid`);
-    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} unrecognised`);
     if (parts.length === 0) return "";
     return `\u00b7 ${parts.join(", ")}${soFar ? " so far" : ""}`;
   },
@@ -2348,7 +2350,7 @@ export const PROBLEMS = {
   overview: (invalid: number, undefined_: number): string => {
     const parts: string[] = [];
     if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid ${invalid === 1 ? "value" : "values"}`);
-    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} unrecognised`);
     return parts.join(", ");
   },
   /** The name of the overview panel's third fact, beside the count. The other

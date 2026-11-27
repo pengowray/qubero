@@ -207,8 +207,8 @@ test("a cell carries what is wrong with its value, so the table can mark it", ()
 
 test("a column heading counts both tiers, and says so far while rows are unread", () => {
   assert.equal(PROBLEMS.column(2, 0, false), "\u00b7 2 invalid");
-  assert.equal(PROBLEMS.column(0, 5, false), "\u00b7 5 undefined");
-  assert.equal(PROBLEMS.column(2, 5, false), "\u00b7 2 invalid, 5 undefined");
+  assert.equal(PROBLEMS.column(0, 5, false), "\u00b7 5 unrecognised");
+  assert.equal(PROBLEMS.column(2, 5, false), "\u00b7 2 invalid, 5 unrecognised");
   assert.equal(PROBLEMS.column(2, 0, true), "\u00b7 2 invalid so far");
   // Nothing wrong is nothing on the heading, not a zero.
   assert.equal(PROBLEMS.column(0, 0, true), "");
