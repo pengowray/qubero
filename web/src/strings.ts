@@ -4280,7 +4280,7 @@ export const SETTINGS = {
   chipNone: "No template",
   chipTitle: "Change the template. It applies to every view.",
   gearLabel: "Settings",
-  gearTitle: "Settings: template and hex view",
+  gearTitle: "Settings: template, hex view and listing",
 
   // ---- the dialog ----
 
@@ -4300,6 +4300,11 @@ export const SETTINGS = {
   /** On the one toggle still lit, which cannot be turned off. */
   lastOn: "One column stays on",
   columnNote: "Saved separately for files with a template and files without one.",
+
+  listingHeading: "Listing",
+  listingColumns: "Show address, type and size on",
+  listingColumnsCursor: "Row at cursor",
+  listingColumnsAll: "Every row",
 
   templateHeading: "Template",
   current: (name: string): string => `Current template: ${name}`,

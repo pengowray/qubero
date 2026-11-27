@@ -3837,6 +3837,52 @@ button.insp-xrow-where:hover {
 .rp-gap .rp-type {
   display: none;
 }
+/* The listing is read for names and values, so a row's address, its size and
+   the encoding of a number (`u64 le`) show only on the row under the pointer
+   and the row the cursor is on. `rp-all`, from Settings, puts them on every
+   row. They are taken out rather than made invisible, so the value has the
+   width, and the address moves to the far end so that the names do not shift
+   when it appears. A gap keeps its size: how much is unmapped is what a gap
+   row says. A structure's type is its name and stays (`is-kind`). */
+.report:not(.rp-all) .rp-row > .rp-at,
+.report:not(.rp-all) .rp-gap > .rp-at,
+.report:not(.rp-all) .rp-row > .rp-size,
+.report:not(.rp-all) .rp-row > .rp-type:not(.is-kind) {
+  display: none;
+}
+.report:not(.rp-all) .rp-row:is(:hover, .is-on) > :is(.rp-at, .rp-size, .rp-type),
+.report:not(.rp-all) .rp-gap:is(:hover, .is-on) > .rp-at {
+  display: revert;
+}
+.report:not(.rp-all) .rp-at {
+  order: 1;
+  width: auto;
+}
+.report:not(.rp-all) .rp-row > .rp-bytes {
+  order: 2;
+}
+.report:not(.rp-all) .rp-item.rp-block {
+  padding-inline-start: calc(8px + var(--rp-ind, 0px));
+  background-position: 12px 0;
+}
+/* A narrow pane has room for a name and a value and little else, and the
+   value is what the row is for: the name column gives way first, and type and
+   size are left to the At cursor panel, on every row and in both settings.
+   Shown on the selected row they took the whole of the value's width. */
+@media (max-width: 700px) {
+  .rp-tree {
+    width: min(var(--rp-tree, 228px), 46%);
+  }
+  .report .rp-row > :is(.rp-size, .rp-type:not(.is-kind)) {
+    display: none !important;
+  }
+  /* The button that shows a row's bytes is invisible until the row is hovered
+     or selected, and kept its width while invisible: a fifth of a phone's
+     row, taken from the value. */
+  .rp-row:not(:hover, .is-on, .is-cursor) > .rp-bytes:not(.is-on) {
+    display: none;
+  }
+}
 /* A field with no bytes in the file: a value the template works out, or a list
    that turned out to be empty. Nothing of it is in front of the reader, so it
    is grey. */

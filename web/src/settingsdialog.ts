@@ -21,6 +21,15 @@ export type HexHost = {
   setColumn(c: RightColumn): void;
 };
 
+/** Which rows of the listing show their address, type and size: the row the
+ *  pointer or the cursor is on, or every row. */
+export type ListingColumns = "cursor" | "all";
+
+export type ListingHost = {
+  columns(): ListingColumns;
+  setColumns(c: ListingColumns): void;
+};
+
 /** A template the chooser lists beyond the built-ins and the bundled format
  *  descriptions: the file's own signature template, a converted `.ksy`, and a
  *  converted ImHex pattern. */
@@ -65,6 +74,7 @@ export class SettingsDialog {
   private readonly convertHexpat: HTMLButtonElement;
   private readonly modeGroup: HTMLElement;
   private readonly rowGroup: HTMLElement;
+  private readonly listingGroup: HTMLElement;
   private readonly textToggle: HTMLButtonElement;
   private readonly fieldsToggle: HTMLButtonElement;
   private readonly condensed: HTMLInputElement;
@@ -76,6 +86,7 @@ export class SettingsDialog {
     entries: readonly TemplateEntry[],
     private readonly hex: HexHost,
     private readonly glyphs: HTMLSelectElement,
+    private readonly listing: ListingHost,
   ) {
     this.entries = [...entries].sort((a, b) => a.label.localeCompare(b.label));
 
@@ -165,6 +176,23 @@ export class SettingsDialog {
       glyphLabel,
     );
 
+    // ---- listing ----
+    this.listingGroup = segmented(
+      SETTINGS.listingColumns,
+      [
+        { value: "cursor", text: SETTINGS.listingColumnsCursor },
+        { value: "all", text: SETTINGS.listingColumnsAll },
+      ],
+      (v) => {
+        this.listing.setColumns(v === "all" ? "all" : "cursor");
+        this.syncHex();
+      },
+    );
+    hexPane.append(
+      el("h3", { textContent: SETTINGS.listingHeading }),
+      el("div", { className: "set-field" }, el("span", { className: "set-label", textContent: SETTINGS.listingColumns }), this.listingGroup),
+    );
+
     const closeX = el("button", { type: "button", className: "set-x", textContent: "×", title: SETTINGS.closeLabel });
     closeX.setAttribute("aria-label", SETTINGS.closeLabel);
     closeX.addEventListener("click", () => this.el.close());
@@ -245,6 +273,7 @@ export class SettingsDialog {
   /** Show what the hex view is set to now. */
   syncHex(): void {
     pressSegment(this.modeGroup, this.hex.mode());
+    pressSegment(this.listingGroup, this.listing.columns());
     const per = this.hex.bytesPerRow();
     const stride = this.hex.stride();
     const widths = [8, 16, 32].map((n) => ({ value: String(n), text: String(n) }));

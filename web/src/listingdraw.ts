@@ -369,7 +369,10 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // be trusted to mean. Every other row is where it was declared and the
   // column is the plain type, so the arrow marks the rows that hop and
   // nothing else.
-  row.append(el("span", "rp-type", item.via ?? n.type));
+  // A structure's type is its name (`ProgramHeader`), and a row reached
+  // through a pointer says so here: both say what the thing is, so they stay
+  // when the encoding columns are hidden. `u64 le` on a number is encoding.
+  row.append(el("span", `rp-type${n.composite || item.via !== null ? " is-kind" : ""}`, item.via ?? n.type));
   row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
   // A toggle that opens a strip of nothing is a dead control, and so is one
   // over bytes that are not in the file.

@@ -47,7 +47,9 @@ import {
 import { rememberChoice, storedChoice, storedNumber, storedText } from "./stored.ts";
 import { ASCII_GLYPHS, fieldBits, fieldStart } from "./hexcell.ts";
 import { gearIcon } from "./icons.ts";
-import { SettingsDialog, type ExtraTemplate } from "./settingsdialog.ts";
+import { SettingsDialog, type ExtraTemplate, type ListingColumns } from "./settingsdialog.ts";
+
+const LISTING_COLUMNS_KEY = "qubero.listing.columns";
 import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
 import { templateExtensions } from "./identity.ts";
 import { linkedFor } from "./viz/linked.ts";
@@ -428,6 +430,11 @@ function buildDocument(tab: Tab): Page {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const structure = new ListingReport(doc);
+  // The listing is for a field's name and value. Its address, type and size
+  // are on the row under the pointer or the cursor unless the reader asks for
+  // them on every row.
+  let listingColumns: ListingColumns = storedChoice(LISTING_COLUMNS_KEY, ["cursor", "all"], "cursor") as ListingColumns;
+  structure.el.classList.toggle("rp-all", listingColumns === "all");
   // One long list, read on its own beside the listing. Empty and hidden until
   // a list is opened in it.
   const listPane = new ListPane(doc);
@@ -1350,6 +1357,14 @@ function buildDocument(tab: Tab): Page {
       },
     },
     glyphs,
+    {
+      columns: () => listingColumns,
+      setColumns: (c) => {
+        listingColumns = c;
+        rememberChoice(LISTING_COLUMNS_KEY, c);
+        structure.el.classList.toggle("rp-all", c === "all");
+      },
+    },
   );
   settings = dialog;
   dialog.setTemplatesOffered(doc.isFile, doc.isFile);
