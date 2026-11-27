@@ -138,7 +138,8 @@ fn key_fields() -> Vec<(&'static str, T)> {
 fn with_key(name: &str, named_by: &str, contents: &str, rest: Vec<(&str, T)>) -> T {
     let mut fields = key_fields();
     fields.extend(rest);
-    T::structure_named(name, named_by, contents, fields).machinery(&["large"])
+    // Where this key is, and where the directory that lists it is.
+    T::structure_named(name, named_by, contents, fields).machinery(&["large"]).positions(&["fSeekKey", "fSeekPdir"])
 }
 
 /// One compressed block: two letters naming the algorithm, the version of it,
@@ -268,7 +269,7 @@ fn basket() -> T {
         ("body", body()),
         ("entries", joined(basket_entries())),
     ]);
-    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).counted_as("basket")
+    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).positions(&["fSeekKey", "fSeekPdir", "fLast"]).counted_as("basket")
 }
 
 /// What a basket's body comes to: the values of its entries up to `fLast`, and
@@ -288,6 +289,7 @@ fn basket_entries() -> T {
             ("offsets", T::when(E::lit(0).less_than(E::Remaining), T::repeat(T::i32(Big), Until::End))),
         ],
     )
+    .positions(&["offsets"])
 }
 
 /// The values of a basket, read as its branch's one leaf says.
@@ -447,6 +449,7 @@ fn directory(level: usize) -> T {
         ],
     )
     .machinery(&["large", "reserved"])
+    .positions(&["fSeekDir", "fSeekParent"])
 }
 
 /// `inner` at the offset the field `name` holds, and nothing at all when that
@@ -665,7 +668,8 @@ pub fn root() -> Template {
             ("free_list", at_if_set("fSeekFree", T::Named("FreeRecord".into()))),
         ],
     )
-    .machinery(&["large", "fUnits"]);
+    .machinery(&["large", "fUnits"])
+    .positions(&["fEND"]);
 
     let mut t = Template::new("root", header)
         .with_schema(schema::KIND, schema::builder())
@@ -1205,5 +1209,22 @@ pub(super) mod tests {
         let free = ev.node(&d, &down(&FREE, &[K_FIELDS])).unwrap();
         assert_eq!(free.child_count, 1);
         assert_eq!(ev.node(&d, &down(&FREE, &[K_FIELDS, 0, 3])).unwrap().value, Value::Int(2_000_000_000));
+    }
+
+    /// Every seek in a key, a directory and the file header is a position,
+    /// and so is each offset in a basket's table of entries. The lengths
+    /// beside them are not.
+    #[test]
+    fn seeks_are_positions() {
+        let t = root();
+        use crate::machinery::assert_marks;
+        assert_marks(&t, "TFile", &["fEND", "fSeekFree", "fSeekInfo", "fBEGIN"], &["fNbytesFree", "fNbytesInfo"]);
+        for name in ["Record", "KeyEntry", "TreeRecord", "FreeRecord"] {
+            assert_marks(&t, name, &["fSeekKey", "fSeekPdir"], &["fNbytes", "fObjlen", "fKeylen"]);
+        }
+        assert_marks(&t, "Directory", &["fSeekDir", "fSeekParent", "fSeekKeys"], &["fNbytesKeys"]);
+        assert_marks(&t, "Basket", &["fSeekKey", "fLast"], &["fNevBuf", "fBufferSize"]);
+        assert_marks(&t, "BasketEntries", &["offsets"], &[]);
+        assert_marks(&t, "RNTupleLocator", &["offset"], &["size"]);
     }
 }

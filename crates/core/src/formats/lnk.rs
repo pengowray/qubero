@@ -97,6 +97,8 @@ fn link_info() -> T {
     ])
 }
 
+/// Every offset in a LinkInfo counts from the start of the LinkInfo, its
+/// size field included.
 fn link_info_body() -> T {
     T::structure("LinkInfoBody", vec![
         ("header_size", T::u32(Little)),
@@ -111,9 +113,10 @@ fn link_info_body() -> T {
         ("unicode_offsets", T::switch(E::field("header_size"), vec![(0x24, T::structure("UnicodeOffsets", vec![
             ("local_base_path_offset_unicode", T::u32(Little)),
             ("common_path_suffix_offset_unicode", T::u32(Little)),
-        ]))], T::bytes(E::lit(0)))),
+        ]).positions(&["local_base_path_offset_unicode", "common_path_suffix_offset_unicode"]))], T::bytes(E::lit(0)))),
         ("contents", T::bytes(E::Remaining)),
     ])
+    .positions(&["volume_id_offset", "local_base_path_offset", "common_network_relative_link_offset", "common_path_suffix_offset"])
 }
 
 fn string_data() -> T {
@@ -166,5 +169,12 @@ mod tests {
         let mut ev = Evaluator::new(lnk());
         assert_eq!(ev.node(&d, &[16, 1]).unwrap().value, Value::Str("foo".into()));
         assert_eq!(ev.node(&d, &[16]).unwrap().size_bits, 5 * 8);
+    }
+
+    #[test]
+    fn link_info_offsets_are_positions() {
+        let t = lnk();
+        crate::machinery::assert_marks(&t, "LinkInfoBody", &["volume_id_offset", "common_path_suffix_offset"], &["header_size", "flags"]);
+        crate::machinery::assert_marks(&t, "UnicodeOffsets", &["local_base_path_offset_unicode", "common_path_suffix_offset_unicode"], &[]);
     }
 }
