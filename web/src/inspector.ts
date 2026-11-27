@@ -6,6 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatAddress, formatBytes, formatLimit, formatOffset, RESIDENT_BYTES } from "./doc.ts";
+import { positionValue } from "./format.ts";
 import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
@@ -2933,7 +2934,9 @@ export class Inspector {
     // select and copy, which a disabled input in most browsers is not.
     this.field.readOnly = !n.editable || row !== null;
     this.field.classList.remove("invalid");
-    this.field.value = row ?? (n.composite ? "" : n.edit_text);
+    // An offset is shown in the base addresses are. The field is also the
+    // editor, and the core reads `0x40` back as the same number.
+    this.field.value = row ?? (n.composite ? "" : (positionValue(n) ?? n.edit_text));
     this.field.placeholder = n.composite && row === null ? structText(n) : "";
     this.field.setAttribute("aria-label", ariaLabel(n));
     this.colourBlock.hidden = n.colour === undefined;

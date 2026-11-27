@@ -2,7 +2,7 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "./pkg/qubero_wasm.js";
-import { formatBytes, formatOffset } from "./format.ts";
+import { byteDigits, formatBytes, formatOffset } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
 import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
@@ -268,6 +268,9 @@ export type TemplateNode = {
    * structure's machinery on; whether to fold is the view's decision, since
    * a field and the field it places can end up in different sections. */
   readonly consumed_by: number | null;
+  /** True when a sibling uses this field's value as a position in the file,
+   *  so the value is written in the base addresses are. */
+  readonly locates: boolean;
   /** What the template says over the top of that: true for machinery, false
    * for payload, null when it has no opinion. */
   readonly machinery: boolean | null;
@@ -489,6 +492,8 @@ export type Span = {
   readonly inline: boolean;
   /** The colour this structure says it is. See `TemplateNode.colour`. */
   readonly colour?: string;
+  /** See `TemplateNode.locates`. */
+  readonly locates?: boolean;
   /** What is wrong with this field's value, when something is. The node's own:
    *  a chip that cannot say a signature is wrong is a view the reader has to
    *  leave to find out. */
@@ -2367,7 +2372,7 @@ export function bitFormula(bitOffset: number, width: number): string {
   const terms: string[] = [];
   for (let i = 0; i < bytes; i++) {
     const shift = 8 * (bytes - 1 - i) - trailing;
-    let term = `b[0x${(first + i).toString(16)}]`;
+    let term = `b[${byteDigits(first + i)}]`;
     if (i === 0 && skip !== 0) {
       const mask = ` & 0x${(0xff >> skip).toString(16).padStart(2, "0")}`;
       // Brackets only where something else would bind tighter than the mask.
@@ -2393,7 +2398,7 @@ export function bitFormulaLow(bitOffset: number, width: number): string {
   const used = (skip + width) % 8;
   const terms: string[] = [];
   for (let i = 0; i < bytes; i++) {
-    let term = `b[0x${(first + i).toString(16)}]`;
+    let term = `b[${byteDigits(first + i)}]`;
     const shift = i === 0 ? -skip : 8 * i - skip;
     // The last byte keeps only the bits the field reaches. Where the field
     // starts and ends in one byte, the mask applies after the shift.

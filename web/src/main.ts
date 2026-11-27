@@ -45,11 +45,16 @@ import {
   UNICODE_ENCODINGS,
 } from "./encodings.ts";
 import { rememberChoice, storedChoice, storedNumber, storedText } from "./stored.ts";
+import { getAddressBase, setAddressBase } from "./format.ts";
 import { ASCII_GLYPHS, fieldBits, fieldStart } from "./hexcell.ts";
 import { gearIcon } from "./icons.ts";
 import { SettingsDialog, type ExtraTemplate, type ListingColumns } from "./settingsdialog.ts";
 
 const LISTING_COLUMNS_KEY = "qubero.listing.columns";
+const ADDRESSES_KEY = "qubero.addresses";
+// Set before any view draws, so the first addresses on screen are in the
+// chosen base.
+setAddressBase(storedChoice(ADDRESSES_KEY, ["hex", "dec"], "hex") === "dec" ? "dec" : "hex");
 import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
 import { templateExtensions } from "./identity.ts";
 import { linkedFor } from "./viz/linked.ts";
@@ -1208,17 +1213,24 @@ function buildDocument(tab: Tab): Page {
   undoBtn.addEventListener("click", () => doc.undo());
   redoBtn.addEventListener("click", () => doc.redo());
 
-  const goto = el("input", { type: "text", placeholder: "Go to offset (hex)", className: "tb-goto" });
-  goto.setAttribute("aria-label", "Go to offset, hexadecimal");
+  const goto = el("input", { type: "text", className: "tb-goto" });
+  const labelGoto = (): void => {
+    const dec = getAddressBase() === "dec";
+    goto.placeholder = SETTINGS.gotoPlaceholder(dec);
+    goto.setAttribute("aria-label", SETTINGS.gotoLabel(dec));
+  };
+  labelGoto();
   goto.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     // An address copied off the screen arrives as `@0x40`, so the box takes
-    // the mark off before it takes the `0x` off. Neither is required: what a
-    // reader types by hand is still bare digits.
-    const t = goto.value.trim().replace(/^@/, "").replace(/^0x/i, "");
-    if (!/^[0-9a-f]+$/i.test(t)) return goto.classList.add("invalid");
+    // the mark off first. `0x` always means hex; bare digits are read in the
+    // base addresses are shown in.
+    const t = goto.value.trim().replace(/^@/, "");
+    const hex = /^0x/i.test(t) || getAddressBase() === "hex";
+    const digits = t.replace(/^0x/i, "");
+    if (!(hex ? /^[0-9a-f]+$/i : /^[0-9]+$/).test(digits)) return goto.classList.add("invalid");
     goto.classList.remove("invalid");
-    const to = parseInt(t, 16);
+    const to = parseInt(digits, hex ? 16 : 10);
     nav.recordJump(view.cursorState.bitOffset, to * 8);
     view.setCursor(to, { pane: "hex" });
     view.el.focus();
@@ -1363,6 +1375,18 @@ function buildDocument(tab: Tab): Page {
         listingColumns = c;
         rememberChoice(LISTING_COLUMNS_KEY, c);
         structure.el.classList.toggle("rp-all", c === "all");
+      },
+    },
+    {
+      base: getAddressBase,
+      setBase: (b) => {
+        if (b === getAddressBase()) return;
+        setAddressBase(b);
+        rememberChoice(ADDRESSES_KEY, b);
+        labelGoto();
+        view.redrawAddresses();
+        structure.redraw();
+        inspector.render();
       },
     },
   );

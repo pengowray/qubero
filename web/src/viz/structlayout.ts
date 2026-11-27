@@ -48,7 +48,7 @@ import type { Doc, TemplateNode } from "../doc.ts";
 import type { Item } from "../flatten.ts";
 import { pathKey } from "../flatten.ts";
 import { fieldClass } from "../fieldstyle.ts";
-import { formatAddress, formatBytes } from "../format.ts";
+import { formatAddress, formatBytes, getAddressBase } from "../format.ts";
 import { askedCardKey, formatCardKind, registerKindCard } from "../formatcards.ts";
 import type { DrawContext } from "../listingdraw.ts";
 import { bitSizeText, childWord, countText, VIZ } from "../strings.ts";
@@ -266,7 +266,8 @@ const MONO = monoMeasure();
 function relText(bits: number): string {
   const bytes = Math.floor(bits / 8);
   const rest = bits % 8;
-  return `+0x${bytes.toString(16).padStart(2, "0")}${rest === 0 ? "" : `.${rest}`}`;
+  const digits = getAddressBase() === "hex" ? `0x${bytes.toString(16).padStart(2, "0")}` : String(bytes);
+  return `+${digits}${rest === 0 ? "" : `.${rest}`}`;
 }
 
 /** The view each figure was left at, by document and path, so a figure the
@@ -546,9 +547,10 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
     const ruler: SVGElement[] = [svg("rect", { x: 0, y: 0, width, height: RULER_H, class: "sl-ruler-bg" })];
     const marks: { start: number; end: number; priority: number }[] = [];
     const at: number[] = [];
+    const base = getAddressBase() === "hex" ? 16 : 10;
     for (let i = 0; i < bytesPerRow; i++) {
       const x = X((i + 0.5) / bytesPerRow);
-      const w = MONO(i.toString(16), OFFSET_PX);
+      const w = MONO(i.toString(base), OFFSET_PX);
       at.push(x);
       marks.push({ start: x - w / 2, end: x + w / 2, priority: i % 4 === 0 ? 2 : i % 2 === 0 ? 1 : 0 });
     }
@@ -557,7 +559,7 @@ export function drawStructLayout(doc: Doc, data: Extract<StructLayoutData, { sta
       const x = at[i] as number;
       if (keep[i] !== true || x < g.x0 || x > gridRight) continue;
       const t = svg("text", { x, y: RULER_H / 2 + 1, class: "sl-ruler", "text-anchor": "middle", "dominant-baseline": "central" });
-      t.textContent = i.toString(16);
+      t.textContent = i.toString(base);
       ruler.push(t);
     }
     gridG.replaceChildren(...grid);

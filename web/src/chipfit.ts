@@ -15,6 +15,7 @@
 // rewrite a `.js` specifier back to the file it came from.
 import type { Span } from "./doc.ts";
 import { bitSizeText, countText } from "./strings.ts";
+import { positionValue } from "./format.ts";
 
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
@@ -56,7 +57,9 @@ export function runDetail(count: number, unit: string | null = null): string {
 export function chipDetail(s: Span): string {
   if (s.count > 0) return runDetail(s.count, s.unit);
   if (s.gap || s.kind === "bytes" || s.value === "") return bitSizeText(s.size_bits);
-  const value = s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}…` : s.value;
+  // A span has no `edit_text`; a number's value is its decimal digits.
+  const shown = positionValue({ locates: s.locates ?? false, kind: s.kind, edit_text: s.value }) ?? s.value;
+  const value = shown.length > CHIP_VALUE ? `${shown.slice(0, CHIP_VALUE)}…` : shown;
   return withWorth(value, s);
 }
 

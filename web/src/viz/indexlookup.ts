@@ -43,7 +43,7 @@
 import "./indexlookup.css";
 import type { Doc, TemplateNode } from "../doc.ts";
 import { fieldClass } from "../fieldstyle.ts";
-import { formatAddress } from "../format.ts";
+import { byteDigits, formatAddress, getAddressBase } from "../format.ts";
 import { bitSizeText, childWord, countText, VIZ } from "../strings.ts";
 import { board, type Board } from "./board.ts";
 import { invertX, rescaleDomain, type View } from "./boardmath.ts";
@@ -143,7 +143,7 @@ function loadAxis(): Promise<Axis> {
 /** A number as the axis writes it: hex for a byte offset, decimal for an
  *  entry number. */
 function unitText(v: number, counts: "bytes" | "entries"): string {
-  return counts === "bytes" ? `0x${Math.round(v).toString(16)}` : String(Math.round(v));
+  return counts === "bytes" ? byteDigits(Math.round(v)) : String(Math.round(v));
 }
 
 /** A field's number as the index row writes it: decimal, as the listing and
@@ -151,7 +151,7 @@ function unitText(v: number, counts: "bytes" | "entries"): string {
 function numberText(n: TemplateNode, counts: "bytes" | "entries"): string {
   const v = Number(n.edit_text !== "" ? n.edit_text : n.value);
   if (!Number.isSafeInteger(v)) return n.value;
-  return counts === "bytes" && v >= 10 ? `${v} (0x${v.toString(16)})` : String(v);
+  return counts === "bytes" && v >= 10 && getAddressBase() === "hex" ? `${v} (0x${v.toString(16)})` : String(v);
 }
 
 /** What a field holds, in words: its value, a structure's one-line reading,
@@ -165,7 +165,7 @@ function valueText(n: TemplateNode): string {
  *  working's result can be checked against the hex addresses on the cards. */
 function withHex(text: string): string {
   const v = Number(text);
-  return Number.isSafeInteger(v) && v >= 10 ? `${text} (0x${v.toString(16)})` : text;
+  return Number.isSafeInteger(v) && v >= 10 && getAddressBase() === "hex" ? `${text} (0x${v.toString(16)})` : text;
 }
 
 /** A palette entry's channels as the template writes them, `20 120 240`, in

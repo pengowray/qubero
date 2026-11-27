@@ -9,7 +9,7 @@
 // event of its own.
 
 import type { Doc } from "../doc.ts";
-import { formatOffset } from "../format.ts";
+import { formatOffset, getAddressBase } from "../format.ts";
 import { bitsText, RV } from "./text.ts";
 import type { Target } from "./section.ts";
 
@@ -51,12 +51,13 @@ export function dumpRows(doc: Doc, startByte: number, endByte: number, rows: num
   const first = Math.floor(startByte / 16) * 16;
   const wanted = Math.min(Math.ceil(endByte / 16) * 16, first + rows * 16, doc.lengthBytes);
   const read = doc.read(first, Math.max(0, wanted - first));
-  const digits = Math.max(4, Math.ceil(Math.log2(Math.max(2, endByte)) / 4));
+  const base = getAddressBase() === "hex" ? 16 : 10;
+  const digits = Math.max(4, base === 16 ? Math.ceil(Math.log2(Math.max(2, endByte)) / 4) : String(Math.max(0, endByte - 1)).length);
   for (let r = first; r < wanted; r += 16) {
     const line = document.createElement("div");
     const off = document.createElement("span");
     off.className = "rv-dump-off";
-    off.textContent = r.toString(16).padStart(digits, "0");
+    off.textContent = r.toString(base).padStart(digits, "0");
     line.append(off, " ");
     let text = "";
     for (let i = 0; i < 16; i++) {

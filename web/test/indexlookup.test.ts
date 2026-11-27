@@ -61,6 +61,7 @@ class FakeDoc implements Reads {
       read_at: spec.read_at === undefined || spec.read_at === null ? null : spec.read_at * 8,
       read_as: null,
       consumed_by: null,
+      locates: false,
       machinery: null,
       contents: false,
       framed: false,

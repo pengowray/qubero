@@ -1142,6 +1142,16 @@ export class ListingReport {
     else this.restyle();
   }
 
+  /** Draw every row again, for a setting that changes how values are written:
+   *  the base addresses and offsets are in. */
+  redraw(): void {
+    if (this.el.hidden) {
+      this.stale = true;
+      return;
+    }
+    this.paintAgain();
+  }
+
   /** Redraw the window that is already up, for a change that moves nothing. */
   private paintAgain(): void {
     this.discard();
