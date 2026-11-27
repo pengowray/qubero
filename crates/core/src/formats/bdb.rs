@@ -214,13 +214,14 @@ fn page(e: Endian) -> T {
             ("next_pgno", T::u32(e)),
             ("entries", T::u16(e)),
             // Where the items growing back from the end of the page have got
-            // to, so the free space is between here and the index.
+            // to, so the free space is between here and the index. Counted
+            // from the start of the page.
             ("hf_offset", T::u16(e)),
             ("level", T::u8()),
             ("page_type", T::enumeration("PageType", T::u8(), PAGE_TYPE)),
             ("contents", T::bytes(E::Remaining)),
         ],
-    )
+    ).positions(&["hf_offset"])
 }
 
 /// Whether these bytes open a Berkeley DB of the modern layout: one of the
@@ -372,5 +373,12 @@ mod tests {
         // The same bytes, with the page type a btree meta page would have.
         mz[25] = 9;
         assert!(is_bdb(&mz));
+    }
+
+    /// Where the items end on a page is a position in it. The log offset is
+    /// into the log file, not this one, and the page numbers are not.
+    #[test]
+    fn the_page_free_space_offset_is_a_position() {
+        crate::machinery::assert_marks(&bdb(), "Page", &["hf_offset"], &["lsn_offset", "pgno", "entries"]);
     }
 }
