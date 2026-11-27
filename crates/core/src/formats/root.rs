@@ -269,7 +269,7 @@ fn basket() -> T {
         ("body", body()),
         ("entries", joined(basket_entries())),
     ]);
-    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).positions(&["fSeekKey", "fSeekPdir", "fLast"]).counted_as("basket")
+    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).positions(&["fSeekKey", "fSeekPdir"]).counted_as("basket")
 }
 
 /// What a basket's body comes to: the values of its entries up to `fLast`, and
@@ -289,7 +289,6 @@ fn basket_entries() -> T {
             ("offsets", T::when(E::lit(0).less_than(E::Remaining), T::repeat(T::i32(Big), Until::End))),
         ],
     )
-    .positions(&["offsets"])
 }
 
 /// The values of a basket, read as its branch's one leaf says.
@@ -1211,9 +1210,9 @@ pub(super) mod tests {
         assert_eq!(ev.node(&d, &down(&FREE, &[K_FIELDS, 0, 3])).unwrap().value, Value::Int(2_000_000_000));
     }
 
-    /// Every seek in a key, a directory and the file header is a position,
-    /// and so is each offset in a basket's table of entries. The lengths
-    /// beside them are not.
+    /// Every seek in a key, a directory and the file header is a position.
+    /// The lengths beside them are not, and neither are a basket's `fLast`
+    /// and entry offsets, which count inside the unpacked basket.
     #[test]
     fn seeks_are_positions() {
         let t = root();
@@ -1223,8 +1222,8 @@ pub(super) mod tests {
             assert_marks(&t, name, &["fSeekKey", "fSeekPdir"], &["fNbytes", "fObjlen", "fKeylen"]);
         }
         assert_marks(&t, "Directory", &["fSeekDir", "fSeekParent", "fSeekKeys"], &["fNbytesKeys"]);
-        assert_marks(&t, "Basket", &["fSeekKey", "fLast"], &["fNevBuf", "fBufferSize"]);
-        assert_marks(&t, "BasketEntries", &["offsets"], &[]);
+        assert_marks(&t, "Basket", &["fSeekKey", "fSeekPdir"], &["fLast", "fNevBuf", "fBufferSize"]);
+        assert_marks(&t, "BasketEntries", &[], &["offsets"]);
         assert_marks(&t, "RNTupleLocator", &["offset"], &["size"]);
     }
 }

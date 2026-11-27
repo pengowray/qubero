@@ -664,7 +664,7 @@ mod tests {
         let t = mp4();
         crate::machinery::assert_marks(&t, "AuxInfoOffsets", &["offsets"], &["entry_count"]);
         crate::machinery::assert_marks(&t, "ItemLocation", &["base_offset"], &["extent_count"]);
-        crate::machinery::assert_marks(&t, "ExifItem", &["tiff_header_offset"], &[]);
+        crate::machinery::assert_marks(&t, "ExifItem", &["tiff_header_offset"], &["exif"]);
         crate::machinery::assert_marks(&t, "TrackFragmentHeader", &["base_data_offset"], &["default_sample_size"]);
         crate::machinery::assert_marks(&t, "RandomAccessEntry", &["moof_offset"], &["time"]);
         crate::machinery::assert_marks(&t, "SegmentIndex", &["first_offset"], &["reference_count"]);

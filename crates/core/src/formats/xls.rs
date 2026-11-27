@@ -135,12 +135,14 @@ fn record() -> T {
                                 T::structure(
                                     "BoundSheet8",
                                     vec![
+                                        // Where the sheet's BOF record is, counted from
+                                        // the start of the Workbook stream.
                                         ("stream_offset", T::u32(Little)),
                                         ("visibility", T::u8()),
                                         ("sheet_type", T::u8()),
                                         ("name", unicode(true)),
                                     ],
-                                ),
+                                ).positions(&["stream_offset"]),
                             ),
                             (0x0203, cell("Number", vec![("value", T::F64(Little))])),
                             (0x027e, cell("RK", vec![("encoded_number", T::u32(Little))])),
@@ -276,4 +278,16 @@ fn unicode(short: bool) -> T {
             ),
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where a sheet starts in the Workbook stream is a position. The
+    /// visibility and type beside it are not.
+    #[test]
+    fn a_sheet_stream_offset_is_a_position() {
+        crate::machinery::assert_marks(&xls(), "BoundSheet8", &["stream_offset"], &["visibility", "sheet_type"]);
+    }
 }

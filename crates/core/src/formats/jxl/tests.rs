@@ -444,5 +444,5 @@ fn a_u64_of_more_than_twelve_bits_adds_its_groups_above_the_low_bits() {
 /// end of the field.
 #[test]
 fn the_exif_tiff_header_offset_is_a_position() {
-    crate::machinery::assert_marks(&jxl(), "Exif", &["tiff_header_offset"], &[]);
+    crate::machinery::assert_marks(&jxl(), "Exif", &["tiff_header_offset"], &["prefix"]);
 }
