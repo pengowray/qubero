@@ -2032,6 +2032,104 @@ mod tests {
         (0..60_000).flat_map(|i| format!("line {i} of a stream opened a go at a time\n").into_bytes()).collect()
     }
 
+    /// Ask `f` until it stops answering `Pending`, feeding `lossy` the
+    /// chunks each answer names, and say how many times it waited. Every
+    /// chunk named is one of `run`'s, the bytes of the file the run is.
+    fn until_fed<T>(lossy: &crate::codec::lazy::tests::Lossy, run: std::ops::Range<usize>, mut f: impl FnMut() -> crate::eval::R<T>) -> (T, usize) {
+        use crate::eval::EvalError;
+        let inside = lossy.chunks(run);
+        for waits in 0..50 {
+            match f() {
+                Ok(found) => return (found, waits),
+                Err(EvalError::Pending(missing)) => {
+                    assert!(!missing.is_empty() && missing.iter().all(|m| inside.contains(m)), "{missing:?} is not in {inside:?}");
+                    lossy.feed(&missing);
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        panic!("waited 50 times")
+    }
+
+    /// A stream read through an index whose run is missing chunks of the file
+    /// waits for them wherever it is read: the template looked for in its
+    /// first bytes, its bytes read by a field and by a tab, a step of the map
+    /// both ways, a block and a block's codes. Each answer is `Pending`,
+    /// naming chunks of the file inside the run, and once they are fed it
+    /// reads as the stream does. Nothing is kept as the run's refusal.
+    #[test]
+    fn a_stream_whose_run_is_missing_chunks_waits_for_them() {
+        use crate::codec::lazy::tests::Lossy;
+        use crate::codec::lazy::{decode_or_index_with, Decoded, RunInput};
+        use crate::codec::Codec;
+        use crate::eval::EvalError;
+        use crate::source::Source;
+        let text = many_lines();
+        let d = zlib_over(&text);
+        let file = d.source().0.clone();
+        let run = 2..file.len() - 4;
+        let key = (0, run.start as u64 * 8, run.len() as u64 * 8);
+        let Ok(Decoded::Indexed(mut index)) = decode_or_index_with(Codec::Deflate, std::sync::Arc::new(file[run.clone()].to_vec()), small_limits()) else {
+            panic!("indexed")
+        };
+        let lossy = Lossy::new(file.clone(), 1024);
+        index.set_input(RunInput::new(lossy.clone(), run.start as u64, run.len() as u64));
+        let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        e.spaces.set_lazy_limits(small_limits());
+        e.spaces.keep_index(key, Codec::Deflate, std::sync::Arc::new(index));
+        let refused = |e: &Evaluator| e.spaces.run_refusal(key, Codec::Deflate).is_some() || !e.spaces.refused_runs.borrow().is_empty();
+
+        // The stream's template says only bytes, so its first bytes are
+        // looked at to see what they are, and those wait.
+        let (id, waits) = until_fed(&lossy, run.clone(), || e.open_space(&d, 0, RUN));
+        let id = id.expect("the stream opens");
+        assert!(waits > 0 && !refused(&e));
+        let SpaceSource::Lazy(_) = e.space(id).unwrap().source() else { panic!("held whole") };
+
+        // Not the stream's first bytes, whose span was read to see what the
+        // stream is, and is still held.
+        for at in [400_000usize, 1_234_567, text.len() - 100] {
+            lossy.drop_all();
+            let (got, waits) = until_fed(&lossy, run.clone(), || e.read_in(&d, id, at as u64 * 8, 800));
+            // Once for the span the bytes are in, and once more if they run
+            // on into the next.
+            assert!(got == text[at..at + 100] && (1..=2).contains(&waits), "100 bytes at {at}, after {waits} waits");
+        }
+        assert!(!refused(&e));
+
+        // A tab reads the stream through its source, which names the
+        // chunks of the file and reads zeroes until they are fed.
+        lossy.drop_all();
+        let mut got = vec![0u8; 100];
+        let missing = e.space(id).unwrap().source().read_bytes(500_000, &mut got);
+        assert!(!missing.is_empty() && got == [0u8; 100]);
+        let (_, waits) = until_fed(&lossy, run.clone(), || match e.space(id).unwrap().source().read_bytes(500_000, &mut got) {
+            missing if missing.is_empty() => Ok(()),
+            missing => Err(EvalError::Pending(missing)),
+        });
+        assert!(waits >= 1 && got == text[500_000..500_100]);
+
+        // The map from a byte of the stream to its step, and back.
+        lossy.drop_all();
+        let (step, _) = until_fed(&lossy, run.clone(), || e.map_out(id, 350_000));
+        let step = step.expect("a step made it");
+        lossy.drop_all();
+        let back = until_fed(&lossy, run.clone(), || e.map_in(id, run.start as u64 * 8 + step.in_bits.start)).0;
+        assert_eq!(back, Some(step));
+
+        // The listing's blocks, read from the index's block starts and the
+        // run's bits.
+        lossy.drop_all();
+        let block = until_fed(&lossy, run.clone(), || e.node(&d, &[6, 1, 3])).0;
+        assert!(block.size_bits > 0 && block.child_count > 0, "{block:?}");
+        lossy.drop_all();
+        let code = until_fed(&lossy, run.clone(), || e.node(&d, &[6, 1, 3, block.child_count as usize - 1, 0])).0;
+        assert!(code.size_bits > 0, "{code:?}");
+        assert!(!refused(&e));
+        let verdict = e.run_check(&d, &[7]).unwrap().expect("the Adler-32 is a check");
+        assert!(verdict.ok, "{verdict:?}");
+    }
+
     /// Indexing a stream past the cap is charged to the work allowed for a
     /// go like any other reading: a go that runs out hands back `Busy` and
     /// says how far the pass has got, and the next go carries on from there.

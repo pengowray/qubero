@@ -1817,6 +1817,118 @@ mod tests {
         assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::TooLarge));
     }
 
+    /// A part read through an index whose run is missing chunks of the file
+    /// answers `Pending` with them, read in the listing's stitched space and
+    /// in the joined stream opened as a document, and reads once they are
+    /// fed. The part is not kept as a part in trouble, nor its run as
+    /// refused.
+    #[test]
+    fn a_part_whose_run_is_missing_chunks_waits_for_them() {
+        use crate::codec::lazy::tests::Lossy;
+        use crate::codec::lazy::{decode_or_index_with, Decoded, Limits, ReadError, RunInput};
+        use crate::codec::Codec;
+        use crate::eval::EvalError;
+        let big: Vec<u8> = (0..4000).flat_map(|i| format!("row {i}, ").into_bytes()).collect::<Vec<u8>>()[..30_000].to_vec();
+        let text = [&big[..], b"and a short block after it"].concat();
+        let file = bgzf_of(&[&big, b"and a short block after it"]);
+        let d = Document::new(MemSource(file.clone()));
+        let limits = Limits { whole: 4096, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() };
+        let fresh = || {
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            e.spaces.set_whole_cap(10_000);
+            e.spaces.set_lazy_limits(limits);
+            e
+        };
+        let mut whole = Evaluator::new(crate::formats::bgzf());
+        let held = whole.open_space(&d, 0, &[1]).unwrap().expect("opens whole");
+        let held = whole.space(held).unwrap();
+        let first = held.runs()[0].clone();
+        assert_eq!(first.run_space, 0);
+        let (at, len) = (first.run_offset_bits / 8, first.run_bits / 8);
+        let key = (0, first.run_offset_bits, first.run_bits);
+        let Ok(Decoded::Indexed(mut index)) = decode_or_index_with(Codec::Deflate, std::sync::Arc::new(file[at as usize..(at + len) as usize].to_vec()), limits) else {
+            panic!("indexed")
+        };
+        let lossy = Lossy::new(file.clone(), 256);
+        index.set_input(RunInput::new(lossy.clone(), at, len));
+        let index = std::sync::Arc::new(index);
+        let inside = lossy.chunks(at as usize..(at + len) as usize);
+        /// Ask `f` until it stops naming chunks, feeding them, each of them
+        /// a chunk of the file inside the part's run, and say how many times
+        /// it named some.
+        fn until_fed(lossy: &Lossy, inside: &[crate::source::Missing], what: &str, mut f: impl FnMut() -> Result<(), Vec<crate::source::Missing>>) -> usize {
+            for waits in 0..50 {
+                match f() {
+                    Ok(()) => return waits,
+                    Err(missing) => {
+                        assert!(!missing.is_empty() && missing.iter().all(|m| inside.contains(m)), "{what}: {missing:?}");
+                        lossy.feed(&missing);
+                    }
+                }
+            }
+            panic!("{what}: waited 50 times")
+        }
+        let pending = |r: Result<Vec<u8>, EvalError>, got: &mut Vec<u8>| match r {
+            Ok(bytes) => {
+                *got = bytes;
+                Ok(())
+            }
+            Err(EvalError::Pending(missing)) => Err(missing),
+            Err(other) => panic!("{other:?}"),
+        };
+
+        // Read where the stream is declared, a part at a time.
+        let mut e = fresh();
+        e.spaces.keep_index(key, Codec::Deflate, index.clone());
+        e.node(&d, &[1]).unwrap();
+        let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
+        let mut got = Vec::new();
+        let waits = until_fed(&lossy, &inside, "the stitched space", || pending(e.read_in(&d, space, 20_000 * 8, 64 * 8), &mut got));
+        assert_eq!((got.as_slice(), waits > 0), (&text[20_000..20_064], true));
+        assert!(stitch_of(&e, space).troubles.borrow().is_empty());
+        assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), None);
+
+        // Opened as a document of its own, past the cap a joined stream is
+        // held whole at.
+        lossy.drop_all();
+        let mut e = fresh();
+        e.spaces.keep_index(key, Codec::Deflate, index.clone());
+        // A stream whose template says only bytes has its first bytes looked
+        // at to see what they are, which would wait too.
+        let mut opened = None;
+        until_fed(&lossy, &inside, "opening it", || match e.open_space(&d, 0, &[1]) {
+            Ok(id) => {
+                opened = id;
+                Ok(())
+            }
+            Err(EvalError::Pending(missing)) => Err(missing),
+            Err(other) => panic!("{other:?}"),
+        });
+        let id = opened.expect("opens a part at a time");
+        let space = e.space(id).unwrap();
+        lossy.drop_all();
+        let mut got = vec![0u8; text.len()];
+        let waits = until_fed(&lossy, &inside, "the joined stream", || match space.source().read(0, &mut got) {
+            Ok(()) => Ok(()),
+            Err(ReadError::Missing(missing)) => Err(missing),
+            Err(ReadError::Refused(why)) => panic!("{why:?}"),
+        });
+        assert!(got == text && waits > 0);
+        for byte in [0, 12_345, 29_999, 30_010] {
+            lossy.drop_all();
+            let mut step = None;
+            until_fed(&lossy, &inside, "a byte's step", || space.map_out(byte).map(|s| step = s));
+            assert_eq!(step, held.map_out(byte).unwrap(), "byte {byte}");
+        }
+        for bit in (first.run_offset_bits..first.run_offset_bits + first.run_bits).step_by(4099) {
+            lossy.drop_all();
+            let mut step = None;
+            until_fed(&lossy, &inside, "a bit's step", || space.map_in(bit).map(|s| step = s));
+            assert_eq!(step, held.map_in(bit).unwrap(), "bit {bit}");
+        }
+        assert_eq!(e.spaces.run_refusal(key, Codec::Deflate), None);
+    }
+
     /// Four runs, each as many bytes as its entry in `lens` says, and a stream
     /// joined from them in the order they are declared: bytes stored as they
     /// are, a deflate run, a run whose codec copies (as a ZIP declares a stored

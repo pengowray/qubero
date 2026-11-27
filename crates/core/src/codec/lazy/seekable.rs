@@ -126,6 +126,14 @@ impl Seekable {
         &self.input
     }
 
+    /// Read the run through `input` from now on, in place of the input the
+    /// index pass gave it: for a test over a source that loses chunks.
+    #[cfg(test)]
+    pub(crate) fn set_input(&mut self, input: RunInput) {
+        assert_eq!(input.len(), self.input.len(), "the same run");
+        self.input = input;
+    }
+
     /// The CRC-32 of the whole output, worked out on the pass that indexed
     /// it. Only a deflate run's pass sums its output, since gzip's trailer
     /// holds this sum; nothing for zstd and xz.

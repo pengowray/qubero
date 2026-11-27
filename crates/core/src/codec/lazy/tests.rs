@@ -1621,3 +1621,241 @@ fn an_xz_span_from_a_window_is_the_span_from_the_whole_stream() {
     }
     assert!(spans > 8, "{spans} spans");
 }
+
+/// A source over `bytes` that holds only some of its chunks of `chunk`
+/// bytes, as a store that keeps part of the file does: a read reports the
+/// chunks it does not hold, ascending and each once, and reads zeroes there.
+/// Chunks are fed and dropped through `held`. `Send + Sync`, so a
+/// [`RunInput`] can be made over it.
+pub(crate) struct Lossy {
+    bytes: Vec<u8>,
+    chunk: u64,
+    pub(crate) held: std::sync::Mutex<std::collections::BTreeSet<u64>>,
+}
+
+impl Lossy {
+    /// A source that holds none of its chunks yet.
+    pub(crate) fn new(bytes: Vec<u8>, chunk: u64) -> Arc<Lossy> {
+        Arc::new(Lossy { bytes, chunk, held: Default::default() })
+    }
+
+    pub(crate) fn feed(&self, missing: &[crate::source::Missing]) {
+        lock(&self.held).extend(missing.iter().map(|m| m.chunk));
+    }
+
+    pub(crate) fn drop_all(&self) {
+        lock(&self.held).clear();
+    }
+
+    /// The chunks bytes `range` of the source are in.
+    pub(crate) fn chunks(&self, range: std::ops::Range<usize>) -> Vec<crate::source::Missing> {
+        let (first, last) = (range.start as u64 / self.chunk, (range.end as u64).div_ceil(self.chunk));
+        (first..last).map(|chunk| crate::source::Missing { chunk }).collect()
+    }
+}
+
+impl crate::source::Source for Lossy {
+    fn len_bytes(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<crate::source::Missing> {
+        let held = lock(&self.held);
+        let mut missing = Vec::new();
+        let (mut pos, end) = (offset, offset + out.len() as u64);
+        while pos < end {
+            let chunk = pos / self.chunk;
+            let stop = ((chunk + 1) * self.chunk).min(end);
+            let (from, to) = ((pos - offset) as usize, (stop - offset) as usize);
+            match held.contains(&chunk) {
+                true => out[from..to].copy_from_slice(&self.bytes[pos as usize..stop as usize]),
+                false => {
+                    out[from..to].fill(0);
+                    missing.push(crate::source::Missing { chunk });
+                }
+            }
+            pos = stop;
+        }
+        missing
+    }
+}
+
+/// The run `packed` with bytes before and after it, as a file holds it, and
+/// where in that file the run starts. A run's input starting anywhere but at
+/// the source's first byte is what a run of the file is.
+fn in_a_file(packed: &[u8]) -> (Vec<u8>, usize) {
+    let before = 1500;
+    let mut file = mixed(before, 3);
+    file.extend_from_slice(packed);
+    file.extend_from_slice(&mixed(700, 4));
+    (file, before)
+}
+
+/// Read `out.len()` bytes at `at` of `s`, and say which chunks the read was
+/// missing each time it was made, feeding them, until it reads.
+fn read_waiting(s: &Seekable, lossy: &Lossy, at: u64, out: &mut [u8]) -> Vec<Vec<crate::source::Missing>> {
+    let mut asked = Vec::new();
+    loop {
+        match s.read(at, out) {
+            Ok(()) => return asked,
+            Err(ReadError::Missing(missing)) => {
+                assert!(asked.len() < 50, "asked {} times", asked.len());
+                lossy.feed(&missing);
+                asked.push(missing);
+            }
+            Err(ReadError::Refused(why)) => panic!("refused: {why:?}"),
+        }
+    }
+}
+
+/// An index over a source that does not hold its run reads nothing and
+/// names exactly the chunks of the file each read needs, all at once, for a
+/// deflate, a zstd and an xz run. Once those are fed, the read gives the
+/// bytes the run comes to. Nothing is cached from a read that was missing
+/// chunks, so no span looks decoded when it is not, and the chunks are named
+/// in the file, past the bytes before the run.
+#[test]
+fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed() {
+    let data = mixed(300_000, 61);
+    for (codec, packed, limits) in [
+        (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6), Limits { spacing: 16 << 10, ..small() }),
+        (Codec::Zstd, zstd_of(&data, 30_000, true), small()),
+        (Codec::Xz, xz_pieces(&data, 60_000, Some(20_000)), Limits { span: 1 << 20, ..small() }),
+    ] {
+        let mut s = indexed(codec, &packed, limits);
+        assert!(s.spans() > 3, "{codec:?}: {} spans", s.spans());
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::new(file, 1024);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        for k in 0..s.spans() {
+            let want = s.span_bytes(k);
+            if want.is_empty() {
+                continue;
+            }
+            lossy.drop_all();
+            let mut got = vec![0u8; (want.end - want.start) as usize];
+            let asked = read_waiting(&s, &lossy, want.start, &mut got);
+            assert!(got == data[want.start as usize..want.end as usize], "{codec:?} span {k}: the bytes differ");
+            assert_eq!(asked.len(), 1, "{codec:?} span {k}: asked {asked:?}");
+            let named = &asked[0];
+            assert!(named.windows(2).all(|w| w[0].chunk < w[1].chunk), "{codec:?} span {k}: {named:?}");
+            // What is named is the span's own bytes, in the file, past what
+            // comes before the run: for deflate from its checkpoint's byte to
+            // the byte of the next one's bit, with the header of the block the
+            // checkpoint is inside; for zstd its frames. An xz read names only
+            // the blocks it decodes, which are inside the span.
+            let mut range = s.span_in(k);
+            if codec == Codec::Zlib {
+                range.end = s.checkpoints.get(k + 1).map_or(packed.len(), |n| n.in_bit.div_ceil(8) as usize);
+            }
+            let mut whole = lossy.chunks(run_at + range.start..run_at + range.end);
+            if let (Codec::Zlib, Some(h)) = (codec, s.checkpoints[k].block()) {
+                let head = (h / 8) as usize;
+                whole.extend(lossy.chunks(run_at + head..run_at + (head + inflate::MAX_HEAD_BYTES).min(packed.len())));
+                whole.sort_by_key(|m| m.chunk);
+                whole.dedup();
+            }
+            match codec {
+                Codec::Xz => assert!(named.iter().all(|m| whole.contains(m)), "{codec:?} span {k}: {named:?} is not in {whole:?}"),
+                _ => assert_eq!(named, &whole, "{codec:?} span {k}"),
+            }
+        }
+        // A read that is missing chunks caches nothing for its span.
+        let k = s.spans() / 2;
+        let want = s.span_bytes(k);
+        lock(&s.spans).take(k as u64);
+        lock(&s.prefixes).take(k as u64);
+        lossy.drop_all();
+        assert!(matches!(s.read(want.start, &mut [0u8; 16]), Err(ReadError::Missing(_))));
+        assert!(lock(&s.spans).take(k as u64).is_none(), "{codec:?}: span {k} was cached from nothing");
+        assert_eq!(xz_decoded(&s, k).unwrap_or(0), 0, "{codec:?}: span {k} was decoded from nothing");
+    }
+}
+
+/// An xz span read part of the way keeps what it decoded when a later read
+/// of it finds chunks missing, and that read, made again once they are fed,
+/// carries on from there rather than from the span's first block.
+#[test]
+fn an_xz_read_missing_chunks_keeps_what_the_span_decoded() {
+    let data = text_and_noise();
+    let packed = xz_pieces(&data, 90_000, Some(20_000));
+    let mut s = indexed(Codec::Xz, &packed, Limits { span: 1 << 20, ..small() });
+    // A span of a block of 90 kB, whose LZMA2 chunks are 20 kB of output
+    // each, so a read of its first bytes decodes only part of it.
+    let k = (0..s.spans()).find(|&k| s.span_bytes(k).end - s.span_bytes(k).start > 50_000).expect("a span of a whole block");
+    let want = s.span_bytes(k);
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file, 1024);
+    s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+    let mut first = vec![0u8; 1000];
+    read_waiting(&s, &lossy, want.start, &mut first);
+    let decoded = xz_decoded(&s, k).expect("the span is cached");
+    assert!(decoded > 0 && decoded < (want.end - want.start) as usize, "{decoded} bytes decoded");
+    lossy.drop_all();
+    let mut last = vec![0u8; 1000];
+    let at = want.end - 1000;
+    assert!(matches!(s.read(at, &mut last), Err(ReadError::Missing(_))));
+    assert_eq!(xz_decoded(&s, k), Some(decoded), "the decoded part of the span was dropped");
+    read_waiting(&s, &lossy, at, &mut last);
+    assert!(first == data[want.start as usize..want.start as usize + 1000] && last == data[at as usize..want.end as usize]);
+}
+
+/// Every other read of an index through an input missing chunks names them
+/// and gives what the index over the whole run gives once they are fed: a
+/// span's trace, a block, the block holding a bit, a block's trace, and the
+/// two maps, for blocks whose starts were thinned out and are found again.
+#[test]
+fn traces_and_blocks_through_an_input_missing_chunks_wait_for_them() {
+    let data = mixed(300_000, 43);
+    let packed = flushed(&data, 1, 2000);
+    let limits = Limits { block_marks: 4, ..small() };
+    let held = indexed(Codec::Deflate, &packed, limits);
+    let mut s = indexed(Codec::Deflate, &packed, limits);
+    assert!(s.blocks.stride > 1 && s.blocks() > 16);
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file, 1024);
+    s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+    /// Ask `f` until it stops naming chunks, feeding each time, and say how
+    /// many times it named some.
+    fn waiting<T>(lossy: &Lossy, mut f: impl FnMut() -> Result<T, Vec<crate::source::Missing>>) -> (T, usize) {
+        for asked in 0..50 {
+            match f() {
+                Ok(found) => return (found, asked),
+                Err(missing) => {
+                    assert!(!missing.is_empty(), "missing nothing");
+                    lossy.feed(&missing);
+                }
+            }
+        }
+        panic!("asked 50 times")
+    }
+    let missing = |e: ReadError| match e {
+        ReadError::Missing(m) => m,
+        ReadError::Refused(why) => panic!("refused: {why:?}"),
+    };
+    let mut named = 0;
+    for k in (0..s.spans()).step_by(3) {
+        lossy.drop_all();
+        let (t, asked) = waiting(&lossy, || s.span_trace(k).map_err(missing));
+        assert!(shape(&t) == shape(&held.span_trace(k).unwrap()), "span {k}");
+        named += asked;
+    }
+    for i in (0..s.blocks()).step_by(5) {
+        lossy.drop_all();
+        let (b, asked) = waiting(&lossy, || s.block(i).map_err(missing));
+        assert_eq!(b, held.block(i).unwrap(), "block {i}");
+        named += asked;
+        lossy.drop_all();
+        let (t, _) = waiting(&lossy, || s.block_trace(i).map_err(missing));
+        assert!(shape(&t) == shape(&held.block_trace(i).unwrap()), "block {i}");
+        let mid = (b.in_bits.start + b.in_bits.end) / 2;
+        lossy.drop_all();
+        assert_eq!(waiting(&lossy, || s.block_of_bit(mid)).0, Some(i), "bit {mid}");
+        lossy.drop_all();
+        assert_eq!(waiting(&lossy, || s.map_in(mid)).0, held.map_in(mid).unwrap(), "bit {mid}");
+        lossy.drop_all();
+        let byte = b.out_bytes.start;
+        assert_eq!(waiting(&lossy, || s.map_out(byte)).0, held.map_out(byte).unwrap(), "byte {byte}");
+    }
+    assert!(named > 10, "only {named} reads named chunks");
+}
