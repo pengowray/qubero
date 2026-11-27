@@ -266,7 +266,7 @@ export class TemplatePanel {
     if (this.marked !== null) {
       const old = this.lineEls[this.marked];
       old?.classList.remove("is-at");
-      delete old?.dataset.note;
+      if (old !== undefined) this.undress(old);
     }
     this.marked = line;
     this.note = note;
@@ -278,12 +278,33 @@ export class TemplatePanel {
     if (moved) this.reveal(line);
   }
 
-  /** Mark a drawn row as the marked line, with its note. The note is drawn by
-   *  CSS from `data-note`, so it is not part of the text a selection copies. */
+  /** Mark a drawn row as the marked line, with its note. The note goes
+   *  straight after the number type it is about (`u32be`), so it covers
+   *  nothing and the field's name stays in line with its neighbours. It is
+   *  drawn by CSS from `data-note`, so a selection does not copy it. */
   private dress(row: HTMLElement): void {
     row.classList.add("is-at");
-    if (this.note === null) delete row.dataset.note;
-    else row.dataset.note = this.note;
+    this.undress(row);
+    if (this.note === null) return;
+    const note = document.createElement("span");
+    note.className = "tp-note";
+    note.dataset.note = this.note;
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode() as Text | null; t !== null; t = walker.nextNode() as Text | null) {
+      const m = /\b[a-z]+\d+(?:le|be)\b/.exec(t.data);
+      if (m === null) continue;
+      t.splitText(m.index + m[0].length).before(note);
+      return;
+    }
+    row.append(note);
+  }
+
+  /** Take the note off a row and join the text it was put into. */
+  private undress(row: HTMLElement): void {
+    const note = row.querySelector(".tp-note");
+    if (note === null) return;
+    note.remove();
+    row.normalize();
   }
 
   /** Scroll the marked line into view, leaving the view alone if it already is. */

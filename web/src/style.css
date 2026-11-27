@@ -1423,24 +1423,18 @@ button.welcome-crystal {
 }
 /* Muted text on the marked line's fill is under 4.5:1 in both themes. */
 .tp-line.is-at .tp-kw,
-.tp-line.is-at .tp-comment,
-.tp-line.is-at[data-note]::after {
+.tp-line.is-at .tp-comment {
   color: color-mix(in srgb, var(--muted) 60%, var(--fg));
 }
 /* The byte order the marked field was read in, when its line writes the other
-   one. In the UI font so it does not read as part of the notation, and drawn
-   from `data-note` so that copying a selection leaves it out. */
-.tp-line.is-at[data-note]::after {
+   one. It follows the number type it is about. In the UI font so it does not
+   read as part of the notation, and drawn from `data-note` so that copying a
+   selection leaves it out. */
+.tp-note::after {
   content: attr(data-note);
-  margin-left: 2ch;
+  margin-left: 1ch;
   font-family: var(--sans);
-  /* Held at the panel's right edge, over the end of a line longer than the
-     panel, so the note is in view without scrolling sideways. */
-  position: sticky;
-  right: 0;
-  display: inline-block;
-  padding: 0 8px;
-  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--muted) 60%, var(--fg));
 }
 .tp-field {
   color: var(--accent);
