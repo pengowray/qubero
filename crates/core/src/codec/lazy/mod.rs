@@ -403,6 +403,14 @@ enum Start {
         /// a decode starting here reads again. Nothing at the start of a
         /// block.
         block: Option<u64>,
+        /// A copy of that header and its tables: the bytes of the run from
+        /// the one `block` is in, [`MAX_HEAD_BYTES`] of them or to the run's
+        /// end. So a decode starting here reads only the run from here on,
+        /// however far back the block starts. Made when the pass finishes,
+        /// for the checkpoints it keeps; nothing until then.
+        ///
+        /// [`MAX_HEAD_BYTES`]: crate::codec::inflate::MAX_HEAD_BYTES
+        head: Option<Arc<[u8]>>,
         /// How many deflate blocks start before `in_bit`. This counts the
         /// block the checkpoint is inside, and does not count a block
         /// starting at `in_bit`.
@@ -434,6 +442,15 @@ impl Checkpoint {
         match self.start {
             Start::Deflate { block, .. } => block,
             Start::Frame { .. } | Start::Unit(_) => None,
+        }
+    }
+
+    /// The copy of the header of the block it is inside, and the byte of
+    /// the run the copy starts at.
+    fn head(&self) -> Option<(&[u8], usize)> {
+        match &self.start {
+            Start::Deflate { block: Some(h), head: Some(bytes), .. } => Some((bytes, (h / 8) as usize)),
+            _ => None,
         }
     }
 

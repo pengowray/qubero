@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use super::input::RunInput;
 use super::seekable::{seekable, Kind};
-use super::{wrapper, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
+use super::{wrapper, Checkpoint, Checkpoints, Decoded, Limits, Progress, Start, Stepped, SLIDE_AT, WINDOW};
 use crate::checksum::{adler32_update, crc32_update};
-use crate::codec::inflate::{self, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES};
 
 /// A deflate, zlib or gzip run's index pass, done a step at a time: each
@@ -224,13 +224,37 @@ impl DeflatePass {
         if !inflate::trailer_agrees(&self.framing, &self.packed[self.framing.trailer()], len, || sums.crc, || sums.adler) {
             return Err(Refusal::Failed);
         }
-        let checkpoints = sink.marks.take().expect("set when the pass started").list;
+        let mut checkpoints = sink.marks.take().expect("set when the pass started").list;
+        self.copy_heads(&mut checkpoints);
         let mut s = seekable(self.codec, self.input.clone(), Kind::Deflate(self.framing), len, checkpoints, self.limits);
         s.blocks = sink.blocks.take().expect("set when the pass started");
         s.blocks_end = blocks_end;
         s.crc32 = Some(sums.crc);
         s.adler32 = Some(sums.adler);
         Ok(Decoded::Indexed(s))
+    }
+}
+
+impl DeflatePass {
+    /// Give each checkpoint inside a block a copy of the block's header and
+    /// tables, which a decode starting there reads again, so that it need
+    /// not read the run as far back as the block's start. The checkpoints
+    /// inside one block share one copy.
+    fn copy_heads(&self, checkpoints: &mut [Checkpoint]) {
+        let mut last: Option<(u64, Arc<[u8]>)> = None;
+        for c in checkpoints {
+            let Start::Deflate { block: Some(h), head, .. } = &mut c.start else { continue };
+            let copy = match &last {
+                Some((at, copy)) if *at == *h => copy.clone(),
+                _ => {
+                    let from = (*h / 8) as usize;
+                    let copy: Arc<[u8]> = self.packed[from..(from + MAX_HEAD_BYTES).min(self.packed.len())].into();
+                    last = Some((*h, copy.clone()));
+                    copy
+                }
+            };
+            *head = Some(copy);
+        }
     }
 }
 
@@ -398,7 +422,7 @@ impl Sink for WindowSink {
             let keep = (WINDOW as u64).min(out) as usize;
             let window = &self.hist[self.hist.len() - keep..];
             let blocks = self.blocks.as_ref().map_or(0, |b| b.count);
-            marks.offer(in_bit, in_bit, out, || Start::Deflate { block, blocks, window: window.into() });
+            marks.offer(in_bit, in_bit, out, || Start::Deflate { block, head: None, blocks, window: window.into() });
         }
         // After the checkpoint, so that a step ending here takes the one a
         // pass in one go would have taken, and the step after does not take

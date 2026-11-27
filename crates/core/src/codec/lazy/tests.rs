@@ -1520,6 +1520,8 @@ fn a_deflate_span_from_a_window_is_the_span_from_the_whole_run() {
         assert!(s.spans() > 4, "{codec:?}: {} spans", s.spans());
         for k in 0..s.spans() {
             let (code, head) = span_copies(&s, &packed, k);
+            // The checkpoint's own copy of the header is the run's bytes.
+            assert_eq!(s.checkpoints[k].head().map(|(b, at)| (b.to_vec(), at)), head, "{codec:?} span {k}");
             let input = inflate::Input::new(window(&code, &packed), head.as_ref().map(|h| window(h, &packed)));
             let want = s.span_bytes(k);
             let mut bytes = vec![0u8; (want.end - want.start) as usize];
@@ -1839,7 +1841,7 @@ fn read_waiting(s: &Seekable, lossy: &Lossy, at: u64, out: &mut [u8]) -> Vec<Vec
 #[test]
 fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed() {
     let data = mixed(300_000, 61);
-    let mut inside_blocks = 0;
+    let (mut inside_blocks, mut header_before) = (0, 0);
     for (codec, packed, limits) in [
         (Codec::Zlib, miniz_oxide::deflate::compress_to_vec_zlib(&data, 6), Limits { spacing: 16 << 10, ..small() }),
         (Codec::Zstd, zstd_of(&data, 30_000, true), small()),
@@ -1864,21 +1866,19 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
             assert!(named.windows(2).all(|w| w[0].chunk < w[1].chunk), "{codec:?} span {k}: {named:?}");
             // What is named is the span's own bytes, in the file, past what
             // comes before the run: for deflate from its checkpoint's byte to
-            // the byte of the next one's bit, with the header of the block the
-            // checkpoint is inside; for zstd its frames, without the skippable
-            // frame in front of the first. An xz read names only the blocks it
-            // decodes, which are inside the span.
+            // the byte of the next one's bit, and not the header of the block
+            // the checkpoint is inside, which the checkpoint keeps a copy of;
+            // for zstd its frames, without the skippable frame in front of the
+            // first. An xz read names only the blocks it decodes, which are
+            // inside the span.
             let mut range = if codec == Codec::Zstd { s.frames_in(k) } else { s.span_in(k) };
             if codec == Codec::Zlib {
                 range.end = s.checkpoints.get(k + 1).map_or(packed.len(), |n| n.in_bit.div_ceil(8) as usize);
             }
-            let mut whole = lossy.chunks(run_at + range.start..run_at + range.end);
+            let whole = lossy.chunks(run_at + range.start..run_at + range.end);
             if let (Codec::Zlib, Some(h)) = (codec, s.checkpoints[k].block()) {
                 inside_blocks += 1;
-                let head = (h / 8) as usize;
-                whole.extend(lossy.chunks(run_at + head..run_at + (head + inflate::MAX_HEAD_BYTES).min(packed.len())));
-                whole.sort_by_key(|m| m.chunk);
-                whole.dedup();
+                header_before += (run_at + (h / 8) as usize + inflate::MAX_HEAD_BYTES <= whole[0].chunk as usize * 1024) as usize;
             }
             match codec {
                 Codec::Xz => assert!(named.iter().all(|m| whole.contains(m)), "{codec:?} span {k}: {named:?} is not in {whole:?}"),
@@ -1895,9 +1895,9 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
         assert!(lock(&s.spans).take(k as u64).is_none(), "{codec:?}: span {k} was cached from nothing");
         assert_eq!(xz_decoded(&s, k).unwrap_or(0), 0, "{codec:?}: span {k} was decoded from nothing");
     }
-    // Deflate spans that start inside a block, which read the block's header
-    // from before their own bytes.
-    assert!(inside_blocks > 3, "{inside_blocks} deflate spans start inside a block");
+    // Deflate spans that start inside a block, some of them chunks past the
+    // block's header, which they read from the checkpoint's copy.
+    assert!(inside_blocks > 3 && header_before > 0, "{inside_blocks} deflate spans start inside a block, {header_before} chunks past its header");
 }
 
 /// An xz span read part of the way keeps what it decoded when a later read

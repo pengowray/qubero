@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::deflate::{BlockMarks, WindowSink};
 use super::input::{refused_as_none, Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
-use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
+use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder, Window};
 use crate::source::Missing;
 
 /// A compressed run that comes to more than can be held whole, read through
@@ -299,16 +299,15 @@ impl Seekable {
     }
 
     /// What a decode or a trace of deflate span `k` reads, copied through
-    /// the run's input, all of it or none: from the byte its checkpoint's bit
-    /// is in to the byte holding the bit before the next checkpoint's (or to
-    /// the run's end, for the last span), and the header of the block the
-    /// checkpoint is inside, [`MAX_HEAD_BYTES`] of it.
-    fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies, Vec<Missing>> {
+    /// the run's input: from the byte its checkpoint's bit is in to the byte
+    /// holding the bit before the next checkpoint's (or to the run's end, for
+    /// the last span). The header of the block the checkpoint is inside is
+    /// the checkpoint's own copy.
+    fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies<'_>, Vec<Missing>> {
         let c = &self.checkpoints[k];
         let to = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |n| n.in_bit.div_ceil(8) as usize);
-        let head = c.block().map(|h| (h / 8) as usize..(h / 8) as usize + MAX_HEAD_BYTES);
-        let [code, head] = self.input.copies([Some((c.in_bit / 8) as usize..to), head])?;
-        Ok(DeflateCopies { code: code.expect("asked for"), head })
+        let code = self.input.copy((c.in_bit / 8) as usize..to)?;
+        Ok(DeflateCopies { code, head: c.head() })
     }
 
     /// Deflate span `k`, decoded from `input`: from checkpoint `k`'s bit to
@@ -592,10 +591,12 @@ impl Seekable {
         }
     }
 
-    /// How many bytes the checkpoints' windows, the block starts and the span
-    /// cache hold, for tests and for saying what a run costs.
+    /// How many bytes the checkpoints' windows and header copies, the block
+    /// starts and the span cache hold, for tests and for saying what a run
+    /// costs. Checkpoints inside one block share a header copy, which counts
+    /// for each of them.
     pub fn held_bytes(&self) -> usize {
-        self.checkpoints.iter().map(|c| c.window().len()).sum::<usize>()
+        self.checkpoints.iter().map(|c| c.window().len() + c.head().map_or(0, |h| h.0.len())).sum::<usize>()
             + self.blocks.list.len() * std::mem::size_of::<(u64, u64)>()
             + lock(&self.spans).weight
             + lock(&self.prefixes).weight
@@ -609,19 +610,21 @@ impl Seekable {
     }
 }
 
-/// Copies of what a deflate decode reads, made through the run's input: its
-/// codes, and the header and tables of the block it starts inside, when it
-/// starts inside one.
-struct DeflateCopies {
+/// What a deflate decode reads: its codes, copied through the run's input,
+/// and the checkpoint's copy of the header and tables of the block it starts
+/// inside, when it starts inside one, with the byte of the run that starts
+/// at.
+struct DeflateCopies<'a> {
     code: Copied,
-    head: Option<Copied>,
+    head: Option<(&'a [u8], usize)>,
 }
 
-impl DeflateCopies {
+impl DeflateCopies<'_> {
     /// The copies as the input [`inflate::run`] reads, in a run `run_len`
     /// bytes long.
     fn input(&self, run_len: u64) -> Input<'_> {
-        Input::new(self.code.window(run_len), self.head.as_ref().map(|h| h.window(run_len)))
+        let head = self.head.and_then(|(bytes, at)| Window::of(bytes, at, run_len as usize));
+        Input::new(self.code.window(run_len), head)
     }
 }
 
