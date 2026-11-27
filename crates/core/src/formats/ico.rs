@@ -22,6 +22,8 @@ pub fn ico() -> Template {
             ],
         ),
     )
+    // A PNG image reads its ICC profile and EXIF block by name.
+    .with_part(&super::png::part())
 }
 
 fn entry() -> T {

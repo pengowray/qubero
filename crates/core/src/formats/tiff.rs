@@ -945,7 +945,9 @@ fn one(e: Endian, t: i128) -> Option<T> {
         3 => T::u16(e),
         4 | 13 => T::u32(e),
         5 => ratio(e, false),
-        6 => T::Int { bits: 8, endian: e },
+        // One byte has no byte order, so it is read the same way in both
+        // directories, as `u8` is.
+        6 => T::Int { bits: 8, endian: Big },
         8 => T::Int { bits: 16, endian: e },
         9 => T::i32(e),
         10 => ratio(e, true),

@@ -20,6 +20,15 @@
 //! type        := "type" struct                     a structure filed under its own name
 //!              | "type" NAME "=" ty                anything else, under the name a
 //!                                                  `Named` reaches it by
+//!              | "type" NAME "=" "same as type" NAME
+//!                                                  the type of that name, written out
+//!                                                  in full above or below this line
+//!              | "type" NAME "=" "same as type" NAME ", but big-endian"
+//!              | "type" NAME "=" "same as type" NAME ", but little-endian"
+//!                                                  that type set to that byte order, as
+//!                                                  an arm's `but big-endian` is; this
+//!                                                  type is that one's big-endian, or
+//!                                                  little-endian, counterpart
 //!
 //! ty          := struct | wrapper ty | ty annotation | choice | leaf
 //! struct      := NAME ["(" attr {"," attr} ")"] "{" {field} "}"
@@ -32,7 +41,8 @@
 //! arm         := key "=>" ty                        one arm on each line, or all on one
 //!                                                   line with commas between them
 //!              | "_ =>" ty                          any other value; always the last arm
-//!              | key "=>" same | "_ =>" same
+//!              | key {"," key} "=>" same            every arm whose key is listed
+//!              | "_ =>" same
 //! same        := "same as case" key                 the arm above whose line starts with
 //!                                                   that key is this arm's type too
 //!              | "same as case" key ", but big-endian"
@@ -43,11 +53,24 @@
 //!
 //! A `same as` line points only at an arm written out in full, never at
 //! another `same as` line, and only at an arm that takes more than one line.
+//! Arms that would each be the same `same as` line are one line, with their
+//! keys in the order of the arms, where the first of them would be. When a
+//! choice has a key twice, only arms next to each other share a line, since
+//! the first arm with the key is the one read.
 //! In an arm `but big-endian` points at, every `le` and `be` on something one
 //! byte wide or narrower is as that arm writes it, since that narrow it says
-//! which end of the byte a field is taken from rather than byte order. Such an
-//! arm never holds a type reached by name or by `schema`, or a `u(expr)`,
+//! which end of the byte a field is taken from rather than byte order. Every
+//! named type that arm uses is replaced by its big-endian counterpart, the
+//! type whose line says `same as type` that one `, but big-endian`, and a
+//! named type with no such line stays as it is. `but little-endian` is the
+//! same with little-endian counterparts. A `same as type` line with a byte
+//! order reads the same way for the named types the type it names uses. Such
+//! an arm or type never holds a type reached by `schema`, or a `u(expr)`,
 //! because the line could not speak for the numbers in those.
+//!
+//! Of two named types that are the same, the one the root reaches first is
+//! written out in full, and so is a type whose counterpart is a `same as type`
+//! line, so a line may name a type written below it.
 //!
 //! wrapper     := "sized(" expr ")"                  parsed inside an N-byte window
 //!              | "sizedbits(" expr ")"              the same, counted in bits
@@ -257,6 +280,7 @@
 //! in than the line it continues, and folded as shallow in its brackets as it
 //! can be.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -277,12 +301,18 @@ pub fn render(t: &Template) -> String {
         out.push("deducer: in code".to_string());
     }
     out.push(String::new());
+    let _pairing = UsingPairing::start(Pairing::of(t));
+    let lines = PAIRING.with(|p| p.borrow().as_ref().map(|p| p.lines.clone())).unwrap_or_default();
     write_ty(&mut out, 0, "root ", &t.root, "");
     let mut names: Vec<&String> = t.types.keys().collect();
     names.sort();
     for name in names {
         let ty = &t.types[name];
         out.push(String::new());
+        if let Some(line) = lines.get(name.as_str()) {
+            out.push(format!("type {name} = {line}"));
+            continue;
+        }
         // The key is the name a `Named` reaches this type by. A structure
         // carries a name of its own as well, and the two are nearly always the
         // same word; where they are not, both are written.
@@ -702,36 +732,100 @@ fn line_part(p: &LinePart) -> String {
 ///
 /// A diagram key ([`ty_text`]) writes every arm out, so the keys stay what
 /// they were.
+///
+/// Arms that are the same `same as` line are written as one, with their keys
+/// in the order the arms are in, where the first of them is:
+/// `30, 38, 41 => same as case 29`. Both `switch` and `match` take the first
+/// arm whose key is the value, so the order of the arms matters only when a
+/// key is there twice. In such a choice only arms next to each other are put
+/// on one line. The `_` arm is always last and on its own.
 fn write_choice(out: &mut Vec<String>, ind: usize, head: &str, on: &str, cases: &[(String, &Ty)], default: &Ty, tail: &str) {
     out.push(format!("{}{head}{on} {{", pad(ind)));
     let keyed = WRITING_KEY.with(|k| k.get());
     let mut written: Vec<Written> = Vec::new();
-    let arms = cases.iter().map(|(k, t)| (k.as_str(), *t)).chain(std::iter::once(("_", default)));
-    for (key, ty) in arms {
+    // Each arm's key, and either the lines it is written as or the `same as`
+    // it is.
+    let mut arms: Vec<(&str, Result<Vec<String>, String>)> = Vec::new();
+    for (key, ty) in cases.iter().map(|(k, t)| (k.as_str(), *t)).chain(std::iter::once(("_", default))) {
         if !keyed {
             if let Some(same) = same_as(&mut written, ty) {
-                out.push(format!("{}{key} => {same}", pad(ind + 1)));
+                arms.push((key, Err(same)));
                 continue;
             }
         }
-        let start = out.len();
-        write_ty(out, ind + 1, &format!("{key} => "), ty, "");
-        if out.len() - start > 1 {
+        let mut lines = Vec::new();
+        write_ty(&mut lines, ind + 1, &format!("{key} => "), ty, "");
+        if lines.len() > 1 {
             written.push(Written { key: key.to_string(), ty, big: None, little: None });
+        }
+        arms.push((key, Ok(lines)));
+    }
+    let unique = {
+        let mut keys: Vec<&str> = cases.iter().map(|(k, _)| k.as_str()).collect();
+        keys.sort_unstable();
+        keys.windows(2).all(|w| w[0] != w[1])
+    };
+    // The `_` arm is the last one and is never put with others.
+    let cases_end = arms.len() - 1;
+    let mut done = vec![false; arms.len()];
+    for i in 0..arms.len() {
+        if done[i] {
+            continue;
+        }
+        match &arms[i].1 {
+            Ok(lines) => out.extend(lines.iter().cloned()),
+            Err(same) => {
+                let mut keys = vec![arms[i].0];
+                if i < cases_end {
+                    for j in i + 1..cases_end {
+                        if done[j] {
+                            continue;
+                        }
+                        if arms[j].1.as_ref().err() == Some(same) {
+                            keys.push(arms[j].0);
+                            done[j] = true;
+                        } else if !unique {
+                            break;
+                        }
+                    }
+                }
+                write_keys(out, ind + 1, &keys, &format!(" => {same}"));
+            }
         }
     }
     out.push(format!("{}}}{tail}", pad(ind)));
 }
 
-/// An arm of a choice that was written out in full, and the same type set to
-/// each byte order, worked out the first time a later arm is compared with it.
-/// The outer `None` is not worked out yet; the inner one is a type that cannot
-/// be set to that byte order, or is already in it.
+/// Keys with commas between them and then `tail`, folded between keys the way
+/// [`wrap_line`] folds any line, four spaces further in. `tail` stays whole on
+/// the last line, so `=> same as case 128` is never broken.
+fn write_keys(out: &mut Vec<String>, ind: usize, keys: &[&str], tail: &str) {
+    let mut line = pad(ind);
+    let mut empty = true;
+    for (n, key) in keys.iter().enumerate() {
+        let piece = if n + 1 == keys.len() { format!("{key}{tail}") } else { format!("{key},") };
+        if !empty && line.chars().count() + 1 + piece.chars().count() > WIDTH {
+            out.push(std::mem::replace(&mut line, format!("{}    ", pad(ind))));
+            empty = true;
+        }
+        if !empty {
+            line.push(' ');
+        }
+        line.push_str(&piece);
+        empty = false;
+    }
+    out.push(line);
+}
+
+/// An arm of a choice that was written out in full, and its [`Shape`] as it is
+/// and in each byte order, worked out the first time a later arm is compared
+/// with it. The outer `None` is not worked out yet; the inner one is a type
+/// whose byte order cannot be set.
 struct Written<'a> {
     key: String,
     ty: &'a Ty,
-    big: Option<Option<Ty>>,
-    little: Option<Option<Ty>>,
+    big: Option<Option<Shape>>,
+    little: Option<Option<Shape>>,
 }
 
 /// What a later arm is written as when it repeats an arm in `written`: the
@@ -740,22 +834,29 @@ fn same_as(written: &mut [Written], ty: &Ty) -> Option<String> {
     if let Some(w) = written.iter().find(|w| w.ty == ty) {
         return Some(format!("same as case {}", w.key));
     }
-    for w in written.iter_mut() {
-        let big = w.big.get_or_insert_with(|| in_order(w.ty, Endian::Big));
-        if big.as_ref() == Some(ty) {
-            return Some(format!("same as case {}, but big-endian", w.key));
+    let this = shape(ty, None)?;
+    PAIRING.with(|p| {
+        let p = p.borrow();
+        let empty = Pairing::default();
+        let p = p.as_deref().unwrap_or(&empty);
+        for w in written.iter_mut() {
+            let big = w.big.get_or_insert_with(|| shape(w.ty, Some(Endian::Big)));
+            if big.as_ref().is_some_and(|s| p.same(s, &this, Endian::Big)) {
+                return Some(format!("same as case {}, but big-endian", w.key));
+            }
+            let little = w.little.get_or_insert_with(|| shape(w.ty, Some(Endian::Little)));
+            if little.as_ref().is_some_and(|s| p.same(s, &this, Endian::Little)) {
+                return Some(format!("same as case {}, but little-endian", w.key));
+            }
         }
-        let little = w.little.get_or_insert_with(|| in_order(w.ty, Endian::Little));
-        if little.as_ref() == Some(ty) {
-            return Some(format!("same as case {}, but little-endian", w.key));
-        }
-    }
-    None
+        None
+    })
 }
 
-/// `ty` with every number wider than a byte read in byte order `e`, or None
-/// when that changes nothing or when `ty` holds something whose byte order
-/// cannot be set from here.
+/// A type with every number wider than a byte set to one byte order, or left
+/// as it is, and with every named type it uses taken out and listed in the
+/// order they are met. Two shapes whose `ty` is equal are the same type apart
+/// from the names in their lists.
 ///
 /// "A number" is every place the notation writes `le` or `be` on something
 /// wider than a byte: a field's integer, float or fixed-point type, `utf16`,
@@ -764,43 +865,246 @@ fn same_as(written: &mut [Written], ty: &Ty) -> Option<String> {
 /// narrow say which end of the byte it is taken from, which is not byte
 /// order.
 ///
-/// Three things make the answer None, because the arm would then hold a
-/// number that `but big-endian` says nothing about: a type named from the
-/// template's table (its numbers are written under `type`, not here), a type
-/// the file describes, and an integer as wide as an expression says, which
-/// may be a byte or less.
-///
 /// Compared with `==`, which is the IR's own structure: no text is compared.
-fn in_order(ty: &Ty, e: Endian) -> Option<Ty> {
-    let mut out = ty.clone();
-    if !order_ty(&mut out, e) || &out == ty {
-        return None;
-    }
-    Some(out)
+struct Shape {
+    ty: Ty,
+    names: Vec<Arc<str>>,
 }
 
-/// Set every number wider than a byte in `ty` to `e`. False when `ty` holds
-/// something [`in_order`] refuses.
+/// `ty` as a [`Shape`], in byte order `e` or as it is. None when `ty` holds a
+/// number that `but big-endian` could not speak for: a type the file
+/// describes, or an integer as wide as an expression says, which may be a
+/// byte or less.
+fn shape(ty: &Ty, e: Option<Endian>) -> Option<Shape> {
+    let mut out = ty.clone();
+    let mut names = Vec::new();
+    order_ty(&mut out, e, &mut names).then_some(Shape { ty: out, names })
+}
+
+/// The named types that are byte-order counterparts of each other, and what
+/// each named type that repeats another is written as. Worked out once for a
+/// whole template by [`Pairing::of`].
+#[derive(Default)]
+struct Pairing {
+    /// A named type's counterpart in big-endian, and in little-endian.
+    big: HashMap<Arc<str>, Arc<str>>,
+    little: HashMap<Arc<str>, Arc<str>>,
+    /// The types written as one `same as type` line, and the line after `=`.
+    lines: HashMap<Arc<str>, String>,
+}
+
+thread_local! {
+    /// The pairing of the template [`render`] is writing, so that a choice
+    /// deep inside it can tell which named types are counterparts. A
+    /// thread-local for the same reason as [`WRITING_KEY`].
+    static PAIRING: std::cell::RefCell<Option<std::rc::Rc<Pairing>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sets [`PAIRING`] for as long as it lives, and puts back what was there.
+struct UsingPairing(Option<std::rc::Rc<Pairing>>);
+
+impl UsingPairing {
+    fn start(p: Pairing) -> UsingPairing {
+        UsingPairing(PAIRING.with(|cell| cell.replace(Some(std::rc::Rc::new(p)))))
+    }
+}
+
+impl Drop for UsingPairing {
+    fn drop(&mut self) {
+        PAIRING.with(|cell| *cell.borrow_mut() = self.0.take());
+    }
+}
+
+fn order_word(e: Endian) -> &'static str {
+    match e {
+        Endian::Big => "big",
+        Endian::Little => "little",
+    }
+}
+
+impl Pairing {
+    fn map(&self, e: Endian) -> &HashMap<Arc<str>, Arc<str>> {
+        match e {
+            Endian::Big => &self.big,
+            Endian::Little => &self.little,
+        }
+    }
+
+    /// Whether `b` is `a` in byte order `e`: `a` is already a shape in that
+    /// order, so what is left is the names. Each name `a` uses is replaced by
+    /// its counterpart in `e` when it has one and is kept when it has none,
+    /// and the names that come out have to be `b`'s, one to one.
+    fn same(&self, a: &Shape, b: &Shape, e: Endian) -> bool {
+        a.ty == b.ty && names_pair(&a.names, &b.names, self.map(e))
+    }
+
+    /// Every named type that is the same as another, and every named type
+    /// that is another in one byte order: that one's counterpart in that
+    /// order.
+    ///
+    /// Of two types that are the same, the one the root reaches first is
+    /// written out in full and the other is one line naming it. Of a type and
+    /// its counterpart, the type is written out and the counterpart is the
+    /// line, the one the root reaches first being the type when either could
+    /// be. A type that uses named types has a counterpart only when each named
+    /// type it uses goes to its own counterpart, or stays as it is when it has
+    /// none. Every pair is taken to hold while that is checked, and a pair that
+    /// fails is taken out until none fails, so a type that uses itself can
+    /// have a counterpart. A type in two pairs is in none, and a type that
+    /// fits on one line is written out, since a `same as type` line would be
+    /// no shorter.
+    fn of(t: &Template) -> Pairing {
+        let types: Vec<(Arc<str>, &Ty)> = reach_order(t).into_iter().map(|n| (n.clone(), &t.types[&*n])).collect();
+        let short = |name: &str, ty: &Ty| inline(ty).is_some_and(|one| format!("type {name} = {one}").chars().count() <= WIDTH);
+        let mut lines: HashMap<Arc<str>, String> = HashMap::new();
+        // Copies first: a type equal to one the root reaches before it.
+        let mut full: Vec<usize> = Vec::new();
+        for (i, (name, ty)) in types.iter().enumerate() {
+            match full.iter().find(|&&f| types[f].1 == *ty) {
+                Some(&f) if !short(name, ty) => {
+                    lines.insert(name.clone(), format!("same as type {}", types[f].0));
+                }
+                _ => full.push(i),
+            }
+        }
+        // A type something else copies stays out of pairs, so that a `same
+        // as` line never names another `same as` line.
+        let copied: Vec<&str> = lines.values().map(|l| l.trim_start_matches("same as type ")).collect();
+        let free: Vec<usize> = full.into_iter().filter(|&i| !short(&types[i].0, types[i].1) && !copied.contains(&&*types[i].0)).collect();
+        let shapes: HashMap<usize, [Option<Shape>; 3]> = free
+            .iter()
+            .map(|&i| (i, [shape(types[i].1, None), shape(types[i].1, Some(Endian::Big)), shape(types[i].1, Some(Endian::Little))]))
+            .collect();
+        let of = |i: usize, e: Option<Endian>| -> Option<&Shape> {
+            let k = match e {
+                None => 0,
+                Some(Endian::Big) => 1,
+                Some(Endian::Little) => 2,
+            };
+            shapes[&i][k].as_ref()
+        };
+        // Pairs `(a, b, e)`: b is a in byte order e, so b is the line and a
+        // is written out. The one reached first is written out where that
+        // reads, and the other one where only that reads.
+        let mut pairs: Vec<(usize, usize, Endian)> = Vec::new();
+        let same_shape = |a: usize, b: usize, e: Endian| of(a, Some(e)).zip(of(b, None)).is_some_and(|(s, n)| s.ty == n.ty);
+        for (x, &a) in free.iter().enumerate() {
+            for &b in &free[x + 1..] {
+                let found = [(a, b), (b, a)]
+                    .into_iter()
+                    .flat_map(|(a, b)| [Endian::Big, Endian::Little].map(|e| (a, b, e)))
+                    .find(|&(a, b, e)| same_shape(a, b, e));
+                pairs.extend(found);
+            }
+        }
+        // Take out pairs that do not hold until none is taken out.
+        let mut p = Pairing::default();
+        loop {
+            p.big.clear();
+            p.little.clear();
+            let mut count: HashMap<usize, usize> = HashMap::new();
+            for &(a, b, _) in &pairs {
+                *count.entry(a).or_default() += 1;
+                *count.entry(b).or_default() += 1;
+            }
+            for &(a, b, e) in &pairs {
+                let map = match e {
+                    Endian::Big => &mut p.big,
+                    Endian::Little => &mut p.little,
+                };
+                map.insert(types[a].0.clone(), types[b].0.clone());
+            }
+            let before = pairs.len();
+            pairs.retain(|&(a, b, e)| {
+                count[&a] == 1 && count[&b] == 1 && of(a, Some(e)).zip(of(b, None)).is_some_and(|(s, n)| names_pair(&s.names, &n.names, p.map(e)))
+            });
+            if pairs.len() == before {
+                break;
+            }
+        }
+        for &(a, b, e) in &pairs {
+            lines.insert(types[b].0.clone(), format!("same as type {}, but {}-endian", types[a].0, order_word(e)));
+        }
+        p.lines = lines;
+        p
+    }
+}
+
+/// Whether the names `from` lists become the names `to` lists when each is
+/// replaced by its counterpart in `counterpart`, or kept when it has none, and
+/// whether that takes each name to one name and no two names to the same one.
+fn names_pair(from: &[Arc<str>], to: &[Arc<str>], counterpart: &HashMap<Arc<str>, Arc<str>>) -> bool {
+    if from.len() != to.len() {
+        return false;
+    }
+    let mut forth: HashMap<&str, &str> = HashMap::new();
+    let mut back: HashMap<&str, &str> = HashMap::new();
+    for (a, b) in from.iter().zip(to) {
+        if counterpart.get(a).unwrap_or(a) != b {
+            return false;
+        }
+        if *forth.entry(&**a).or_insert(&**b) != &**b || *back.entry(&**b).or_insert(&**a) != &**a {
+            return false;
+        }
+    }
+    true
+}
+
+/// Every named type, in the order the root reaches them: the first name met
+/// in the root, then the names that type uses, and so on, depth first. Types
+/// nothing reaches come after, in alphabetical order.
+fn reach_order(t: &Template) -> Vec<Arc<str>> {
+    fn visit(t: &Template, ty: &Ty, seen: &mut Vec<Arc<str>>) {
+        let mut names = Vec::new();
+        order_ty(&mut ty.clone(), None, &mut names);
+        for n in names {
+            if !seen.contains(&n) {
+                if let Some(next) = t.types.get(&*n) {
+                    seen.push(n.clone());
+                    visit(t, next, seen);
+                }
+            }
+        }
+    }
+    let mut seen = Vec::new();
+    visit(t, &t.root, &mut seen);
+    let mut rest: Vec<&String> = t.types.keys().filter(|k| !seen.iter().any(|s| &**s == k.as_str())).collect();
+    rest.sort();
+    seen.extend(rest.into_iter().map(|k| Arc::from(k.as_str())));
+    seen
+}
+
+/// Set a number wider than a byte to `e`, when there is an `e`.
+fn set(endian: &mut Endian, e: Option<Endian>) {
+    if let Some(e) = e {
+        *endian = e;
+    }
+}
+
+/// Set every number wider than a byte in `ty` to `e`, and take out every
+/// named type, listing it in `names`. False when `ty` holds something
+/// [`shape`] refuses.
 ///
 /// Every arm is listed, with no catch-all, so that a type added to the IR has
 /// to say here whether it carries a byte order.
-fn order_ty(ty: &mut Ty, e: Endian) -> bool {
+fn order_ty(ty: &mut Ty, e: Option<Endian>, names: &mut Vec<Arc<str>>) -> bool {
     let wide = |bits: u32, endian: &mut Endian| {
         if bits > 8 {
-            *endian = e;
+            set(endian, e);
         }
     };
     match ty {
         Ty::UInt { bits, endian } | Ty::Int { bits, endian } | Ty::SignMagnitude { bits, endian } => wide(*bits, endian),
         Ty::Fixed { bits, endian, .. } => wide(*bits, endian),
         Ty::F16(endian) | Ty::BF16(endian) | Ty::F32(endian) | Ty::F64(endian) | Ty::F80(endian) | Ty::IbmF32(endian) => {
-            *endian = e
+            set(endian, e)
         }
-        Ty::UIntExpr { .. } | Ty::Named(_) | Ty::Schema { .. } => return false,
+        Ty::UIntExpr { .. } | Ty::Schema { .. } => return false,
+        Ty::Named(n) => names.push(std::mem::replace(n, Arc::from(""))),
         Ty::Nullable { inner, .. }
         | Ty::Origin { inner }
         | Ty::Enum { inner, .. }
-        | Ty::Flags { inner, .. } => return order_ty(inner, e),
+        | Ty::Flags { inner, .. } => return order_ty(inner, e, names),
         Ty::F8 { .. }
         | Ty::Leb128 { .. }
         | Ty::Zigzag
@@ -827,73 +1131,73 @@ fn order_ty(ty: &mut Ty, e: Endian) -> bool {
                     order_expr(d, e);
                 }
             }
+            // Every field is walked even after one is refused, so that the
+            // names list is whole.
+            let mut ok = true;
             for f in &mut def.fields {
-                if !order_field(f, e) {
-                    return false;
-                }
+                ok &= order_field(f, e, names);
             }
+            return ok;
         }
         Ty::Array { elem, count } => {
             order_expr(count, e);
-            return order_ty(elem, e);
+            return order_ty(elem, e, names);
         }
         Ty::Repeat { elem, until } => {
             match until {
                 Until::Cond(x) | Until::While(x) => order_expr(x, e),
                 Until::End | Until::FieldBytes { .. } | Until::FieldValue { .. } => {}
             }
-            return order_ty(elem, e);
+            return order_ty(elem, e, names);
         }
         Ty::PointerList { adjust, elem, .. } => {
             order_expr(adjust, e);
-            return order_ty(elem, e);
+            return order_ty(elem, e, names);
         }
         Ty::Chain { first, adjust, elem, .. } => {
             order_expr(first, e);
             order_expr(adjust, e);
-            return order_ty(elem, e);
+            return order_ty(elem, e, names);
         }
         Ty::Gather { from, offset, adjust, elem, .. } => {
             order_steps(from, e);
             order_expr(offset, e);
             order_expr(adjust, e);
-            return order_ty(elem, e);
+            return order_ty(elem, e, names);
         }
         Ty::Stitched { from, part_len, len, inner } => {
             order_steps(from, e);
             for x in [part_len, len].into_iter().flatten() {
                 order_expr(x, e);
             }
-            return order_ty(inner, e);
+            return order_ty(inner, e, names);
         }
         Ty::At { at: x, inner, .. }
         | Ty::Sized { size: x, inner }
         | Ty::SizedBits { bits: x, inner }
         | Ty::When { cond: x, inner } => {
             order_expr(x, e);
-            return order_ty(inner, e);
+            return order_ty(inner, e, names);
         }
         Ty::Switch { on, cases, default } => {
             order_expr(on, e);
             let mut list = cases.to_vec();
+            let mut ok = true;
             for (_, t) in &mut list {
-                if !order_ty(t, e) {
-                    return false;
-                }
+                ok &= order_ty(t, e, names);
             }
             *cases = list.into();
-            return order_ty(Arc::make_mut(default), e);
+            return order_ty(Arc::make_mut(default), e, names) && ok;
         }
         Ty::Match { on, cases, default } => {
             order_expr(on, e);
             let mut list = cases.to_vec();
+            let mut ok = true;
             for (_, t) in &mut list {
-                if !order_ty(t, e) {
-                    return false;
-                }
+                ok &= order_ty(t, e, names);
             }
             *cases = list.into();
-            return order_ty(Arc::make_mut(default), e);
+            return order_ty(Arc::make_mut(default), e, names) && ok;
         }
         Ty::Decoded { codec, inner } => {
             match codec {
@@ -917,20 +1221,20 @@ fn order_ty(ty: &mut Ty, e: Endian) -> bool {
                 }
                 Packing::JpegScan { segments } => order_expr(segments, e),
             }
-            return order_ty(inner, e);
+            return order_ty(inner, e, names);
         }
         Ty::Raster { width, height, bits_per_pixel, pixel, .. } => {
             for x in [width, height, bits_per_pixel] {
                 order_expr(x, e);
             }
-            return order_ty(pixel, e);
+            return order_ty(pixel, e, names);
         }
     }
     true
 }
 
 /// A field's type and every expression the template hangs off the field.
-fn order_field(f: &mut Field, e: Endian) -> bool {
+fn order_field(f: &mut Field, e: Option<Endian>, names: &mut Vec<Arc<str>>) -> bool {
     for x in [&mut f.name_from, &mut f.elem_name_from].into_iter().flatten() {
         order_expr(x, e);
     }
@@ -963,10 +1267,10 @@ fn order_field(f: &mut Field, e: Endian) -> bool {
             }
         }
     }
-    order_ty(&mut f.ty, e)
+    order_ty(&mut f.ty, e, names)
 }
 
-fn order_check(c: &mut Check, e: Endian) {
+fn order_check(c: &mut Check, e: Option<Endian>) {
     if let Some(w) = &mut c.when {
         order_expr(w, e);
     }
@@ -995,16 +1299,16 @@ fn order_check(c: &mut Check, e: Endian) {
     }
 }
 
-fn order_strlen(l: &mut StrLen, e: Endian) {
+fn order_strlen(l: &mut StrLen, e: Option<Endian>) {
     match l {
         StrLen::Fixed(x) | StrLen::Padded { size: x, .. } => order_expr(x, e),
         StrLen::Scan { .. } | StrLen::Terminated { .. } => {}
     }
 }
 
-fn order_encoding(enc: &mut Encoding, e: Endian) {
+fn order_encoding(enc: &mut Encoding, e: Option<Endian>) {
     match enc {
-        Encoding::Utf16(endian) => *endian = e,
+        Encoding::Utf16(endian) => set(endian, e),
         Encoding::Bom { fallback } => order_encoding(fallback, e),
         Encoding::Utf8
         | Encoding::Ascii
@@ -1017,7 +1321,7 @@ fn order_encoding(enc: &mut Encoding, e: Endian) {
     }
 }
 
-fn order_steps(steps: &mut Arc<[Step]>, e: Endian) {
+fn order_steps(steps: &mut Arc<[Step]>, e: Option<Endian>) {
     let mut list = steps.to_vec();
     for s in &mut list {
         if let Step::Tagged { tag, .. } = s {
@@ -1027,7 +1331,7 @@ fn order_steps(steps: &mut Arc<[Step]>, e: Endian) {
     *steps = list.into();
 }
 
-fn order_tag(t: &mut Tag, e: Endian) {
+fn order_tag(t: &mut Tag, e: Option<Endian>) {
     match t {
         Tag::Computed(x) | Tag::ComputedText(x) => order_expr(Arc::make_mut(x), e),
         Tag::Int(_) | Tag::Bytes(_) | Tag::Text(_) | Tag::TextAnyCase(_) => {}
@@ -1036,16 +1340,16 @@ fn order_tag(t: &mut Tag, e: Endian) {
 
 /// Every `peek` wider than a byte in `x` set to `e`. Every arm is listed, as
 /// in [`order_ty`].
-fn order_expr(x: &mut Expr, e: Endian) {
+fn order_expr(x: &mut Expr, e: Option<Endian>) {
     match x {
         Expr::Peek { bits, endian } => {
             if *bits > 8 {
-                *endian = e;
+                set(endian, e);
             }
         }
         Expr::PeekAt { skip: a, bits, endian } | Expr::PeekIn { at: a, bits, endian } => {
             if *bits > 8 {
-                *endian = e;
+                set(endian, e);
             }
             order_expr(a, e);
         }
@@ -2309,10 +2613,132 @@ mod tests {
         let nibble = |a: Endian, n: Endian| Ty::structure("Header", vec![("count", Ty::u16(a)), ("low", Ty::UInt { bits: 4, endian: n })]);
         let text = choice(vec![(1, nibble(Endian::Little, Endian::Little)), (2, nibble(Endian::Big, Endian::Big))]);
         assert!(!text.contains("same as"), "{text}");
-        // A named type keeps its own numbers, which the line could not speak for.
+        // A named type that has a big-endian counterpart has to be replaced by
+        // it: keeping the little-endian one is not what the line says.
+        let named = |a: Endian, rest: &str| Ty::structure("Header", vec![("count", Ty::u16(a)), ("rest", Ty::Named(rest.into()))]);
+        let root = Ty::structure("File", vec![("kind", Ty::u8()), ("header", Ty::switch(E::field("kind"), vec![(1, named(Endian::Little, "Rest.le")), (2, named(Endian::Big, "Rest.le"))], Ty::Bytes(E::lit(0))))]);
+        let text = render(&with_rest(Template::new("demo", root)));
+        assert!(!text.contains("2 => same as"), "{text}");
+    }
+
+    /// `Rest.le` and its big-endian counterpart `Rest.be`, and `Other`, which
+    /// is `Rest.be` with a field more.
+    fn with_rest(t: Template) -> Template {
+        let rest = |e: Endian| Ty::structure("Rest", vec![("a", Ty::u32(e)), ("b", Ty::u32(e))]);
+        let other = vec![("a", Ty::u32(Endian::Big)), ("b", Ty::u32(Endian::Big)), ("c", Ty::u8())];
+        t.with_type("Rest.le", rest(Endian::Little)).with_type("Rest.be", rest(Endian::Big)).with_type("Other", Ty::structure("Rest", other))
+    }
+
+    /// A named type with no counterpart stays as it is, so two arms that use
+    /// it under one name are one in the other byte order.
+    #[test]
+    fn a_named_type_with_no_counterpart_stays_as_it_is() {
         let named = |a: Endian| Ty::structure("Header", vec![("count", Ty::u16(a)), ("rest", Ty::Named("Rest".into()))]);
         let text = choice(vec![(1, named(Endian::Little)), (2, named(Endian::Big))]);
-        assert!(!text.contains("same as"), "{text}");
+        assert!(text.contains("\n    2 => same as case 1, but big-endian\n"), "{text}");
+    }
+
+    /// Two arms whose named types are counterparts are one, and so are the
+    /// two types.
+    #[test]
+    fn named_types_in_two_byte_orders_are_written_once() {
+        let named = |a: Endian, rest: &str| Ty::structure("Header", vec![("count", Ty::u16(a)), ("rest", Ty::Named(rest.into()))]);
+        let arms = vec![(1, named(Endian::Little, "Rest.le")), (2, named(Endian::Big, "Rest.be"))];
+        let root = Ty::structure("File", vec![("kind", Ty::u8()), ("header", Ty::switch(E::field("kind"), arms, Ty::Bytes(E::lit(0))))]);
+        let text = render(&with_rest(Template::new("demo", root)));
+        assert!(text.contains("\n    2 => same as case 1, but big-endian\n"), "{text}");
+        // Rest.le is reached first, so it is the one written out, though it
+        // comes after Rest.be in the list.
+        assert!(text.contains("\ntype Rest.be = same as type Rest.le, but big-endian\n"), "{text}");
+        assert!(text.contains("\ntype Rest.le = Rest {\n  a: u32le\n"), "{text}");
+        // Other is not the counterpart of anything.
+        assert!(text.contains("\ntype Other = Rest {\n"), "{text}");
+    }
+
+    /// A type that uses named types is the counterpart of another only when
+    /// each named type it uses is the counterpart of the one in the same
+    /// place, and a type that uses itself can be one.
+    #[test]
+    fn types_that_use_named_types_are_counterparts_through_them() {
+        let node = |e: Endian, me: &str, rest: &str| {
+            Ty::structure("Node", vec![("v", Ty::u16(e)), ("rest", Ty::Named(rest.into())), ("next", Ty::Named(me.into()))])
+        };
+        let root = Ty::structure("File", vec![("le", Ty::Named("Node.le".into())), ("be", Ty::Named("Node.be".into()))]);
+        let t = with_rest(Template::new("demo", root))
+            .with_type("Node.le", node(Endian::Little, "Node.le", "Rest.le"))
+            .with_type("Node.be", node(Endian::Big, "Node.be", "Rest.be"));
+        let text = render(&t);
+        assert!(text.contains("\ntype Node.be = same as type Node.le, but big-endian\n"), "{text}");
+        assert!(text.contains("\ntype Rest.be = same as type Rest.le, but big-endian\n"), "{text}");
+        // One named type in the wrong place, and the two are both written out.
+        let t = with_rest(Template::new("demo", root_of(&["Node.le", "Node.be"])))
+            .with_type("Node.le", node(Endian::Little, "Node.le", "Rest.le"))
+            .with_type("Node.be", node(Endian::Big, "Node.be", "Other"));
+        let text = render(&t);
+        assert!(!text.contains("type Node.be = same as"), "{text}");
+        assert!(text.contains("\ntype Rest.be = same as type Rest.le, but big-endian\n"), "{text}");
+        // A named type kept where its counterpart belongs is not the line's
+        // reading either.
+        let t = with_rest(Template::new("demo", root_of(&["Node.le", "Node.be"])))
+            .with_type("Node.le", node(Endian::Little, "Node.le", "Rest.le"))
+            .with_type("Node.be", node(Endian::Big, "Node.be", "Rest.le"));
+        assert!(!render(&t).contains("type Node.be = same as"));
+    }
+
+    /// A structure with one field for each name, so the root reaches them in
+    /// that order.
+    fn root_of(names: &[&str]) -> Ty {
+        Ty::structure("File", names.iter().enumerate().map(|(i, n)| (["a", "b", "c"][i], Ty::Named((*n).into()))).collect())
+    }
+
+    /// Every name a built-in template uses is one of its types, so a format
+    /// that borrows another's part has taken the names with it.
+    #[test]
+    fn every_name_a_builtin_uses_is_one_of_its_types() {
+        let mut missing = Vec::new();
+        for name in crate::formats::builtin_names() {
+            let Some(t) = crate::formats::builtin(name) else { continue };
+            for ty in std::iter::once(&t.root).chain(t.types.values()) {
+                let mut names = Vec::new();
+                order_ty(&mut ty.clone(), None, &mut names);
+                for n in names {
+                    if !t.types.contains_key(&*n) {
+                        missing.push(format!("{name} uses {n}"));
+                    }
+                }
+            }
+        }
+        missing.dedup();
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// The ICC profile is one named type wherever a format carries one: a
+    /// PNG reads it in iCCP, and in its EXIF thumbnail's APP2 segments and
+    /// joined profile.
+    #[test]
+    fn an_icc_profile_is_written_once() {
+        for name in ["png", "jpeg", "webp", "tiff", "flac"] {
+            let text = render(&crate::formats::builtin(name).expect("a template"));
+            assert_eq!(text.matches("\ntype icc.Profile = ").count(), 1, "{name}");
+            assert_eq!(text.matches("ICCProfile {").count(), 1, "{name}");
+        }
+        let png = render(&crate::formats::builtin("png").expect("png"));
+        assert_eq!(png.lines().filter(|l| l.ends_with(" icc.Profile")).count(), 3, "{png}");
+    }
+
+    /// A type equal to one written out is one line, and a type that fits on
+    /// one line is written out whatever it repeats.
+    #[test]
+    fn a_named_type_the_same_as_another_is_one_line() {
+        let rest = || Ty::structure("Rest", vec![("a", Ty::u32(Endian::Little)), ("b", Ty::u32(Endian::Little))]);
+        let t = Template::new("demo", root_of(&["B", "A", "C"]))
+            .with_type("A", rest())
+            .with_type("B", rest())
+            .with_type("C", Ty::u32(Endian::Big))
+            .with_type("D", Ty::u32(Endian::Big));
+        let text = render(&t);
+        assert!(text.contains("\ntype A = same as type B\n"), "{text}");
+        assert!(text.contains("\ntype C = u32be\n") && text.contains("\ntype D = u32be\n"), "{text}");
     }
 
     /// What is already big-endian in case 1 stays so: a `peek` that reads a
@@ -2327,6 +2753,52 @@ mod tests {
         // little-endian.
         let text = choice(vec![(1, arm(Endian::Big)), (2, arm(Endian::Little))]);
         assert!(!text.contains("same as"), "{text}");
+    }
+
+    /// Arms that are the same `same as` line share one, in key order, where
+    /// the first of them is, even with another arm between them.
+    #[test]
+    fn arms_the_same_as_one_arm_share_a_line() {
+        let text = choice(vec![
+            (1, header(Endian::Little, 32)),
+            (2, header(Endian::Little, 32)),
+            (3, header(Endian::Big, 32)),
+            (4, header(Endian::Little, 32)),
+            (5, header(Endian::Big, 32)),
+        ]);
+        assert!(text.contains("\n    2, 4 => same as case 1\n    3, 5 => same as case 1, but big-endian\n    _ => bytes[0]\n"), "{text}");
+        // The `_` arm stays last and on its own line.
+        let root = Ty::switch(E::field("kind"), vec![(1, header(Endian::Big, 32)), (2, header(Endian::Big, 32))], header(Endian::Big, 32));
+        let text = render(&Template::new("demo", Ty::structure("File", vec![("kind", Ty::u8()), ("header", root)])));
+        assert!(text.contains("\n    2 => same as case 1\n    _ => same as case 1\n"), "{text}");
+    }
+
+    /// A key that is there twice makes the order of the arms count, so only
+    /// arms next to each other share a line.
+    #[test]
+    fn a_choice_with_a_key_twice_keeps_its_arms_in_order() {
+        let text = choice(vec![
+            (1, header(Endian::Little, 32)),
+            (2, header(Endian::Little, 32)),
+            (3, header(Endian::Little, 32)),
+            (4, Ty::u8()),
+            (2, header(Endian::Little, 32)),
+        ]);
+        assert!(text.contains("\n    2, 3 => same as case 1\n    4 => u8be\n    2 => same as case 1\n"), "{text}");
+    }
+
+    /// A list of keys too long for one line is folded the way any long line
+    /// is, four spaces in, between keys, and never inside the `same as`.
+    #[test]
+    fn a_long_list_of_keys_is_folded() {
+        let arms: Vec<(i128, Ty)> = (0..40).map(|k| (10 + k, header(Endian::Little, 32))).collect();
+        let text = choice(arms);
+        let at = text.find("    11, 12, 13").expect("one line of keys");
+        let lines: Vec<&str> = text[at..].lines().take_while(|l| !l.trim_start().starts_with('_')).collect();
+        assert!(lines.len() > 1, "{text}");
+        assert!(lines.iter().all(|l| l.chars().count() <= WIDTH), "{text}");
+        assert!(lines[1].starts_with("        "), "{text}");
+        assert!(lines.last().is_some_and(|l| l.ends_with("49 => same as case 10")), "{text}");
     }
 
     #[test]
