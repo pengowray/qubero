@@ -1310,6 +1310,55 @@ for a place"; `Measures` and `Spaces::joins` have two places each as well.
   member, and is sized as itself. A BGZF file of 140 blocks, over 3 MiB,
   opens as a tab.
 
+### Built (part 7c, web)
+
+Built on 2026-11-28. The waiting loops are in `web/src/chunkwait.ts`, which
+the node tests load without the wasm.
+
+- **`Doc.readLoaded(at, len)`** reads a range 4 MiB at a time
+  (`PIECE_BYTES`). It loads the file chunks each piece's read names, and
+  reads that piece again until it is complete. A deflate span holds at most
+  8 MiB of output, so a piece touches at most 16 MiB of spans when they are
+  at least as long as the piece, and under 12 MiB when they are shorter.
+  Either way, the spans its earlier rounds decoded are still in the span
+  cache at its last round. It is used on the file as well as on tabs, by the
+  hex view's copy, the image card, the stride view's sample and `openplan`'s
+  `loadBytes`. So a stored run over 32 MiB now opens as a tab, and a picture
+  of 32 to 64 MiB decodes. The inspector loads a checked run before
+  `runCheckLoaded` only on the file, because on a tab the run's length counts
+  bytes of the stream, not of the file.
+- **One read per stretch.** `fetchChunks` groups the chunks a reply or a
+  read names into stretches of neighbours, at most 256 chunks each, and reads
+  each stretch with one blob read and one `notify`. `settle`, `read`,
+  `readBits` and `fileChunks` use it, and `fetchRun`'s read-ahead is
+  unchanged. A failed read is a `ReadFailure` for the whole stretch.
+- **When a wait gives up** (`ChunkWait`). A round that asks for a chunk
+  loaded in the same wait since the core last got further ends the wait. Any
+  other round goes on. The backstop is `roundLimit`: as many rounds as the
+  file has chunks, and at least `MAX_ROUNDS`. One round loads at most half
+  the store, the first chunks named. `ensureTabRange`, `textWindow`,
+  `textIndex`, `textBack` (which used to stop after 3 rounds) and
+  `stringsScan` use this rule. `runCheckLoaded` and Open unpacked use
+  `waitToOpen` with `roundLimit`, and `runCheckLoaded` passes
+  `Doc.unpacking()` with each reply.
+- **Left as they were:** `dumpScan` and `dumpBytes` still read a tab in one
+  call, and `ensureRange` on the file still fetches one chunk at a time.
+  `stringsScan` on the file still loads one chunk per round, since the core
+  stops at the first chunk it has not got; a read-ahead there would speed up
+  a scan of a large file.
+- **Strings.** None was added. `REPORT.imageFailed`, "Couldn't decode this
+  image", now also shows when the picture's bytes did not load, where the
+  card used to say "Loading the image's bytes…" for ever. The words are not
+  quite right for that case.
+- **Checked in the browser** (2026-11-28, before part 7c's core half), with a
+  gzip of 43 MB that unpacks to 74 MB, a zip with a stored entry of 40 MB,
+  and a BMP of 42 MB: the listing filled in; `readLoaded` gave the right
+  bytes for 256 KiB, 20 MiB and the whole of the unpacked tab and for the
+  whole 43 MB file; the text window, text back and a strings scan to the end
+  worked on the tab and on the file; the gzip CRC and the zip entry's CRC
+  over 40 MB checked; the stored entry opened as a tab with the right bytes;
+  and the BMP's picture decoded, 4,000 by 3,500 pixels.
+
 ## Memory
 
 For an indexed run, besides DESIGN-lazy-unpacking's table:
