@@ -9,9 +9,11 @@
 // and is filled in when it is needed or when the page is idle. Every chunk is
 // filled in the end, so selecting the whole text and copying it gets all of it.
 
-import type { Doc } from "./doc.ts";
+import type { Doc, TemplateNode, TemplateReply } from "./doc.ts";
+import { copyIcon } from "./icons.ts";
 import { SIDEBAR } from "./strings.ts";
 import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type Kid, type TemplateIndex } from "./templateindex.ts";
+import { fieldLines, jumpTarget, type JumpNode, type JumpTree } from "./templatejump.ts";
 
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
  *  empty chunks are sized from it before any line is drawn. */
@@ -20,6 +22,11 @@ const LINE = 18;
 const CHUNK = 400;
 /** Chunks drawn at once when the text arrives; the rest wait for idle time. */
 const FIRST_CHUNKS = 3;
+/** Pointer travel, in pixels, past which a press and release on a line is a
+ *  drag to select text rather than a click. */
+const DRAG_PX = 4;
+/** How long the Copy confirmation stays up: as long as the table view's. */
+const NOTICE_MS = 5000;
 
 type Chunk = { readonly el: HTMLElement; readonly from: number; readonly to: number; filled: boolean };
 
@@ -28,6 +35,10 @@ const idle: (fn: () => void) => void =
 
 export class TemplatePanel {
   readonly el: HTMLElement;
+  /** The tab's own controls, for the sidebar's bar: the Copy button. */
+  readonly tools: HTMLElement;
+  /** A field's line was clicked and this node of the file is declared on it. */
+  onJump: (path: readonly number[]) => void = () => {};
   private readonly scroller: HTMLElement;
   private readonly body: HTMLElement;
   private text: string | null = null;
@@ -57,6 +68,17 @@ export class TemplatePanel {
    *  having none is not yet an answer, and nothing is shown. */
   private known = false;
   private builtKnown = false;
+  /** Per line, the first line of the field statement it is part of, or -1. */
+  private fieldAt: Int32Array | null = null;
+  /** The note on a clicked line saying why the cursor did not move. */
+  private missed: HTMLElement | null = null;
+  /** A clicked line whose search waits on part of the tree not read yet. It
+   *  is searched again when the tree changes. */
+  private jumpOwed: number | null = null;
+  private pressAt: { x: number; y: number } | null = null;
+  private readonly copyButton: HTMLButtonElement;
+  private readonly notice: HTMLElement;
+  private noticeTimer = 0;
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -68,12 +90,30 @@ export class TemplatePanel {
     this.body = document.createElement("div");
     this.body.className = "tp-text";
     this.scroller.append(this.body);
-    this.el.append(this.scroller);
+    this.notice = document.createElement("div");
+    this.notice.className = "tp-notice";
+    this.notice.setAttribute("role", "status");
+    this.notice.hidden = true;
+    this.el.append(this.scroller, this.notice);
+    this.copyButton = document.createElement("button");
+    this.copyButton.type = "button";
+    this.copyButton.className = "insp-act tp-copy";
+    this.copyButton.append(copyIcon());
+    this.copyButton.title = SIDEBAR.copyTemplate;
+    this.copyButton.setAttribute("aria-label", SIDEBAR.copyTemplate);
+    this.copyButton.hidden = true;
+    this.copyButton.addEventListener("click", () => void this.copy());
+    this.tools = this.copyButton;
+    this.scroller.addEventListener("pointerdown", (e) => {
+      this.pressAt = { x: e.clientX, y: e.clientY };
+    });
+    this.scroller.addEventListener("click", (e) => this.clicked(e));
     doc.onChange(() => {
       // An edit can change which structure a node is (ELF's `class` decides
       // which ELFHeader is read), so the children are asked again.
       this.kids.clear();
       if (this.visible && this.waiting) this.follow();
+      if (this.visible && this.jumpOwed !== null) this.jump(this.jumpOwed);
     });
     new ResizeObserver(() => {
       if (this.revealOwed && this.marked !== null && this.scroller.clientHeight > 0) this.reveal(this.marked);
@@ -104,6 +144,7 @@ export class TemplatePanel {
 
   /** `bitOffset` is absolute, counting from the top bit of byte 0. */
   setOffset(bitOffset: number): void {
+    this.unmiss();
     this.offset = bitOffset;
     this.pinned = null;
     if (this.visible) this.follow();
@@ -111,6 +152,7 @@ export class TemplatePanel {
 
   /** Mark this field rather than the innermost one at the cursor. */
   setPath(path: readonly number[]): void {
+    this.unmiss();
     this.pinned = path;
     if (this.visible) this.follow();
   }
@@ -132,6 +174,10 @@ export class TemplatePanel {
     this.marked = null;
     this.lineEls = [];
     this.chunks = [];
+    this.fieldAt = null;
+    this.missed = null;
+    this.jumpOwed = null;
+    this.copyButton.hidden = text === "";
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     if (text === "") {
@@ -145,6 +191,7 @@ export class TemplatePanel {
     }
     const index = indexTemplate(text);
     this.index = index;
+    this.fieldAt = fieldLines(index);
     let widest = 0;
     for (const l of index.lines) widest = Math.max(widest, l.length);
     // Off-screen chunks have no width until drawn, so the text says how wide
@@ -181,6 +228,8 @@ export class TemplatePanel {
     for (let i = c.from; i < c.to; i++) {
       const row = document.createElement("div");
       row.className = "tp-line";
+      row.dataset.line = String(i);
+      if ((this.fieldAt?.[i] ?? -1) >= 0) row.classList.add("is-field");
       // An empty block copies as nothing at all, so a blank line would be
       // lost from copied text without something in it.
       if (lines[i] === "") row.append(document.createElement("br"));
@@ -301,10 +350,106 @@ export class TemplatePanel {
 
   /** Take the note off a row and join the text it was put into. */
   private undress(row: HTMLElement): void {
-    const note = row.querySelector(".tp-note");
+    const note = row.querySelector(".tp-note:not(.tp-miss)");
     if (note === null) return;
     note.remove();
     row.normalize();
+  }
+
+  /** A click on a field's line moves the cursor to that field. A press and
+   *  release that selected text, or moved more than a few pixels, is a drag
+   *  and does nothing. */
+  private clicked(e: MouseEvent): void {
+    const from = this.pressAt;
+    this.pressAt = null;
+    this.unmiss();
+    if (e.button !== 0 || e.detail > 1) return;
+    if (from !== null && Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_PX) return;
+    if (!(window.getSelection()?.isCollapsed ?? true)) return;
+    const row = e.target instanceof Element ? e.target.closest(".tp-line.is-field") : null;
+    if (!(row instanceof HTMLElement)) return;
+    const line = this.fieldAt?.[Number(row.dataset.line)] ?? -1;
+    if (line >= 0) this.jump(line);
+  }
+
+  /** Find a node of the file declared on `line` and hand it to `onJump`, or
+   *  say at the end of the line why there is none. */
+  private jump(line: number): void {
+    this.jumpOwed = null;
+    const index = this.index;
+    if (index === null) return;
+    let cursor = this.pinned;
+    if (cursor === null) {
+      const at = this.doc.locate(this.offset);
+      cursor = at.status === "ok" ? at.node : null;
+    }
+    const result = jumpTarget(index, line, this.tree(), cursor);
+    if (result.kind === "found") return this.onJump(result.path);
+    if (result.kind === "pending") {
+      this.jumpOwed = line;
+      return;
+    }
+    this.miss(line, result.kind === "absent" ? SIDEBAR.notInFile : SIDEBAR.notInFirst(result.tried, result.list));
+  }
+
+  /** The file's tree as `jumpTarget` reads it. */
+  private tree(): JumpTree {
+    const doc = this.doc;
+    const one = (n: TemplateNode): JumpNode => ({ name: n.name, type: n.type, list: n.list, childCount: n.child_count, absent: n.absent });
+    const settle = <T, U>(r: TemplateReply<T>, f: (v: T) => U): U | null | "pending" =>
+      r.status === "ok" ? f(r.node) : r.status === "error" ? null : "pending";
+    return {
+      node: (path) => settle(doc.templateNode(path), one),
+      children: (path, from, to) => settle(doc.templateChildren(path, from, to), (ns) => ns.map(one)),
+      kids: (path) => {
+        const k = this.childrenOf(path);
+        return k === "loading" ? "pending" : k;
+      },
+    };
+  }
+
+  /** Say at the end of `line` why clicking it did not move the cursor. Drawn
+   *  from `data-note` like the byte order note, so a selection leaves it out. */
+  private miss(line: number, why: string): void {
+    const row = this.lineEls[line];
+    if (row === undefined) return;
+    const note = document.createElement("span");
+    note.className = "tp-note tp-miss";
+    note.dataset.note = why;
+    row.append(note);
+    this.missed = note;
+  }
+
+  private unmiss(): void {
+    this.jumpOwed = null;
+    if (this.missed === null) return;
+    const row = this.missed.parentElement;
+    this.missed.remove();
+    this.missed = null;
+    row?.normalize();
+  }
+
+  /** Put the whole template text on the clipboard, as the core wrote it. */
+  private async copy(): Promise<void> {
+    this.unmiss();
+    const text = this.text;
+    if (text === null || text === "") return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return this.say(SIDEBAR.copyFailed);
+    }
+    this.say(SIDEBAR.copied(this.index?.lines.length ?? 0));
+  }
+
+  /** A message about the Copy button's press, which goes away on its own. */
+  private say(text: string): void {
+    this.notice.textContent = text;
+    this.notice.hidden = false;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.hidden = true;
+    }, NOTICE_MS);
   }
 
   /** Scroll the marked line into view, leaving the view alone if it already is. */
