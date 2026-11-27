@@ -248,7 +248,7 @@ fn tag_ref() -> T {
             ("offset", T::computed(place_of_member(&["offset"]))),
             ("length", T::computed(place_of_member(&["length"]))),
         ],
-    )
+    ).positions(&["offset"])
 }
 
 /// A group: nothing but the tags and reference numbers of the descriptors
@@ -714,7 +714,7 @@ fn index_entry() -> T {
             ("length", u32be()),
             ("key", T::computed(E::field("tag").mul(E::lit(65536)).add(E::field("ref")))),
         ],
-    ).named_by("tag")
+    ).positions(&["offset"]).named_by("tag")
     .machinery(&["key"])
 }
 
@@ -797,7 +797,7 @@ fn gathered_entry() -> T {
     T::structure(
         "Hdf4IndexEntry",
         vec![("key", from("key")), ("offset", from("offset")), ("length", from("length"))],
-    )
+    ).positions(&["offset"])
 }
 
 pub fn hdf4() -> Template {
@@ -1395,5 +1395,15 @@ mod tests {
         // A byte of that descriptor is found as the descriptor.
         let at = e.locate(&d, descriptor.offset_bits + 8).unwrap();
         assert_eq!(&at[..4], &[3, 1, 2, 0]);
+    }
+
+    /// Every offset a descriptor or a member gives is a position in the file.
+    /// The lengths beside them are not.
+    #[test]
+    fn descriptor_offsets_are_positions() {
+        let t = hdf4();
+        for name in ["Hdf4Reference", "Hdf4IndexEntry", "Hdf4GroupMember", "Hdf4VgroupMember", "Hdf4VdataAttribute", "Hdf4VgroupAttribute"] {
+            crate::machinery::assert_marks(&t, name, &["offset"], &["length"]);
+        }
     }
 }

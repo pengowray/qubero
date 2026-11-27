@@ -222,7 +222,7 @@ fn members(tag_from: E, ref_of: E, count: E) -> T {
                 ("offset", T::computed(place_of_member(&["offset"]))),
                 ("length", T::computed(place_of_member(&["length"]))),
             ],
-        ),
+        ).positions(&["offset"]),
         count,
     )
 }
@@ -491,7 +491,7 @@ fn version_four_attributes() -> Vec<(&'static str, T)> {
                         ("offset", T::computed(place_of_member(&["offset"]))),
                         ("length", T::computed(place_of_member(&["length"]))),
                     ],
-                ),
+                ).positions(&["offset"]),
                 E::field("nattrs").at_least(E::lit(0)),
             ),
         ),
@@ -524,7 +524,7 @@ pub(super) fn vgroup() -> T {
             ("offset", T::computed(place_of_member(&["offset"]))),
             ("length", T::computed(place_of_member(&["length"]))),
         ],
-    );
+    ).positions(&["offset"]);
     let fields = vec![
         ("nvelt", i16be()),
         ("tags", T::array(tag(), n())),
