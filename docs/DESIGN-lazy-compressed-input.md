@@ -1646,9 +1646,11 @@ compressed size is unchanged. Where the code differs from the text above:
   the pass reads that copy (`RunInput::held_copy`). A pass that reads its run
   into its place in `Unfinished` (`Held::Gathering`) asks only for a handle
   once the run is read (`Evaluator::shared_input`), and without one the
-  index reads the pass's copy. `run_input` refuses a copy longer than
-  `CAP_BYTES` as `TooLarge` before it reads anything, and never refuses a
-  handle. A handle is made only for a run of whole bytes, and in a space
+  index reads the pass's copy. The evaluator makes every pass with
+  `Indexing::through` or `decode_or_index_through`, which "Built (part 6)"
+  calls private and which are public now. `run_input` refuses a copy longer
+  than `CAP_BYTES` as `TooLarge` before it reads anything, and never refuses
+  a handle. A handle is made only for a run of whole bytes, and in a space
   other than the file, only for a run that starts on a byte.
 - **Weighing.** `RunInput::owned_bytes` is the length of a copy, and 0 for a
   handle. `Indexes` weighs each index by that. An index over a handle
@@ -1691,7 +1693,11 @@ compressed size is unchanged. Where the code differs from the text above:
   the span cache in one call is refused. With `file_bytes_at_once` counting
   nothing for a space read through an index, as before, that test fails its
   check of `Evaluator::gathers`, and without that check it asks for the same
-  chunk a fourth time and fails there. The space tests of
+  chunk a fourth time and fails there. A gzip past the cap, over a store of
+  48 chunks, opens as a joined stream read a part at a time, whose one part
+  is read through an index over the store; the joined stream's limit is the
+  span cache, and reads of it wait for pushed-out chunks and then give the
+  member's bytes. The space tests of
   streams past the cap, `lazy_real`, `decoded_real` and `compressed_real`
   now read their files through an `ArcSource`, so their indexes read
   through handles. In `crates/wasm/tests/open_space_waits.rs`,
@@ -1731,7 +1737,10 @@ compressed size is unchanged. Where the code differs from the text above:
   store can name chunks of the file that `ensureRange` on that tab does not
   load: `ensureRange` asks `has_chunk` of the tab, and a tab's store always
   answers yes. A view that awaits `ensureRange` and then reads once can
-  therefore show an incomplete read. `Doc.read`, `textWindow`, `textIndex`, `textBack` and
+  therefore show an incomplete read. "A joined stream walked twice" in
+  "Still to do" can happen from 7a on: an index over a part of a joined
+  stream now reads the store, so `template_for` can answer `Pending` after
+  the walk has finished. `Doc.read`, `textWindow`, `textIndex`, `textBack` and
   `stringsScan` already fetch the chunks a read names as chunks of the file.
 
 ## Still to do
