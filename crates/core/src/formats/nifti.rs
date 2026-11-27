@@ -552,7 +552,7 @@ fn header_1(e: Endian) -> T {
             ("intent_name", text(16)),
             ("magic", text(4)),
         ],
-    )
+    ).positions(&["data_offset"])
     .machinery(&["data_offset", "scaled", "data_type", "db_name", "extents", "session_error", "regular", "glmax", "glmin"])
     .payload(&["dim", "datatype", "pixdim"])
 }
@@ -616,7 +616,7 @@ fn header_2(e: Endian) -> T {
             ("dim_info", dim_info()),
             ("unused_str", text(15)),
         ],
-    )
+    ).positions(&["vox_offset"])
     .machinery(&["scaled", "eol_check", "unused_str"])
     .payload(&["dim", "datatype", "pixdim", "vox_offset"])
 }
@@ -1251,5 +1251,15 @@ mod tests {
         none.magic = &[0; 4];
         assert!(!is_nifti(&none.bytes(), 348));
         assert!(!is_nifti(&[0u8; 400], 400));
+    }
+
+    /// Where the voxels start is a position when it is a whole number of
+    /// bytes: NIfTI-1's `data_offset` and NIfTI-2's `vox_offset`. NIfTI-1's
+    /// own `vox_offset` is a float, and the spatial offsets are coordinates.
+    #[test]
+    fn the_voxel_offset_is_a_position() {
+        let t = nifti();
+        crate::machinery::assert_marks(&t, "Nifti1Header", &["data_offset"], &["vox_offset", "qoffset_x"]);
+        crate::machinery::assert_marks(&t, "Nifti2Header", &["vox_offset"], &["qoffset_x", "slice_start"]);
     }
 }
