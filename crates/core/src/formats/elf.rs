@@ -480,7 +480,9 @@ fn program_header(bits: u32, e: Endian) -> T {
         fields.push(("flags", T::flags("SegmentFlags", T::u32(e), SEGMENT_FLAGS)));
     }
     fields.push(("align", addr(bits, e)));
-    T::structure("ProgramHeader", fields).named_by("type").counted_as("segment").reads_as(&[
+    // The segment's `offset` is a position in the file. Nothing here reads
+    // the segments, so the template says so itself.
+    T::structure("ProgramHeader", fields).named_by("type").counted_as("segment").positions(&["offset"]).reads_as(&[
         ("type", "", ""),
         ("flags", "", ""),
         ("file_size", "{} bytes in the file", ""),
@@ -1087,6 +1089,32 @@ mod tests {
         assert!(!marked.contains(&"program_header_count"), "{marked:?}");
         assert!(!marked.contains(&"section_header_entry_size"), "{marked:?}");
         assert!(!marked.contains(&"section_name_table"), "{marked:?}");
+    }
+
+    /// Each section header's `offset` is where its section is, because the
+    /// `sections` list reads it there; its `size` beside it is not. Each
+    /// program header's `offset` is a position too, by declaration.
+    #[test]
+    fn a_section_header_offset_is_a_position() {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(elf());
+        let header = [7, 15, 0, 1];
+        let n = ev.node(&d, &header).unwrap().child_count;
+        let mut marked = Vec::new();
+        for i in 0..n {
+            let mut p = header.to_vec();
+            p.push(i as usize);
+            let f = ev.node(&d, &p).unwrap();
+            if f.locates {
+                marked.push(f.name.clone());
+            }
+        }
+        // `name_offset` counts from the start of the section name table, which
+        // is a position in that table, and its `At` adds it to the table's.
+        assert_eq!(marked, vec!["name_offset".to_string(), "offset".to_string()]);
+        let T::Struct(ph) = program_header(64, Little) else { panic!("not a structure") };
+        let marked: Vec<&str> = ph.fields.iter().zip(crate::machinery::locators(&ph)).filter(|(_, l)| *l).map(|(f, _)| &*f.name).collect();
+        assert_eq!(marked, vec!["offset"]);
     }
 
     /// A table a header points at is somewhere for a reason, and the reason is

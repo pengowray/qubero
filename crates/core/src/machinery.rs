@@ -30,6 +30,9 @@ use std::sync::Arc;
 
 use crate::template::{Expr, StrLen, StructDef, Ty, Until};
 
+mod positions;
+pub use positions::{Positions, AT, EACH};
+
 /// For each field of `def`, the first later sibling whose length, count, type
 /// or position that field settles. `None` for a field no sibling reads, which
 /// is most of them.
@@ -100,7 +103,8 @@ pub fn names_in(e: &Expr) -> Vec<Arc<str>> {
 /// For each field of `def`, whether a later sibling uses its value as a
 /// position: where an `At` reads its contents, the table a `PointerList`
 /// takes its offsets from, where a `Chain` starts, and the base a
-/// `PointerList`, `Chain` or `Gather` adds to every offset it reads.
+/// `PointerList`, `Chain` or `Gather` adds to every offset it reads. A field
+/// named in [`StructDef::positions`] is one too.
 ///
 /// A view uses this to write such a value in the same base as the addresses
 /// beside it, so `program_header_offset` can be matched by eye to the address
@@ -110,107 +114,15 @@ pub fn names_in(e: &Expr) -> Vec<Arc<str>> {
 /// stride` the index and the stride are a count and a length, and writing
 /// them as addresses would say they point somewhere. A field named on the
 /// right of a subtraction is left out for the same reason: `end - size` is a
-/// position, `size` is not. A `Gather`'s offsets are read inside each record
-/// it walks to, so they name no sibling, and a `Stitched` run's parts are
-/// placed from inside its records the same way.
-pub fn locators(def: &StructDef) -> Vec<bool> {
-    let mut out = vec![false; def.fields.len()];
-    let mut names: Vec<Arc<str>> = Vec::new();
-    for (i, f) in def.fields.iter().enumerate() {
-        names.clear();
-        ty_positions(&f.ty, &mut names);
-        // Most fields place nothing, and a structure of thousands of fields
-        // asked once per field would otherwise cost the square of that.
-        if names.is_empty() {
-            continue;
-        }
-        for (j, g) in def.fields.iter().enumerate().take(i) {
-            if names.iter().any(|n| *n == g.name) {
-                out[j] = true;
-            }
-        }
-    }
-    out
-}
-
-/// [`locators`] for field `i` alone, which is what a node read asks: one pass
-/// over the fields after it rather than over every pair.
-pub fn locates(def: &StructDef, i: usize) -> bool {
-    let Some(name) = def.fields.get(i).map(|f| &f.name) else { return false };
-    let mut names: Vec<Arc<str>> = Vec::new();
-    def.fields.iter().skip(i + 1).any(|f| {
-        names.clear();
-        ty_positions(&f.ty, &mut names);
-        names.iter().any(|n| n == name)
-    })
-}
-
-/// Every sibling name this type reads as a position. See [`locators`].
-fn ty_positions(ty: &Ty, out: &mut Vec<Arc<str>>) {
-    match ty {
-        Ty::At { at, inner, .. } => {
-            position_terms(at, out);
-            ty_positions(inner, out);
-        }
-        Ty::PointerList { offsets, adjust, elem, .. } => {
-            out.push(offsets.clone());
-            position_terms(adjust, out);
-            ty_positions(elem, out);
-        }
-        Ty::Chain { first, adjust, elem, .. } => {
-            position_terms(first, out);
-            position_terms(adjust, out);
-            ty_positions(elem, out);
-        }
-        Ty::Gather { adjust, elem, .. } => {
-            position_terms(adjust, out);
-            ty_positions(elem, out);
-        }
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => ty_positions(elem, out),
-        Ty::Sized { inner, .. }
-        | Ty::Origin { inner }
-        | Ty::When { inner, .. }
-        | Ty::Enum { inner, .. }
-        | Ty::Flags { inner, .. }
-        | Ty::Nullable { inner, .. } => ty_positions(inner, out),
-        Ty::Switch { cases, default, .. } => {
-            for (_, t) in cases.iter() {
-                ty_positions(t, out);
-            }
-            ty_positions(default, out);
-        }
-        Ty::Match { cases, default, .. } => {
-            for (_, t) in cases.iter() {
-                ty_positions(t, out);
-            }
-            ty_positions(default, out);
-        }
-        // A structure's fields name their own siblings, as in `ty_refs`.
-        _ => {}
-    }
-}
-
-/// The sibling names a position expression is made of by adding them. See
-/// [`locators`] for what is left out and why.
-fn position_terms(e: &Expr, out: &mut Vec<Arc<str>>) {
-    match e {
-        Expr::Ref(n) => out.push(n.clone()),
-        // `offsets[i]`: the array holds the positions.
-        Expr::Elem { array, .. } => out.push(array.clone()),
-        // A path of one step is a sibling read by name. A longer one names a
-        // field inside a sibling, and the sibling is not itself the number.
-        Expr::Sibling(path) | Expr::Within(path) if path.len() == 1 => out.push(Arc::from(path[0].as_str())),
-        Expr::Add(a, b) | Expr::Min(a, b) | Expr::Max(a, b) | Expr::Or(a, b) => {
-            position_terms(a, out);
-            position_terms(b, out);
-        }
-        Expr::Sub(a, _) => position_terms(a, out),
-        Expr::Cond { then, otherwise, .. } => {
-            position_terms(then, out);
-            position_terms(otherwise, out);
-        }
-        _ => {}
-    }
+/// position, `size` is not.
+///
+/// This is `def` on its own. A position read from inside another structure,
+/// such as the `offset` a `PointerList` reads in each element of a table, is
+/// marked by [`Positions`], which walks a whole template.
+pub fn locators(def: &Arc<StructDef>) -> Vec<bool> {
+    let t = crate::template::Template::new("", Ty::Struct(def.clone()));
+    let mut p = Positions::default();
+    (0..def.fields.len()).map(|i| p.flags(&t, def, i) & AT != 0).collect()
 }
 
 /// What the template itself says about field `i`: `Some(true)` for machinery,
@@ -543,8 +455,6 @@ mod tests {
             ],
         ));
         assert_eq!(locators(&s), vec![true, false, false, false, true, false, false, false, false]);
-        let each: Vec<bool> = (0..s.fields.len()).map(|i| locates(&s, i)).collect();
-        assert_eq!(each, locators(&s));
     }
 
     #[test]
@@ -560,6 +470,169 @@ mod tests {
             ],
         ));
         assert_eq!(locators(&s), vec![false, true, false, true, false]);
+    }
+
+    /// The flags `Positions` gives each field of `s`, by name, in a template
+    /// whose root is `root` and which `s` is reached from.
+    fn flags_in(root: &Ty, s: &Arc<StructDef>) -> Vec<(String, u8)> {
+        let t = crate::template::Template::new("test", root.clone());
+        let mut p = Positions::of(&t);
+        s.fields.iter().enumerate().map(|(i, f)| (f.name.to_string(), p.flags(&t, s, i))).collect()
+    }
+
+    fn marked(got: &[(String, u8)], flag: u8) -> Vec<&str> {
+        got.iter().filter(|(_, f)| f & flag != 0).map(|(n, _)| n.as_str()).collect()
+    }
+
+    /// A pointer list that reads its offsets from inside each element of a
+    /// table marks that field of the element, and not the size beside it.
+    #[test]
+    fn the_offset_a_pointer_list_reads_in_each_record_is_a_position() {
+        use crate::template::Anchor;
+        let header = T::structure("SectionHeader", vec![("offset", T::u64(Big)), ("size", T::u64(Big))]);
+        let root = T::structure(
+            "File",
+            vec![
+                ("count", T::u16(Big)),
+                ("headers", T::array(header, E::field("count"))),
+                ("sections", T::pointer_list_sized("headers", &["offset"], Anchor::File, E::lit(0), T::u8())),
+            ],
+        );
+        // The header as it sits inside the root, which is the `Arc` a node
+        // read holds.
+        let Ty::Array { elem, .. } = &def(&root).fields[1].ty else { panic!() };
+        assert_eq!(marked(&flags_in(&root, &def(elem)), AT), vec!["offset"]);
+        // The table itself is marked as before, and its elements are records,
+        // not numbers to mark.
+        let top = flags_in(&root, &def(&root));
+        assert_eq!(marked(&top, AT), vec!["headers"]);
+        assert!(marked(&top, EACH).is_empty());
+    }
+
+    /// A pointer list over a plain array of numbers marks each element, which
+    /// the array's own field carries as `EACH`.
+    #[test]
+    fn each_element_of_an_offsets_array_is_a_position() {
+        let root = T::structure(
+            "Body",
+            vec![
+                ("count", T::u16(Big)),
+                ("pointers", T::array(T::u16(Big), E::field("count"))),
+                ("cells", T::pointer_list("pointers", crate::template::Anchor::Window, E::lit(0), T::u8())),
+                ("lengths", T::array(T::u16(Big), E::field("count"))),
+            ],
+        );
+        let got = flags_in(&root, &def(&root));
+        assert_eq!(marked(&got, EACH), vec!["pointers"]);
+        assert_eq!(marked(&got, AT), vec!["pointers"]);
+    }
+
+    /// `offsets[i]` in an `At` marks each element of `offsets`, and
+    /// `tensors[i].offset` marks `offset` inside each tensor record.
+    #[test]
+    fn an_element_read_as_a_position_is_one() {
+        let tensor = T::structure("Tensor", vec![("dims", T::u32(Big)), ("offset", T::u64(Big))]);
+        let at_field = E::Elem { array: "tensors".into(), index: Box::new(E::lit(0)), field: Arc::from(vec!["offset".to_string()]) };
+        let first = E::Elem { array: "offsets".into(), index: Box::new(E::lit(0)), field: Arc::from(Vec::new()) };
+        let root = T::structure(
+            "File",
+            vec![
+                ("n", T::u32(Big)),
+                ("offsets", T::array(T::u32(Big), E::field("n"))),
+                ("tensors", T::array(tensor, E::field("n"))),
+                ("first", T::at(first, T::u8())),
+                ("data", T::at(at_field, T::u8())),
+            ],
+        );
+        let r = def(&root);
+        assert_eq!(marked(&flags_in(&root, &r), EACH), vec!["offsets"]);
+        let Ty::Array { elem, .. } = &r.fields[2].ty else { panic!() };
+        assert_eq!(marked(&flags_in(&root, &def(elem)), AT), vec!["offset"]);
+    }
+
+    /// Where an element ends is its offset plus its lengths, and the lengths
+    /// are not positions.
+    #[test]
+    fn the_lengths_added_to_an_elements_offset_are_not_positions() {
+        let block = T::structure("Block", vec![("offset", T::u64(Big)), ("head", T::u32(Big)), ("body", T::u64(Big))]);
+        let part = |name: &str| E::Elem { array: "blocks".into(), index: Box::new(E::lit(0)), field: Arc::from(vec![name.to_string()]) };
+        let root = T::structure(
+            "File",
+            vec![("blocks", T::array(block, E::lit(2))), ("end", T::at(part("offset").add(part("head")).add(part("body")), T::u8()))],
+        );
+        let Ty::Array { elem, .. } = &def(&root).fields[0].ty else { panic!() };
+        assert_eq!(marked(&flags_in(&root, &def(elem)), AT), vec!["offset"]);
+    }
+
+    /// A chain's `next` is a position inside every record of the chain, along
+    /// the path the chain names, through a switch on the record's kind.
+    #[test]
+    fn a_chain_next_is_a_position_in_each_record() {
+        let a = T::structure("A", vec![("size", T::u32(Big)), ("next", T::u32(Big))]);
+        let b = T::structure("B", vec![("next", T::u32(Big)), ("count", T::u32(Big))]);
+        let record = T::structure("Record", vec![("kind", T::u8()), ("body", T::switch(E::field("kind"), vec![(1, a)], b))]);
+        let root = T::structure(
+            "File",
+            vec![("first", T::u32(Big)), ("records", T::chain(E::field("first"), &["body", "next"], crate::template::Anchor::File, record))],
+        );
+        assert_eq!(marked(&flags_in(&root, &def(&root)), AT), vec!["first"]);
+        let Ty::Chain { elem, .. } = &def(&root).fields[1].ty else { panic!() };
+        let rec = def(elem);
+        assert!(marked(&flags_in(&root, &rec), AT).is_empty());
+        let Ty::Switch { cases, default, .. } = &rec.fields[1].ty else { panic!() };
+        assert_eq!(marked(&flags_in(&root, &def(&cases[0].1)), AT), vec!["next"]);
+        assert_eq!(marked(&flags_in(&root, &def(default)), AT), vec!["next"]);
+    }
+
+    /// A gather's offset is a position in each record its steps reach; the
+    /// count beside it, which says how long the child is, is not.
+    #[test]
+    fn a_gather_offset_is_a_position_in_each_record() {
+        use crate::template::Step;
+        let desc = T::structure("Descriptor", vec![("count", T::u32(Big)), ("offset", T::u32(Big))]);
+        let row = T::structure("Row", vec![("descriptors", T::array(desc, E::lit(2)))]);
+        let root = T::structure(
+            "Table",
+            vec![
+                ("rows", T::array(row, E::lit(3))),
+                (
+                    "heap",
+                    T::gather(
+                        vec![Step::field("rows"), Step::each(), Step::field("descriptors"), Step::each()],
+                        E::field("offset"),
+                        crate::template::Anchor::Window,
+                        E::lit(0),
+                        T::bytes(E::Placer(Box::new(E::field("count")))),
+                    ),
+                ),
+            ],
+        );
+        let r = def(&root);
+        // The walk starts at `rows`, which is where the records are and not
+        // itself a position.
+        assert!(marked(&flags_in(&root, &r), AT).is_empty());
+        let Ty::Array { elem: row, .. } = &r.fields[0].ty else { panic!() };
+        let Ty::Array { elem: desc, .. } = &def(row).fields[0].ty else { panic!() };
+        assert_eq!(marked(&flags_in(&root, &def(desc)), AT), vec!["offset"]);
+    }
+
+    /// A path into an earlier field marks the field it lands on.
+    #[test]
+    fn a_path_into_an_earlier_field_marks_where_it_lands() {
+        let inner = T::structure("Info", vec![("len", T::u32(Big)), ("at", T::u32(Big))]);
+        let within = E::Within(Arc::from(vec!["info".to_string(), "at".to_string()]));
+        let root = T::structure("File", vec![("info", inner), ("data", T::at(within, T::u8()))]);
+        let r = def(&root);
+        // `info` is not the number, and is left alone.
+        assert!(marked(&flags_in(&root, &r), AT).is_empty());
+        assert_eq!(marked(&flags_in(&root, &def(&r.fields[0].ty)), AT), vec!["at"]);
+    }
+
+    /// A field the template declares a position is one, though nothing reads it.
+    #[test]
+    fn a_declared_position_is_one() {
+        let s = def(&T::structure("Segment", vec![("offset", T::u64(Big)), ("size", T::u64(Big))]).positions(&["offset"]));
+        assert_eq!(locators(&s), vec![true, false]);
     }
 
     #[test]

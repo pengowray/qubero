@@ -402,10 +402,11 @@ pub struct NodeInfo {
     /// Whether it is folded is the view's to decide, since that depends on
     /// where the two of them end up on screen. See [`crate::machinery`].
     pub consumed_by: Option<usize>,
-    /// True when a sibling uses this field's value as a position in the file:
-    /// where an `At` reads, where a chain starts, the offsets of a pointer
-    /// list. A view writes such a value in the base its addresses are in. See
-    /// [`crate::machinery::locators`].
+    /// True when the template uses this field's value as a position in the
+    /// file: where an `At` reads, where a chain starts and the `next` in each
+    /// of its records, the offsets a pointer list or a gather reads, each
+    /// element of a table of offsets. A view writes such a value in the base
+    /// its addresses are in. See [`crate::machinery::Positions`].
     pub locates: bool,
     /// True when this node's own bytes include punctuation its children do not
     /// account for: the braces of a JSON object, the brackets of an array. The
@@ -822,6 +823,10 @@ pub struct Evaluator {
     /// Reachability in the template's named-type graph, independent of bytes.
     /// Once for types read inside a stream and once for types read in the file.
     placing_types: std::cell::OnceCell<[rustc_hash::FxHashSet<String>; 2]>,
+    /// Which fields of the template's structures hold a position, and what
+    /// each structure's fields are machinery for, worked out once per
+    /// structure rather than at every node read. See [`machinery::Positions`].
+    positions: std::cell::RefCell<machinery::Positions>,
     /// The decoded streams this reading has opened, and what each one came to.
     spaces: space::Spaces,
     /// The streams opened as documents of their own, which is what a tab is.
@@ -912,6 +917,7 @@ impl Evaluator {
             go: go::Go::default(),
             placed: placed::Index::default(),
             placing_types: std::cell::OnceCell::new(),
+            positions: std::cell::RefCell::default(),
             spaces: space::Spaces::default(),
             open: Vec::new(),
             schemas: schema::Schemas::default(),
@@ -1469,21 +1475,45 @@ impl Evaluator {
     /// has none of them: the elements of a list are all the same shape and none
     /// of them places another.
     ///
-    /// Worked out afresh for each child rather than once for the structure.
-    /// Listing a structure's children makes that quadratic, in a walk of a
-    /// handful of type enums over the few dozen fields a structure has; a run
-    /// long enough to care about is a list, and lists stop at the first line
-    /// here.
+    /// The last of the four, whether the field holds a position, is asked of
+    /// an element of a list too: the elements of a table of offsets are each
+    /// a position, and the list's own field in its structure says so.
+    ///
+    /// What the structure's fields are machinery for and which hold a
+    /// position are looked up in [`machinery::Positions`], which works each
+    /// structure out once.
     fn in_parent(&self, path: &[usize]) -> (Option<usize>, Option<bool>, bool, bool) {
         let Some((&last, parent)) = path.split_last() else { return (None, None, false, false) };
-        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None, false, false) };
+        let s = match self.memo.get(parent).map(|r| &r.ty) {
+            Some(Ty::Struct(s)) => s,
+            Some(Ty::Array { .. } | Ty::Repeat { .. }) => return (None, None, false, self.each_locates(parent)),
+            _ => return (None, None, false, false),
+        };
         let name = s.fields.get(last).map(|f| &f.name);
         let contents = match (&s.contents, name) {
             (Some(c), Some(n)) => **n == **c,
             _ => false,
         };
-        let locates = machinery::locates(s, last);
-        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last), contents, locates)
+        let mut p = self.positions.borrow_mut();
+        let locates = p.flags(&self.template, s, last) & machinery::AT != 0;
+        (p.consumer(&self.template, s, last), machinery::hint(s, last), contents, locates)
+    }
+
+    /// Whether every element of the list at `list`, which is an `Array` or a
+    /// `Repeat`, is a position: the list is
+    /// a field of a structure, or what an `At` in one points at, and that
+    /// field is marked [`machinery::EACH`].
+    #[inline(never)]
+    fn each_locates(&self, list: &[usize]) -> bool {
+        let mut field = list;
+        loop {
+            let Some((&i, parent)) = field.split_last() else { return false };
+            match self.memo.get(parent).map(|r| &r.ty) {
+                Some(Ty::At { .. }) => field = parent,
+                Some(Ty::Struct(s)) => return self.positions.borrow_mut().flags(&self.template, s, i) & machinery::EACH != 0,
+                _ => return false,
+            }
+        }
     }
 
     /// The whole text of a text field, decoded in its own encoding, up to the

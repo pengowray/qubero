@@ -683,6 +683,18 @@ mod tests {
         assert_eq!(ev.node(&d, &[PAGE1]).unwrap().line.as_deref(), Some("table leaf \u{b7} 1 cell"));
     }
 
+    /// Each cell pointer is where its cell starts in the page, so each is a
+    /// position; the count before them is not.
+    #[test]
+    fn each_cell_pointer_is_a_position() {
+        let d = Document::new(MemSource(db()));
+        let mut ev = Evaluator::new(sqlite());
+        assert!(ev.node(&d, &[PAGE1, POINTERS, 0]).unwrap().locates);
+        assert!(ev.node(&d, &[PAGES, 0, POINTERS, 1]).unwrap().locates);
+        assert!(!ev.node(&d, &[PAGE1, CELL_COUNT]).unwrap().locates);
+        assert!(!ev.node(&d, &[PAGES, 0, CELL_COUNT]).unwrap().locates);
+    }
+
     #[test]
     fn the_schema_row_reads_as_the_five_columns_sqlite_keeps_there() {
         let d = Document::new(MemSource(db()));

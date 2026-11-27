@@ -3715,6 +3715,12 @@ pub struct StructDef {
     /// settles the stride of every row and is also the first thing a reader
     /// wants to know, and folding it behind the pixels would hide it.
     pub payload: Vec<Arc<str>>,
+    /// Fields that hold a position in the file, though nothing in the template
+    /// reads them as one. An ELF program header's `offset` is where its
+    /// segment starts, and the template reads the sections rather than the
+    /// segments. A view writes these in the base the addresses are in, the
+    /// same as the positions [`crate::machinery::Positions`] works out.
+    pub positions: Vec<Arc<str>>,
     /// What one of these reads as where a whole record has to fit on one line.
     /// Empty for a structure with no line of its own, which reads as its name.
     pub line: Vec<LinePart>,
@@ -3986,6 +3992,7 @@ impl Ty {
             cut: false,
             machinery: Vec::new(),
             payload: Vec::new(),
+            positions: Vec::new(),
             line: Vec::new(),
             encoding: None,
             colour: None,
@@ -4262,6 +4269,15 @@ impl Ty {
     pub fn payload(self, names: &[&str]) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { payload: names.iter().map(|n| Arc::from(*n)).collect(), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Names fields that hold a position in the file though nothing in the
+    /// template reads them as one. See [`StructDef::positions`].
+    pub fn positions(self, names: &[&str]) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { positions: names.iter().map(|n| Arc::from(*n)).collect(), ..(*s).clone() })),
             other => other,
         }
     }
