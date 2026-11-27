@@ -608,7 +608,9 @@ fn symbol(bits: u32, e: Endian) -> T {
         fields.push(("visibility", visibility));
         fields.push(("section_index", T::u16(e)));
     }
-    T::structure("Symbol", fields).counted_as("symbol")
+    // `name_offset` counts from the start of the string table the symbol
+    // table's section header links to.
+    T::structure("Symbol", fields).counted_as("symbol").positions(&["name_offset"])
 }
 
 /// The dynamic section: what the loader reads to put a program together, as a
@@ -1358,5 +1360,16 @@ mod tests {
         let mut ev = Evaluator::new(elf());
         assert_eq!(ev.node(&d, &[7, 1]).unwrap().value, Value::Enum { raw: 40, name: Some("ARM".into()), hex: false });
         assert_eq!(ev.node(&d, &[7, 3]).unwrap().value, Value::UInt(0x8000));
+    }
+
+    /// A symbol's name offset is a position in its string table. Its value
+    /// and size are not.
+    #[test]
+    fn a_symbol_name_offset_is_a_position() {
+        for bits in [32, 64] {
+            let T::Struct(s) = symbol(bits, Little) else { panic!("not a structure") };
+            let marked: Vec<&str> = s.fields.iter().zip(crate::machinery::locators(&s)).filter(|(_, l)| *l).map(|(f, _)| &*f.name).collect();
+            assert_eq!(marked, vec!["name_offset"]);
+        }
     }
 }
