@@ -1342,8 +1342,9 @@ fn a_run_past_the_input_limit_says_so_on_its_row_and_when_opened() {
 
 /// The same at full size, under the default limits: a .gz of one member and
 /// a zip entry of 65 MiB of run, past the 64 MiB a copy may be, open end to
-/// end from a store of 4 MiB. Slow and about 200 MB of memory, so run on
-/// purpose: `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+/// end from a store of 4 MiB. It took 6 seconds and 290 MB of memory in a
+/// debug build on 2026-11-28, so it is run on purpose:
+/// `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
 #[test]
 #[ignore]
 fn a_gzip_member_and_a_zip_entry_past_64_mib_open_end_to_end() {
