@@ -59,6 +59,12 @@ impl RunInput {
         self.source.resident_limit()
     }
 
+    /// Whether a read of `bytes` of the run at once is more than `limit`
+    /// allows, which it can be only when the source has a resident limit.
+    pub(super) fn too_much(&self, bytes: usize, limit: usize) -> bool {
+        bytes > limit && self.resident_limit().is_some()
+    }
+
     /// Bytes `at..at + out.len()` of the run, or every chunk of the source
     /// the read is missing, all at once. On a miss `out` holds zeroes where
     /// the missing chunks are. Bytes past the run's end are not read, and

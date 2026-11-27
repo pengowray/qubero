@@ -37,6 +37,12 @@ use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBu
 /// then. Skippable frames after the last frame are a span of their own too
 /// when they come to the input spacing, so that no span's read of its bytes
 /// reads them.
+///
+/// A span is read whole, so when the index will read the run from a source
+/// that keeps only part of the file, a frame whose own input passes
+/// [`Limits::unit_input`] is refused as [`Refusal::TooLarge`]: a frame the
+/// pass has finished once it is past the cap, and one finished while the run
+/// might still be held whole once the run turns out not to fit.
 pub(super) struct ZstdPass {
     packed: Arc<Vec<u8>>,
     /// Where the index reads the run from once it is made.
@@ -58,10 +64,12 @@ enum Phase {
     /// The part that may come to a whole run: traced, and with the output
     /// kept, and checkpoints taken in case it does not. `last` is the frame
     /// it is in, as the byte it starts at and the output before it, and
-    /// `largest` the largest frame it has finished. A frame may come to as
-    /// much as the whole run may here, and the frames this part finished are
-    /// held to the span limit only if the run turns out not to fit.
-    Whole { walk: ZstdWalk, out: Vec<u8>, trace: TraceBuilder, last: (usize, u64), largest: u64 },
+    /// `largest` the most output a frame it has finished came to, and
+    /// `widest` the most input one took. A frame may come to as much as the
+    /// whole run may here, and the frames this part finished are held to the
+    /// span limit, and to the limit on input, only if the run turns out not
+    /// to fit.
+    Whole { walk: ZstdWalk, out: Vec<u8>, trace: TraceBuilder, last: (usize, u64), largest: u64, widest: usize },
     /// Past the cap: the output is counted, to `count`, and none of it kept.
     Index { walk: ZstdWalk, count: u64 },
     /// Finished, or refused.
@@ -71,7 +79,7 @@ enum Phase {
 impl ZstdPass {
     pub(super) fn new(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> ZstdPass {
         let walk = ZstdWalk::new(0..packed.len(), 0, limits.span.max(limits.whole) as u64);
-        let phase = Phase::Whole { walk, out: Vec::new(), trace: TraceBuilder::default(), last: (0, 0), largest: 0 };
+        let phase = Phase::Whole { walk, out: Vec::new(), trace: TraceBuilder::default(), last: (0, 0), largest: 0, widest: 0 };
         let marks = Checkpoints::new(&limits);
         ZstdPass { packed, input, limits, marks, phase, open: None, furthest: 0, most: 0 }
     }
@@ -110,26 +118,32 @@ impl ZstdPass {
         let limits = self.limits;
         let marks = &mut self.marks;
         let open = &mut self.open;
-        // The frame before ends where this one's skippable frames start.
+        let input = &self.input;
+        // The frame before ends where this one's skippable frames start. How
+        // much input it took, when there was one.
         let mark = |f: FrameAt, marks: &mut Checkpoints, open: &mut Option<FrameAt>| {
-            if let Some(was) = open.replace(f) {
-                ended(marks, was, f.front);
-            }
+            let took = open.replace(f).map(|was| ended(marks, was, f.front));
             marks.offer(f.front as u64 * 8, f.own as u64 * 8, f.out, || Start::Frame { own: f.own });
+            took
+        };
+        let too_much = |took: Option<usize>| match took {
+            Some(n) if input.too_much(n, limits.unit_input) => Err(Refusal::TooLarge),
+            _ => Ok(()),
         };
         // The last frame ends where the walk says, and any skippable frames
         // after it are a span of their own once they come to the spacing.
         let finish = |walk: &ZstdWalk, marks: &mut Checkpoints, open: &mut Option<FrameAt>, len: u64| {
             if let Some(was) = open.take() {
-                ended(marks, was, walk.frames_end());
+                too_much(Some(ended(marks, was, walk.frames_end())))?;
             }
             let rest = walk.frames_end();
             if rest < data.len() && marks.due_by_input(data.len() as u64 * 8) {
                 marks.take(rest as u64 * 8, len, || Start::Frame { own: data.len() });
             }
+            Ok(())
         };
         match std::mem::replace(&mut self.phase, Phase::Over) {
-            Phase::Whole { mut walk, mut out, mut trace, mut last, mut largest } => {
+            Phase::Whole { mut walk, mut out, mut trace, mut last, mut largest, mut widest } => {
                 let mut over = false;
                 let walked = walk.run(
                     Window::whole(data),
@@ -139,7 +153,7 @@ impl ZstdPass {
                     &mut |f| {
                         largest = largest.max(f.out - last.1);
                         last = (f.front, f.out);
-                        mark(f, marks, open);
+                        widest = widest.max(mark(f, marks, open).unwrap_or(0));
                         Ok(())
                     },
                     &mut |bytes| {
@@ -153,7 +167,7 @@ impl ZstdPass {
                 );
                 match walked.and_then(Walked::of_whole) {
                     Ok(None) => {
-                        self.phase = Phase::Whole { walk, out, trace, last, largest };
+                        self.phase = Phase::Whole { walk, out, trace, last, largest, widest };
                         Ok(Stepped::Working)
                     }
                     Ok(Some(end)) => Ok(Stepped::Done(Decoded::Whole(out, frames::zstd_done(trace, data.len(), end)))),
@@ -162,6 +176,7 @@ impl ZstdPass {
                         if largest > limits.span as u64 {
                             return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame));
                         }
+                        too_much(Some(widest))?;
                         // Past the cap: on from the start of the frame the
                         // walk stopped in, counting the output and keeping
                         // none of it.
@@ -178,7 +193,7 @@ impl ZstdPass {
                 }
             }
             Phase::Index { mut walk, mut count } => {
-                let walked = walk.run(Window::whole(data), out_bytes, reach, &mut TraceBuilder::off(), &mut |f| Ok(mark(f, marks, open)), &mut |bytes| {
+                let walked = walk.run(Window::whole(data), out_bytes, reach, &mut TraceBuilder::off(), &mut |f| too_much(mark(f, marks, open)), &mut |bytes| {
                     count += bytes.len() as u64;
                     match count > limits.lazy {
                         true => Err(Refusal::TooLargeLazy),
@@ -196,7 +211,7 @@ impl ZstdPass {
                         Ok(Stepped::Working)
                     }
                     Some(len) => {
-                        finish(&walk, marks, open, len);
+                        finish(&walk, marks, open, len)?;
                         let list = std::mem::take(&mut marks.list);
                         Ok(Stepped::Done(Decoded::Indexed(seekable(Codec::Zstd, self.input.clone(), Kind::Zstd, len, list, limits))))
                     }
@@ -210,9 +225,12 @@ impl ZstdPass {
 /// A frame announced as `f` has ended at byte `end`: one whose own input is
 /// the input spacing or more gets a checkpoint at its start, if it has none,
 /// so that it is a span of its own. The next frame then starts a span as
-/// well, since it starts the spacing past that checkpoint or more.
-fn ended(marks: &mut Checkpoints, f: FrameAt, end: usize) {
-    marks.take_if_long(f.front as u64 * 8, (end - f.own) as u64 * 8, f.out, || Start::Frame { own: f.own });
+/// well, since it starts the spacing past that checkpoint or more. How many
+/// bytes of input the frame took, without the skippable frames in front.
+fn ended(marks: &mut Checkpoints, f: FrameAt, end: usize) -> usize {
+    let took = end - f.own;
+    marks.take_if_long(f.front as u64 * 8, took as u64 * 8, f.out, || Start::Frame { own: f.own });
+    took
 }
 
 /// The output of the frames in bytes `range` of the run, read from `window`,

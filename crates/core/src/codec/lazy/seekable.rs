@@ -212,7 +212,13 @@ impl Seekable {
             let dst = &mut out[to..to + take];
             match &self.kind {
                 // Decoded only as far as this read reaches.
-                Kind::Xz(l) => super::xz::read_span_through(&self.prefixes, &self.input, l, self.span_units(k, l), k, from, dst)?,
+                Kind::Xz(l) => {
+                    let most = match self.input.resident_limit() {
+                        Some(_) => self.limits.span_input,
+                        None => usize::MAX,
+                    };
+                    super::xz::read_span_through(&self.prefixes, &self.input, l, self.span_units(k, l), k, from, dst, most)?
+                }
                 _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
             }
             pos += take as u64;
@@ -233,6 +239,17 @@ impl Seekable {
     pub(super) fn frames_in(&self, k: usize) -> std::ops::Range<usize> {
         let range = self.span_in(k);
         self.checkpoints[k].own().unwrap_or(range.start).min(range.end)..range.end
+    }
+
+    /// Refused as [`Refusal::TooLarge`] when a span read would gather more
+    /// than [`Limits::span_input`] of the run at once from a source that
+    /// keeps only part of the file. Only thinning makes a zstd or xz span
+    /// that large; a deflate span never is.
+    fn at_once(&self, bytes: usize) -> Result<(), Refusal> {
+        match self.input.too_much(bytes, self.limits.span_input) {
+            true => Err(Refusal::TooLarge),
+            false => Ok(()),
+        }
     }
 
     /// The xz blocks span `k` holds, as numbers in the stream's index.
@@ -269,6 +286,7 @@ impl Seekable {
             }
             Kind::Zstd => {
                 let (range, out) = (self.frames_in(k), self.checkpoints[k].out);
+                self.at_once(range.len())?;
                 let copy = self.input.copy(range.clone())?;
                 super::zstd::decode_span(copy.window(self.input.len()), range, out, want, self.limits.span)?
             }
@@ -345,6 +363,7 @@ impl Seekable {
                 // read a header at a time, and their first piece with the
                 // frames, so that a span behind a short one reads at once.
                 let (front, frames) = (self.span_in(k).start, self.frames_in(k));
+                self.at_once(frames.len())?;
                 let first = (front < frames.start).then(|| front..frames.start.min(front + super::zstd::FRONT_PIECE));
                 let [copy, first] = self.input.copies([Some(frames.clone()), first])?;
                 let skips = super::zstd::skippable_starts(&self.input, front, frames.start, first)?;
@@ -352,6 +371,7 @@ impl Seekable {
             }
             Kind::Xz(l) => {
                 let range = self.span_in(k);
+                self.at_once(range.len())?;
                 let copy = self.input.copy(range.clone())?;
                 super::xz::span_trace(copy.window(len), l, k, range, self.span_units(k, l), c.out)?
             }
@@ -492,13 +512,19 @@ impl Seekable {
     /// The start of every block from kept start `g` up to the next kept start,
     /// found by decoding from start `g` and counting the output. The run is
     /// read through its input from start `g` to the next kept start, or to
-    /// the run's end.
+    /// the run's end. A stretch past [`Limits::unit_input`] is refused as
+    /// [`Refusal::TooLarge`] when the source keeps only part of the file.
     fn group(&self, g: usize) -> Result<Arc<[(u64, u64)]>, ReadError> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
         }
         let &(in_bit, _) = self.blocks.list.get(g).ok_or(Refusal::Failed)?;
         let to = self.blocks.list.get(g + 1).map_or(self.input.len() as usize, |m| m.0.div_ceil(8) as usize);
+        // Only a hostile run, of more blocks than are kept, has a long
+        // stretch between two kept starts.
+        if self.input.too_much(to - (in_bit / 8) as usize, self.limits.unit_input) {
+            return Err(Refusal::TooLarge.into());
+        }
         let code = self.input.copy((in_bit / 8) as usize..to)?;
         let starts: Arc<[(u64, u64)]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();
         lock(&self.groups).put(g as u64, starts.clone(), 1);

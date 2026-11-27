@@ -1738,12 +1738,23 @@ pub(crate) struct Lossy {
     bytes: Vec<u8>,
     chunk: u64,
     pub(crate) held: std::sync::Mutex<std::collections::BTreeSet<u64>>,
+    /// What it says it holds at once, as a store does; it drops nothing to
+    /// keep to it.
+    limit: Option<u64>,
 }
 
 impl Lossy {
-    /// A source that holds none of its chunks yet.
+    /// A source that holds none of its chunks yet, and says it holds any
+    /// read whole.
     pub(crate) fn new(bytes: Vec<u8>, chunk: u64) -> Arc<Lossy> {
-        Arc::new(Lossy { bytes, chunk, held: Default::default() })
+        Arc::new(Lossy { bytes, chunk, held: Default::default(), limit: None })
+    }
+
+    /// The same, saying it holds at most `limit` bytes at once, so that an
+    /// index reading through it is held to the limits on what one read
+    /// gathers.
+    pub(crate) fn keeping(bytes: Vec<u8>, chunk: u64, limit: u64) -> Arc<Lossy> {
+        Arc::new(Lossy { bytes, chunk, held: Default::default(), limit: Some(limit) })
     }
 
     pub(crate) fn feed(&self, missing: &[crate::source::Missing]) {
@@ -1764,6 +1775,10 @@ impl Lossy {
 impl crate::source::Source for Lossy {
     fn len_bytes(&self) -> u64 {
         self.bytes.len() as u64
+    }
+
+    fn resident_limit(&self) -> Option<u64> {
+        self.limit
     }
 
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<crate::source::Missing> {
@@ -2100,4 +2115,142 @@ fn a_large_xz_block_is_a_span_of_its_own() {
     let (bytes, whole) = crate::codec::decode_traced(Codec::Xz, &packed).expect("decodes whole");
     reads_back(&s, &bytes, 173);
     traces_agree(&s, &whole, 179);
+}
+
+/// A run in a file read from a store that keeps `limit` bytes at once, with
+/// all of the file's chunks loaded.
+fn from_a_store(packed: &[u8], limit: u64) -> RunInput {
+    let (file, run_at) = in_a_file(packed);
+    let n = file.len();
+    let lossy = Lossy::keeping(file, 1024, limit);
+    lossy.feed(&lossy.chunks(0..n));
+    RunInput::new(lossy, run_at as u64, packed.len() as u64)
+}
+
+/// A zstd frame or an xz block whose input passes the limit on one, which a
+/// read of its span reads whole, is refused as too large when the run is
+/// read from a store that keeps only part of the file: in one pass, in steps
+/// and told the run is large. Read from a copy in memory, the same run
+/// indexes and reads back as before, and so does one that is held whole.
+#[test]
+fn a_frame_or_block_too_large_to_read_at_once_is_refused_only_from_a_store() {
+    let limits = Limits { unit_input: 80_000, ..by_input() };
+    let (frames, large, _) = frames_large_and_small();
+    assert!(large.len() > 100_000);
+    let text = mixed(200_000, 163);
+    let mut data: Vec<Vec<u8>> = text.chunks(10_000).map(<[u8]>::to_vec).collect();
+    data.insert(8, noise(100_000, 167));
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.iter().map(|c| (crate::codec::xz::tests::pack(c, 3, 0, 2, 1 << 16, None), c.clone())).collect();
+    let stream = crate::codec::xz::tests::wrap(&blocks, true);
+    for (codec, packed) in [(Codec::Zstd, &frames), (Codec::Xz, &stream)] {
+        let refused = decode_or_index_through(codec, Arc::new(packed.clone()), from_a_store(packed, 32 << 20), limits);
+        assert_eq!(refused.err(), Some(Refusal::TooLarge), "{codec:?}");
+        let s = indexed(codec, packed, limits);
+        let (bytes, _) = crate::codec::decode_traced(codec, packed).expect("decodes whole");
+        reads_back(&s, &bytes, 181);
+        let whole = Limits { whole: 1 << 20, ..limits };
+        let held = decode_or_index_through(codec, Arc::new(packed.clone()), from_a_store(packed, 32 << 20), whole);
+        assert!(matches!(held, Ok(Decoded::Whole(..))), "{codec:?}: a run held whole has no span to read");
+    }
+    for told in [false, true] {
+        let pass = Indexing::through(Codec::Zstd, Arc::new(frames.clone()), from_a_store(&frames, 32 << 20), limits).expect("starts");
+        let pass = if told { pass.known_large() } else { pass };
+        assert_eq!(in_steps_of(pass, 3000, 8 * 2000).0.err(), Some(Refusal::TooLarge), "told {told}");
+    }
+}
+
+/// A zstd or xz span that thinning has made larger than one read may gather
+/// is refused when its bytes or its trace are read from a store that keeps
+/// only part of the file, before anything is read. An xz read gathers a
+/// block at a time instead, so it reads the span's bytes all the same, and
+/// no answer names more chunks than the limit covers. A span under the limit
+/// reads, and from a copy in memory every span does.
+#[test]
+fn a_span_past_what_one_read_may_gather_is_refused_from_a_store() {
+    let text = mixed(400_000, 191);
+    let thinned = Limits { spacing: 16 << 10, in_spacing: 16 << 10, checkpoints: 6, ..small() };
+    for (codec, packed) in [(Codec::Zstd, zstd_of(&text, 10_000, true)), (Codec::Xz, xz_of(&text, 10_000))] {
+        // The limit on one read does not change where the spans are, so it
+        // is set to put about half of them over it.
+        let s = indexed(codec, &packed, thinned);
+        let mut sizes: Vec<usize> = (0..s.spans()).map(|k| if codec == Codec::Zstd { s.frames_in(k).len() } else { s.span_in(k).len() }).collect();
+        sizes.sort_unstable();
+        let limits = Limits { span_input: sizes[sizes.len() / 2], ..thinned };
+        let held = indexed(codec, &packed, limits);
+        reads_back(&held, &text, 193);
+        let mut s = indexed(codec, &packed, limits);
+        let (file, run_at) = in_a_file(&packed);
+        let lossy = Lossy::keeping(file, 1024, 32 << 20);
+        s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+        let (mut over, mut under) = (0, 0);
+        for k in 0..s.spans() {
+            let want = s.span_bytes(k);
+            let gathers = match codec {
+                Codec::Zstd => s.frames_in(k).len(),
+                _ => s.span_in(k).len(),
+            };
+            lossy.drop_all();
+            let mut got = vec![0u8; (want.end - want.start) as usize];
+            if gathers > limits.span_input {
+                over += 1;
+                assert_eq!(s.span_trace(k).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                if codec == Codec::Zstd {
+                    assert_eq!(s.read(want.start, &mut got).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                    continue;
+                }
+            } else {
+                under += 1;
+                let t = loop {
+                    match s.span_trace(k) {
+                        Ok(t) => break t,
+                        Err(ReadError::Missing(m)) => lossy.feed(&m),
+                        Err(ReadError::Refused(why)) => panic!("{codec:?} span {k}: refused: {why:?}"),
+                    }
+                };
+                assert!(shape(&t) == shape(&held.span_trace(k).unwrap()), "{codec:?} span {k}");
+                lossy.drop_all();
+            }
+            let asked = read_waiting(&s, &lossy, want.start, &mut got);
+            assert!(got == text[want.start as usize..want.end as usize], "{codec:?} span {k}");
+            for named in &asked {
+                assert!(named.len() <= limits.span_input / 1024 + 2, "{codec:?} span {k}: {} chunks named at once", named.len());
+            }
+        }
+        assert!(over > 0 && under > 0, "{codec:?}: {over} spans over the limit, {under} under it");
+    }
+}
+
+/// A stretch between two kept deflate block starts longer than the limit on
+/// one read, which only a run of more blocks than are kept has, is refused
+/// when the blocks in it are looked for from a store that keeps only part of
+/// the file. Read from a copy in memory, they are found as before.
+#[test]
+fn a_long_stretch_between_kept_block_starts_is_refused_from_a_store() {
+    let data = mixed(300_000, 197);
+    let packed = flushed(&data, 1, 2000);
+    let limits = Limits { block_marks: 4, unit_input: 20_000, ..small() };
+    let held = indexed(Codec::Deflate, &packed, limits);
+    let mut s = indexed(Codec::Deflate, &packed, limits);
+    s.set_input(from_a_store(&packed, 32 << 20));
+    let stride = s.blocks.stride;
+    let stretch = |g: usize| s.blocks.list.get(g + 1).map_or(packed.len() as u64 * 8, |m| m.0).div_ceil(8) - s.blocks.list[g].0 / 8;
+    let (mut over, mut under) = (0, 0);
+    for g in 0..s.blocks.list.len() {
+        let i = g as u64 * stride + 1;
+        if i >= s.blocks() {
+            continue;
+        }
+        match stretch(g) > 20_000 {
+            true => {
+                over += 1;
+                assert_eq!(s.block(i).err(), Some(ReadError::Refused(Refusal::TooLarge)), "block {i}");
+            }
+            false => {
+                under += 1;
+                assert_eq!(s.block(i), held.block(i), "block {i}");
+            }
+        }
+        assert!(held.block(i).is_ok(), "block {i}");
+    }
+    assert!(over > 0, "{over} stretches over the limit, {under} under it");
 }
