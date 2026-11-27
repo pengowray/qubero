@@ -1387,6 +1387,7 @@ function buildDocument(tab: Tab): Page {
         view.redrawAddresses();
         structure.redraw();
         inspector.render();
+        refresh();
       },
     },
   );
@@ -2217,9 +2218,14 @@ function buildDocument(tab: Tab): Page {
     const at = document.createElement("span");
     at.className = "addr";
     at.textContent = formatOffset(c.bitOffset);
-    // Inside a byte the decimal counts bits, so the two halves agree.
+    // Inside a byte the decimal counts bits, so the two halves agree. Where
+    // addresses are already decimal, a whole byte's number is not repeated.
     const decimal =
-      c.bitOffset % 8 === 0 ? `(${c.offset.toLocaleString()})` : `(bit ${c.bitOffset.toLocaleString()})`;
+      c.bitOffset % 8 !== 0
+        ? ` (bit ${c.bitOffset.toLocaleString()})`
+        : getAddressBase() === "hex"
+          ? ` (${c.offset.toLocaleString()})`
+          : "";
     // Overwrite/Insert and the pane are the hex grid's, so they go with it:
     // reading `· Hex` under a listing says the wrong thing about both.
     const pane = c.pane === "ascii" ? "Text" : c.mode === "binary" ? "Binary" : "Hex";
@@ -2231,7 +2237,7 @@ function buildDocument(tab: Tab): Page {
     const bits = sel === null ? 0 : sel.endBit - sel.startBit;
     const selected =
       bits === 0 ? "" : `  ·  ${bits % 8 === 0 ? selectedBytes(bits / 8) : `${bits.toLocaleString()} bits`} selected`;
-    posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}${selected}`);
+    posLabel.replaceChildren("Offset ", at, `${decimal}${listingShowing ? "" : editing}${selected}`);
     // Where the byte under the cursor came from. Only an unpacked stream has an
     // answer, and only once a codec keeps a trace of what it did; until then
     // there is nothing to say and nothing is said.

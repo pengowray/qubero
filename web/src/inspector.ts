@@ -6,7 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatAddress, formatBytes, formatLimit, formatOffset, RESIDENT_BYTES } from "./doc.ts";
-import { positionValue } from "./format.ts";
+import { getAddressBase, positionValue } from "./format.ts";
 import { fieldStart } from "./hexcell.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address, problemGlyph, tagged as el } from "./dom.ts";
@@ -221,6 +221,9 @@ export class Inspector {
   private readonly struct: HTMLElement;
   private readonly crumbs: HTMLElement;
   private readonly field: HTMLInputElement;
+  /** What the field shows and what editing it starts from. They differ for an
+   *  offset shown as `0x40`, whose editor still starts from `64`. */
+  private fieldText = { shown: "", edit: "" };
   /** Long values (bytes, text) are edited here instead, wrapped over lines. */
   private readonly area: HTMLTextAreaElement;
   /** A code's bits are shown here instead of in the box, because they have a
@@ -447,8 +450,12 @@ export class Inspector {
         this.clearError();
       }
     });
+    this.field.addEventListener("focus", () => {
+      if (this.field.dataset["dirty"] !== "1" && this.field.value === this.fieldText.shown) this.field.value = this.fieldText.edit;
+    });
     this.field.addEventListener("blur", () => {
       if (this.field.dataset["dirty"] === "1") this.commitField();
+      else if (this.field.value === this.fieldText.edit) this.field.value = this.fieldText.shown;
     });
     this.field.addEventListener("input", () => {
       this.field.dataset["dirty"] = "1";
@@ -1145,7 +1152,9 @@ export class Inspector {
     const next = new Map<string, { readonly key: string; readonly el: HTMLElement }>();
     const shown: HTMLElement[] = [];
     for (const section of sections) {
-      const key = `${this.doc.template ?? ""}|${width}|${section.key?.(this.doc, n, path) ?? fieldKey}`;
+      // The base addresses are written in is in the key: the figures write
+      // offsets, and changing it in Settings has to draw them again.
+      const key = `${this.doc.template ?? ""}|${width}|${getAddressBase()}|${section.key?.(this.doc, n, path) ?? fieldKey}`;
       const prev = this.vizDrawn.get(section.id);
       if (prev !== undefined && prev.key === key) {
         next.set(section.id, prev);
@@ -2934,9 +2943,12 @@ export class Inspector {
     // select and copy, which a disabled input in most browsers is not.
     this.field.readOnly = !n.editable || row !== null;
     this.field.classList.remove("invalid");
-    // An offset is shown in the base addresses are. The field is also the
-    // editor, and the core reads `0x40` back as the same number.
-    this.field.value = row ?? (n.composite ? "" : (positionValue(n) ?? n.edit_text));
+    // An offset is shown in the base addresses are, and edited from the
+    // decimal digits the editor always starts from.
+    const edit = row ?? (n.composite ? "" : n.edit_text);
+    const shown = row ?? (n.composite ? "" : (positionValue(n) ?? n.edit_text));
+    this.fieldText = { shown, edit };
+    this.field.value = document.activeElement === this.field ? edit : shown;
     this.field.placeholder = n.composite && row === null ? structText(n) : "";
     this.field.setAttribute("aria-label", ariaLabel(n));
     this.colourBlock.hidden = n.colour === undefined;
