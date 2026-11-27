@@ -3,7 +3,8 @@
 Written 2026-11-26, for developers. This is a proposal. Parts 1 to 3 are
 built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
-from this text), and parts 4 to 11 are not. It follows
+from this text), and so is part 5 (2026-11-28; see "Built (part 5)"). Part 4
+and parts 6 to 11 are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
@@ -668,6 +669,98 @@ zeroes. Each must pass `Missing` on instead:
 | `Space::map_out`, `map_in`, `trace_at_bit` | `Option` | a `Result` whose error is the missing chunks; the wasm crate replies "pending" |
 | `index_run`'s `refused_runs` | keeps refusals | never sees a missing chunk, which is an `EvalError` |
 
+### Built (part 5)
+
+**Built on 2026-11-28.** The index passes still read a copy of the run
+gathered whole (part 2), and each hands its `Seekable` a `RunInput` over
+that copy (`RunInput::held`, an `ArcSource`). So outside the tests no read
+finds a chunk missing yet, and nothing a reader sees changes. Where the
+code differs from the text above:
+
+- **`RunInput`** is in `codec/lazy/input.rs`, as sketched, with `held` for a
+  copy. Two crate-private methods sit on top of `read`: `copy` cuts a range
+  short at the run's end and reads it, and `copies` reads several ranges and
+  names every chunk that any of them is missing, sorted and once each.
+  `read` fills any bytes past the run's end with zeroes. No caller asks for
+  bytes there.
+- **Which reads answer `ReadError`.** `read`, `span_trace`, `block`,
+  `block_trace` and `block_trace_from` answer `ReadError`, as the table's
+  first row says. The five reads that answered an `Option` before
+  (`trace_at_byte`, `trace_at_bit`, `map_out`, `map_in` and `block_of_bit`)
+  answer `Result<Option<_>, Vec<Missing>>` instead. For them a refusal
+  still gives `None`, as before, and the error holds only missing chunks.
+  `lazy::refused_as_none` converts a `Result<T, ReadError>` into that form.
+  `Space::map_out`, `map_in` and `trace_at_bit`, and `Joined::map_out` and
+  `map_in`, answer the same kind of `Result`. `Evaluator::map_out` and
+  `map_in` answer `R<Option<Step>>`, with `EvalError::Pending` for missing
+  chunks, and the wasm crate turns that into a "pending" reply.
+- **Each read copies only the compressed bytes it needs** through the
+  `RunInput`. The ranges are the ones part 3's tests decode from:
+  - a deflate span: from the byte holding its checkpoint's bit to the byte
+    holding the next checkpoint's bit, and `MAX_HEAD_BYTES` from the header
+    of the block the checkpoint is inside;
+  - a zstd span, and the trace of a zstd or xz span: the span's frames or
+    blocks, the bytes `span_in` gives;
+  - `block(i)`: the one or two bytes holding BFINAL and BTYPE;
+  - `group(g)`: from kept block start `g` to the next kept block start;
+  - `block_trace(i)`: from the block's first byte to the byte holding its
+    last bit, or to the run's end for the last block;
+  - an xz read: it asks `Prefix::needs` which blocks it will decode, and
+    reads their LZMA2 data whole, or nothing when the bytes it reads are
+    already decoded.
+
+  Until part 6 bounds what a read needs, one copy can be as long as the
+  whole run. Each read makes its copy again, and the time the copies take
+  was not measured.
+- **A read of several spans** stops at the first span missing chunks and
+  names that span's, as "A chunk pushed out while a synchronous read is
+  under way" says.
+- **In the evaluator**, `read_in`'s arm for a space read through an index is
+  `read_indexed`, and `read_stitched`'s read of a part's index is
+  `read_part_index`, both `#[cold]` and out of line for the stack. `Blocks`
+  gains `first_start`, out of line for the same reason, for placing a
+  stream's `blocks` row. `traced_count`, `traced_at` and
+  `Evaluator::block_trace` answer `R`. `traced_at` now reads the block or
+  block trace it needs first, and passes it to `traced_step_at`, which
+  finds the row. `unit_of` takes the first block's kind from a whole trace
+  only, and never reads an indexed run for it: an indexed run's blocks are
+  deflate blocks, and every kind of deflate block is counted as "block".
+- **Rows that needed no change.** `part_index` reads nothing through an
+  index; only `read_stitched`'s read does. `Joined::part_trace` decodes the
+  copy of the compressed run that a `JoinedBytes::Packed` holds; part 10
+  replaces that copy with a `RunInput`. No code that reads a `Seekable`
+  adds an entry to `refused_runs` or `Stitch::troubles`, and the tests check
+  that both stay empty.
+- **The web** needed no change. `Doc.settle` already fetches the chunks
+  that any "pending" reply names, and `mapOut`, `mapIn` and `decodedCode`
+  return `null` for such a reply.
+- **A problem left for later.** `template_for` can now answer `Pending`
+  after a joined stream's walk has finished. `join_whole` gives the finished
+  walk to its caller and keeps nothing, so when the call is made again, the
+  evaluator walks the joined stream again from its first part. In part 5
+  `template_for` never answers `Pending` there: it does so only when an
+  index reads through a source that can lose chunks, and part 7 is the
+  first part to make such an index. See "Still to do".
+- **Tests.** In `codec/lazy/tests.rs`, `Lossy` is a source over a file that
+  holds only the chunks it was fed. A `Seekable` built as usual is given a
+  `RunInput` onto it (`Seekable::set_input`, for tests), starting past
+  other bytes of the file. Over deflate (with checkpoints inside blocks),
+  zstd (with skippable frames) and xz runs, the read of each span names
+  exactly the chunks of the bytes it needs (for xz, chunks inside the span)
+  in one answer, leaves the span out of the span cache, and reads the right
+  bytes once those chunks are fed. An xz span
+  read part of the way keeps its prefix through a read that finds chunks
+  missing, and carries on from it. Span traces, blocks, block traces, the
+  block of a bit with thinned block starts, and `map_out` and `map_in` wait
+  the same way, and then give what an index over the whole run gives. In
+  `eval/space.rs`, a zlib stream whose index reads through such a source is
+  opened, read by a field and by a tab, mapped both ways, and listed down to
+  a block and its codes. Each of these first answers `Pending`, naming only
+  chunks inside the run, and `refused_runs` stays empty. In
+  `eval/stitch.rs`, a BGZF part read through such an index answers
+  `Pending` in the stitched space and in the joined stream opened as a
+  document, and is never added to `Stitch::troubles`.
+
 ## Measuring a gzip member
 
 `stream_len_at` reads up to 64 MiB in one `read_in`: the rest of the file
@@ -1122,6 +1215,8 @@ order. Each part needs only the parts before it.
    its copy (an `ArcSource`), so that until part 7 no read of a `Seekable`
    finds a chunk missing; `ReadError`; every row of the table in "Everything
    that has to treat `Missing` as 'not yet'". Nothing a reader sees changes.
+   **Done 2026-11-28**; see "Built (part 5)" under "A `Seekable` reading
+   through its `RunInput`".
 6. **Bound what a `Seekable` read needs.** Checkpoints by compressed
    distance, and at the start of large frames and blocks; header copies;
    BFINAL and BTYPE with the block starts; block traces that stop when coarse;
@@ -1276,6 +1371,14 @@ in the browser.
 
 ## Still to do
 
+- **A joined stream walked twice.** `join_whole` gives a finished walk to
+  its caller and keeps nothing. If `open_space` then answers `Pending`
+  because chunks under the stream's first bytes are missing
+  (`template_for`), the next call walks the joined stream again from its
+  first part. The second walk gives the same stream, so only time is lost.
+  This cannot happen before part 7. A fix: `open_space` keeps the joined
+  stream that `unpack` made until the next call for the same stream takes
+  it.
 - **Lift `unit_input`.** A zstd span decode could keep its frame decoder
   between reads, as xz's `Prefix` keeps its LZMA2 decoder, and xz's
   `lzma2_len` could read a block's LZMA2 chunk headers a window at a time,
