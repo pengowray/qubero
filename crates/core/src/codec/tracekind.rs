@@ -73,10 +73,40 @@ pub enum Role {
 pub enum Family {
     Deflate,
     JpegScan,
+    Lz4,
+    Snappy,
+    FastLz,
+    /// `.Z`, LZW codes.
+    Compress,
+    /// LHA's `-lh4-` to `-lh7-`.
+    Lzhuf,
+    Rar5,
+    /// LZMA and LZMA2, raw, in lzip, and in xz.
+    Lzma,
+    /// PNG's scanlines, unfiltered a row at a time.
+    PngScanlines,
+    /// Bytes kept in the low bits of a picture's pixels.
+    LowBits,
+    CdfHuffman,
+    Pico8,
 }
 
 impl Family {
-    pub const ALL: &[Family] = &[Family::Deflate, Family::JpegScan];
+    pub const ALL: &[Family] = &[
+        Family::Deflate,
+        Family::JpegScan,
+        Family::Lz4,
+        Family::Snappy,
+        Family::FastLz,
+        Family::Compress,
+        Family::Lzhuf,
+        Family::Rar5,
+        Family::Lzma,
+        Family::PngScanlines,
+        Family::LowBits,
+        Family::CdfHuffman,
+        Family::Pico8,
+    ];
 
     /// The family of a codec, or `None` for a codec whose nodes have no kind
     /// yet.
@@ -84,7 +114,32 @@ impl Family {
         match codec {
             Codec::Deflate | Codec::Zlib | Codec::Gzip => Some(Family::Deflate),
             Codec::JpegBaseline => Some(Family::JpegScan),
-            _ => None,
+            Codec::Lz4Block | Codec::Lz4Frame => Some(Family::Lz4),
+            Codec::Snappy => Some(Family::Snappy),
+            Codec::FastLz => Some(Family::FastLz),
+            Codec::Compress => Some(Family::Compress),
+            Codec::Lha { .. } => Some(Family::Lzhuf),
+            Codec::Rar5 { .. } => Some(Family::Rar5),
+            Codec::Lzip | Codec::Lzma1 { .. } | Codec::Lzma2 | Codec::Xz => Some(Family::Lzma),
+            Codec::PngScanlines { .. } | Codec::PngUnfilter { .. } => Some(Family::PngScanlines),
+            Codec::LowBitsArgb | Codec::LowBitsRgba11 => Some(Family::LowBits),
+            Codec::CdfHuffman | Codec::CdfAhuff => Some(Family::CdfHuffman),
+            Codec::Pico8Pxa | Codec::Pico8Old => Some(Family::Pico8),
+            // Not yet: pxu and IAR's two have no sample to test them by.
+            Codec::PicotronPxu | Codec::IarLz77 | Codec::IarPackbits => None,
+            // These lay down no blocks, so they have no nodes to name.
+            Codec::CfbWorkbook
+            | Codec::Stored
+            | Codec::Zstd
+            | Codec::Brotli
+            | Codec::Bzip2
+            | Codec::CdfRle
+            | Codec::Latin1Text
+            | Codec::EscapedLatin1Text
+            | Codec::Base64
+            | Codec::QuotedPrintable
+            | Codec::QEncoding
+            | Codec::TascamScramble => None,
         }
     }
 
@@ -94,12 +149,24 @@ impl Family {
         match self {
             Family::Deflate => DEFLATE,
             Family::JpegScan => JPEG_SCAN,
+            Family::Lz4 => LZ4,
+            Family::Snappy => SNAPPY,
+            Family::FastLz => FASTLZ,
+            Family::Compress => COMPRESS,
+            Family::Lzhuf => LZHUF,
+            Family::Rar5 => RAR5,
+            Family::Lzma => LZMA,
+            Family::PngScanlines => PNG_SCANLINES,
+            Family::LowBits => LOW_BITS,
+            Family::CdfHuffman => CDF_HUFFMAN,
+            Family::Pico8 => PICO8,
         }
     }
 
     /// The role a step plays in this family. Only the repeat codes of a
     /// Huffman table need the family: deflate's code 16 repeats the length
-    /// before it, and 17 and 18 write zeros.
+    /// before it and 17 and 18 write zeros; RAR 5's 16 and 17 repeat and its
+    /// 15, 18 and 19 write zeros; every one of LHA's writes zeros.
     pub fn step_role(self, kind: StepKind, outside_units: bool) -> Role {
         match kind {
             StepKind::Header(field, _) => Role::Field(field),
@@ -107,7 +174,7 @@ impl Family {
             StepKind::Table(TableField::LitLen { .. }) => Role::CodeLength,
             StepKind::Table(TableField::Dist { .. }) => Role::DistanceCodeLength,
             StepKind::Table(TableField::Repeat { code, .. }) => match (self, code) {
-                (Family::Deflate, 16) => Role::RepeatLength,
+                (Family::Deflate, 16) | (Family::Rar5, 16 | 17) => Role::RepeatLength,
                 _ => Role::ZeroLengths,
             },
             StepKind::Literal(_) => Role::Literal,
@@ -185,6 +252,156 @@ const JPEG_SCAN: &[KindEntry] = &[
     k(Role::Field(StepField::Restart), "jpegscan.restart"),
     // Bytes after the last MCU that no code read.
     k(Role::Trailing, "jpegscan.trailing"),
+];
+
+/// LZ4 blocks, alone or in a frame, read by `codec::lz4`. A frame's block
+/// starts with its size word; its checksums are outside every block.
+const LZ4: &[KindEntry] = &[
+    k(Role::Blocks, "lz4.blocks"),
+    k(Role::Block, "lz4.block"),
+    k(Role::Field(StepField::BlockHeader), "lz4.block_size"),
+    k(Role::Field(StepField::Token), "lz4.token"),
+    k(Role::Field(StepField::LengthExtra), "lz4.length_extra"),
+    k(Role::Codes, "lz4.codes"),
+    k(Role::Stored, "lz4.literals"),
+    k(Role::Field(StepField::Offset), "lz4.offset"),
+    k(Role::Match, "lz4.match"),
+    k(Role::Unnamed, "lz4.unnamed_codes"),
+];
+
+/// One raw Snappy block, read by `codec::snappy`. The length in front of it
+/// is outside the block.
+const SNAPPY: &[KindEntry] = &[
+    k(Role::Blocks, "snappy.blocks"),
+    k(Role::Block, "snappy.block"),
+    k(Role::Field(StepField::Token), "snappy.tag"),
+    k(Role::Field(StepField::LengthExtra), "snappy.length_extra"),
+    k(Role::Codes, "snappy.codes"),
+    k(Role::Stored, "snappy.literals"),
+    k(Role::Field(StepField::Offset), "snappy.offset"),
+    k(Role::Match, "snappy.match"),
+    k(Role::Unnamed, "snappy.unnamed_codes"),
+];
+
+/// One FastLZ block, read by `codec::fastlz`.
+const FASTLZ: &[KindEntry] = &[
+    k(Role::Blocks, "fastlz.blocks"),
+    k(Role::Block, "fastlz.block"),
+    k(Role::Field(StepField::Token), "fastlz.token"),
+    k(Role::Field(StepField::LengthExtra), "fastlz.length_extra"),
+    k(Role::Field(StepField::Offset), "fastlz.offset"),
+    k(Role::Codes, "fastlz.codes"),
+    k(Role::Stored, "fastlz.literals"),
+    k(Role::Match, "fastlz.match"),
+    k(Role::Field(StepField::Padding), "fastlz.padding"),
+    k(Role::Unnamed, "fastlz.unnamed_codes"),
+];
+
+/// A `.Z` file's LZW codes, read by `codec::compress`. A block runs to a
+/// clear code, and the zero bits that pad a group of codes when the width
+/// changes are inside it.
+const COMPRESS: &[KindEntry] = &[
+    k(Role::Blocks, "compress.blocks"),
+    k(Role::Block, "compress.block"),
+    k(Role::Codes, "compress.codes"),
+    k(Role::Literal, "compress.literal"),
+    k(Role::Match, "compress.match"),
+    k(Role::EndOfBlock, "compress.clear"),
+    k(Role::Field(StepField::Padding), "compress.padding"),
+    k(Role::Unnamed, "compress.unnamed_codes"),
+];
+
+/// LHA's `-lh5-` family, read by `codec::lha`: per block, a symbol count,
+/// three Huffman tables and the codes.
+const LZHUF: &[KindEntry] = &[
+    k(Role::Blocks, "lzhuf.blocks"),
+    k(Role::Block, "lzhuf.block"),
+    k(Role::Field(StepField::BlockHeader), "lzhuf.symbol_count"),
+    k(Role::CodeLengthCodeLength, "lzhuf.code_length_code_length"),
+    k(Role::CodeLength, "lzhuf.code_length"),
+    k(Role::DistanceCodeLength, "lzhuf.offset_code_length"),
+    k(Role::ZeroLengths, "lzhuf.code_length_zeros"),
+    k(Role::Codes, "lzhuf.codes"),
+    k(Role::Literal, "lzhuf.literal"),
+    k(Role::Match, "lzhuf.match"),
+    k(Role::Unnamed, "lzhuf.unnamed_codes"),
+];
+
+/// RAR 5's compressed blocks, read by `codec::rar5`.
+const RAR5: &[KindEntry] = &[
+    k(Role::Blocks, "rar5.blocks"),
+    k(Role::Block, "rar5.block"),
+    k(Role::Field(StepField::BlockHeader), "rar5.block_header"),
+    k(Role::CodeLengthCodeLength, "rar5.code_length_code_length"),
+    k(Role::CodeLength, "rar5.code_length"),
+    k(Role::DistanceCodeLength, "rar5.distance_code_length"),
+    k(Role::RepeatLength, "rar5.code_length_repeat"),
+    k(Role::ZeroLengths, "rar5.code_length_zeros"),
+    k(Role::Codes, "rar5.codes"),
+    k(Role::Literal, "rar5.literal"),
+    k(Role::Match, "rar5.match"),
+    k(Role::Field(StepField::FilterDef), "rar5.filter"),
+    k(Role::Field(StepField::Padding), "rar5.padding"),
+    k(Role::Unnamed, "rar5.unnamed_codes"),
+];
+
+/// LZMA, read by `codec::lzma`: one block for an LZMA1 stream, one per chunk
+/// for LZMA2, raw, in lzip or in xz. A container's own headers and checks are
+/// outside every block.
+const LZMA: &[KindEntry] = &[
+    k(Role::Blocks, "lzma.blocks"),
+    k(Role::Block, "lzma.block"),
+    k(Role::Field(StepField::BlockHeader), "lzma.chunk_header"),
+    k(Role::Field(StepField::LzmaProps), "lzma.properties"),
+    k(Role::Field(StepField::RangeInit), "lzma.range_init"),
+    k(Role::Codes, "lzma.codes"),
+    k(Role::Literal, "lzma.literal"),
+    k(Role::Match, "lzma.match"),
+    k(Role::EndOfBlock, "lzma.end_marker"),
+    k(Role::Stored, "lzma.stored_data"),
+    k(Role::Unnamed, "lzma.unnamed_codes"),
+];
+
+/// PNG's scanlines, read by `codec::scanlines` and `codec::pixels`. A row's
+/// pass and row number are steps of no width.
+const PNG_SCANLINES: &[KindEntry] = &[
+    k(Role::Blocks, "png.scanlines"),
+    k(Role::Block, "png.scanline"),
+    k(Role::Field(StepField::Pass), "png.pass"),
+    k(Role::Field(StepField::Row), "png.row"),
+    k(Role::Field(StepField::Filter), "png.filter"),
+    k(Role::Filtered, "png.filtered_row"),
+];
+
+/// Bytes kept in the low bits of a picture's pixels, read by
+/// `codec::pixels`.
+const LOW_BITS: &[KindEntry] = &[
+    k(Role::Blocks, "lowbits.blocks"),
+    k(Role::Block, "lowbits.pixels"),
+    k(Role::Codes, "lowbits.codes"),
+    k(Role::Pixel, "lowbits.pixel"),
+];
+
+/// NASA CDF's Huffman and adaptive Huffman coding, read by `codec::cdfhuff`.
+const CDF_HUFFMAN: &[KindEntry] = &[
+    k(Role::Blocks, "cdfhuffman.blocks"),
+    k(Role::Block, "cdfhuffman.block"),
+    k(Role::Field(StepField::FrequencyTable), "cdfhuffman.frequency_table"),
+    k(Role::Codes, "cdfhuffman.codes"),
+    k(Role::Literal, "cdfhuffman.literal"),
+    k(Role::EndOfBlock, "cdfhuffman.end_of_stream"),
+    k(Role::Field(StepField::Padding), "cdfhuffman.padding"),
+    k(Role::Unnamed, "cdfhuffman.unnamed_codes"),
+];
+
+/// PICO-8's two code compressions, read by `codec::pico8`.
+const PICO8: &[KindEntry] = &[
+    k(Role::Blocks, "pico8.blocks"),
+    k(Role::Block, "pico8.block"),
+    k(Role::Codes, "pico8.codes"),
+    k(Role::Literal, "pico8.literal"),
+    k(Role::Match, "pico8.match"),
+    k(Role::EndOfBlock, "pico8.end"),
 ];
 
 /// Every kind a codec's nodes can be. Empty for a codec whose nodes have no
