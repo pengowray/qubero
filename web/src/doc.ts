@@ -3784,7 +3784,7 @@ export class Doc {
       const now = w.missing.join(",");
       if (now === asked) return { lines: [], missing: w.missing, next: from };
       asked = now;
-      await Promise.all(w.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+      await this.fileChunks(w.missing);
     }
     return { lines: [], missing: [], next: from };
   }
@@ -3812,7 +3812,7 @@ export class Doc {
       const now = chunks.join(",");
       if (now === asked) return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
       asked = now;
-      await Promise.all(chunks.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+      await this.fileChunks(chunks);
     }
     return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
   }
@@ -3822,7 +3822,7 @@ export class Doc {
     for (let go = 0; go < 3; go++) {
       const b = JSON.parse(this.editor.text_back(this.space, encoding, at, lines)) as TextBack;
       if (b.missing.length === 0) return b;
-      await Promise.all(b.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+      await this.fileChunks(b.missing);
     }
     return { start: at, back: at, missing: [] };
   }
@@ -3848,7 +3848,7 @@ export class Doc {
       const now = s.missing.join(",");
       if (now === asked) return { hits: [], missing: s.missing, next: from };
       asked = now;
-      await Promise.all(s.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+      await this.fileChunks(s.missing);
     }
     return { hits: [], missing: [], next: from };
   }
