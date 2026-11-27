@@ -346,9 +346,10 @@ impl<'a> Walk<'a, '_> {
                 let mut es = Vec::new();
                 elems_here(self.t, &def.fields[i].ty, 0, &mut es);
                 let numbers = !es.is_empty() && es.iter().all(|e| {
-                    let mut ss = Vec::new();
+                    let (mut ss, mut inner) = (Vec::new(), Vec::new());
                     structs_here(self.t, e, 0, &mut ss);
-                    ss.is_empty()
+                    elems_here(self.t, e, 0, &mut inner);
+                    ss.is_empty() && inner.is_empty()
                 });
                 self.p.mark(def, i, if numbers { AT | EACH } else { AT });
             }
@@ -597,16 +598,22 @@ mod tests {
     }
 
     /// A declared list of numbers holds a position in each element. A
-    /// declared list of structures does not: its elements are records, and
-    /// the positions in them are their own fields.
+    /// declared list of structures or of lists does not: the elements are
+    /// not numbers.
     #[test]
     fn a_declared_list_of_numbers_is_a_position_in_each_element() {
         let rec = T::structure("Rec", vec![("n", T::u8())]);
         let root = T::structure(
             "Root",
-            vec![("count", T::u8()), ("offsets", T::array(T::u32(Big), E::field("count"))), ("records", T::array(rec, E::field("count"))), ("first", T::u32(Big))],
+            vec![
+                ("count", T::u8()),
+                ("offsets", T::array(T::u32(Big), E::field("count"))),
+                ("records", T::array(rec, E::field("count"))),
+                ("first", T::u32(Big)),
+                ("table", T::array(T::array(T::u32(Big), E::field("count")), E::field("count"))),
+            ],
         )
-        .positions(&["offsets", "records", "first"]);
+        .positions(&["offsets", "records", "first", "table"]);
         let t = Template::new("t", root.clone());
         let Ty::Struct(s) = &root else { panic!() };
         let mut p = Positions::of(&t);
@@ -614,6 +621,7 @@ mod tests {
         assert_eq!(p.flags(&t, s, 1), AT | EACH);
         assert_eq!(p.flags(&t, s, 2), AT);
         assert_eq!(p.flags(&t, s, 3), AT);
+        assert_eq!(p.flags(&t, s, 4), AT);
     }
 }
 
