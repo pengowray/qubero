@@ -40,7 +40,7 @@ use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBu
 ///
 /// A span is read whole, so when the index will read the run from a source
 /// that keeps only part of the file, a frame whose own input passes
-/// [`Limits::unit_input`] is refused as [`Refusal::TooLarge`]: a frame the
+/// [`Limits::unit_input`] is refused as [`Refusal::TooMuchAtOnce`]: a frame the
 /// pass has finished once it is past the cap, and one finished while the run
 /// might still be held whole once the run turns out not to fit.
 pub(super) struct ZstdPass {
@@ -127,7 +127,7 @@ impl ZstdPass {
             took
         };
         let too_much = |took: Option<usize>| match took {
-            Some(n) if input.too_much(n, limits.unit_input) => Err(Refusal::TooLarge),
+            Some(n) if input.too_much(n, limits.unit_input) => Err(Refusal::TooMuchAtOnce),
             _ => Ok(()),
         };
         // The last frame ends where the walk says, and any skippable frames

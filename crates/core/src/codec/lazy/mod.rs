@@ -91,13 +91,13 @@ pub const IN_SPACING_START: u64 = 1 << 20;
 /// run may take, and the most one stretch between two kept deflate block
 /// starts may take, when the run is read from a source that keeps only part
 /// of the file at once. Each is read whole when a span or a block list is
-/// read, so one larger is refused as [`Refusal::TooLarge`].
+/// read, so one larger is refused as [`Refusal::TooMuchAtOnce`].
 pub const UNIT_INPUT: usize = 16 << 20;
 
 /// The most compressed input one read of a zstd or xz span may gather at
 /// once, when the run is read from a source that keeps only part of the file.
 /// A span over it, which only thinning can make, is refused when read, as
-/// [`Refusal::TooLarge`]. A deflate span never reaches it: its input is at
+/// [`Refusal::TooMuchAtOnce`]. A deflate span never reaches it: its input is at
 /// most the input spacing and one stored block for each thinning, 8.5 MiB.
 pub const SPAN_INPUT: usize = 16 << 20;
 

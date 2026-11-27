@@ -252,13 +252,13 @@ impl Seekable {
         self.checkpoints[k].own().unwrap_or(range.start).min(range.end)..range.end
     }
 
-    /// Refused as [`Refusal::TooLarge`] when a span read would gather more
-    /// than [`Limits::span_input`] of the run at once from a source that
+    /// Refused as [`Refusal::TooMuchAtOnce`] when a span read would gather
+    /// more than [`Limits::span_input`] of the run at once from a source that
     /// keeps only part of the file. Only thinning makes a zstd or xz span
     /// that large; a deflate span never is.
     fn at_once(&self, bytes: usize) -> Result<(), Refusal> {
         match self.input.too_much(bytes, self.limits.span_input) {
-            true => Err(Refusal::TooLarge),
+            true => Err(Refusal::TooMuchAtOnce),
             false => Ok(()),
         }
     }
@@ -523,7 +523,8 @@ impl Seekable {
     /// found by decoding from start `g` and counting the output. The run is
     /// read through its input from start `g` to the next kept start, or to
     /// the run's end. A stretch past [`Limits::unit_input`] is refused as
-    /// [`Refusal::TooLarge`] when the source keeps only part of the file.
+    /// [`Refusal::TooMuchAtOnce`] when the source keeps only part of the
+    /// file.
     fn group(&self, g: usize) -> Result<Arc<[BlockStart]>, ReadError> {
         if let Some(starts) = lock(&self.groups).get(g as u64) {
             return Ok(starts);
@@ -533,7 +534,7 @@ impl Seekable {
         // Only a hostile run, of more blocks than are kept, has a long
         // stretch between two kept starts.
         if self.input.too_much(to - (in_bit / 8) as usize, self.limits.unit_input) {
-            return Err(Refusal::TooLarge.into());
+            return Err(Refusal::TooMuchAtOnce.into());
         }
         let code = self.input.copy((in_bit / 8) as usize..to)?;
         let starts: Arc<[BlockStart]> = self.group_from(g, Input::new(code.window(self.input.len()), None))?.into();

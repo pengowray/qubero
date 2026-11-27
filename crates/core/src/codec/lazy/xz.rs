@@ -43,7 +43,7 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) ->
     // A read of a span reads a block's data whole, so one too large to read
     // at once is refused.
     if (0..l.blocks.len()).any(|i| input.too_much(l.block_len(i), limits.unit_input)) {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooMuchAtOnce);
     }
     let mut marks = Checkpoints::new(&limits);
     let mut out = 0u64;

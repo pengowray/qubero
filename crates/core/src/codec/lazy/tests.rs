@@ -2213,8 +2213,9 @@ fn from_a_store(packed: &[u8], limit: u64) -> RunInput {
 }
 
 /// A zstd frame or an xz block whose input passes the limit on one, which a
-/// read of its span reads whole, is refused as too large when the run is
-/// read from a store that keeps only part of the file: in one pass, in steps
+/// read of its span reads whole, is refused as too much to read at once
+/// when the run is read from a store that keeps only part of the file, and
+/// not as too large to unpack, which it is not: in one pass, in steps
 /// and told the run is large. Read from a copy in memory, the same run
 /// indexes and reads back as before, and so does one that is held whole.
 #[test]
@@ -2229,7 +2230,7 @@ fn a_frame_or_block_too_large_to_read_at_once_is_refused_only_from_a_store() {
     let stream = crate::codec::xz::tests::wrap(&blocks, true);
     for (codec, packed) in [(Codec::Zstd, &frames), (Codec::Xz, &stream)] {
         let refused = decode_or_index_through(codec, Arc::new(packed.clone()), from_a_store(packed, 32 << 20), limits);
-        assert_eq!(refused.err(), Some(Refusal::TooLarge), "{codec:?}");
+        assert_eq!(refused.err(), Some(Refusal::TooMuchAtOnce), "{codec:?}");
         let s = indexed(codec, packed, limits);
         let (bytes, _) = crate::codec::decode_traced(codec, packed).expect("decodes whole");
         reads_back(&s, &bytes, 181);
@@ -2240,7 +2241,7 @@ fn a_frame_or_block_too_large_to_read_at_once_is_refused_only_from_a_store() {
     for told in [false, true] {
         let pass = Indexing::through(Codec::Zstd, Arc::new(frames.clone()), from_a_store(&frames, 32 << 20), limits).expect("starts");
         let pass = if told { pass.known_large() } else { pass };
-        assert_eq!(in_steps_of(pass, 3000, 8 * 2000).0.err(), Some(Refusal::TooLarge), "told {told}");
+        assert_eq!(in_steps_of(pass, 3000, 8 * 2000).0.err(), Some(Refusal::TooMuchAtOnce), "told {told}");
     }
 }
 
@@ -2278,9 +2279,9 @@ fn a_span_past_what_one_read_may_gather_is_refused_from_a_store() {
             let mut got = vec![0u8; (want.end - want.start) as usize];
             if gathers > limits.span_input {
                 over += 1;
-                assert_eq!(s.span_trace(k).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                assert_eq!(s.span_trace(k).err(), Some(ReadError::Refused(Refusal::TooMuchAtOnce)), "{codec:?} span {k}");
                 if codec == Codec::Zstd {
-                    assert_eq!(s.read(want.start, &mut got).err(), Some(ReadError::Refused(Refusal::TooLarge)), "{codec:?} span {k}");
+                    assert_eq!(s.read(want.start, &mut got).err(), Some(ReadError::Refused(Refusal::TooMuchAtOnce)), "{codec:?} span {k}");
                     continue;
                 }
             } else {
@@ -2328,7 +2329,7 @@ fn a_long_stretch_between_kept_block_starts_is_refused_from_a_store() {
         match stretch(g) > 20_000 {
             true => {
                 over += 1;
-                assert_eq!(s.block(i).err(), Some(ReadError::Refused(Refusal::TooLarge)), "block {i}");
+                assert_eq!(s.block(i).err(), Some(ReadError::Refused(Refusal::TooMuchAtOnce)), "block {i}");
             }
             false => {
                 under += 1;

@@ -505,6 +505,29 @@ fn a_gzip_past_the_cap_opens_as_a_joined_stream_read_from_the_store() {
     assert!(waited >= 2, "{waited} waits: the reads found their chunks in the store");
 }
 
+/// A zstd frame whose compressed bytes are longer than one read from a store
+/// may gather is refused as too much to keep in memory at once when the
+/// stream is read from the store, and not as too large to unpack, which it
+/// is not. The same stream in memory opens.
+#[test]
+fn a_zstd_frame_too_long_to_read_from_the_store_is_refused_as_too_much_at_once() {
+    let content = noise(300 << 10);
+    let bytes = crate::codec::lazy::tests::zstd_of(&content, 100_000, false);
+    let limits = crate::codec::lazy::Limits { unit_input: 64 << 10, ..small_lazy() };
+    let mut d = stored(&bytes, 48);
+    let mut ev = Evaluator::new(crate::formats::builtin("zstd").unwrap());
+    ev.spaces.set_lazy_limits(limits);
+    let decoded = fed(&mut d, &bytes, |d| ev.child_named(d, &[], "decoded")).unwrap().expect("a decoded field");
+    let run = [decoded[0], 0];
+    let node = fed(&mut d, &bytes, |d| ev.node(d, &run)).unwrap();
+    assert_eq!(node.refused.as_deref(), Some("too-much-at-once"));
+    let mut ev = Evaluator::new(crate::formats::builtin("zstd").unwrap());
+    ev.spaces.set_lazy_limits(limits);
+    let d = doc(&bytes);
+    let decoded = ev.child_named(&d, &[], "decoded").unwrap().expect("a decoded field");
+    assert_eq!(ev.node(&d, &[decoded[0], 0]).unwrap().refused, None, "in memory");
+}
+
 /// A tab over a stream read through an index, whose run is read from a store
 /// that keeps part of the file, keeps no more than the index keeps decoded.
 /// So a run inside the stream that is read whole is read a window at a time,
