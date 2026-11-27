@@ -41,9 +41,36 @@ export type TemplateIndex = {
   readonly root: Block | null;
   /** Per line that starts a statement, the last line of that statement. */
   readonly stmtEnd: ReadonlyMap<number, number>;
+  /** Every `2 => same as case 1` line: the arm it points at and, for one that
+   *  ends `but big-endian` or `but little-endian`, which. */
+  readonly sameAs: readonly SameAs[];
 };
 
-type Frame = { contentIndent: number; block: Block | null };
+/** One `same as case` line. `target` is the first line of the arm it names,
+ *  null when no arm above it starts with that key. */
+export type SameAs = { readonly line: number; readonly target: number | null; readonly order: ByteOrder | null };
+
+export type ByteOrder = "big" | "little";
+
+/** `arms` is set on the frame a `switch` or `match` opens: each arm's key, to
+ *  the arm's first line. */
+type Frame = { contentIndent: number; block: Block | null; arms: Map<string, number> | null };
+
+/** The key an arm's line starts with and what follows its `=>`, or null for a
+ *  line that is not an arm. A key in double quotes may hold ` => ` itself. */
+function armOf(trimmed: string): { key: string; rest: string } | null {
+  let end = 0;
+  if (trimmed.startsWith('"')) {
+    end = 1;
+    while (end < trimmed.length && trimmed[end] !== '"') end += trimmed[end] === "\\" ? 2 : 1;
+    end++;
+  }
+  const at = trimmed.indexOf(" => ", end);
+  if (at <= 0) return null;
+  return { key: trimmed.slice(0, at), rest: trimmed.slice(at + 4) };
+}
+
+const SAME_AS = /^same as case (.+?)(?:, but (big|little)-endian)?$/;
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
@@ -76,7 +103,7 @@ function topGroups(s: string): [number, number][] {
 
 /** What an opening statement opens, from its text without the final `{`. A
  *  structure gives its name and where that name starts in `body`. */
-function opener(body: string): { kind: "struct"; name: string; at: number } | { kind: "other" } {
+function opener(body: string): { kind: "struct"; name: string; at: number } | { kind: "choice" } | { kind: "other" } {
   const groups = topGroups(body);
   let outside = "";
   let from = 0;
@@ -85,7 +112,7 @@ function opener(body: string): { kind: "struct"; name: string; at: number } | { 
     from = b + 1;
   }
   outside += body.slice(from);
-  if (/(^|[\s:=(])(switch|match)\s/.test(outside)) return { kind: "other" };
+  if (/(^|[\s:=(])(switch|match)\s/.test(outside)) return { kind: "choice" };
   if (/(^|\s)(enum|flags)\s+\S+\s*$/.test(outside)) return { kind: "other" };
   let end = body.trimEnd().length;
   const last = groups.at(-1);
@@ -105,6 +132,7 @@ export function indexTemplate(text: string): TemplateIndex {
   const byName = new Map<string, Block[]>();
   const typeSpans = new Map<string, readonly [number, number]>();
   const stmtEnd = new Map<number, number>();
+  const sameAs: SameAs[] = [];
   let root: Block | null = null;
   const stack: Frame[] = [];
   /** The statement being read: its first line and kind. */
@@ -149,7 +177,7 @@ export function indexTemplate(text: string): TemplateIndex {
       const col = indentOf(ln(first + li)) + (o.at - (starts[li] ?? 0));
       decls[first + li]?.push([col, col + o.name.length]);
     }
-    stack.push({ contentIndent: ind + 2, block });
+    stack.push({ contentIndent: ind + 2, block, arms: o.kind === "choice" ? new Map() : null });
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -188,6 +216,17 @@ export function indexTemplate(text: string): TemplateIndex {
       const name = trimmed.slice(0, trimmed.indexOf(": "));
       if (!top.block.fields.has(name)) top.block.fields.set(name, i);
     } else stmtKind = "plain";
+    if (top?.arms != null && d === top.contentIndent) {
+      const arm = armOf(trimmed);
+      if (arm !== null) {
+        const same = SAME_AS.exec(arm.rest.trimEnd());
+        if (same !== null) {
+          const order = same[2] === "big" || same[2] === "little" ? same[2] : null;
+          sameAs.push({ line: i, target: top.arms.get(same[1] ?? "") ?? null, order });
+        }
+        if (!top.arms.has(arm.key)) top.arms.set(arm.key, i);
+      }
+    }
     kinds[i] = stmtKind;
     if (stmtKind !== "comment" && line.trimEnd().endsWith("{")) finish(i);
   }
@@ -207,7 +246,28 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, stmtEnd, sameAs };
+}
+
+/** The byte order a block is also read in: the order of a `same as case N,
+ *  but big-endian` line whose arm N holds the block, or null when none does.
+ *  The innermost such arm decides. */
+function orderOf(index: TemplateIndex, b: Block): ByteOrder | null {
+  let best: { order: ByteOrder; from: number } | null = null;
+  for (const s of index.sameAs) {
+    if (s.order === null || s.target === null) continue;
+    const [a, z] = fieldSpan(index, s.target);
+    if (b.open >= a && b.open <= z && (best === null || s.target > best.from)) best = { order: s.order, from: s.target };
+  }
+  return best?.order ?? null;
+}
+
+/** A field's type text as the arm that says `same as case N, but big-endian`
+ *  reads it: every `le` or `be` after a width wider than a byte set to that
+ *  order. One byte or narrower stays as written, as it does in the core. */
+function inOrder(said: string, order: ByteOrder): string {
+  const to = order === "big" ? "be" : "le";
+  return said.replace(/(\d+)(le|be)(?![a-z0-9])/g, (m: string, bits: string) => (Number(bits) > 8 ? bits + to : m));
 }
 
 /** The lines a field covers: its own statement and every line nested under it. */
@@ -263,22 +323,33 @@ const squash = (s: string): string => s.replace(/\s+/g, "");
  * best: each child whose name is a field of the block counts, and counts again
  * when the field's type text names the child's type. Null when two fit
  * equally well, since picking one of them would be a guess.
+ *
+ * A block inside an arm that a `same as case N, but big-endian` line points at
+ * is also the block of that line's own arm, so its types are compared a
+ * second time as that arm reads them, and the better of the two counts. That
+ * is what finds the written-out little-endian header for a big-endian file.
  */
 export function bestFit(index: TemplateIndex, blocks: readonly Block[], children: readonly { name: string; type: string }[]): Block | null {
   let best: Block | null = null;
   let bestScore = -1;
   let tied = false;
   for (const b of blocks) {
+    const order = orderOf(index, b);
     let score = 0;
+    let other = 0;
     for (const c of children) {
       const at = b.fields.get(c.name);
       if (at === undefined) continue;
       score++;
+      other++;
       const line = index.lines[at] ?? "";
       const said = squash(line.slice(line.indexOf(": ") + 2));
       const t = squash(c.type);
-      if (t !== "" && said.startsWith(t)) score++;
+      if (t === "") continue;
+      if (said.startsWith(t)) score++;
+      if (order !== null && inOrder(said, order).startsWith(t)) other++;
     }
+    score = Math.max(score, other);
     if (score > bestScore) {
       best = b;
       bestScore = score;
@@ -300,6 +371,11 @@ export function bestFit(index: TemplateIndex, blocks: readonly Block[], children
  * each word size and byte order), `children(depth)` is asked for the parent's
  * children to choose between them; when they cannot choose, the search stops
  * at the line it already has.
+ *
+ * A node read by an arm written as `2 => same as case 1` has no line of its
+ * own and is found in arm 1, since that arm's structures are the only ones
+ * with its name. One read by `same as case 1, but big-endian` is found there
+ * too, through [`bestFit`].
  */
 export function findLine(
   index: TemplateIndex,
