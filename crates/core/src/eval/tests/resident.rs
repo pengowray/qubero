@@ -796,3 +796,62 @@ fn a_pass_over_a_run_longer_than_the_store_reads_it_a_window_at_a_time() {
         assert!(got == content[at..at + 100], "100 bytes at {at} differ");
     }
 }
+
+/// Three runs past the cap, each longer than the store, asked for by turns
+/// in goes, as a listing showing three large entries asks. Each pass reads
+/// its run through the store a window at a time, and the third waits for a
+/// place, carrying the others on, which wait for chunks there in turn. No
+/// pass waiting for chunks is ever kept as refused, all three open, no pass
+/// starts twice, and each stream reads its own bytes.
+#[test]
+fn three_passes_reading_windows_asked_for_by_turns_all_open() {
+    let contents: Vec<Vec<u8>> = (0..3).map(|i| hex_lines(24_000 + i)).collect();
+    let packed: Vec<Vec<u8>> = contents.iter().map(|c| miniz_oxide::deflate::compress_to_vec_zlib(c, 6)).collect();
+    let capacity = 240;
+    let lens: Vec<usize> = packed.iter().map(Vec::len).collect();
+    assert!(lens.iter().all(|&n| n > capacity * CHUNK as usize), "{lens:?} bytes is too few for a store of {capacity} chunks");
+    let mut bytes = vec![0xaa, 0xbb];
+    for p in &packed {
+        bytes.extend_from_slice(p);
+    }
+    let mut d = stored(&bytes, capacity);
+    let mut ev = Evaluator::new(runs(&lens, Codec::Zlib));
+    ev.spaces.set_lazy_limits(windowed_lazy());
+    ev.set_slice(Some(600));
+    let mut times: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut open = [false; 3];
+    let mut rounds = 0;
+    while open.iter().any(|o| !o) {
+        for i in 0..3 {
+            if open[i] {
+                continue;
+            }
+            ev.begin_slice();
+            match ev.node(&d, &[1 + i, 0]) {
+                Ok(_) => open[i] = true,
+                Err(EvalError::Busy { .. }) => {}
+                Err(EvalError::Pending(missing)) => {
+                    for m in missing {
+                        let n = times.entry(m.chunk).or_default();
+                        *n += 1;
+                        assert!(*n <= 3, "chunk {} asked for {n} times", m.chunk);
+                        feed(&mut d, &bytes, m.chunk);
+                    }
+                }
+                Err(e) => panic!("{e:?}"),
+            }
+            assert_eq!(ev.spaces.refusals(), 0, "a run waiting for bytes was refused");
+        }
+        rounds += 1;
+        assert!(rounds < 2000, "no end to the rounds");
+    }
+    assert_eq!(ev.spaces.passes.get(), 3, "a pass started twice");
+    for (i, content) in contents.iter().enumerate() {
+        let Some(Opened::Space(id)) = ev.spaces.get(&[1 + i]) else { panic!("run {i} did not open") };
+        assert_eq!(ev.spaces.lazy(id).expect("read through an index").input().owned_bytes(), 0, "run {i}'s index holds a copy");
+        for at in [10, content.len() - 100] {
+            let got = fed(&mut d, &bytes, |d| ev.read_in(d, id, at as u64 * 8, 800)).unwrap();
+            assert!(got == content[at..at + 100], "run {i}: 100 bytes at {at} differ");
+        }
+    }
+}

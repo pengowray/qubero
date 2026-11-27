@@ -1891,10 +1891,17 @@ differs from the text above:
   a "working" reply, and `flatten.ts` reads `unpacking` only from a
   "working" reply. To show the percentage while the pass waits,
   `slice_reply` has to include `unpacking` in a "pending" reply and
-  `Flattener.kids` has to read it there. That change, `Doc.openSpace`
-  returning the progress with a "pending" reply, and the changes to
-  `waitToOpen` and the status bar are left for 7c, with the rest of the
-  web side.
+  `Flattener.kids` has to read it there. Until then, the stream's row in the
+  listing switches between `REPORT.reading` and `REPORT.unpacking` with its
+  percentage from one reply to the next while a pass runs, and so does the
+  status bar after Open unpacked, between `UNPACKED.loading` and
+  `UNPACKED.unpacking`. Before 7b the gather's "pending" replies all came
+  before the pass's "working" replies; now a "pending" reply comes each time
+  a step's window reaches chunks that are not loaded, about once for every
+  3 MiB of the run in the browser (an estimate from `READ_AHEAD`). The
+  listing change, `Doc.openSpace` returning the progress with a "pending"
+  reply, and the changes to `waitToOpen` and the status bar are left for
+  7c, with the rest of the web side.
 - **`UNFINISHED_PASSES` stays at 2.** A pass past the cap now holds less
   than 10 MiB: its checkpoints' windows (at most 8 MiB), its block starts
   (at most 1 MiB), its window of output, its window of the run and its
@@ -1956,7 +1963,10 @@ differs from the text above:
   160 chunks opens in goes. Each `Pending` names at most one window's
   chunks, `Evaluator::unpacking` answers after each one with progress that
   never goes back, no refusal is kept, the pass starts once, and the index
-  matches the one made in memory. In `crates/wasm/tests/open_space_waits.rs`,
+  matches the one made in memory. Three such runs, each longer than a store
+  of 240 chunks, asked for by turns, all open: the third waits for a place
+  and carries the other two passes on while they wait for chunks, no
+  refusal is kept, and no pass starts twice. In `crates/wasm/tests/open_space_waits.rs`,
   `open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time`
   opens a zlib stream of 52 chunks of 64 KiB over a store of 16.
   `Editor::unpacking` answers after every "pending" reply but the first,
