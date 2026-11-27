@@ -1666,10 +1666,14 @@ export class Inspector {
       check: async () => {
         // Loaded here rather than in the core: the core answers "pending"
         // for a run whose bytes have not arrived, and what a reader wants is
-        // for them to arrive. A run that fits in the chunk store is loaded in
-        // one go first. A longer one is read by the core a window at a time,
-        // loading each window's chunks as it asks for them.
-        if (over[1] <= RESIDENT_BYTES) await this.doc.ensureRange(over[0], over[1]);
+        // for them to arrive. A run of the file that fits in the chunk store
+        // is loaded in one go first. A longer one is read by the core a
+        // window at a time, loading each window's chunks as it asks for them.
+        // So is any run on a tab: there `over` counts bytes of the stream,
+        // so its length says nothing about how much of the file is under it,
+        // and loading it first would read it through the stream before the
+        // check reads it again, for chunks the check asks for itself.
+        if (this.doc.isFile && over[1] <= RESIDENT_BYTES) await this.doc.ensureRange(over[0], over[1]);
         const verdict = await this.doc.runCheckLoaded(path);
         if (verdict.status === "error") throw new Error(verdict.message);
         if (verdict.status !== "ok" || verdict.node === null) throw new Error(CHECKED.missingBytes);

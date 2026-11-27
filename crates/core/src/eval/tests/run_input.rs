@@ -204,6 +204,48 @@ fn a_run_joined_from_parts_is_read_through_a_copy() {
     reads_back(&ev, &d, id, &index, &content);
 }
 
+/// The evaluator keeps the indexes it makes up to a total weight, and an
+/// index over a handle weighs what its checkpoints and block starts hold,
+/// not nothing: three runs read through handles, with room for the weight of
+/// two, leave the last two kept. Each stream still reads, through the index
+/// its space holds. In memory each index also weighs its copy of the run, so
+/// with room for two indexes over handles only the last is kept.
+#[test]
+fn indexes_over_handles_are_weighed_and_the_oldest_goes() {
+    let contents: Vec<Vec<u8>> = (0..3).map(|i| lines(8_000 + i)).collect();
+    let runs: Vec<Vec<u8>> = contents.iter().map(|c| zlib(c)).collect();
+    let fields: Vec<(String, T)> = runs.iter().enumerate().map(|(i, r)| (format!("run{i}"), T::decoded(E::lit(r.len() as i128), Codec::Zlib, T::bytes(E::Remaining)))).collect();
+    let template = Template::new("t", T::structure("Root", fields.iter().map(|(n, t)| (n.as_str(), t.clone())).collect()));
+    let file = runs.concat();
+    let d = Document::new(ArcSource(Arc::new(file.clone())));
+    let mut ev = reading(template.clone());
+    let (_, first, _) = opened(&mut ev, &d, &[0]);
+    let weight = first.kept_bytes();
+    assert!(weight > runs[0].len() as u64 && first.input().owned_bytes() == 0, "{weight} bytes kept");
+    // Room for two indexes over handles, and not for two over copies.
+    let cap = 2 * weight + runs[0].len() as u64;
+    ev.spaces.set_index_cap(cap);
+    let mut keys = Vec::new();
+    for i in 0..3 {
+        let (id, index, key) = opened(&mut ev, &d, &[i]);
+        keys.push(key);
+        reads_back(&ev, &d, id, &index, &contents[i]);
+    }
+    assert_eq!(ev.spaces.kept_indexes(), keys[1..]);
+
+    let d = Document::new(MemSource(file));
+    let mut ev = reading(template);
+    ev.spaces.set_index_cap(cap);
+    let mut keys = Vec::new();
+    for i in 0..3 {
+        let (id, index, key) = opened(&mut ev, &d, &[i]);
+        assert_eq!(index.input().owned_bytes(), runs[i].len() as u64);
+        keys.push(key);
+        reads_back(&ev, &d, id, &index, &contents[i]);
+    }
+    assert_eq!(ev.spaces.kept_indexes(), keys[2..]);
+}
+
 /// A copy longer than the cap is refused before anything is read. A handle
 /// is never refused for its length: the cap on the run is the pass's.
 #[test]

@@ -67,6 +67,17 @@ use zstd::ZstdPass;
 /// as [`Refusal::TooLargeLazy`].
 pub const LAZY_CAP_BYTES: u64 = 1 << 30;
 
+/// The most compressed input a run may take up when its index pass reads it
+/// through a handle onto its source, a window at a time: 512 MiB. A trace
+/// keeps the bit each step starts at, counted from the run's first bit, in
+/// 32 bits (`RawStep.in_start`), and 2^32 bits is 512 MiB. A longer run is
+/// refused as [`Refusal::TooLargeInput`] before any of it is read.
+///
+/// A pass that reads a copy of its run is held to [`CAP_BYTES`] instead
+/// ([`Limits::copy_input`]), since the copy is in memory for as long as the
+/// pass runs. See [`too_long_to_index`].
+pub const INPUT_CAP_BYTES: u64 = 1 << 29;
+
 /// The most checkpoints one run keeps. When there would be more, every second
 /// one is dropped and the spacing doubles, so 256 × 32 KiB = 8 MiB of windows
 /// is the most a run's checkpoints hold.
@@ -197,6 +208,14 @@ pub struct Limits {
     /// [`STEP_INPUT`]. A limit of its own so that a test can read a run of a
     /// few hundred kilobytes in windows of every size.
     pub step_input: usize,
+    /// [`INPUT_CAP_BYTES`]: the most compressed input a run may take up when
+    /// its pass reads it through a handle. A limit of its own so that a test
+    /// can reach it with a run of a few hundred kilobytes.
+    pub input: u64,
+    /// The most compressed input a run may take up when its pass reads a
+    /// copy of it: [`CAP_BYTES`]. A limit of its own, so that a test can show
+    /// a run past it read through a handle without 64 MiB of run.
+    pub copy_input: usize,
 }
 
 impl Default for Limits {
@@ -216,6 +235,8 @@ impl Default for Limits {
             unit_input: UNIT_INPUT,
             span_input: SPAN_INPUT,
             step_input: STEP_INPUT,
+            input: INPUT_CAP_BYTES,
+            copy_input: CAP_BYTES,
         }
     }
 }
@@ -242,6 +263,19 @@ impl Limits {
 /// made over a copy of the run ([`Indexing::from_copy`]).
 pub fn reads_in_windows(codec: Codec, input: &RunInput, limits: &Limits) -> bool {
     can_step(codec) && input.fits(limits.step_window(codec))
+}
+
+/// Why a run of `len` bytes is too long for an index pass, if it is, said
+/// before any of it is read: past [`Limits::input`] for a pass that reads it
+/// through a handle (`through_handle`), as [`Refusal::TooLargeInput`], and
+/// past [`Limits::copy_input`] for a pass that reads a copy of it, as
+/// [`Refusal::TooLarge`]. Each pass is held to the one limit of the way it
+/// reads, so a copy never shows the handle's refusal.
+pub fn too_long_to_index(len: u64, through_handle: bool, limits: &Limits) -> Option<Refusal> {
+    match through_handle {
+        true => (len > limits.input).then_some(Refusal::TooLargeInput),
+        false => (len > limits.copy_input as u64).then_some(Refusal::TooLarge),
+    }
 }
 
 /// Whether a run packed with `codec` can be read a piece at a time.
@@ -306,8 +340,8 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
 /// ([`reads_in_windows`]); it calls this for xz, whose layout still reads a
 /// copy of the whole stream.
 pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
-    if packed.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+    if let Some(why) = too_long_to_index(packed.len() as u64, false, &limits) {
+        return Err(why);
     }
     match codec {
         _ if can_step(codec) => {
@@ -402,9 +436,11 @@ impl Indexing {
     }
 
     /// The pass reads the run through `reads`, and the index through `input`.
+    /// A pass that reads a copy is held to [`Limits::copy_input`], and one
+    /// that reads a handle to [`Limits::input`]: see [`too_long_to_index`].
     fn reading(codec: Codec, reads: RunInput, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
-        if input.len() > CAP_BYTES as u64 {
-            return Err(Refusal::TooLarge);
+        if let Some(why) = too_long_to_index(input.len(), reads.held_copy().is_none(), &limits) {
+            return Err(why);
         }
         Ok(Indexing(match codec {
             Codec::Zstd => Pass::Zstd(ZstdPass::new(reads, input, limits)),

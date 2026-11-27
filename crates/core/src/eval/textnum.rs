@@ -307,6 +307,11 @@ impl Source for Window {
         }
         Vec::new()
     }
+
+    /// None: what was read is held.
+    fn missing(&self, _: u64, _: u64) -> Vec<Missing> {
+        Vec::new()
+    }
 }
 
 impl Evaluator {

@@ -169,7 +169,8 @@ export const RV = {
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
   /** A finding's text for a stream left as bytes, by the core's refusal word.
    *  `too-large-lazy` is a stream the core reads a piece at a time (deflate,
-   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB, and
+   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB,
+   *  `too-large-input` one that is over 512 MiB compressed, and
    *  `too-large-zstd-frame` and `too-large-xz-block` one with a frame or
    *  block that unpacks to more than 64 MiB. All read the same as
    *  `too-large`. `too-much-at-once` is a stream with a part that a read
@@ -177,7 +178,7 @@ export const RV = {
    *  memory at once, such as a zstd frame or an xz block over 16 MiB
    *  compressed; it reads as `DECODED_REFUSED` words it. */
   refused: (why: string): string =>
-    why === "too-large" || why === "too-large-lazy" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
+    why === "too-large" || why === "too-large-lazy" || why === "too-large-input" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
       ? "Too large to unpack here"
       : why === "too-much-at-once"
         ? "Too large for the editor to keep in memory at once, so it was not unpacked"

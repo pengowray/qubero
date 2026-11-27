@@ -8,7 +8,7 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatAddress, formatBytes, formatLimit, formatOffset, percentText, RESIDENT_BYTES } from "./doc.ts";
+import { formatAddress, formatBytes, formatLimit, formatOffset, RESIDENT_BYTES } from "./doc.ts";
 import { positionValue } from "./format.ts";
 import { fieldStart } from "./hexcell.ts";
 import type { CodecKind, Doc, TemplateNode } from "./doc.ts";
@@ -16,6 +16,7 @@ import { address, problemGlyph as glyph, tagged as el } from "./dom.ts";
 import { DUMP_MIN_BYTES, isComputed, pathKey, PAGE } from "./flatten.ts";
 import type { Item } from "./flatten.ts";
 import { fieldClass, sectionColor } from "./fieldstyle.ts";
+import { pendingText } from "./pendingtext.ts";
 import { nodeSwatch } from "./colour.ts";
 import { byteStrip } from "./bytestrip.ts";
 import { byteDump } from "./bytedump.ts";
@@ -96,20 +97,6 @@ export function spaceOf(item: Item): number {
   return "node" in item && item.node !== null ? item.node.space : 0;
 }
 
-/** How much of the file this is, for a part big enough for the answer to mean
- *  anything. Under a per cent, the number says less than the range does. */
-/** What a stretch of the listing still being read says: how far the core has
- *  got unpacking the large stream its fields wait on, while they wait on one;
- *  that the fields are being read, while the core works on them with no
- *  progress to give; and otherwise that bytes are on their way. The stream is
- *  the one this stretch's own fields were asked for, which is not always the
- *  one unpacked most recently: Open unpacked may be carrying on another. */
-export function pendingText(item: Extract<Item, { kind: "pending" }>): string {
-  const u = item.unpacking;
-  if (u !== null) return REPORT.unpacking(percentText(u.read_bits, u.run_bits));
-  return item.working ? REPORT.working : REPORT.reading;
-}
-
 /** Write a pending stretch's words into its element, marking whether they
  *  give the unpacking's progress, for `keepsProgress`. */
 export function writePending(node: HTMLElement, item: Extract<Item, { kind: "pending" }>): void {
@@ -126,6 +113,8 @@ export function keepsProgress(node: HTMLElement, item: Extract<Item, { kind: "pe
   return item.working && item.unpacking === null && node.hasAttribute("data-progress");
 }
 
+/** How much of the file this is, for a part big enough for the answer to mean
+ *  anything. Under a per cent, the number says less than the range does. */
 export function shareText(sizeBits: number, fileBits: number): string {
   if (fileBits <= 0) return "";
   const share = sizeBits / fileBits;

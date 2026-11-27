@@ -153,9 +153,12 @@ function gzipInnerName(name: string): string {
   return `${name} (uncompressed)`;
 }
 
+/** The run's bytes, read in pieces. A run can be up to `OPEN_LIMIT`, more
+ *  than the store keeps. On a tab whose bytes were recognised, whose fields
+ *  count from the stream's first byte, the run is bytes of the stream, and
+ *  the file under them can be more than the store keeps as well. */
 async function loadBytes(doc: Doc, at: number, len: number): Promise<Uint8Array> {
-  await doc.ensureRange(at, len);
-  const read = doc.read(at, len);
+  const read = await doc.readLoaded(at, len);
   if (!read.complete) throw new Error("Some of these bytes could not be loaded from the file.");
   return read.bytes;
 }

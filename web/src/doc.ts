@@ -9,7 +9,8 @@ import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatLimit, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
-import { MAX_ROUNDS, waitToOpen, type OpenStep } from "./openwait.ts";
+import { waitToOpen, type OpenStep } from "./openwait.ts";
+import { askUntilLoaded, ChunkWait, readInPieces, roundLimit, stretches, type Asked } from "./chunkwait.ts";
 
 /** What the signature database made of a file, and where its lists came from. */
 export type SigVerdict = {
@@ -20,10 +21,6 @@ export type SigVerdict = {
 };
 
 export const CHUNK_SIZE = 64 * 1024;
-/** How many rounds of fetch-and-ask-again a read of text is given. Each round
- *  is one window of file, so this is a batch of lines spanning a few tens of
- *  megabytes: further than any screenful reaches, and short of forever. */
-const TEXT_ROUNDS = 512;
 /** Chunks to fetch past one the template asked for and did not have. Placing
  * fields runs forward through a file, so the chunk after the missing one is
  * nearly always the next one wanted. They are read in one go: asking the file
@@ -31,6 +28,13 @@ const TEXT_ROUNDS = 512;
  * worth of metadata that way is hundreds of them. */
 const READ_AHEAD = 48;
 const CHUNK_CAPACITY = 512; // 32 MiB resident at most
+/** The most chunks one read of the file takes in: 16 MiB, as much of the
+ *  file as one span of a stream reads, at most. Neighbouring missing chunks
+ *  are read together up to this. */
+const STRETCH_CHUNKS = 256;
+/** The most chunks one round of a wait loads: half the store, so that a
+ *  round cannot push out what the round before it loaded. */
+const ROUND_CHUNKS = CHUNK_CAPACITY / 2;
 /** How much of the file the editor keeps in memory at once: what the core's
  *  chunk store holds, from the same two numbers the store is made with. A
  *  stream that has to be read from the file in one piece and takes up more
@@ -3079,7 +3083,7 @@ export class Doc {
    *  of it the settled reply leaves out. */
   private settle<T>(r: RawReply<T>): TemplateReply<T> {
     if (r.status === "pending") {
-      for (const c of r.chunks) this.fetchChunk(c);
+      this.fetchChunks(r.chunks);
       // A contiguous run of missing chunks means something is being read
       // through from front to back, so the chunks after it are what comes
       // next: worth reading in one go. Scattered ones mean fields across the
@@ -3099,7 +3103,7 @@ export class Doc {
           this.nextMiss = last + 1 + READ_AHEAD;
         } else this.nextMiss = last + 1;
       }
-      for (const c of r.wanted ?? []) this.fetchChunk(c);
+      this.fetchChunks(r.wanted ?? []);
       return {
         status: "pending",
         reachedBytes: r.reached_bytes,
@@ -3110,7 +3114,7 @@ export class Doc {
     if (r.status === "ok" && r.wanted !== undefined && r.wanted.length > 0) {
       // Answered without some previews, so the rows are here and their first
       // bytes are on their way. Asking again once they land fills them in.
-      for (const c of r.wanted) this.fetchChunk(c);
+      this.fetchChunks(r.wanted);
       return { status: "ok", node: r.node };
     }
     if (r.status === "working") {
@@ -3118,7 +3122,7 @@ export class Doc {
       // it has to ask itself again. Yielding first lets the page draw what it
       // has and stay usable while the rest is worked out.
       this.scheduleMoreWork();
-      for (const c of r.wanted ?? []) this.fetchChunk(c);
+      this.fetchChunks(r.wanted ?? []);
       return {
         status: "working",
         reachedBytes: r.reached_bytes,
@@ -3507,25 +3511,36 @@ export class Doc {
    * once the chunks a "pending" one names have loaded. The core reads a run
    * longer than a window of the chunk store a window at a time, over several
    * asks. Gives up the way Open unpacked does (see `waitToOpen`), with a
-   * "pending" answer.
+   * "pending" answer, with two differences. Each answer carries how far a
+   * pass it waits on has got, when it waits on one, as Open unpacked's do.
+   * And the backstop is the file's `roundLimit` rather than `MAX_ROUNDS`: a
+   * check over a long run, read a window at a time with no pass to report
+   * progress, takes a round for each window, and a run of 512 MiB can be
+   * more windows than that.
    */
   runCheckLoaded(path: readonly number[]): Promise<TemplateReply<Verdict | null>> {
     const ask = (): OpenStep<TemplateReply<Verdict | null>> => {
       const raw = JSON.parse(this.editor.run_check(this.space, Uint32Array.from(path))) as RawReply<Verdict | null>;
       const r = this.settle(raw);
-      if (raw.status === "pending") return { kind: "pending", chunks: raw.chunks };
-      if (r.status === "working") return { kind: "working", unpacking: null };
+      if (raw.status === "pending") return { kind: "pending", chunks: raw.chunks, unpacking: this.unpacking() };
+      if (r.status === "working") return { kind: "working", unpacking: this.unpacking() };
       return { kind: "done", value: r };
     };
     return new Promise((resolve, reject) => {
-      waitToOpen(ask(), ask, (chunks) => this.fileChunks(chunks), {
-        live: () => true,
-        working: () => {},
-        loading: () => {},
-        done: resolve,
-        lost: () => resolve({ status: "pending", reachedBytes: 0 }),
-        failed: reject,
-      });
+      waitToOpen(
+        ask(),
+        ask,
+        (chunks) => this.fileChunks(chunks),
+        {
+          live: () => true,
+          working: () => {},
+          loading: () => {},
+          done: resolve,
+          lost: () => resolve({ status: "pending", reachedBytes: 0 }),
+          failed: reject,
+        },
+        { limit: this.roundLimit() },
+      );
     });
   }
 
@@ -3634,7 +3649,7 @@ export class Doc {
   read(at: number, len: number): ReadResult {
     const bytes = new Uint8Array(len);
     const missing = this.editor.read_bytes(this.space, at, bytes);
-    for (const chunk of missing) this.fetchChunk(chunk);
+    this.fetchChunks(missing);
     return { bytes, complete: missing.length === 0 };
   }
 
@@ -3642,7 +3657,7 @@ export class Doc {
   readBits(atBit: number, nBits: number): ReadResult {
     const bytes = new Uint8Array(Math.ceil(nBits / 8));
     const missing = this.editor.read_bits(this.space, atBit, nBits, bytes);
-    for (const chunk of missing) this.fetchChunk(chunk);
+    this.fetchChunks(missing);
     return { bytes, complete: missing.length === 0 };
   }
 
@@ -3654,7 +3669,7 @@ export class Doc {
    * seconds rather than minutes.
    *
    * Always chunks of the file, and asked about by the file's number: see
-   * `fetchChunk`.
+   * `fetchChunks`.
    */
   private fetchRun(from: number, count: number): void {
     const total = Math.ceil(this.blob.size / CHUNK_SIZE);
@@ -3667,39 +3682,61 @@ export class Doc {
       end += 1;
     }
     if (end <= start) return;
+    this.fetchStretch(start, end);
+  }
+
+  /**
+   * Start reading `chunks` of the file, one read for each stretch of
+   * neighbours among them, and skip any that are on their way already. A
+   * span of a stream is up to 256 chunks of its run, and reading those one
+   * by one was 256 reads and 256 redraws, each redraw copying the chunks
+   * that had arrived so far.
+   *
+   * The store is not asked whether it has them: the core named them as
+   * missing, and the redraw at the end of the read is what the view that
+   * asked is waiting for. `fileChunks`, which waits on the reads itself,
+   * leaves out the chunks the store has.
+   *
+   * A chunk is always the file's, whichever document asks. What a tab is
+   * missing is chunks of the file under its stream, never bytes of the
+   * stream itself, and a stream read by the template it declared is read in
+   * the file's reading, which asks for bytes of the file: the fields outside
+   * the stream that size it, and the runs a joined stream is kept in.
+   * Reading ahead can run off the end, and a chunk past the end is not a
+   * chunk: feeding an empty one would look like bytes that are all zero, so
+   * `stretches` leaves it out.
+   */
+  private fetchChunks(chunks: Iterable<number>): void {
+    const total = Math.ceil(this.blob.size / CHUNK_SIZE);
+    const skip = (c: number): boolean => this.inflight.has(c);
+    for (const [start, end] of stretches({ chunks, total, skip, most: STRETCH_CHUNKS })) this.fetchStretch(start, end);
+  }
+
+  /**
+   * Read chunks `start` up to `end` of the file in one read, feed each one
+   * in, and say so once, when they all have. Each chunk is marked as on its
+   * way until then. A read that fails rejects with a `ReadFailure` naming
+   * the whole stretch, which is the read that failed.
+   */
+  private fetchStretch(start: number, end: number): void {
     const at = start * CHUNK_SIZE;
-    const read = Promise.resolve(this.blob.slice(at, Math.min(end * CHUNK_SIZE, this.blob.size)).arrayBuffer()).then((buf) => {
-      const bytes = new Uint8Array(buf);
-      for (let c = start; c < end; c++) {
-        const off = (c - start) * CHUNK_SIZE;
-        if (off >= bytes.length) break;
-        this.editor.feed_chunk(c, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.length)));
-      }
-    });
+    const stop = Math.min(end * CHUNK_SIZE, this.blob.size);
+    const read = Promise.resolve(this.blob.slice(at, stop).arrayBuffer()).then(
+      (buf) => {
+        const bytes = new Uint8Array(buf);
+        for (let c = start; c < end; c++) {
+          const off = (c - start) * CHUNK_SIZE;
+          if (off >= bytes.length) break;
+          this.editor.feed_chunk(c, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.length)));
+        }
+      },
+      (e: unknown) => {
+        throw new ReadFailure(at, stop - at, e);
+      },
+    );
     for (let c = start; c < end; c++) this.inflight.set(c, read);
     void read.finally(() => {
       for (let c = start; c < end; c++) this.inflight.delete(c);
-      this.notify();
-    });
-  }
-
-  private fetchChunk(chunk: number): void {
-    // A chunk is always the file's, whichever document asks. An unpacked
-    // stream's own bytes were all decoded in one go and none of them can
-    // arrive later, but a stream read by the template it declared is read in
-    // the file's reading, which asks for bytes of the file: the fields outside
-    // the stream that size it, and the runs a joined stream is kept in.
-    // Reading ahead can run off the end, and a chunk past the end is not a
-    // chunk: feeding an empty one would look like bytes that are all zero.
-    if (chunk * CHUNK_SIZE >= this.blob.size) return;
-    if (this.inflight.has(chunk)) return;
-    const start = chunk * CHUNK_SIZE;
-    const read = Promise.resolve(this.blob.slice(start, Math.min(start + CHUNK_SIZE, this.blob.size)).arrayBuffer()).then((buf) => {
-      this.editor.feed_chunk(chunk, new Uint8Array(buf));
-    });
-    this.inflight.set(chunk, read);
-    void read.finally(() => {
-      this.inflight.delete(chunk);
       this.notify();
     });
   }
@@ -3709,25 +3746,23 @@ export class Doc {
    * again then rather than on the next change. The chunks a pending reply
    * names are the file's whichever document asked, and `handleReply` has
    * already started reading them, so this waits on those reads and starts
-   * only the ones that are not under way. Rejects with a `ReadFailure` when
-   * one cannot be read.
+   * only the ones that are not under way, a stretch of neighbours at a time
+   * (`fetchChunks`). Rejects with a `ReadFailure` when one cannot be read.
    *
    * Resolving does not promise the chunks are still here when the caller
    * asks: the store keeps `CHUNK_CAPACITY` of them, and a stream that needs
    * more than that at once pushes out its own first chunks.
    */
   async fileChunks(chunks: readonly number[]): Promise<void> {
-    await Promise.all(
-      chunks.map(async (c) => {
-        if (this.editor.has_chunk(0, c)) return;
-        this.fetchChunk(c);
-        try {
-          await this.inflight.get(c);
-        } catch (e: unknown) {
-          throw new ReadFailure(c * CHUNK_SIZE, Math.min(CHUNK_SIZE, this.blob.size - c * CHUNK_SIZE), e);
-        }
-      }),
-    );
+    const absent = chunks.filter((c) => !this.editor.has_chunk(0, c));
+    this.fetchChunks(absent);
+    // One read can carry many of them, so each read is waited on once.
+    const reads = new Set<Promise<void>>();
+    for (const c of absent) {
+      const read = this.inflight.get(c);
+      if (read !== undefined) reads.add(read);
+    }
+    await Promise.all(reads);
   }
 
   /**
@@ -3793,20 +3828,15 @@ export class Doc {
    * spanning a lot of file takes as many rounds as it takes: a screenful of
    * four-kilobyte lines is a megabyte, which is a round for every window of
    * it. What is not allowed is going round without getting anywhere, so a
-   * round that asks for the same chunks as the one before it is where this
-   * gives up rather than spins.
+   * round that asks again for a chunk loaded for this batch is where this
+   * gives up rather than spins (`untilLoaded`).
    */
   async textWindow(encoding: string, from: number, want: number): Promise<TextWindow> {
-    let asked = "";
-    for (let go = 0; go < TEXT_ROUNDS; go++) {
+    const got = await this.untilLoaded(() => {
       const w = JSON.parse(this.editor.text_window(this.space, encoding, from, want)) as TextWindow;
-      if (w.missing.length === 0) return w;
-      const now = w.missing.join(",");
-      if (now === asked) return { lines: [], missing: w.missing, next: from };
-      asked = now;
-      await this.fileChunks(w.missing);
-    }
-    return { lines: [], missing: [], next: from };
+      return { value: w, missing: w.missing };
+    });
+    return got.complete ? got.value : { lines: [], missing: got.value.missing, next: from };
   }
 
   /**
@@ -3815,36 +3845,34 @@ export class Doc {
    * what the caller carries on from rather than `to`.
    */
   async textIndex(encoding: string, from: number, to: number): Promise<TextIndex> {
-    let asked = "";
-    for (let go = 0; go < TEXT_ROUNDS; go++) {
+    const got = await this.untilLoaded(() => {
       const packed = this.editor.text_index(this.space, encoding, from, to);
       const missing = packed[4] ?? 0;
-      if (missing === 0) {
-        return {
-          next: packed[0] ?? from,
-          lf: packed[1] ?? 0,
-          cr: packed[2] ?? 0,
-          crlf: packed[3] ?? 0,
-          starts: packed.subarray(5),
-        };
-      }
-      const chunks = Array.from(packed.subarray(5, 5 + missing));
-      const now = chunks.join(",");
-      if (now === asked) return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
-      asked = now;
-      await this.fileChunks(chunks);
-    }
-    return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
+      return { value: packed, missing: missing === 0 ? [] : Array.from(packed.subarray(5, 5 + missing)) };
+    });
+    if (!got.complete) return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
+    const packed = got.value;
+    return {
+      next: packed[0] ?? from,
+      lf: packed[1] ?? 0,
+      cr: packed[2] ?? 0,
+      crlf: packed[3] ?? 0,
+      starts: packed.subarray(5),
+    };
   }
 
-  /** Where the line holding `at` starts, and `lines` line starts back from it. */
+  /**
+   * Where the line holding `at` starts, and `lines` line starts back from it.
+   * The core reads back a line at a time and stops at the first chunk it has
+   * not got, so going back over many lines can take a round for each window
+   * of them. Gives up, with both at `at`, by the rule `textWindow` uses.
+   */
   async textBack(encoding: string, at: number, lines: number): Promise<TextBack> {
-    for (let go = 0; go < 3; go++) {
+    const got = await this.untilLoaded(() => {
       const b = JSON.parse(this.editor.text_back(this.space, encoding, at, lines)) as TextBack;
-      if (b.missing.length === 0) return b;
-      await this.fileChunks(b.missing);
-    }
-    return { start: at, back: at, missing: [] };
+      return { value: b, missing: b.missing };
+    });
+    return got.complete ? got.value : { start: at, back: at, missing: [] };
   }
 
   /**
@@ -3853,24 +3881,20 @@ export class Doc {
    * carry on from, never an offset picked out of the air.
    *
    * The same retry loop as `textWindow`: the core stops at the first chunk it
-   * has not got, and a round that asks for the same chunks as the one before
-   * it gives up rather than spins.
+   * has not got, and a round that asks again for a chunk loaded for this
+   * scan gives up rather than spins. Giving up comes back as no hits and no
+   * progress, which the strings view takes as the end of the scan, so a scan
+   * that keeps loading chunks it has not loaded before is never stopped part
+   * way by a count of rounds.
    */
   async stringsScan(from: number, want: number, opts: StringScanOpts): Promise<StringScan> {
     const encodings = opts.encodings.join(",");
     if (encodings === "") return { hits: [], missing: [], next: this.lengthBytes };
-    let asked = "";
-    for (let go = 0; go < TEXT_ROUNDS; go++) {
-      const s = JSON.parse(
-        this.editor.strings_scan(this.space, from, want, opts.minChars, encodings),
-      ) as StringScan;
-      if (s.missing.length === 0) return s;
-      const now = s.missing.join(",");
-      if (now === asked) return { hits: [], missing: s.missing, next: from };
-      asked = now;
-      await this.fileChunks(s.missing);
-    }
-    return { hits: [], missing: [], next: from };
+    const got = await this.untilLoaded(() => {
+      const s = JSON.parse(this.editor.strings_scan(this.space, from, want, opts.minChars, encodings)) as StringScan;
+      return { value: s, missing: s.missing };
+    });
+    return got.complete ? got.value : { hits: [], missing: got.value.missing, next: from };
   }
 
   /**
@@ -3896,19 +3920,61 @@ export class Doc {
    * `ensureRange` on a tab. A tab's own store answers that it has every chunk,
    * and the bytes it is missing are chunks of the file under the stream. So
    * read the range, load the file chunks the read names, and read again, until
-   * the read is complete. Stops as `waitToOpen` does when a chunk loaded here
-   * is asked for again: the range needs more of the file at once than the
-   * store keeps, and the caller's own read comes back incomplete.
+   * the read is complete. Stops by the rule in `untilLoaded` when a chunk
+   * loaded here is asked for again: the range needs more of the file at once
+   * than the store keeps, and the caller's own read comes back incomplete.
+   * A caller that wants the bytes of a long range reads them with
+   * `readLoaded` instead, which reads it in pieces.
    */
   private async ensureTabRange(at: number, len: number): Promise<void> {
-    const loaded = new Set<number>();
     const bytes = new Uint8Array(len);
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      const missing = Array.from(this.editor.read_bytes(this.space, at, bytes));
-      if (missing.length === 0 || missing.some((c) => loaded.has(c))) return;
-      await this.fileChunks(missing);
-      for (const c of missing) loaded.add(c);
-    }
+    await this.untilLoaded(() => ({ value: null, missing: Array.from(this.editor.read_bytes(this.space, at, bytes)) }));
+  }
+
+  /**
+   * The bytes in `[at, at + len)` once their chunks of the file have loaded,
+   * and whether they all did. `complete` is false when the wait gave up: a
+   * piece needed more of the file at once than the store keeps.
+   *
+   * Read a piece at a time (`readInPieces`, with pieces of `PIECE_BYTES`),
+   * since a long range may never be in the store all at once: on a tab, a
+   * range whose compressed input is longer than the store, and on the file,
+   * a range longer than the store. Each piece is read, the chunks of the
+   * file it names are loaded, and it is read again until it is complete.
+   * Rejects with a `ReadFailure` when a chunk cannot be read.
+   */
+  readLoaded(at: number, len: number): Promise<ReadResult> {
+    return readInPieces({
+      at,
+      len,
+      read: (from, out) => Array.from(this.editor.read_bytes(this.space, from, out)),
+      load: (chunks) => this.fileChunks(chunks),
+      wait: this.chunkWait(),
+    });
+  }
+
+  /**
+   * Ask until the answer is missing no chunks of the file, loading the ones
+   * each answer names, as the loops here that read and read again do.
+   *
+   * A round that asks again for a chunk this wait has loaded ends it: the
+   * chunk was pushed out of the store before the core could use it. Every
+   * other round loads chunks this wait has not loaded before, so a wait that
+   * keeps moving goes on as long as it takes, up to as many rounds as the
+   * file has chunks (`roundLimit`). One round loads at most half the store.
+   */
+  private untilLoaded<T>(ask: () => Asked<T>): Promise<{ readonly value: T; readonly complete: boolean }> {
+    return askUntilLoaded({ ask, load: (chunks) => this.fileChunks(chunks), wait: this.chunkWait() });
+  }
+
+  /** A new wait for chunks of the file, for `untilLoaded` and `readLoaded`. */
+  private chunkWait(): ChunkWait {
+    return new ChunkWait({ limit: this.roundLimit(), most: ROUND_CHUNKS });
+  }
+
+  /** The backstop for a wait over this file (see `roundLimit`). */
+  roundLimit(): number {
+    return roundLimit(this.blob.size, CHUNK_SIZE);
   }
 
   private loadChunk(chunk: number): Promise<void> {

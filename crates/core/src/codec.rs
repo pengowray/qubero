@@ -491,6 +491,13 @@ pub enum Refusal {
     /// limit for a run read a piece at a time, which is larger than
     /// [`CAP_BYTES`]. Only a codec [`lazy`] can index says this.
     TooLargeLazy,
+    /// The compressed run itself is past [`lazy::Limits::input`], 512 MiB,
+    /// the most a run may take up when its index pass reads it through a
+    /// handle onto its source: a trace counts the bits of its steps from the
+    /// run's front in 32 bits. Said before any of the run is read, since the
+    /// field's size says it. A pass that reads a copy of its run says
+    /// [`Refusal::TooLarge`] past [`CAP_BYTES`] instead.
+    TooLargeInput,
     /// One zstd frame or one xz block of the run comes to more than
     /// [`lazy::Limits::span`], 64 MiB. A run of several frames or blocks is
     /// read a piece at a time, up to [`lazy::LAZY_CAP_BYTES`], but each frame
@@ -580,6 +587,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too-large",
             Refusal::TooLargeLazy => "too-large-lazy",
+            Refusal::TooLargeInput => "too-large-input",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
             Refusal::TooMuchAtOnce => "too-much-at-once",
@@ -604,6 +612,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too large to unpack (over 64 MiB)",
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
+            Refusal::TooLargeInput => "too large to unpack (over 512 MiB compressed)",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB)",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB)",
             Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",

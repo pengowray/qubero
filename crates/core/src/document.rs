@@ -236,6 +236,13 @@ impl<S: Source> Source for Document<S> {
     fn resident_limit(&self) -> Option<u64> {
         self.source.resident_limit()
     }
+
+    /// The chunks of the source under the bytes the document reads there
+    /// now, through the edits.
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        let n = len.saturating_mul(8).min(self.len_bits().saturating_sub(offset.saturating_mul(8)));
+        self.table.missing_bits(&self.source, offset * 8, n)
+    }
 }
 
 #[cfg(test)]

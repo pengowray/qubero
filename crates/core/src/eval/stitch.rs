@@ -198,7 +198,7 @@ pub(super) enum PartTrouble {
 /// after a field's name.
 fn part_refused(why: Refusal) -> String {
     match why {
-        Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooMuchAtOnce => format!("is {}", why.message()),
+        Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooMuchAtOnce => format!("is {}", why.message()),
         Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB)".into(),
         Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB)".into(),
         _ => "could not be unpacked".into(),
@@ -706,7 +706,7 @@ impl Evaluator {
             None => {
                 let Some(stitch) = self.spaces.stitch(id) else { return fail("this stream is no longer open") };
                 let lazy = stitch.len_bytes > self.spaces.whole_cap() as u64;
-                if let Some(why) = self.too_large_to_join(stitch, lazy) {
+                if let Some(why) = self.too_large_to_join(doc, stitch, lazy) {
                     return Ok(Err(why));
                 }
                 // A walk that is never put back needs no place, as with an
@@ -727,16 +727,30 @@ impl Evaluator {
     ///
     /// Held whole, a trace keeps each step's start in 32 bits, which is half
     /// a gigabyte of runs laid end to end, and no packed run past the cap is
-    /// decoded. Read a part at a time, every stored part's bytes and every
-    /// packed part's compressed run are read once and kept, up to the same
-    /// cap between them as the stream would have had to fit under whole.
-    fn too_large_to_join(&self, stitch: &Stitch, lazy: bool) -> Option<Refusal> {
+    /// decoded. Read a part at a time, every stored part's bytes and the
+    /// compressed run of every packed part decoded whole are read once and
+    /// kept, up to the same cap between them as the stream would have had to
+    /// fit under whole. A packed part read through its index costs the stream
+    /// nothing when a handle reaches its run, since the index then reads the
+    /// run where it is; one no handle reaches is counted, since its index
+    /// holds a copy. Which parts are read through an index is decided as
+    /// [`Self::index_part`] decides it.
+    fn too_large_to_join<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, lazy: bool) -> Option<Refusal> {
         let run_bits = |p: &Part| match &p.source {
             PartSource::Stored { .. } => p.len * 8,
             PartSource::Packed { size_bits, .. } => *size_bits,
         };
+        let limits = self.spaces.lazy_limits();
+        let copied = |p: &Part| match &p.source {
+            PartSource::Packed { space, at_bits, size_bits, codec: Ok(codec) }
+                if lazy::can_index(*codec) && p.len > limits.whole as u64 && self.shared_input(doc, (*space, *at_bits, *size_bits)).is_some() =>
+            {
+                0
+            }
+            _ => run_bits(p) / 8,
+        };
         let too_large = match lazy {
-            true => stitch.parts.iter().map(|p| run_bits(p) / 8).sum::<u64>() > self.spaces.whole_cap() as u64,
+            true => stitch.parts.iter().map(copied).sum::<u64>() > self.spaces.whole_cap() as u64,
             false => {
                 stitch.parts.iter().map(run_bits).sum::<u64>() > u64::from(u32::MAX)
                     || stitch.parts.iter().any(|p| matches!(p.source, PartSource::Packed { size_bits, .. } if size_bits / 8 > crate::codec::CAP_BYTES as u64))
@@ -902,9 +916,10 @@ impl Evaluator {
                 };
                 match self.index_part(doc, stitch, i)? {
                     Ok(Some(index)) => JoinedBytes::Indexed(index),
-                    // A part past `LAZY_CAP_BYTES`, or with a zstd frame or
-                    // xz block past 64 MiB, refuses the stream for that.
-                    Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeUnit(_) | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
+                    // A part past `LAZY_CAP_BYTES`, with a zstd frame or xz
+                    // block past 64 MiB, or whose run is past
+                    // `Limits::input`, refuses the stream for that.
+                    Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooLargeUnit(_) | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
                     Err(_) => return Ok(Err(Refusal::Failed)),
                     Ok(None) => {
                         let run = match self.gather_run(doc, space, at_bits, run_bits)? {

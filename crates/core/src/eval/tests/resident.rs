@@ -855,3 +855,118 @@ fn three_passes_reading_windows_asked_for_by_turns_all_open() {
         }
     }
 }
+
+// ----- the two limits on how long a compressed run may be -----
+
+/// A zlib run past the limit on a copy, and several times longer than the
+/// store, opens through its handle: its pass reads it a window at a time and
+/// keeps no copy, so only `Limits::input` applies, and a run of exactly that
+/// length opens. One byte past `Limits::input`, the same run is refused as
+/// `too-large-input` before anything is read: the store has nothing in it,
+/// and nothing is asked for. In a store with too little room for two
+/// windows, or in memory with no handle, the pass would read a copy, which
+/// is past the copy limit, so it is refused as `too-large`, again before
+/// anything is read, whatever `Limits::input` is.
+#[test]
+fn a_run_is_held_to_the_limit_of_the_way_its_pass_reads_it() {
+    use crate::codec::lazy::Limits;
+    let content = hex_lines(40_000);
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&content, 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    let len = packed.len();
+    let capacity = 160;
+    assert!(len > 3 * capacity * CHUNK as usize, "{len} bytes is too few for a store of {capacity} chunks");
+    let reading = |limits: Limits| {
+        let mut ev = Evaluator::new(one_run(len, Codec::Zlib));
+        ev.spaces.set_lazy_limits(limits);
+        ev
+    };
+    let copy_input = len / 2;
+
+    let mut d = stored(&bytes, capacity);
+    let mut ev = reading(Limits { copy_input, input: len as u64, ..windowed_lazy() });
+    fed(&mut d, &bytes, |d| ev.node(d, &[1, 0])).unwrap();
+    assert_eq!(fed(&mut d, &bytes, |d| ev.node(d, &[1])).unwrap().refused, None);
+    let Some(Opened::Space(id)) = ev.spaces.get(&[1]) else { panic!("the stream did not open") };
+    assert_eq!(ev.spaces.lazy(id).expect("read through an index").input().owned_bytes(), 0);
+    let at = content.len() / 2;
+    assert!(fed(&mut d, &bytes, |d| ev.read_in(d, id, at as u64 * 8, 800)).unwrap() == content[at..at + 100]);
+
+    let refused = |d: &Document<ChunkStore>, limits: Limits, why: Refusal, at: &str| {
+        let mut ev = reading(limits);
+        assert_eq!(ev.open_space(d, 0, &[1]).unwrap_or_else(|e| panic!("{at}: {e:?}")), None, "{at}");
+        assert_eq!(ev.open_refusal(&[1]), Some(why), "{at}");
+        assert_eq!(ev.node(d, &[1]).unwrap().refused.as_deref(), Some(why.as_str()), "{at}");
+    };
+    let past_input = Limits { copy_input, input: len as u64 - 1, ..windowed_lazy() };
+    refused(&stored(&bytes, capacity), past_input, Refusal::TooLargeInput, "past the input limit");
+    // Room for less than two windows of 8 KiB and the margin.
+    let too_small = 2 * ((8 << 10) + 65_541) / CHUNK as usize - 4;
+    let roomy = Limits { copy_input, input: 2 * len as u64, ..windowed_lazy() };
+    refused(&stored(&bytes, too_small), roomy, Refusal::TooLarge, "a copy, from a small store");
+    refused(&stored(&bytes, too_small), past_input, Refusal::TooLarge, "a copy past both limits");
+    let mut ev = reading(roomy);
+    assert_eq!(ev.node(&doc(&bytes), &[1]).unwrap().refused.as_deref(), Some("too-large"), "a copy, in memory");
+}
+
+/// A .gz of one member, past the limit on a copy and several times longer
+/// than the store, opens as a joined stream read a part at a time: its one
+/// part is read through an index over the store, which holds no copy of its
+/// run, so the run does not count against the cap on what a joined stream
+/// read a part at a time copies. Past `Limits::input` it is refused as
+/// `too-large-input`, and the member's own stream says so too. In memory,
+/// with no handle onto the file, the part's index would hold a copy, so the
+/// run counts against the cap and the stream is refused as too large.
+#[test]
+fn a_gzip_member_past_the_copy_limit_opens_as_a_joined_stream_through_its_handle() {
+    use crate::codec::lazy::Limits;
+    use crate::eval::SpaceSource;
+    let content = noise(400 << 10);
+    let bytes = gzip_member(&content);
+    let run = bytes.len() - 18;
+    let capacity = 160;
+    assert!(bytes.len() > 2 * capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
+    let limits = Limits { copy_input: 64 << 10, input: run as u64, ..windowed_lazy() };
+    let reading = |limits: Limits| {
+        let mut ev = Evaluator::new(crate::formats::gzip());
+        ev.spaces.set_lazy_limits(limits);
+        ev.spaces.set_whole_cap(64 << 10);
+        ev
+    };
+
+    let mut d = stored(&bytes, capacity);
+    let mut ev = reading(limits);
+    let (id, _) = in_goes(&mut ev, &mut d, &bytes, 600, |ev, d| ev.open_space(d, 0, &[1]));
+    let id = id.unwrap().expect("the joined stream opens");
+    let SpaceSource::Joined(_) = ev.space(id).unwrap().source() else { panic!("not read a part at a time") };
+    let mut got = vec![0u8; 100];
+    for at in [0, content.len() / 2, content.len() - 100] {
+        for _ in 0..10 {
+            // The joined stream says which chunks a read would find
+            // missing, and the read finds those.
+            let said = ev.space(id).unwrap().source().missing(at as u64, 100);
+            let wanted = ev.space(id).unwrap().source().read_bytes(at as u64, &mut got);
+            assert_eq!(said, wanted, "100 bytes at {at}");
+            if wanted.is_empty() {
+                break;
+            }
+            for m in wanted {
+                feed(&mut d, &bytes, m.chunk);
+            }
+        }
+        assert!(got == content[at..at + 100], "100 bytes at {at} differ");
+    }
+
+    let mut d = stored(&bytes, capacity);
+    let mut ev = reading(Limits { input: run as u64 - 1, ..limits });
+    let (id, _) = in_goes(&mut ev, &mut d, &bytes, 600, |ev, d| ev.open_space(d, 0, &[1]));
+    assert_eq!(id.unwrap(), None);
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeInput));
+    let (member, _) = in_goes(&mut ev, &mut d, &bytes, 600, |ev, d| ev.node(d, &[0, 0, 10]));
+    assert_eq!(member.unwrap().refused.as_deref(), Some("too-large-input"));
+
+    let mut ev = reading(Limits { copy_input: 1 << 20, ..limits });
+    assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None, "in memory");
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge), "in memory");
+}

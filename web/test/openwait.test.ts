@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_ROUNDS, waitToOpen, type OpenStep } from "../src/openwait.ts";
+import { MAX_ROUNDS } from "../src/chunkwait.ts";
+import { waitToOpen, type OpenStep, type WaitOptions } from "../src/openwait.ts";
 
 type Step = OpenStep<string>;
 const done = (value: string): Step => ({ kind: "done", value });
@@ -26,7 +27,7 @@ const windowWait = (read: number, ...chunks: number[]): Step => ({
  */
 function run(
   replies: readonly Step[],
-  opts: { load?: (chunks: readonly number[]) => Promise<void>; live?: () => boolean } = {},
+  opts: { load?: (chunks: readonly number[]) => Promise<void>; live?: () => boolean; wait?: Omit<WaitOptions, "later"> } = {},
 ): Promise<{ said: string[]; asks: number; loads: number[][] }> {
   const said: string[] = [];
   const loads: number[][] = [];
@@ -64,7 +65,7 @@ function run(
         lost: () => end("lost"),
         failed: (error) => end(`failed ${error instanceof Error ? error.message : String(error)}`),
       },
-      (then) => queueMicrotask(then),
+      { later: (then) => queueMicrotask(then), ...opts.wait },
     );
   });
 }
@@ -168,4 +169,19 @@ test("a window asked for again once the pass got further is loaded again", async
   const r = await run([windowWait(100, 3, 4), windowWait(150, 3, 4), done("tab")]);
   assert.deepEqual(r.loads, [[3, 4], [3, 4]]);
   assert.equal(r.said.at(-1), "done tab");
+});
+
+test("a wait given a larger limit goes on while every round loads chunks it has not loaded before", async () => {
+  // A checksum over a long run, read a window at a time, with no pass to
+  // say how far it has got.
+  const replies = Array.from({ length: MAX_ROUNDS + 10 }, (_, i) => pending(i));
+  const r = await run([...replies, done("verdict")], { wait: { limit: MAX_ROUNDS + 100 } });
+  assert.equal(r.loads.length, MAX_ROUNDS + 10);
+  assert.equal(r.said.at(-1), "done verdict");
+});
+
+test("a wait given a larger limit still ends when a chunk it loaded is asked for again", async () => {
+  const r = await run([pending(0), pending(1), pending(0)], { wait: { limit: MAX_ROUNDS + 100 } });
+  assert.deepEqual(r.loads, [[0], [1]]);
+  assert.equal(r.said.at(-1), "lost");
 });

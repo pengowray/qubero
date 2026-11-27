@@ -909,7 +909,7 @@ function buildDocument(tab: Tab): Page {
         waiting = null;
         waitSays(UNPACKED.readFailed(wouldBeTitle(path, node), error instanceof Error ? error.message : String(error)), true);
       },
-    });
+    }, { limit: doc.roundLimit() });
     return null;
   };
   /** Write this page's status bar, where the wait began, rather than through

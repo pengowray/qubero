@@ -215,8 +215,10 @@ truncated to the column with the full text on hover. An undefined leaf gets
 the glyph only, with the reason on hover: the value already says `(unknown)`
 or `+2 unnamed`, and repeating it in a second phrase would make the quiet
 tier as long as the loud one. A structure or run row with `problems_within` above zero
-shows the count at the end of its row: `· 3 invalid`, `· 12 undefined`, both
-when both. The count is a button that opens the row and scrolls to the first.
+shows the count at the end of its row: `· 3 invalid`, `· 12 unrecognised`, both
+when both. The tier is still called undefined in the code; on screen it is
+"unrecognised", since a format can have "undefined" as a value of its own (an
+HDF5 address reads `undefined`). The count is a button that opens the row and scrolls to the first.
 
 **Hex view chips.** The chip keeps its kind fill: a red chip would hide what
 kind of field it is, and colour is already spent on kind. An invalid chip gets
@@ -250,7 +252,7 @@ problem a `--warn` outline. The hover line adds the count.
 
 **Overview panel and Contents.** A Contents heading gets the same trailing
 count as a listing structure row. The overview panel's two facts at the top
-become three when the document's root count is non-zero: `2 invalid values, 5 undefined · Show
+become three when the document's root count is non-zero: `2 invalid values, 5 unrecognised · Show
 first`, which is the single place a reader can start from without knowing
 where to look.
 

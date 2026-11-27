@@ -97,9 +97,10 @@ impl RunInput {
     }
 
     /// Bytes `at..at + out.len()` of the run, or every chunk of the source
-    /// the read is missing, all at once. On a miss `out` holds zeroes where
-    /// the missing chunks are. Bytes past the run's end are not read, and
-    /// read as zeroes: a caller never asks for them.
+    /// the read is missing, all at once. The source is asked which chunks
+    /// are missing first ([`Source::missing`]), so a read that would find
+    /// some copies nothing, and `out` is left as zeroes. Bytes past the run's
+    /// end are not read, and read as zeroes: a caller never asks for them.
     pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), Vec<Missing>> {
         debug_assert!(at.saturating_add(out.len() as u64) <= self.len, "read past the end of the run");
         let inside = self.len.saturating_sub(at).min(out.len() as u64) as usize;
@@ -107,10 +108,29 @@ impl RunInput {
         if inside == 0 {
             return Ok(());
         }
+        let missing = self.source.missing(self.at + at, inside as u64);
+        if !missing.is_empty() {
+            out[..inside].fill(0);
+            return Err(missing);
+        }
+        // A source that decodes as it reads may find more missing than it
+        // could say before the read.
         let missing = self.source.read_bytes(self.at + at, &mut out[..inside]);
         match missing.is_empty() {
             true => Ok(()),
             false => Err(missing),
+        }
+    }
+
+    /// The chunks of the source a read of bytes `range` of the run would
+    /// find missing, cut short at the run's end, without reading them: see
+    /// [`Source::missing`].
+    pub fn missing(&self, range: Range<usize>) -> Vec<Missing> {
+        let end = (range.end as u64).min(self.len);
+        let start = (range.start as u64).min(end);
+        match start < end {
+            true => self.source.missing(self.at + start, end - start),
+            false => Vec::new(),
         }
     }
 

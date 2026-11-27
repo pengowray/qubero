@@ -127,6 +127,7 @@ test("a refusal of a joined stream is said by the core's word for it", () => {
   const tab = JOINED.tabTitle("stream", "range.bam");
   assert.equal(JOINED.refused("too-large", tab), JOINED.tooLarge(tab));
   assert.equal(JOINED.refused("too-large-lazy", tab), JOINED.partTooLarge(tab));
+  assert.equal(JOINED.refused("too-large-input", tab), JOINED.partTooLargeInput(tab));
   assert.equal(JOINED.refused("too-large-zstd-frame", tab), JOINED.partZstdFrameTooLarge(tab));
   assert.equal(JOINED.refused("too-large-xz-block", tab), JOINED.partXzBlockTooLarge(tab));
   assert.equal(JOINED.refused("failed", tab), JOINED.failed(tab));

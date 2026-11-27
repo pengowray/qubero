@@ -474,6 +474,16 @@ impl Source for SpaceSource {
     fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
         Some(Arc::new(self.clone()))
     }
+
+    /// The chunks of the file a read here would name, found without
+    /// decoding: see [`Seekable::missing`]. None for bytes held whole.
+    fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
+        match self {
+            SpaceSource::Whole(_) => Vec::new(),
+            SpaceSource::Lazy(index) => index.missing(offset, len),
+            SpaceSource::Joined(joined) => joined.missing(offset, len),
+        }
+    }
 }
 
 /// A stream joined from parts, too large to hold whole, read a part at a
@@ -573,6 +583,26 @@ impl Joined {
         Ok(())
     }
 
+    /// The chunks of the file a [`Joined::read`] of `len` bytes at `at` would
+    /// name, found without decoding: those of the first part read through
+    /// its index that is missing some. The other parts are held in memory.
+    pub fn missing(&self, at: u64, len: u64) -> Vec<Missing> {
+        let end = at.saturating_add(len).min(self.len);
+        let mut pos = at;
+        while pos < end {
+            let Some(i) = self.part_at(pos) else { break };
+            let range = self.parts[i].0.clone();
+            if let JoinedBytes::Indexed(index) = &self.parts[i].1 {
+                let found = index.missing(pos - range.start, range.end.min(end) - pos);
+                if !found.is_empty() {
+                    return found;
+                }
+            }
+            pos = range.end;
+        }
+        Vec::new()
+    }
+
     /// The trace of packed part `i`, decoded again with its trace on.
     fn part_trace(&self, i: usize, run: &[u8], codec: Codec) -> Option<Arc<Trace>> {
         if let Some((held, t)) = lock(&self.traced).as_ref() {
@@ -659,14 +689,30 @@ pub(super) type RunKey = (u32, u64, u64);
 /// run is indexed once however many things read it: the `Decoded` node over
 /// it, a stitched stream with it as a part, and the tab.
 ///
-/// An index whose run no handle reaches reads it through a copy of it, so
-/// the total of those copies is capped, and the index used longest ago goes
-/// first. An index over a handle owns no copy, and weighs nothing here (see
-/// [`lazy::RunInput::owned_bytes`]).
-#[derive(Default)]
+/// Each index is weighed by what it holds for as long as it is kept: its
+/// checkpoints' windows, header copies and block starts
+/// ([`Seekable::kept_bytes`]), and the copy of its run when no handle reaches
+/// the run ([`lazy::RunInput::owned_bytes`]). The weights are capped in
+/// total, and the index used longest ago goes first. The caches inside each
+/// index are not weighed; the limits bound them.
 pub(super) struct Indexes {
-    entries: Vec<(RunKey, Codec, Arc<Seekable>, u64)>,
+    /// Each index, with its weight and when it was last used.
+    entries: Vec<(RunKey, Codec, Arc<Seekable>, u64, u64)>,
     clock: u64,
+    /// The most the weights may come to: [`INDEXED_RUN_BYTES`], made small
+    /// by a test.
+    cap: u64,
+}
+
+impl Default for Indexes {
+    fn default() -> Indexes {
+        Indexes { entries: Vec::new(), clock: 0, cap: INDEXED_RUN_BYTES as u64 }
+    }
+}
+
+/// What an index weighs in [`Indexes`].
+fn weight(index: &Seekable) -> u64 {
+    index.kept_bytes() + index.input().owned_bytes()
 }
 
 impl Indexes {
@@ -674,23 +720,34 @@ impl Indexes {
         self.clock += 1;
         let clock = self.clock;
         let e = self.entries.iter_mut().find(|e| e.0 == key && e.1 == codec)?;
-        e.3 = clock;
+        e.4 = clock;
         Some(e.2.clone())
     }
 
+    /// Keep `index`, letting go of the indexes used longest ago until the
+    /// weights fit. An index heavier than the cap on its own is kept alone.
     fn put(&mut self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
-        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.input().owned_bytes()).sum::<u64>();
-        while !self.entries.is_empty() && held(&self.entries) + index.input().owned_bytes() > INDEXED_RUN_BYTES as u64 {
-            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
+        let w = weight(&index);
+        while !self.entries.is_empty() && self.entries.iter().map(|e| e.3).sum::<u64>() + w > self.cap {
+            let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].4).expect("not empty");
             self.entries.swap_remove(oldest);
         }
         self.clock += 1;
-        self.entries.push((key, codec, index, self.clock));
+        self.entries.push((key, codec, index, w, self.clock));
+    }
+
+    /// The runs whose indexes are kept, for tests.
+    #[cfg(test)]
+    fn kept(&self) -> Vec<RunKey> {
+        let mut keys: Vec<RunKey> = self.entries.iter().map(|e| e.0).collect();
+        keys.sort_unstable();
+        keys
     }
 }
 
-/// The most the copies of compressed runs that indexes read through may
-/// hold between them. The same as the most one run may be.
+/// The most the indexes kept may weigh between them. Each weighs about
+/// 9.1 MiB at most when its run is read through a handle, so at least seven
+/// such indexes are kept.
 const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 
 /// Runs whose indexing pass has started and not finished, by where each run
@@ -1288,6 +1345,25 @@ impl Spaces {
         self.lazy_limits = limits;
     }
 
+    /// The limits and the cap on a joined stream held whole, for
+    /// [`super::Evaluator::set_stream_limits`].
+    pub(super) fn set_stream_limits(&mut self, limits: Limits, whole_cap: usize) {
+        self.lazy_limits = limits;
+        self.whole_cap = whole_cap;
+    }
+
+    /// The most the indexes kept may weigh, made small for a test.
+    #[cfg(test)]
+    pub(super) fn set_index_cap(&mut self, bytes: u64) {
+        self.indexes.borrow_mut().cap = bytes;
+    }
+
+    /// The runs whose indexes are kept, for tests.
+    #[cfg(test)]
+    pub(super) fn kept_indexes(&self) -> Vec<RunKey> {
+        self.indexes.borrow().kept()
+    }
+
     /// The index behind a space read a piece at a time. Nothing for any
     /// other space.
     pub(super) fn lazy(&self, space: u32) -> Option<&Arc<Seekable>> {
@@ -1483,11 +1559,17 @@ impl super::Evaluator {
         if let Some(held) = held {
             return self.carry_on(doc, key, codec, held, true);
         }
-        if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
-            return Ok(Err(Refusal::TooLarge));
-        }
         let limits = self.spaces.lazy_limits;
         let windowed = self.shared_input(doc, key).filter(|input| lazy::reads_in_windows(codec, input, &limits));
+        // Past `Limits::input` for a pass that reads the run through its
+        // handle, and past `Limits::copy_input` for any other, which reads a
+        // copy: an xz run, a run no handle reaches, or a run in a source with
+        // too little room for two windows. Said before anything waits or is
+        // gathered, so that a copy too long to make is refused as too large
+        // and not as too much to gather at once.
+        if let Some(why) = lazy::too_long_to_index(key.2 / 8, windowed.is_some(), &limits) {
+            return Ok(Err(why));
+        }
         // A go with no allowance carries its pass to the end before it hands
         // back, so it never puts one back for that and needs no place,
         // unless the pass reads a source that can find chunks missing. A go
@@ -1555,8 +1637,10 @@ impl super::Evaluator {
     /// - Any other run is gathered whole ([`Self::gather_run`]) and the copy
     ///   kept: a run in a stitched space, in a stretch an edit touched, or in
     ///   a source that gives no handle, such as a [`MemSource`]. A run longer
-    ///   than the cap is refused as [`Refusal::TooLarge`] before anything of
-    ///   it is read. A handle is never refused here.
+    ///   than [`Limits::copy_input`], the cap, is refused as
+    ///   [`Refusal::TooLarge`] before anything of it is read. A handle is
+    ///   never refused here: a pass reading one is held to [`Limits::input`]
+    ///   by [`Self::index_pass`].
     ///
     /// A handle made before an edit reads the source it was given, at the
     /// place it was given, and never the edited bytes. Every edit drops the
@@ -1567,8 +1651,8 @@ impl super::Evaluator {
         if let Some(input) = self.shared_input(doc, key) {
             return Ok(Ok(input));
         }
-        if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
-            return Ok(Err(Refusal::TooLarge));
+        if let Some(why) = lazy::too_long_to_index(key.2 / 8, false, &self.spaces.lazy_limits) {
+            return Ok(Err(why));
         }
         Ok(self.gather_run(doc, key.0, key.1, key.2)?.map(|bytes| lazy::RunInput::held(Arc::new(bytes))))
     }
@@ -1576,7 +1660,7 @@ impl super::Evaluator {
     /// The handle [`Self::run_input`] makes for the run at `key`, when one
     /// reaches it. Reads nothing.
     #[inline(never)]
-    fn shared_input<S: Source>(&self, doc: &Document<S>, (space, at, n): RunKey) -> Option<lazy::RunInput> {
+    pub(super) fn shared_input<S: Source>(&self, doc: &Document<S>, (space, at, n): RunKey) -> Option<lazy::RunInput> {
         if n % 8 != 0 {
             return None;
         }
@@ -2176,6 +2260,45 @@ mod tests {
         assert_eq!(e.spaces.indexed((0, 16, (d.len_bytes() - 6) * 8), crate::codec::Codec::Deflate).map(|i| std::sync::Arc::ptr_eq(&i, &index)), Some(true));
     }
 
+    /// An index is weighed by its checkpoints' windows, its copies of block
+    /// headers, each counted once, and its block starts, and by the copy of
+    /// its run when it holds one. The indexes kept are held to a total weight,
+    /// and the one used longest ago goes first. So a copy of the run counts:
+    /// two indexes over a handle fit where an index over a copy and one over
+    /// a handle do not.
+    #[test]
+    fn indexes_are_weighed_by_what_they_hold_and_the_one_used_longest_ago_goes() {
+        use super::{weight, Indexes};
+        use crate::codec::lazy::{decode_or_index_through, decode_or_index_with, Decoded, RunInput};
+        use crate::codec::Codec;
+        use std::sync::Arc;
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(&many_lines(), 6);
+        let len = packed.len() as u64;
+        let Ok(Decoded::Indexed(copied)) = decode_or_index_with(Codec::Zlib, Arc::new(packed.clone()), small_limits()) else { panic!("indexed") };
+        let handle = RunInput::new(Arc::new(ArcSource(Arc::new(packed.clone()))), 0, len);
+        let Ok(Decoded::Indexed(shared)) = decode_or_index_through(Codec::Zlib, Arc::new(packed), handle, small_limits()) else { panic!("indexed") };
+        let (copied, shared) = (Arc::new(copied), Arc::new(shared));
+
+        let windows: usize = (0..shared.spans()).map(|k| (shared.span_bytes(k).start as usize).min(32 << 10)).sum();
+        assert!(shared.kept_bytes() as usize >= windows && shared.kept_bytes() as usize <= shared.held_bytes(), "{} bytes kept", shared.kept_bytes());
+        assert_eq!(copied.kept_bytes(), shared.kept_bytes());
+        assert_eq!((weight(&shared), weight(&copied)), (shared.kept_bytes(), shared.kept_bytes() + len));
+
+        let key = |i: u64| (0u32, i, 8);
+        let mut ix = Indexes { cap: 2 * weight(&shared), ..Indexes::default() };
+        ix.put(key(1), Codec::Zlib, shared.clone());
+        ix.put(key(2), Codec::Zlib, shared.clone());
+        assert_eq!(ix.kept(), [key(1), key(2)]);
+        assert!(ix.get(key(1), Codec::Zlib).is_some());
+        ix.put(key(3), Codec::Zlib, shared.clone());
+        assert_eq!(ix.kept(), [key(1), key(3)], "the index used longest ago goes");
+        ix.put(key(4), Codec::Zlib, copied.clone());
+        assert_eq!(ix.kept(), [key(4)], "the copy of the run is weighed");
+        ix.put(key(5), Codec::Zlib, shared);
+        assert_eq!(ix.kept(), [key(5)]);
+        assert_eq!(Indexes::default().cap, 64 << 20);
+    }
+
     /// Limits small enough that a few megabytes of text are past the cap and
     /// take several goes to index.
     fn small_limits() -> crate::codec::lazy::Limits {
@@ -2255,8 +2378,10 @@ mod tests {
         // chunks of the file and reads zeroes until they are fed.
         lossy.drop_all();
         let mut got = vec![0u8; 100];
+        let said = e.space(id).unwrap().source().missing(500_000, 100);
         let missing = e.space(id).unwrap().source().read_bytes(500_000, &mut got);
         assert!(!missing.is_empty() && got == [0u8; 100]);
+        assert_eq!(said, missing, "the stream says which chunks the read finds missing");
         let (_, waits) = until_fed(&lossy, run.clone(), || match e.space(id).unwrap().source().read_bytes(500_000, &mut got) {
             missing if missing.is_empty() => Ok(()),
             missing => Err(EvalError::Pending(missing)),

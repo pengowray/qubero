@@ -210,6 +210,11 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB)",
+  /** A deflate, zlib, gzip or zstd run read a piece at a time whose
+   *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
+   *  most such a run may take up. The limit is on the compressed size, not on
+   *  what it unpacks to. Also said after a part's name, as "is …". */
+  "too-large-input": "too large to unpack (over 512 MiB compressed)",
   /** A zstd run, or an xz stream, read a piece at a time: each frame or
    *  block of it is unpacked whole, and one of them unpacks to more than
    *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
@@ -672,6 +677,14 @@ export const JOINED = {
   partTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts unpacks to over 1 GiB.`,
   /**
    * In the status bar, when Open joined stream was pressed and the core
+   * refused because one compressed part is over 512 MiB compressed
+   * (`too-large-input`), the most a compressed stream read a piece at a time
+   * may take up. The limit is on that one part, not on the parts together,
+   * and on its compressed size. The core does not say which part.
+   */
+  partTooLargeInput: (tab: string): string => `Couldn't open ${tab}: one of its parts is over 512 MiB compressed.`,
+  /**
+   * In the status bar, when Open joined stream was pressed and the core
    * refused because one compressed part has a zstd frame, or an xz block,
    * that unpacks to more than 64 MiB (`too-large-zstd-frame`,
    * `too-large-xz-block`): each frame or block is unpacked whole. The core
@@ -705,6 +718,8 @@ export const JOINED = {
         return JOINED.tooLarge(tab);
       case "too-large-lazy":
         return JOINED.partTooLarge(tab);
+      case "too-large-input":
+        return JOINED.partTooLargeInput(tab);
       case "too-large-zstd-frame":
         return JOINED.partZstdFrameTooLarge(tab);
       case "too-large-xz-block":
@@ -2326,7 +2341,9 @@ function plural(noun: string): string {
  * ancestor carries, and the line the overview panel opens with.
  *
  * `invalid` and `undefined` are the two tiers, and the difference is who says
- * the value is wrong. The format ruling a value out is a finding; Qubero
+ * the value is wrong. On screen the second tier is "unrecognised": a format
+ * can have "undefined" as a value of its own (an HDF5 address), and one word
+ * for both would give a row two readings. The format ruling a value out is a finding; Qubero
  * having no name for one is not, so only the first is marked in red. See
  * `docs/DESIGN-wrong-values.md`.
  */
@@ -2338,7 +2355,7 @@ export const PROBLEMS = {
   within: (invalid: number, undefined_: number, soFar: boolean): string => {
     const parts: string[] = [];
     if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid`);
-    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} unrecognised`);
     if (parts.length === 0) return "";
     return `\u00b7 ${parts.join(", ")}${soFar ? " so far" : ""}`;
   },
@@ -2348,7 +2365,7 @@ export const PROBLEMS = {
   overview: (invalid: number, undefined_: number): string => {
     const parts: string[] = [];
     if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid ${invalid === 1 ? "value" : "values"}`);
-    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} unrecognised`);
     return parts.join(", ");
   },
   /** The name of the overview panel's third fact, beside the count. The other
@@ -5060,13 +5077,13 @@ export const SIDEBAR = {
   atCursor: "At cursor",
   template: "Template",
   noTemplate: "No template for this file.",
-  /** At the end of the Template tab's marked line, when the field was read
-   *  through a `same as ..., but big-endian` line and its numbers are in the
-   *  other byte order from the one the marked line writes. */
+  /** On the Template tab's marked line, after the number type it is about,
+   *  when the field was read through a `same as ..., but big-endian` line and
+   *  its numbers are in the other byte order from the one the line writes. */
   readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
-  /** At the end of a field's line in the Template tab, after a click on it
-   *  found no such field in this file: its switch arm is not the one taken,
-   *  its list is empty, or it is optional and absent. */
+  /** On a field's line in the Template tab, after the field's name and type,
+   *  when a click on it found no such field in this file: its switch arm is
+   *  not the one taken, its list is empty, or it is optional and absent. */
   notInFile: "not in this file",
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
@@ -5076,7 +5093,10 @@ export const SIDEBAR = {
     list === "" ? `not found in the first ${n.toLocaleString()} fields` : `not found in the first ${n.toLocaleString()} elements of ${list}`,
   /** The Template tab's copy button, as its tooltip and accessible name. */
   copyTemplate: "Copy the template text",
-  /** After the template text was put on the clipboard. */
-  copied: (lines: number): string => `Copied ${lines.toLocaleString()} lines of template text.`,
-  copyFailed: "Couldn't copy to the clipboard.",
+  /** Beside the Template tab's copy button, after the template text was put
+   *  on the clipboard. The button says what was copied. */
+  copied: (lines: number): string => `Copied ${lines.toLocaleString()} lines.`,
+  /** In the same place, when the clipboard refused the text. Short enough to
+   *  fit between the tabs and the button. */
+  copyFailed: "Couldn't copy.",
 } as const;

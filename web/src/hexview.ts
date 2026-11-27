@@ -1788,8 +1788,7 @@ export class HexView {
     const start = Math.floor(sel.startBit / 8);
     const n = Math.ceil(sel.endBit / 8) - start;
     if (n > COPY_LIMIT_BYTES) return this.say(COPY_TOO_BIG(n));
-    await this.doc.ensureRange(start, n);
-    const { bytes, complete } = this.doc.read(start, n);
+    const { bytes, complete } = await this.doc.readLoaded(start, n);
     if (!complete) return this.say(COPY_PENDING);
     const asText = this.pane === "ascii";
     // The text column's own reading, byte for byte, so what is copied is what

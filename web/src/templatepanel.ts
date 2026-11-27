@@ -25,7 +25,7 @@ const FIRST_CHUNKS = 3;
 /** Pointer travel, in pixels, past which a press and release on a line is a
  *  drag to select text rather than a click. */
 const DRAG_PX = 4;
-/** How long the Copy confirmation stays up: as long as the table view's. */
+/** How long the Copy button's message stays up: as long as the table view's. */
 const NOTICE_MS = 5000;
 
 type Chunk = { readonly el: HTMLElement; readonly from: number; readonly to: number; filled: boolean };
@@ -35,7 +35,8 @@ const idle: (fn: () => void) => void =
 
 export class TemplatePanel {
   readonly el: HTMLElement;
-  /** The tab's own controls, for the sidebar's bar: the Copy button. */
+  /** The tab's own controls, for the sidebar's bar: the Copy button and the
+   *  message to its left saying whether the copy worked. */
   readonly tools: HTMLElement;
   /** A field's line was clicked and this node of the file is declared on it. */
   onJump: (path: readonly number[]) => void = () => {};
@@ -90,11 +91,11 @@ export class TemplatePanel {
     this.body = document.createElement("div");
     this.body.className = "tp-text";
     this.scroller.append(this.body);
-    this.notice = document.createElement("div");
-    this.notice.className = "tp-notice";
+    this.el.append(this.scroller);
+    this.notice = document.createElement("span");
+    this.notice.className = "tp-copied";
     this.notice.setAttribute("role", "status");
     this.notice.hidden = true;
-    this.el.append(this.scroller, this.notice);
     this.copyButton = document.createElement("button");
     this.copyButton.type = "button";
     this.copyButton.className = "insp-act tp-copy";
@@ -103,7 +104,9 @@ export class TemplatePanel {
     this.copyButton.setAttribute("aria-label", SIDEBAR.copyTemplate);
     this.copyButton.hidden = true;
     this.copyButton.addEventListener("click", () => void this.copy());
-    this.tools = this.copyButton;
+    this.tools = document.createElement("span");
+    this.tools.className = "tp-tools";
+    this.tools.append(this.notice, this.copyButton);
     this.scroller.addEventListener("pointerdown", (e) => {
       this.pressAt = { x: e.clientX, y: e.clientY };
     });
@@ -178,6 +181,7 @@ export class TemplatePanel {
     this.missed = null;
     this.jumpOwed = null;
     this.copyButton.hidden = text === "";
+    this.notice.hidden = true;
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     if (text === "") {
@@ -373,7 +377,7 @@ export class TemplatePanel {
   }
 
   /** Find a node of the file declared on `line` and hand it to `onJump`, or
-   *  say at the end of the line why there is none. */
+   *  say on the line why there is none. */
   private jump(line: number): void {
     this.jumpOwed = null;
     const index = this.index;
@@ -408,24 +412,30 @@ export class TemplatePanel {
     };
   }
 
-  /** Say at the end of `line` why clicking it did not move the cursor. Drawn
-   *  from `data-note` like the byte order note, so a selection leaves it out. */
+  /** Say on `line`, straight after the field's name and type, why clicking
+   *  it did not move the cursor, and flash the line's fill. Drawn from
+   *  `data-note` like the byte order note, so a selection leaves it out. */
   private miss(line: number, why: string): void {
     const row = this.lineEls[line];
     if (row === undefined) return;
     const note = document.createElement("span");
     note.className = "tp-note tp-miss";
     note.dataset.note = why;
-    row.append(note);
+    insertAt(row, noteColumn(this.index?.lines[line] ?? "", this.index?.decls[line]), note);
     this.missed = note;
+    // Restarts the flash when the same line is clicked again.
+    row.classList.remove("is-missed");
+    void row.offsetWidth;
+    row.classList.add("is-missed");
   }
 
   private unmiss(): void {
     this.jumpOwed = null;
     if (this.missed === null) return;
-    const row = this.missed.parentElement;
+    const row = this.missed.closest(".tp-line");
     this.missed.remove();
     this.missed = null;
+    row?.classList.remove("is-missed");
     row?.normalize();
   }
 
@@ -442,7 +452,7 @@ export class TemplatePanel {
     this.say(SIDEBAR.copied(this.index?.lines.length ?? 0));
   }
 
-  /** A message about the Copy button's press, which goes away on its own. */
+  /** A message beside the Copy button about its press, which goes away on its own. */
   private say(text: string): void {
     this.notice.textContent = text;
     this.notice.hidden = false;
@@ -472,4 +482,42 @@ export class TemplatePanel {
     const room = s.clientWidth - 12 * this.charWidth;
     if (indent < s.scrollLeft || indent > s.scrollLeft + room) s.scrollLeft = Math.max(0, indent - 2 * this.charWidth);
   }
+}
+
+/** Where on a field's line the note on a click that found nothing goes: after
+ *  the field's name and type. For a field that opens a structure, the type is
+ *  the structure's name, `decls` on the line, and the note goes before the
+ *  structure's options in brackets. Otherwise it goes before an `enum Name {`
+ *  or `flags Name {` that lists the values, or before a final `{`. */
+export function noteColumn(text: string, decls: readonly (readonly [number, number])[] = []): number {
+  const decl = decls.at(-1);
+  if (decl !== undefined) return decl[1];
+  const named = /\s(?:enum|flags)\s+[A-Za-z_]\w*\s*\{/.exec(text);
+  if (named !== null) return named.index;
+  const end = text.trimEnd();
+  const brace = /\s*\{$/.exec(end);
+  return brace !== null ? brace.index : end.length;
+}
+
+/** Put `el` into a drawn row at character `col` of the row's text, outside
+ *  any coloured run that ends there. */
+function insertAt(row: HTMLElement, col: number, el: HTMLElement): void {
+  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  for (let t = walker.nextNode() as Text | null; t !== null; t = walker.nextNode() as Text | null) {
+    const end = seen + t.data.length;
+    if (col < end) {
+      t.splitText(col - seen).before(el);
+      return;
+    }
+    if (col === end) {
+      let n: Node = t;
+      while (n.parentNode !== null && n.parentNode !== row) n = n.parentNode;
+      if (n.parentNode === row) (n as ChildNode).after(el);
+      else row.append(el);
+      return;
+    }
+    seen = end;
+  }
+  row.append(el);
 }
