@@ -284,6 +284,7 @@ fn pack_info() -> T {
             ("end", T::if_room(property_id())),
         ],
     )
+    .positions(&["pack_pos"])
 }
 
 /// How LZMA was set up: one byte packing three numbers, and the dictionary.
@@ -1153,6 +1154,7 @@ pub fn sevenzip() -> Template {
             ],
         )
         .field_aside("header_ahead")
+        .positions(&["next_header_offset"])
         // The twenty bytes after it: the three numbers that say where the
         // header is, and nothing else. This is what tells a truncated archive
         // from a corrupt one, since a reader that cannot trust these cannot

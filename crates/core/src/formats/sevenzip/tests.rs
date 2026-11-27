@@ -593,3 +593,12 @@ fn a_bit_per_file_stops_at_the_number_of_files() {
     // The names still read, so the walk stepped over the block correctly.
     assert_eq!(e.node(&d, &[8, 3, 2, 1, 1, 1, 1, 1]).unwrap().value, Value::Str("f.txt".into()));
 }
+
+/// Where the header and the packed streams are, both counted from the end of
+/// the start header, are positions. The sizes beside them are not.
+#[test]
+fn header_and_pack_offsets_are_positions() {
+    let t = sevenzip();
+    crate::machinery::assert_marks(&t, "SevenZipArchive", &["next_header_offset"], &["next_header_size"]);
+    crate::machinery::assert_marks(&t, "PackInfo", &["pack_pos"], &["num_pack_streams"]);
+}
