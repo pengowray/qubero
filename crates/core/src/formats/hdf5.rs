@@ -376,10 +376,11 @@ fn superblock_v2() -> T {
 /// read here as the eight bytes it always is.
 ///
 /// All ones is the undefined address, the file's way of writing "nothing
-/// here", and it is named so a chip says that rather than spelling out
-/// 18446744073709551615. Every other value shows as the number it is.
+/// here", and it reads as unset rather than as 18446744073709551615. Every
+/// other value shows as the number it is. Not an enum with one name: an enum
+/// calls every real address an unknown value.
 pub(super) fn addr() -> T {
-    T::enumeration("Address", T::u64(Little), &[(UNDEFINED, "undefined")])
+    T::unset_int(T::u64(Little), UNDEFINED)
 }
 
 /// A length, which the superblock sizes separately from an address and which
