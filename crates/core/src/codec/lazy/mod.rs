@@ -51,11 +51,13 @@ use crate::codec::inflate::{Resume, Wrapper};
 use crate::codec::{Codec, Refusal, Trace, CAP_BYTES};
 
 mod deflate;
+mod input;
 mod seekable;
 mod xz;
 mod zstd;
 
 use deflate::DeflatePass;
+pub use input::{refused_as_none, ReadError, RunInput};
 pub use seekable::Seekable;
 use xz::index_xz;
 use zstd::ZstdPass;

@@ -4,6 +4,7 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use super::input::{ReadError, RunInput};
 use super::seekable::{lock, seekable, Kind, Recent};
 use super::{whole, Checkpoints, Decoded, Limits, Start};
 use crate::codec::lzma::{self, Lzma2, LZMA2_CHUNK_MAX};
@@ -65,6 +66,7 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
 ///
 /// The blocks are read from `window`, a window of the stream that holds the
 /// LZMA2 data of every block the read decodes.
+#[cfg(test)]
 pub(super) fn read_span(
     cache: &Mutex<Recent<Prefix>>,
     window: Window<'_>,
@@ -77,6 +79,42 @@ pub(super) fn read_span(
     let held = lock(cache).take(k as u64);
     let mut p = held.unwrap_or_else(|| Prefix::new(l, units.clone()));
     p.reach(window, l, units, from + dst.len())?;
+    p.copy(from, dst);
+    let weight = p.weight();
+    lock(cache).put(k as u64, p, weight);
+    Ok(())
+}
+
+/// [`read_span`], with the blocks read through `input`: only the blocks the
+/// read decodes, each one's LZMA2 data whole (see [`Prefix::needs`]). A read
+/// that finds chunks of the input missing decodes nothing, and keeps what was
+/// decoded of the span for the read made again once they are there.
+pub(super) fn read_span_through(
+    cache: &Mutex<Recent<Prefix>>,
+    input: &RunInput,
+    l: &xz::Layout,
+    units: Range<usize>,
+    k: usize,
+    from: usize,
+    dst: &mut [u8],
+) -> Result<(), ReadError> {
+    let upto = from + dst.len();
+    let held = lock(cache).take(k as u64);
+    let mut p = held.unwrap_or_else(|| Prefix::new(l, units.clone()));
+    let copy = match p.needs(l, units.clone(), upto).map(|range| input.copy(range)).transpose() {
+        Ok(copy) => copy,
+        Err(missing) => {
+            let weight = p.weight();
+            lock(cache).put(k as u64, p, weight);
+            return Err(ReadError::Missing(missing));
+        }
+    };
+    let run_len = input.len() as usize;
+    let window = match &copy {
+        Some(copy) => copy.window(input.len()),
+        None => Window::of(&[], 0, run_len).expect("an empty window"),
+    };
+    p.reach(window, l, units, upto)?;
     p.copy(from, dst);
     let weight = p.weight();
     lock(cache).put(k as u64, p, weight);
@@ -127,6 +165,32 @@ impl Prefix {
         self.blocks.iter().map(Vec::capacity).sum::<usize>()
             + self.blocks.capacity() * std::mem::size_of::<Vec<u8>>()
             + self.decoder.as_ref().map_or(0, Lzma2::held_bytes)
+    }
+
+    /// The bytes of the stream that [`Prefix::reach`] reads to decode the
+    /// first `upto` bytes of the span: the LZMA2 data of every block from the
+    /// one being decoded, or the next to start, to the one holding byte
+    /// `upto - 1` of the span, or to the span's last block for a read that
+    /// reaches the span's end. A block's data is read whole, since its chunk
+    /// headers are all read before its first chunk is decoded. Nothing when
+    /// the read decodes nothing.
+    fn needs(&self, l: &xz::Layout, units: Range<usize>, upto: usize) -> Option<Range<usize>> {
+        if self.decoded >= upto && upto < self.len {
+            return None;
+        }
+        let from = self.first + self.blocks.len() - usize::from(self.decoder.is_some());
+        let to = match upto >= self.len {
+            true => units.end,
+            false => {
+                let mut end = 0usize;
+                let holding = l.blocks[units.clone()].iter().position(|b| {
+                    end += b.unpacked as usize;
+                    end >= upto
+                });
+                holding.map_or(units.end, |i| units.start + i + 1)
+            }
+        };
+        (from < to).then(|| l.blocks[from].lzma2().start..l.blocks[to - 1].lzma2().end)
     }
 
     /// Decode on, a chunk at a time, until the first `upto` bytes of the span

@@ -2855,7 +2855,7 @@ impl Evaluator {
             }
         };
         let Some(Unpacked { source, trace, codec, inner, runs, run }) = unpacked else { return Ok(None) };
-        let (template, recognised) = self.template_for(&inner, &source);
+        let (template, recognised) = self.template_for(&inner, &source)?;
         // A template the stream declared reads the stream where it was
         // declared, under the node that holds what the stream opened to. One
         // that came from looking at the bytes needs nothing outside them.
@@ -2981,14 +2981,21 @@ impl Evaluator {
     /// This is what makes a gzip of a tar open as a tar. A template that says
     /// something more than "bytes" is believed: a ROOT record's object is an
     /// object whatever a sniffer would make of the first four bytes of it.
-    fn template_for(&self, inner: &Ty, source: &space::SpaceSource) -> (Template, bool) {
+    ///
+    /// The bytes looked at are the stream's first 36 KiB. A stream read
+    /// through an index may find chunks of the file its run is in missing,
+    /// and then this answers `Pending` with them rather than look at zeroes.
+    /// A stream the decoder refuses is looked at as zeroes, as before.
+    fn template_for(&self, inner: &Ty, source: &space::SpaceSource) -> R<(Template, bool)> {
         if says_only_bytes(inner) {
             let len = source.len_bytes();
             let mut head = vec![0u8; len.min(0x9000) as usize];
-            source.read(0, &mut head);
+            if let Err(crate::codec::lazy::ReadError::Missing(missing)) = source.read(0, &mut head) {
+                return Err(EvalError::Pending(missing));
+            }
             if let Some(found) = crate::formats::sniff(&head, len) {
                 if let Some(t) = crate::formats::template(found) {
-                    return (t, true);
+                    return Ok((t, true));
                 }
             }
         }
@@ -3003,7 +3010,7 @@ impl Evaluator {
         // And for what builds the types the file describes, which a stream
         // holding a record typed that way asks the same way the file does.
         t.schemas = self.template.schemas.clone();
-        (t, false)
+        Ok((t, false))
     }
 
     /// The bytes of the address space an offset counts in, which is the

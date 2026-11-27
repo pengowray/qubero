@@ -105,7 +105,7 @@ fn sweep() {
                 (false, Some(View { reading: 0, root })) => read_tab(&mut Tab::new(&mut ev, &doc, root)),
                 _ => {
                     let mut held = vec![0u8; space.len_bytes() as usize];
-                    space.source().read(0, &mut held);
+                    let _ = space.source().read(0, &mut held);
                     let tab_doc = Document::new(MemSource(held));
                     let mut tab = Evaluator::new(space.read_as().clone());
                     read_tab(&mut Tab::new(&mut tab, &tab_doc, Vec::new()))

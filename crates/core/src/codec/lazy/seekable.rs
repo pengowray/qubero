@@ -4,9 +4,11 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::deflate::{BlockMarks, WindowSink};
+use super::input::{Copied, ReadError, RunInput};
 use super::{Checkpoint, Limits, GROUPS_KEPT};
-use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper};
+use crate::codec::inflate::{self, CountSink, Ended, Framing, Input, Resume, Sink, Wrapper, MAX_HEAD_BYTES};
 use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField, StepKind, Trace, TraceBuilder};
+use crate::source::Missing;
 
 /// A compressed run that comes to more than can be held whole, read through
 /// its checkpoints.
@@ -23,6 +25,8 @@ use crate::codec::{xz, Block, BlockKind, Codec, Member, Refusal, Step, StepField
 pub struct Seekable {
     codec: Codec,
     packed: Arc<Vec<u8>>,
+    /// Where a span's compressed bytes are read from when it is decoded.
+    input: RunInput,
     kind: Kind,
     len: u64,
     pub(super) checkpoints: Vec<Checkpoint>,
@@ -60,6 +64,7 @@ pub(super) enum Kind {
 pub(super) fn seekable(codec: Codec, packed: Arc<Vec<u8>>, kind: Kind, len: u64, checkpoints: Vec<Checkpoint>, limits: Limits) -> Seekable {
     Seekable {
         codec,
+        input: RunInput::held(packed.clone()),
         packed,
         kind,
         len,
@@ -171,10 +176,17 @@ impl Seekable {
     }
 
     /// Bytes `at..at + out.len()` of the output.
-    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), Refusal> {
+    ///
+    /// Each span the read reaches is decoded from its compressed bytes, read
+    /// through the run's [`RunInput`] first. When chunks of them are not
+    /// loaded, the read stops at that span and names them all, and nothing
+    /// of the span is decoded or cached; spans decoded before it stay in the
+    /// cache, so the read made again once the chunks are there does not
+    /// decode them again.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let end = at.checked_add(out.len() as u64).ok_or(Refusal::Failed)?;
         if end > self.len {
-            return Err(Refusal::Failed);
+            return Err(Refusal::Failed.into());
         }
         let mut pos = at;
         while pos < end {
@@ -186,7 +198,7 @@ impl Seekable {
             let dst = &mut out[to..to + take];
             match &self.kind {
                 // Decoded only as far as this read reaches.
-                Kind::Xz(l) => super::xz::read_span(&self.prefixes, self.whole().code(), l, self.span_units(k, l), k, from, dst)?,
+                Kind::Xz(l) => super::xz::read_span_through(&self.prefixes, &self.input, l, self.span_units(k, l), k, from, dst)?,
                 _ => dst.copy_from_slice(&self.span(k)?[from..from + take]),
             }
             pos += take as u64;
@@ -208,7 +220,7 @@ impl Seekable {
     }
 
     /// Everything span `k` comes to, from the cache or decoded now.
-    fn span(&self, k: usize) -> Result<Arc<Vec<u8>>, Refusal> {
+    fn span(&self, k: usize) -> Result<Arc<Vec<u8>>, ReadError> {
         if let Some(bytes) = lock(&self.spans).get(k as u64) {
             return Ok(bytes);
         }
@@ -223,22 +235,40 @@ impl Seekable {
     /// disagreeing with itself.
     ///
     /// An xz span is never decoded whole: a read of one decodes only as far
-    /// as the read reaches, through `prefixes`. See [`super::xz::read_span`].
-    fn decode_span(&self, k: usize) -> Result<Vec<u8>, Refusal> {
+    /// as the read reaches, through `prefixes`. See
+    /// [`super::xz::read_span_through`].
+    fn decode_span(&self, k: usize) -> Result<Vec<u8>, ReadError> {
         let range = self.span_bytes(k);
         let want = (range.end - range.start) as usize;
         let bytes = match &self.kind {
-            Kind::Deflate(_) => self.deflate_span(k, self.whole())?,
-            Kind::Zstd => {
-                let out = self.checkpoints[k].out;
-                super::zstd::decode_span(self.whole().code(), self.span_in(k), out, want, self.limits.span)?
+            Kind::Deflate(_) => {
+                let copies = self.deflate_span_copies(k)?;
+                self.deflate_span(k, copies.input(self.input.len()))?
             }
-            Kind::Xz(_) => return Err(Refusal::Failed),
+            Kind::Zstd => {
+                let (range, out) = (self.span_in(k), self.checkpoints[k].out);
+                let copy = self.input.copy(range.clone())?;
+                super::zstd::decode_span(copy.window(self.input.len()), range, out, want, self.limits.span)?
+            }
+            Kind::Xz(_) => return Err(Refusal::Failed.into()),
         };
         if bytes.len() != want {
-            return Err(Refusal::Failed);
+            return Err(Refusal::Failed.into());
         }
         Ok(bytes)
+    }
+
+    /// What a decode or a trace of deflate span `k` reads, copied through
+    /// the run's input, all of it or none: from the byte its checkpoint's bit
+    /// is in to the byte holding the bit before the next checkpoint's (or to
+    /// the run's end, for the last span), and the header of the block the
+    /// checkpoint is inside, [`MAX_HEAD_BYTES`] of it.
+    fn deflate_span_copies(&self, k: usize) -> Result<DeflateCopies, Vec<Missing>> {
+        let c = &self.checkpoints[k];
+        let to = self.checkpoints.get(k + 1).map_or(self.input.len() as usize, |n| n.in_bit.div_ceil(8) as usize);
+        let head = c.block().map(|h| (h / 8) as usize..(h / 8) as usize + MAX_HEAD_BYTES);
+        let [code, head] = self.input.copies([Some((c.in_bit / 8) as usize..to), head])?;
+        Ok(DeflateCopies { code: code.expect("asked for"), head })
     }
 
     /// The run's compressed bytes, which every read decodes from: all of
@@ -492,6 +522,22 @@ impl Seekable {
     #[cfg(test)]
     pub(super) fn marks(&self) -> Vec<(u64, u64, Option<u64>)> {
         self.checkpoints.iter().map(|c| (c.in_bit, c.out, c.block())).collect()
+    }
+}
+
+/// Copies of what a deflate decode reads, made through the run's input: its
+/// codes, and the header and tables of the block it starts inside, when it
+/// starts inside one.
+struct DeflateCopies {
+    code: Copied,
+    head: Option<Copied>,
+}
+
+impl DeflateCopies {
+    /// The copies as the input [`inflate::run`] reads, in a run `run_len`
+    /// bytes long.
+    fn input(&self, run_len: u64) -> Input<'_> {
+        Input::new(self.code.window(run_len), self.head.as_ref().map(|h| h.window(run_len)))
     }
 }
 

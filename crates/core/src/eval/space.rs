@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use crate::codec::lazy::{self, Decoded, Limits, Seekable, Stepped};
+use crate::codec::lazy::{self, Decoded, Limits, ReadError, Seekable, Stepped};
 use crate::codec::inflate;
 use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
@@ -391,9 +391,12 @@ impl Space {
 /// What the document of a space opened as a tab of its own reads its bytes
 /// from.
 ///
-/// Never reports a chunk missing: every byte is either held or decoded when
-/// it is read. A read the decoder fails on, which a run that indexed cleanly
-/// should never give, reads as zeroes.
+/// Every byte is either held or decoded when it is read. A run read through
+/// its index reads its compressed bytes as it goes, so a read can find chunks
+/// of the file missing: it reads as zeroes and reports them, and those are
+/// chunks of the file, whichever document asks. A read the decoder fails on,
+/// which a run that indexed cleanly should never give, reads as zeroes and
+/// reports nothing.
 #[derive(Clone)]
 pub enum SpaceSource {
     /// Every byte, held.
@@ -406,24 +409,25 @@ pub enum SpaceSource {
 }
 
 impl SpaceSource {
-    /// Bytes `at..at + out.len()`. False when they could not be read, which
-    /// leaves `out` as zeroes.
-    pub fn read(&self, at: u64, out: &mut [u8]) -> bool {
-        let ok = match self {
+    /// Bytes `at..at + out.len()`. When they could not be read, `out` is
+    /// left as zeroes, and the error says whether chunks of the file are
+    /// missing or the decoder refused.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
+        let read = match self {
             SpaceSource::Whole(bytes) => match bytes.get(at as usize..at as usize + out.len()) {
                 Some(have) => {
                     out.copy_from_slice(have);
-                    true
+                    Ok(())
                 }
-                None => false,
+                None => Err(ReadError::Refused(Refusal::Failed)),
             },
-            SpaceSource::Lazy(index) => index.read(at, out).is_ok(),
-            SpaceSource::Joined(joined) => joined.read(at, out).is_ok(),
+            SpaceSource::Lazy(index) => index.read(at, out),
+            SpaceSource::Joined(joined) => joined.read(at, out),
         };
-        if !ok {
+        if read.is_err() {
             out.fill(0);
         }
-        ok
+        read
     }
 }
 
@@ -437,19 +441,21 @@ impl Source for SpaceSource {
     }
 
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
-        self.read(offset, out);
-        Vec::new()
+        match self.read(offset, out) {
+            Err(ReadError::Missing(missing)) => missing,
+            Ok(()) | Err(ReadError::Refused(_)) => Vec::new(),
+        }
     }
 }
 
 /// A stream joined from parts, too large to hold whole, read a part at a
 /// time. What [`SpaceSource::Joined`] reads.
 ///
-/// Everything it is read from is held here, so it needs nothing of the file
-/// once it is made: the bytes of each stored part, and the compressed run of
-/// each packed one. A packed part small enough to decode whole is decoded when
-/// it is read and kept in a cache like a stitched space's; a larger one is
-/// read through its index.
+/// What it is read from is held here: the bytes of each stored part, and the
+/// compressed run of each packed one. A packed part small enough to decode
+/// whole is decoded when it is read and kept in a cache like a stitched
+/// space's; a larger one is read through its index, which reads its run
+/// through its [`lazy::RunInput`] and may find chunks of the file missing.
 pub struct Joined {
     parts: Vec<(std::ops::Range<u64>, JoinedBytes)>,
     len: u64,
@@ -491,8 +497,10 @@ impl Joined {
         self.parts.get(i).filter(|p| p.0.contains(&byte)).map(|_| i)
     }
 
-    /// Bytes `at..at + out.len()`, from as many parts as they cover.
-    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), Refusal> {
+    /// Bytes `at..at + out.len()`, from as many parts as they cover. A part
+    /// read through its index that finds chunks of the file missing stops
+    /// the read there and names them.
+    pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let end = at + out.len() as u64;
         let mut pos = at;
         while pos < end {
@@ -511,7 +519,7 @@ impl Joined {
                         None => {
                             let bytes = Arc::new(crate::codec::decode(*codec, run)?);
                             if bytes.len() as u64 != range.end - range.start {
-                                return Err(Refusal::Failed);
+                                return Err(Refusal::Failed.into());
                             }
                             lock(&self.cache).put(i, bytes.clone());
                             bytes

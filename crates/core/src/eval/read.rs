@@ -104,26 +104,20 @@ impl Evaluator {
     /// of them going straight to the document would read the file at an offset
     /// that means something else entirely.
     ///
-    /// A decoded stream is already in memory, so it never answers `Pending`.
-    /// A stitched one is read from its parts, and a stored part in the file
-    /// may: see [`Evaluator::read_stitched`].
+    /// A decoded stream held whole is in memory, so it never answers
+    /// `Pending`. One read through an index reads its compressed run as it
+    /// goes, and answers `Pending` with the chunks of the file that run is
+    /// missing: see [`read_indexed`]. A stitched one is read from
+    /// its parts, and a stored part in the file may: see
+    /// [`Evaluator::read_stitched`].
     pub(super) fn read_in<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> R<Vec<u8>> {
         if let Some(stitch) = self.spaces.stitch(space) {
             return self.read_stitched(doc, stitch, at, n);
         }
-        let mut buf = vec![0u8; bytes_for(n)];
         if let Some(index) = self.spaces.lazy(space) {
-            if at + n > index.len() * 8 {
-                return fail("field extends beyond the end of the decoded stream");
-            }
-            let first = at / 8;
-            let mut bytes = vec![0u8; ((at + n).div_ceil(8) - first) as usize];
-            if index.read(first, &mut bytes).is_err() {
-                return fail("unpacking failed");
-            }
-            crate::bits::copy_bits(&bytes, at % 8, &mut buf, 0, n);
-            return Ok(buf);
+            return read_indexed(index, at, n);
         }
+        let mut buf = vec![0u8; bytes_for(n)];
         if space != 0 {
             let Some(src) = self.spaces.buf(space) else { return fail("this stream is no longer open") };
             if at + n > src.len() as u64 * 8 {
@@ -773,6 +767,29 @@ fn ebml_vint_value(bytes: &[u8], strip_marker: bool) -> u128 {
 #[inline(never)]
 fn too_much_at_once<T>(needed: u64, limit: u64) -> R<T> {
     fail(format!("Can't load {} of the file at once: the editor keeps at most {} in memory", size_text(needed), size_text(limit)))
+}
+
+/// `n` bits from bit `at` of a stream read through its index. A chunk of the
+/// file the index's run is missing is `Pending`, as for a read of the file
+/// itself, and never a failure: the run will read once the chunk is loaded.
+/// Out of line, so that what this reads adds nothing to the stack frame of
+/// `read_in`, which every read deep inside an evaluation goes through.
+#[cold]
+#[inline(never)]
+pub(super) fn read_indexed(index: &crate::codec::lazy::Seekable, at: u64, n: u64) -> R<Vec<u8>> {
+    if at + n > index.len() * 8 {
+        return fail("field extends beyond the end of the decoded stream");
+    }
+    let first = at / 8;
+    let mut bytes = vec![0u8; ((at + n).div_ceil(8) - first) as usize];
+    match index.read(first, &mut bytes) {
+        Ok(()) => {}
+        Err(crate::codec::lazy::ReadError::Missing(missing)) => return Err(EvalError::Pending(missing)),
+        Err(crate::codec::lazy::ReadError::Refused(_)) => return fail("unpacking failed"),
+    }
+    let mut buf = vec![0u8; bytes_for(n)];
+    crate::bits::copy_bits(&bytes, at % 8, &mut buf, 0, n);
+    Ok(buf)
 }
 
 /// A size in MiB, or in KiB under 1 MiB, to a tenth, with a tenth of nought

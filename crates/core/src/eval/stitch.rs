@@ -566,13 +566,7 @@ impl Evaluator {
                     bytes.extend_from_slice(&self.read_in(doc, *space, at_bits + from * 8, take * 8)?);
                 }
                 PartSource::Packed { .. } => match self.part_index(doc, stitch, i)? {
-                    Some(index) => {
-                        let mut got = vec![0u8; take as usize];
-                        if let Err(why) = index.read(from, &mut got) {
-                            return self.part_refusal(stitch, i, why);
-                        }
-                        bytes.extend_from_slice(&got);
-                    }
+                    Some(index) => bytes.extend_from_slice(&self.read_part_index(stitch, i, &index, from, take)?),
                     None => {
                         let unpacked = self.unpacked_part(doc, stitch, i)?;
                         bytes.extend_from_slice(&unpacked[from as usize..(from + take) as usize]);
@@ -583,6 +577,21 @@ impl Evaluator {
         }
         crate::bits::copy_bits(&bytes, at % 8, &mut buf, 0, n);
         Ok(buf)
+    }
+
+    /// Bytes `from..from + take` of packed part `i`, read through its index.
+    /// A chunk of the file the part's run is missing is `Pending`, and only
+    /// the decoder refusing the run is the part's failure. Out of line for
+    /// the same reason as [`Self::part_refusal`].
+    #[cold]
+    #[inline(never)]
+    fn read_part_index(&self, stitch: &Stitch, i: usize, index: &Seekable, from: u64, take: u64) -> R<Vec<u8>> {
+        let mut got = vec![0u8; take as usize];
+        match index.read(from, &mut got) {
+            Ok(()) => Ok(got),
+            Err(lazy::ReadError::Missing(missing)) => Err(EvalError::Pending(missing)),
+            Err(lazy::ReadError::Refused(why)) => self.part_refusal(stitch, i, why),
+        }
     }
 
     /// Everything packed part `i` unpacks to: from the stream already open over
@@ -1789,7 +1798,7 @@ mod tests {
         let first = &space.runs()[0];
         assert!(e.spaces.indexed((first.run_space, first.run_offset_bits, first.run_bits), crate::codec::Codec::Deflate).is_some());
         let mut got = vec![0u8; text.len()];
-        assert!(space.source().read(0, &mut got));
+        assert!(space.source().read(0, &mut got).is_ok());
         assert_eq!(got, text);
         assert_eq!(space.runs().len(), held.runs().len());
         for byte in 0..text.len() as u64 {
@@ -1879,13 +1888,13 @@ mod tests {
         let indexed = |r: &super::JoinedRun| e.spaces.indexed((r.run_space, r.run_offset_bits, r.run_bits), crate::codec::Codec::Deflate).is_some();
         assert_eq!(space.runs().iter().map(indexed).collect::<Vec<_>>(), [false, true, false, false]);
         let mut got = vec![0u8; text.len()];
-        assert!(space.source().read(0, &mut got));
+        assert!(space.source().read(0, &mut got).is_ok());
         assert_eq!(got, text);
         // Across each edge between parts, read on its own.
         for r in &space.runs()[1..] {
             let at = r.out_bytes.start - 3;
             let mut got = [0u8; 6];
-            assert!(space.source().read(at, &mut got));
+            assert!(space.source().read(at, &mut got).is_ok());
             assert_eq!(got, text[at as usize..at as usize + 6], "at {at}");
         }
         for byte in 0..text.len() as u64 {

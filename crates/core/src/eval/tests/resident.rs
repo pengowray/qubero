@@ -324,7 +324,7 @@ fn a_joined_stream_read_a_part_at_a_time_opens_over_a_small_store() {
         let space = ev.space(id).unwrap();
         assert!(space.held().is_none(), "read a part at a time");
         let mut out = vec![0u8; joined.len()];
-        assert!(space.source().read(0, &mut out));
+        assert!(space.source().read(0, &mut out).is_ok());
         assert_eq!(out, joined, "goes of {slice:?}");
     }
 }

@@ -248,8 +248,12 @@ impl Evaluator {
                                     return fail(too_large(len));
                                 }
                                 let mut bytes = vec![0u8; len as usize];
-                                if let Err(why) = index.read(out.start, &mut bytes) {
-                                    return fail(refused(why));
+                                match index.read(out.start, &mut bytes) {
+                                    Ok(()) => {}
+                                    // Chunks of the file the stream's run is
+                                    // missing, which come and are asked again.
+                                    Err(crate::codec::lazy::ReadError::Missing(missing)) => return Err(EvalError::Pending(missing)),
+                                    Err(crate::codec::lazy::ReadError::Refused(why)) => return fail(refused(why)),
                                 }
                                 let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
                                 let computed = c.algorithm.over(&bytes);

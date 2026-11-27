@@ -1135,7 +1135,7 @@ fn an_xz_block_the_index_is_wrong_about_is_refused_when_read() {
     let s = indexed(Codec::Xz, &wrap(&blocks, false), Limits { spacing: 1, ..small() });
     let k = s.span_of_byte(4 * 30_000).unwrap();
     let at = s.span_bytes(k).start;
-    assert_eq!(s.read(at, &mut [0u8; 10]).err(), Some(Refusal::Failed));
+    assert_eq!(s.read(at, &mut [0u8; 10]).err(), Some(ReadError::Refused(Refusal::Failed)));
     let mut first = vec![0u8; 30_000];
     s.read(0, &mut first).expect("the first block reads");
     assert!(first == data[..30_000]);
@@ -1304,8 +1304,8 @@ fn a_damaged_xz_chunk_is_refused_by_a_read_that_reaches_it() {
     let mut got = vec![0u8; 1000];
     s.read(100_000, &mut got).expect("the chunks in front of the damage read");
     assert!(got == data[100_000..101_000]);
-    assert_eq!(s.read(damaged, &mut [0u8; 10]).err(), Some(Refusal::Failed));
-    assert_eq!(s.read(149_990, &mut [0u8; 10]).err(), Some(Refusal::Failed));
+    assert_eq!(s.read(damaged, &mut [0u8; 10]).err(), Some(ReadError::Refused(Refusal::Failed)));
+    assert_eq!(s.read(149_990, &mut [0u8; 10]).err(), Some(ReadError::Refused(Refusal::Failed)));
     s.read(100_000, &mut got).expect("the chunks in front of the damage read again");
     assert!(got == data[100_000..101_000]);
     let mut rest = vec![0u8; 150_000];
