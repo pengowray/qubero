@@ -133,6 +133,18 @@ pub fn locators(def: &StructDef) -> Vec<bool> {
     out
 }
 
+/// [`locators`] for field `i` alone, which is what a node read asks: one pass
+/// over the fields after it rather than over every pair.
+pub fn locates(def: &StructDef, i: usize) -> bool {
+    let Some(name) = def.fields.get(i).map(|f| &f.name) else { return false };
+    let mut names: Vec<Arc<str>> = Vec::new();
+    def.fields.iter().skip(i + 1).any(|f| {
+        names.clear();
+        ty_positions(&f.ty, &mut names);
+        names.iter().any(|n| n == name)
+    })
+}
+
 /// Every sibling name this type reads as a position. See [`locators`].
 fn ty_positions(ty: &Ty, out: &mut Vec<Arc<str>>) {
     match ty {
@@ -531,6 +543,8 @@ mod tests {
             ],
         ));
         assert_eq!(locators(&s), vec![true, false, false, false, true, false, false, false, false]);
+        let each: Vec<bool> = (0..s.fields.len()).map(|i| locates(&s, i)).collect();
+        assert_eq!(each, locators(&s));
     }
 
     #[test]

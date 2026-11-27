@@ -1482,7 +1482,7 @@ impl Evaluator {
             (Some(c), Some(n)) => **n == **c,
             _ => false,
         };
-        let locates = machinery::locators(s).get(last).copied().unwrap_or(false);
+        let locates = machinery::locates(s, last);
         (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last), contents, locates)
     }
 
