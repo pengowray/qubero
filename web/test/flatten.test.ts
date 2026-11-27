@@ -8,6 +8,9 @@ import assert from "node:assert/strict";
 import type { TemplateNode, TemplateReply, Unpacking } from "../src/doc.ts";
 import { emptyState, flatten, isComputed, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource } from "../src/flatten.ts";
+import { percentText } from "../src/format.ts";
+import { pendingText } from "../src/pendingtext.ts";
+import { REPORT } from "../src/strings.ts";
 
 type Spec = {
   name: string;
@@ -1364,8 +1367,13 @@ test("a walk over a tree spread across the file settles inside the chunk cache",
 
 /** A source whose children of some paths are still being worked out: the
  *  first `ready` of them are given, as the core gives a slice whose later
- *  children wait on a pass, with how far that pass has got. */
-function workingSource(root: Fixture, waiting: ReadonlyMap<string, { readonly ready: number; readonly unpacking?: Unpacking }>): TreeSource {
+ *  children wait on a pass, with how far that pass has got. The reply is
+ *  "working" unless `status` says "pending", as it is while a pass reading
+ *  its run a window at a time waits for its next window's chunks. */
+function workingSource(
+  root: Fixture,
+  waiting: ReadonlyMap<string, { readonly ready: number; readonly unpacking?: Unpacking; readonly status?: "working" | "pending" }>,
+): TreeSource {
   const inner = source(root);
   return {
     node: (path) => inner.node(path),
@@ -1374,7 +1382,7 @@ function workingSource(root: Fixture, waiting: ReadonlyMap<string, { readonly re
       const wait = waiting.get(pathKey(path));
       if (wait === undefined || reply.status !== "ok") return reply;
       return {
-        status: "working",
+        status: wait.status ?? "working",
         reachedBytes: 0,
         ready: reply.node.slice(0, wait.ready),
         ...(wait.unpacking === undefined ? {} : { unpacking: wait.unpacking }),
@@ -1437,6 +1445,29 @@ test("the fields before a stream that is still unpacking are drawn above it", ()
   assert.deepEqual(wait.unpacking, progress(10, 0.4));
   assert.equal(done.items.indexOf(wait), done.items.findIndex((i) => i.kind === "row" && i.node.name === "os") + 1);
   assert.ok(!done.items.some((i) => i.kind === "gap" || i.kind === "more"), JSON.stringify(shape(done.items)));
+});
+
+test("a stream whose pass waits for its next window keeps the fields above it, and says how far it has unpacked", () => {
+  // A "pending" reply from a pass reading its run a window at a time carries
+  // the header rows and the pass's progress, as a "working" one does.
+  const root = build(GZIP, [], 0);
+  const waiting = new Map([[pathKey([0, 0]), { ready: 6, unpacking: progress(10, 0.4), status: "pending" as const }]]);
+  const done = flatten(workingSource(root, waiting), emptyState);
+  assert.equal(done.pending, true);
+  const rows = done.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.deepEqual(rows, ["magic", "method", "flg", "mtime", "extra_flags", "os"], JSON.stringify(shape(done.items)));
+  const waits = done.items.filter((i) => i.kind === "pending");
+  assert.equal(waits.length, 1, JSON.stringify(shape(done.items)));
+  const wait = waits[0];
+  assert.ok(wait !== undefined && wait.kind === "pending");
+  assert.deepEqual([wait.offsetBits / 8, wait.sizeBits / 8], [10, 1_000]);
+  assert.equal(wait.working, false);
+  assert.deepEqual(wait.unpacking, progress(10, 0.4));
+  assert.equal(done.items.indexOf(wait), done.items.findIndex((i) => i.kind === "row" && i.node.name === "os") + 1);
+  // The placeholder gives the unpacking words, not the ones for bytes on
+  // their way, so it does not switch words between windows.
+  assert.equal(pendingText(wait), REPORT.unpacking(percentText(400, 1000)));
+  assert.notEqual(pendingText(wait), REPORT.reading);
 });
 
 test("a slice with none of its children ready waits as a whole, saying on what", () => {
