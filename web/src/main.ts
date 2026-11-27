@@ -309,7 +309,15 @@ function openEmbedded(bytes: Uint8Array, name: string, origin: string): void {
 /** A section that can be folded down to its title bar, and remembers whether
  *  it was. */
 /** One tab of the right sidebar. `shown` is told when it is shown or hidden. */
-type SideTab = { readonly id: string; readonly label: string; readonly content: HTMLElement; readonly shown?: (visible: boolean) => void };
+type SideTab = {
+  readonly id: string;
+  readonly label: string;
+  readonly content: HTMLElement;
+  readonly shown?: (visible: boolean) => void;
+  /** Controls for the tab's content, shown at the right of the bar while the
+   *  tab is. */
+  readonly tools?: HTMLElement;
+};
 
 /** The right sidebar: a chevron that folds it away, and tabs that pick which
  *  panel fills it. Folded, the bar names the tab that will come back. */
@@ -331,13 +339,17 @@ function panel(tabs: readonly SideTab[], onToggle: () => void): HTMLElement {
     seg.append(b);
     return b;
   });
-  const section = el("section", { className: "panel panel-right" }, el("header", { className: "panel-bar" }, toggle, seg), ...tabs.map((t) => t.content));
+  const tools = tabs.map((t) => (t.tools === undefined ? null : el("span", { className: "panel-tools" }, t.tools)));
+  const bar = el("header", { className: "panel-bar" }, toggle, seg, ...tools.filter((t) => t !== null));
+  const section = el("section", { className: "panel panel-right" }, bar, ...tabs.map((t) => t.content));
   const pick = (id: string): void => {
     tabs.forEach((t, i) => {
       const on = t.id === id;
       buttons[i]?.setAttribute("aria-pressed", String(on));
       buttons[i]?.classList.toggle("is-on", on);
       t.content.hidden = !on;
+      const own = tools[i];
+      if (own != null) own.hidden = !on;
       if (on) name.textContent = t.label;
     });
     // Told after every tab is settled, so a panel that measures itself when
@@ -784,7 +796,7 @@ function buildDocument(tab: Tab): Page {
   nav.onGo(showBits);
   overview.onGoTo = jumpToBit;
   inspector.onGoTo = jumpToBit;
-  inspector.onPick = (path) => {
+  const pickField = (path: readonly number[]): void => {
     const n = doc.templateNode(path);
     // Following a crumb into a stream moves the listing to it and nothing
     // else: there is no bit of the file to put the cursor on.
@@ -796,6 +808,14 @@ function buildDocument(tab: Tab): Page {
     goToField(path);
     overview.reveal(path);
     structure.reveal(path);
+  };
+  inspector.onPick = pickField;
+  // A field's line clicked in the Template tab goes where a crumb does. A
+  // field in an unpacked stream has no bit of the file for the cursor, so
+  // the inspector is told of it directly, which also marks the line.
+  templatePanel.onJump = (path) => {
+    pickField(path);
+    if (!inFile(path)) inspector.setPath(path);
   };
   // Pointing at a row in the properties list marks that field over the bytes.
   // The sidebar names the field and the grid says where it is; between them
@@ -2466,7 +2486,7 @@ function buildDocument(tab: Tab): Page {
   const right = panel(
     [
       { id: "cursor", label: SIDEBAR.atCursor, content: inspector.el },
-      { id: "template", label: SIDEBAR.template, content: templatePanel.el, shown: (v) => templatePanel.setVisible(v) },
+      { id: "template", label: SIDEBAR.template, content: templatePanel.el, shown: (v) => templatePanel.setVisible(v), tools: templatePanel.tools },
     ],
     relayout,
   );

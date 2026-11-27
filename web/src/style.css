@@ -1394,6 +1394,7 @@ button.welcome-crystal {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 .tp-scroll {
   flex: 1 1 auto;
@@ -1411,6 +1412,14 @@ button.welcome-crystal {
   height: var(--tp-line);
   line-height: var(--tp-line);
   white-space: pre;
+}
+/* A field's line goes to that field when clicked. The hover fill is the
+   Listing rows' own, quieter than the marked line's. */
+.tp-line.is-field {
+  cursor: pointer;
+}
+.tp-line.is-field:not(.is-at):hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 /* The line that declares the field at the cursor: the selection's own fill,
    not bold, so the line keeps its width. */
@@ -1435,6 +1444,45 @@ button.welcome-crystal {
   margin-left: 1ch;
   font-family: var(--sans);
   color: color-mix(in srgb, var(--muted) 60%, var(--fg));
+}
+/* Why a clicked line did not move the cursor, at the end of that line. Held
+   at the panel's right edge when the line runs past it, over the text it
+   covers, rather than scrolling the field names out of view. */
+.tp-miss {
+  position: sticky;
+  right: 0;
+  display: inline-block;
+  padding-left: 2ch;
+  padding-right: 4px;
+  background: var(--bg);
+}
+.tp-miss::after {
+  margin-left: 0;
+}
+/* The Copy button sits at the right of the sidebar's bar while this tab is
+   showing. 24px rather than the inspector's 22px, the smallest target the
+   UI checks allow, since here it is the bar's only control of its kind. */
+.panel-tools {
+  margin-left: auto;
+  padding-right: 6px;
+  display: flex;
+}
+.panel-tools[hidden],
+.panel-right.is-collapsed .panel-tools {
+  display: none;
+}
+.tp-copy {
+  width: 24px;
+  height: 24px;
+}
+.tp-copy[hidden] {
+  display: none;
+}
+.templatepanel .tp-notice {
+  right: 12px;
+}
+.tp-notice[hidden] {
+  display: none;
 }
 .tp-field {
   color: var(--accent);
@@ -3493,7 +3541,8 @@ qubero-spinner svg {
   stroke-linejoin: round;
 }
 .hv-notice,
-.tbl-notice {
+.tbl-notice,
+.tp-notice {
   position: absolute;
   right: 22px;
   bottom: 8px;

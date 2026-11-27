@@ -5058,4 +5058,19 @@ export const SIDEBAR = {
    *  through a `same as ..., but big-endian` line and its numbers are in the
    *  other byte order from the one the marked line writes. */
   readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
+  /** At the end of a field's line in the Template tab, after a click on it
+   *  found no such field in this file: its switch arm is not the one taken,
+   *  its list is empty, or it is optional and absent. */
+  notInFile: "not in this file",
+  /** The same, when the search stopped after `n` elements of the list `list`
+   *  (a node's name as the Listing shows it), which has more. The list is
+   *  named because the clicked field may be a list itself, and "elements"
+   *  alone would read as its own. */
+  notInFirst: (n: number, list: string): string =>
+    list === "" ? `not found in the first ${n.toLocaleString()} fields` : `not found in the first ${n.toLocaleString()} elements of ${list}`,
+  /** The Template tab's copy button, as its tooltip and accessible name. */
+  copyTemplate: "Copy the template text",
+  /** After the template text was put on the clipboard. */
+  copied: (lines: number): string => `Copied ${lines.toLocaleString()} lines of template text.`,
+  copyFailed: "Couldn't copy to the clipboard.",
 } as const;
