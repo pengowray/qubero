@@ -943,7 +943,11 @@ fn a_gzip_member_past_the_copy_limit_opens_as_a_joined_stream_through_its_handle
     let mut got = vec![0u8; 100];
     for at in [0, content.len() / 2, content.len() - 100] {
         for _ in 0..10 {
+            // The joined stream says which chunks a read would find
+            // missing, and the read finds those.
+            let said = ev.space(id).unwrap().source().missing(at as u64, 100);
             let wanted = ev.space(id).unwrap().source().read_bytes(at as u64, &mut got);
+            assert_eq!(said, wanted, "100 bytes at {at}");
             if wanted.is_empty() {
                 break;
             }

@@ -2369,8 +2369,10 @@ mod tests {
         // chunks of the file and reads zeroes until they are fed.
         lossy.drop_all();
         let mut got = vec![0u8; 100];
+        let said = e.space(id).unwrap().source().missing(500_000, 100);
         let missing = e.space(id).unwrap().source().read_bytes(500_000, &mut got);
         assert!(!missing.is_empty() && got == [0u8; 100]);
+        assert_eq!(said, missing, "the stream says which chunks the read finds missing");
         let (_, waits) = until_fed(&lossy, run.clone(), || match e.space(id).unwrap().source().read_bytes(500_000, &mut got) {
             missing if missing.is_empty() => Ok(()),
             missing => Err(EvalError::Pending(missing)),

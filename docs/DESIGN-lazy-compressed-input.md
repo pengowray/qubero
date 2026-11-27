@@ -2131,8 +2131,10 @@ text above:
   `copy_input` opens as a joined stream read a part at a time, says
   `too-large-input` past `Limits::input` on the joined stream and the
   member's stream, and is refused as too large in memory, where its index
-  holds a copy. In `space.rs` and `eval/tests/run_input.rs`: weights, with
-  the copy counted, and the index used longest ago let go first. In
+  holds a copy; and that joined stream's `missing`, and a lazy space's in
+  `space.rs`, match what their reads then report. In `space.rs` and
+  `eval/tests/run_input.rs`: weights, with the copy counted, and the index
+  used longest ago let go first. In
   `crates/wasm/tests/open_space_waits.rs`, with small limits set through
   `Editor::set_stream_limits`: a .gz of one member and a zip entry of
   3 MiB of run, past `copy_input`, open end to end from a store of 1 MiB,
@@ -2188,10 +2190,11 @@ text above:
   past 64 MiB of output, still reads as one member. Not changed in 7c,
   since the walk is part 9's; letting go of the walk's bytes before its
   current step would save most of the memory.
-- **Words for `too-large-input` in the report.** `RV.refused` and
-  `RV.streamFailedNote` in `web/src/report/text.ts`, which part 7c's core
-  half could not change, have no case for the new tag: `RV.refused` says
-  "Did not unpack". `web/test/joinedpart.test.ts` could check
+- **Words for `too-large-input` in the report.** `RV.refused` in
+  `web/src/report/text.ts`, which part 7c's core half could not change, has
+  no case for the new tag and says "Did not unpack" for it.
+  `RV.streamFailedNote` takes its words from `DECODED_REFUSED`, so it has
+  them already. `web/test/joinedpart.test.ts` could check
   `JOINED.refused("too-large-input", tab)` beside the other tags.
 - **A checksum over more than 64 MiB of the file.** `run_check` refuses a
   sum over bytes of the file (`Coverage::over`) past `CAP_BYTES`, so the
