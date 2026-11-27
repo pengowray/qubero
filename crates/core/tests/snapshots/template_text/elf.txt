@@ -185,7 +185,7 @@ root ELF {
             }
             _ => bytes[section_headers[index].size]
           }
-          2 => Symbol (unit symbol) {
+          2 => Symbol (unit symbol, positions name_offset) {
             name_offset: u32le
             value: u32le
             size: u32le
@@ -441,7 +441,7 @@ root ELF {
             }
             _ => bytes[section_headers[index].size]
           }
-          2 => Symbol (unit symbol) {
+          2 => Symbol (unit symbol, positions name_offset) {
             name_offset: u32be
             value: u32be
             size: u32be
@@ -700,7 +700,7 @@ root ELF {
             }
             _ => bytes[section_headers[index].size]
           }
-          2 => Symbol (unit symbol) {
+          2 => Symbol (unit symbol, positions name_offset) {
             name_offset: u32le
             info: SymbolInfo (inline) {
               binding: u4be enum SymbolBinding {
@@ -964,7 +964,7 @@ root ELF {
             }
             _ => bytes[section_headers[index].size]
           }
-          2 => Symbol (unit symbol) {
+          2 => Symbol (unit symbol, positions name_offset) {
             name_offset: u32be
             info: SymbolInfo (inline) {
               binding: u4be enum SymbolBinding {

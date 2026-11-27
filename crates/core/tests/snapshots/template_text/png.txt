@@ -2267,7 +2267,7 @@ root PNG {
   }
 }
 
-type tiff.ExifIfd.be = ExifIfd (contents entries) {
+type tiff.ExifIfd.be = ExifIfd (contents entries, positions next_ifd_offset) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -2404,7 +2404,7 @@ type tiff.ExifIfd.be = ExifIfd (contents entries) {
   next_ifd_offset: u32be
 }
 
-type tiff.ExifIfd.le = ExifIfd (contents entries) {
+type tiff.ExifIfd.le = ExifIfd (contents entries, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2541,7 +2541,7 @@ type tiff.ExifIfd.le = ExifIfd (contents entries) {
   next_ifd_offset: u32le
 }
 
-type tiff.GpsIfd.be = GpsIfd (contents entries) {
+type tiff.GpsIfd.be = GpsIfd (contents entries, positions next_ifd_offset) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -2665,7 +2665,7 @@ type tiff.GpsIfd.be = GpsIfd (contents entries) {
   next_ifd_offset: u32be
 }
 
-type tiff.GpsIfd.le = GpsIfd (contents entries) {
+type tiff.GpsIfd.le = GpsIfd (contents entries, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
@@ -2790,7 +2790,7 @@ type tiff.GpsIfd.le = GpsIfd (contents entries) {
 }
 
 type tiff.Ifd.be = Ifd (contents entries, machinery strip_offsets strip_byte_counts tile_offsets
-    tile_byte_counts) {
+    tile_byte_counts, positions next_ifd_offset) {
   count: u16be
   entries: Entry (named by tag, unit entry) {
     tag: u16be enum Tag {
@@ -3381,7 +3381,7 @@ type tiff.Ifd.be = Ifd (contents entries, machinery strip_offsets strip_byte_cou
 }
 
 type tiff.Ifd.le = Ifd (contents entries, machinery strip_offsets strip_byte_counts tile_offsets
-    tile_byte_counts) {
+    tile_byte_counts, positions next_ifd_offset) {
   count: u16le
   entries: Entry (named by tag, unit entry) {
     tag: u16le enum Tag {
