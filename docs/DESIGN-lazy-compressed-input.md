@@ -1771,12 +1771,16 @@ compressed size is unchanged. Where the code differs from the text above:
   | `epub/the-bird-book-pg30000.epub`, 50 MB | 1,347 | 98.7 ms | 98.8 ms | 98.1 ms | 98.5 ms |
 
 - **Left for 7b and 7c**, as planned: the passes reading windows,
-  `NeedsInput`, `Limits::input`, the weights in `Indexes`, and the web
-  changes. Until the web changes land, a read in a tab whose index reads the
-  store can name chunks of the file that `ensureRange` on that tab does not
-  load: `ensureRange` asks `has_chunk` of the tab, and a tab's store always
-  answers yes. A view that awaits `ensureRange` and then reads once can
-  therefore show an incomplete read. "A joined stream walked twice" in
+  `NeedsInput`, `Limits::input`, the weights in `Indexes`, and the rest of
+  the web changes. One web change came forward into 7a, since without it a
+  view on a tab could show an incomplete read: `ensureRange` on a tab now
+  reads the range, loads the file chunks the read names, and reads again
+  until the read is complete, stopping as `waitToOpen` does when a chunk it
+  loaded is asked for again (`Doc.ensureTabRange`, as "`ensureRange` on a
+  tab" describes). Before, it asked `has_chunk` of the tab, whose store always
+  answers yes, and loaded nothing. A range whose input is more than the store
+  keeps still comes back incomplete; `readLoaded` in 7c reads such a range in
+  pieces. "A joined stream walked twice" in
   "Still to do" can happen from 7a on: an index over a part of a joined
   stream now reads the store, so `template_for` can answer `Pending` after
   the walk has finished. `Doc.read`, `textWindow`, `textIndex`, `textBack` and

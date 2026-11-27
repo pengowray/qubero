@@ -9,7 +9,7 @@ import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatLimit, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
-import { waitToOpen, type OpenStep } from "./openwait.ts";
+import { MAX_ROUNDS, waitToOpen, type OpenStep } from "./openwait.ts";
 
 /** What the signature database made of a file, and where its lists came from. */
 export type SigVerdict = {
@@ -3854,8 +3854,12 @@ export class Doc {
     return { hits: [], missing: [], next: from };
   }
 
-  /** Resolve once every chunk covering [at, at+len) is loaded. */
+  /**
+   * Resolve once every chunk covering [at, at+len) is loaded. On an unpacked
+   * stream's tab, see `ensureTabRange`.
+   */
   async ensureRange(at: number, len: number): Promise<void> {
+    if (!this.isFile) return this.ensureTabRange(at, len);
     const first = Math.floor(at / CHUNK_SIZE);
     const last = Math.floor((at + len - 1) / CHUNK_SIZE);
     const waits: Promise<void>[] = [];
@@ -3867,6 +3871,25 @@ export class Doc {
       }
     }
     await Promise.all(waits);
+  }
+
+  /**
+   * `ensureRange` on a tab. A tab's own store answers that it has every chunk,
+   * and the bytes it is missing are chunks of the file under the stream. So
+   * read the range, load the file chunks the read names, and read again, until
+   * the read is complete. Stops as `waitToOpen` does when a chunk loaded here
+   * is asked for again: the range needs more of the file at once than the
+   * store keeps, and the caller's own read comes back incomplete.
+   */
+  private async ensureTabRange(at: number, len: number): Promise<void> {
+    const loaded = new Set<number>();
+    const bytes = new Uint8Array(len);
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const missing = Array.from(this.editor.read_bytes(this.space, at, bytes));
+      if (missing.length === 0 || missing.some((c) => loaded.has(c))) return;
+      await this.fileChunks(missing);
+      for (const c of missing) loaded.add(c);
+    }
   }
 
   private loadChunk(chunk: number): Promise<void> {
