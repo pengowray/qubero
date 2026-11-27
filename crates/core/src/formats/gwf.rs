@@ -881,4 +881,15 @@ mod tests {
         assert_eq!(ev.node(&d, &at(&[5, 5, 0])).unwrap().value, Value::UInt(1));
         assert_eq!(ev.node(&d, &at(&[5, 5, 2])).unwrap().value, Value::UInt(40));
     }
+
+    /// The table of contents' columns of positions are positions. Its
+    /// columns of times and counts are not, and neither is `seekTOC`, which
+    /// counts back from the end of the file.
+    #[test]
+    fn table_of_contents_positions_are_positions() {
+        let t = gwf();
+        crate::machinery::assert_marks(&t, "FrTOC", &["positionH", "positionDetector", "positionEvent", "positionSimEvent"], &["GTimeS", "nFrame", "nADC"]);
+        crate::machinery::assert_marks(&t, "FrTOCStat", &["positionStat"], &["tStart"]);
+        crate::machinery::assert_marks(&t, "FrEndOfFile", &[], &["seekTOC", "nBytes"]);
+    }
 }
