@@ -1413,13 +1413,32 @@ button.welcome-crystal {
   line-height: var(--tp-line);
   white-space: pre;
 }
-/* A field's line goes to that field when clicked. The hover fill is the
-   Listing rows' own, quieter than the marked line's. */
+/* A field's line goes to that field when clicked. Hover draws a thin frame
+   around the line rather than a fill: a grey fill read close to the marked
+   line's light blue in the light theme, and the marked line's fill stays the
+   stronger of the two. */
 .tp-line.is-field {
   cursor: pointer;
 }
 .tp-line.is-field:not(.is-at):hover {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
+}
+/* A click that found no such field in the file: the line's fill flashes once
+   as the note appears, so the click visibly did something. Kept to a grey
+   that fades, and with reduced motion a steady grey until the note goes. */
+.tp-line.is-missed {
+  animation: tp-missed 0.8s ease-out;
+}
+@keyframes tp-missed {
+  from {
+    background: color-mix(in srgb, var(--fg) 14%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tp-line.is-missed {
+    animation: none;
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
+  }
 }
 /* The line that declares the field at the cursor: the selection's own fill,
    not bold, so the line keeps its width. */
@@ -1445,19 +1464,13 @@ button.welcome-crystal {
   font-family: var(--sans);
   color: color-mix(in srgb, var(--muted) 60%, var(--fg));
 }
-/* Why a clicked line did not move the cursor, at the end of that line. Held
-   at the panel's right edge when the line runs past it, over the text it
-   covers, rather than scrolling the field names out of view. */
-.tp-miss {
-  position: sticky;
-  right: 0;
-  display: inline-block;
-  padding-left: 2ch;
-  padding-right: 4px;
-  background: var(--bg);
-}
+/* Why a clicked line did not move the cursor goes in the same way, after the
+   field's name and type (`noteColumn` in templatepanel.ts): in the line it
+   covers nothing, it stays near the field's name even on a long line, and the
+   name stays in line with its neighbours. Its right margin keeps it apart
+   from the notation that follows. */
 .tp-miss::after {
-  margin-left: 0;
+  margin-right: 1ch;
 }
 /* The Copy button sits at the right of the sidebar's bar while this tab is
    showing. 24px rather than the inspector's 22px, the smallest target the
@@ -1478,10 +1491,27 @@ button.welcome-crystal {
 .tp-copy[hidden] {
   display: none;
 }
-.templatepanel .tp-notice {
-  right: 12px;
+.tp-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
-.tp-notice[hidden] {
+/* Whether the copy worked, said beside the button that was pressed, as the
+   inspector says it beside its own Copy buttons. Laid over the bar to the
+   button's left, so the tabs do not move when it comes and goes; the bar's
+   own fill hides a tab it reaches. */
+.tp-copied {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+}
+.tp-copied[hidden] {
   display: none;
 }
 .tp-field {
@@ -3541,8 +3571,7 @@ qubero-spinner svg {
   stroke-linejoin: round;
 }
 .hv-notice,
-.tbl-notice,
-.tp-notice {
+.tbl-notice {
   position: absolute;
   right: 22px;
   bottom: 8px;
