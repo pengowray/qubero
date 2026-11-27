@@ -775,7 +775,7 @@ fn vxr(s: Shape) -> T {
             ("block_offset", T::array(s.offset(), n())),
             ("blocks", T::array(vxr_entry(s), E::field("n_used_entries").at_least(E::lit(0)))),
         ],
-    )
+    ).positions(&["block_offset"])
 }
 
 /// One entry of that index: the records it covers and the block that holds
@@ -1596,5 +1596,12 @@ mod tests {
         assert_eq!(e.node(&d, &[3, 2, 10]).unwrap().value, Value::Str("NSSDC".into()));
         // The record it points at, read as far as its size and its type.
         assert_eq!(e.node(&d, &[3, 2, 11, 0, 0]).unwrap().value, Value::UInt(16));
+    }
+
+    /// Each of an index record's block offsets is a position. The record
+    /// numbers beside them are not.
+    #[test]
+    fn index_block_offsets_are_positions() {
+        crate::machinery::assert_marks(&cdf(), "CdfValueIndex", &["block_offset", "vxr_next"], &["first_record", "n_entries"]);
     }
 }
