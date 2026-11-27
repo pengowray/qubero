@@ -504,13 +504,6 @@ function fits(index: TemplateIndex, blocks: readonly Block[], children: readonly
   return best;
 }
 
-/** The one structure [`fits`] finds best, or null when two fit equally well,
- *  since picking one of them would be a guess. */
-export function bestFit(index: TemplateIndex, blocks: readonly Block[], children: readonly { name: string; type: string }[]): Block | null {
-  const best = fits(index, blocks, children);
-  return best.length === 1 ? (best[0] ?? null) : null;
-}
-
 /** A number as a key or a value writes it: `12`, `-3`, `0xffe2`. */
 function numberOf(s: string): bigint | null {
   const t = s.trim();
@@ -535,78 +528,111 @@ function armTarget(index: TemplateIndex, line: number): number {
   return line;
 }
 
+/** The number a quoted key of one to eight characters is as bytes, read
+ *  big-endian and little-endian: `'curv'` is 0x63757276 or 0x76727563. */
+function keyNumbers(s: string): bigint[] {
+  if (s.length < 1 || s.length > 8 || [...s].some((c) => c.charCodeAt(0) > 0xff)) return [];
+  let be = 0n;
+  let le = 0n;
+  for (let k = 0; k < s.length; k++) {
+    be = (be << 8n) | BigInt(s.charCodeAt(k));
+    le = (le << 8n) | BigInt(s.charCodeAt(s.length - 1 - k));
+  }
+  return [be, le];
+}
+
 /**
  * The first line of the arm `choice` takes when the field it reads holds
  * `kid`'s value, through [`armTarget`]. A number in decimal or hex is
  * compared with the value's number (an enumeration's value ends with its
- * number in brackets, `app2 (0xffe2)`), and any other key with the value as
- * text. Null when no key matches and the default arm `_` cannot be told for
- * sure: there is none, or a key could not be compared with the value. A key
- * in quotes that does not match counts as one that could not be compared,
- * since a value shown as text may be cut short or escaped.
+ * number in brackets, `app2 (0xffe2)`). A key in quotes is compared with the
+ * value as text and, when the value has a number, with that number as bytes
+ * ([`keyNumbers`]). Any other key is compared with the value as text.
+ *
+ * Null when two arms match, or when no arm matches and it is not certain the
+ * default arm `_` was taken: there is none, or a key could not be compared
+ * with the value. A key compared only as text that does not match is one that
+ * could not be compared, since a value shown as text may be cut short or
+ * escaped.
  */
 function takenArm(index: TemplateIndex, choice: Choice, kid: Kid): number | null {
   const texts = [kid.value, kid.edit].filter((t): t is string => t !== undefined);
-  const nums: bigint[] = [];
-  for (const t of texts) {
-    const n = numberOf(t);
-    if (n !== null) nums.push(n);
-  }
+  // An enumeration's label may be a number of its own (`{1 = 16}` shows
+  // `16 (0x1)`), so the bracketed number, when there is one, is the only one.
   const bracketed = numberOf(/\((-?\d+|0x[0-9a-f]+)\)$/i.exec(kid.value?.trim() ?? "")?.[1] ?? "");
-  if (bracketed !== null) nums.push(bracketed);
+  const nums = bracketed !== null ? [bracketed] : texts.map(numberOf).filter((n): n is bigint => n !== null);
   const strs = texts.flatMap((t) => [t, unquote(t)]);
+  const hits = new Set<number>();
   let sure = true;
   for (const [key, line] of choice.arms) {
     if (key === "_") continue;
     if (key.startsWith('"') || key.startsWith("'")) {
-      if (strs.includes(unquote(key))) return armTarget(index, line);
-      sure = false;
+      const text = unquote(key);
+      const asNumbers = nums.length > 0 ? keyNumbers(text) : [];
+      if (strs.includes(text) || asNumbers.some((n) => nums.includes(n))) hits.add(line);
+      else if (asNumbers.length === 0) sure = false;
       continue;
     }
     const n = numberOf(key);
     if (n !== null && nums.length > 0) {
-      if (nums.includes(n)) return armTarget(index, line);
-      continue;
-    }
-    if (n === null && strs.includes(key)) return armTarget(index, line);
-    sure = false;
+      if (nums.includes(n)) hits.add(line);
+    } else if (n === null && strs.includes(key)) hits.add(line);
+    else sure = false;
+  }
+  if (hits.size > 0) {
+    const [only] = hits;
+    return hits.size === 1 && only !== undefined ? armTarget(index, only) : null;
   }
   const other = choice.arms.get("_");
   return sure && other !== undefined ? armTarget(index, other) : null;
 }
 
 /**
- * Whether the arms that lead to `b` are the ones taken, as far as `sibs` (the
- * fields beside the field `b` is the value of) say. The arm whose statement
- * opens `b` is checked against the field its choice reads, then that choice's
- * own arm when the choice is itself an arm (`1 => switch data {`), and so on
- * out. True when every arm that can be told is taken and one could be told,
- * false when one is not taken, null when none could be told.
+ * Whether the arms that lead to `b` are the ones taken. The arm whose
+ * statement opens `b` is checked against the field its choice reads, then that
+ * choice's own arm when the choice is itself an arm (`1 => switch data {`),
+ * and so on out to a statement that is not an arm. That statement must be one
+ * of `anchors`, the field `b` was reached through or a type it names. A switch
+ * written anywhere else reads other fields than the ones `field` finds.
+ *
+ * `field(name)` is the field a choice reads, or null when it is not known.
+ * True when at least one arm's key was compared with a value and every
+ * compared arm was taken, false when a compared arm was not taken, null when
+ * no arm could be compared.
  */
-function armsAgree(index: TemplateIndex, b: Block, sibs: readonly Kid[]): boolean | null {
+function armsAgree(index: TemplateIndex, b: Block, anchors: readonly number[], field: (name: string) => Kid | null): boolean | null {
+  const path: [Choice, number][] = [];
   let line = b.open;
-  let told = false;
   for (let choice = index.armOf.get(line); choice !== undefined; choice = index.armOf.get(line)) {
-    const on = choice.on;
-    const kid = on === null ? undefined : sibs.find((k) => k.name === on);
-    const taken = kid === undefined ? null : takenArm(index, choice, kid);
-    if (taken !== null) {
-      if (taken !== line) return false;
-      told = true;
-    }
+    path.push([choice, line]);
     line = choice.line;
   }
-  return told ? true : null;
+  if (!anchors.includes(line)) return null;
+  let compared = false;
+  for (const [choice, arm] of path) {
+    const kid = choice.on === null ? null : field(choice.on);
+    const taken = kid === null ? null : takenArm(index, choice, kid);
+    if (taken !== null) {
+      if (taken !== arm) return false;
+      compared = true;
+    }
+  }
+  return compared ? true : null;
 }
 
-/** The children of the node that holds `chain[depth]` as a field, skipping a
- *  placing node of the same name. Null at the root, under a list, or when
- *  they are not known. */
-function siblingsOf(chain: readonly ChainNode[], children: Children, depth: number): readonly Kid[] | null {
-  let d = depth - 1;
-  while (d >= 0 && chain[d]?.name === chain[d + 1]?.name) d--;
-  const holder = chain[d];
-  return holder === undefined || holder.list ? null : children(d);
+/** A field a switch above `chain[depth]` reads: the nearest field called
+ *  `name` among the children of the nodes that hold `chain[depth]`, nearest
+ *  first. Null when it is not found, or when a level on the way is not known
+ *  yet. */
+function fieldAbove(chain: readonly ChainNode[], children: Children, depth: number, name: string): Kid | null {
+  for (let d = depth - 1; d >= 0; d--) {
+    if (chain[d]?.list) continue;
+    const kids = children(d);
+    if (kids === null) return null;
+    const kid = kids.find((k) => k.name === name);
+    if (kid !== undefined) return kid;
+  }
+  return null;
 }
 
 /** True when two structures are written the same from their names on. */
@@ -632,7 +658,9 @@ type Found = { line: number; depth: number };
  * is, or null when that cannot be told. The evidence, most trusted first:
  *
  * 1. The arms that lead to each structure, against the value of the field
- *    each `switch` or `match` reads ([`armsAgree`]).
+ *    each `switch` or `match` reads ([`armsAgree`]), for an arm of a switch
+ *    written on the field the last line was found for (the first line of
+ *    `scope`) or in a type that field names.
  * 2. The children of `chain[i - 1]`, by name and type ([`fits`]).
  * 3. How far down the rest of the chain each structure leads, when each next
  *    structure is looked for only inside the field above it.
@@ -640,16 +668,22 @@ type Found = { line: number; depth: number };
  * Structures still left that are written the same are one structure written
  * twice, and the first is as right as any other.
  */
-function choose(index: TemplateIndex, chain: readonly ChainNode[], children: Children, i: number, having: readonly Block[]): Block | null {
+function choose(
+  index: TemplateIndex,
+  chain: readonly ChainNode[],
+  children: Children,
+  i: number,
+  having: readonly Block[],
+  scope: readonly (readonly [number, number])[],
+): Block | null {
   let left = having;
-  const sibs = siblingsOf(chain, children, i - 1);
-  if (sibs !== null) {
-    const verdicts = left.map((b) => armsAgree(index, b, sibs));
-    const taken = left.filter((_, k) => verdicts[k] === true);
-    const possible = left.filter((_, k) => verdicts[k] !== false);
-    if (taken.length > 0) left = taken;
-    else if (possible.length > 0) left = possible;
-  }
+  const anchors = scope.map(([a]) => a);
+  const field = (name: string): Kid | null => fieldAbove(chain, children, i - 1, name);
+  const verdicts = left.map((b) => armsAgree(index, b, anchors, field));
+  const taken = left.filter((_, k) => verdicts[k] === true);
+  const possible = left.filter((_, k) => verdicts[k] !== false);
+  if (taken.length > 0) left = taken;
+  else if (possible.length > 0) left = possible;
   if (left.length > 1) {
     const kids = children(i - 1);
     if (kids !== null) left = fits(index, left, kids);
@@ -685,7 +719,7 @@ function walk(
       const having = blocks.filter((b) => b.fields.has(n.name));
       let chosen: Block | null = having.length === 1 ? (having[0] ?? null) : null;
       if (having.length > 1) {
-        chosen = choose(index, chain, children, i, having);
+        chosen = choose(index, chain, children, i, having, scope);
         if (chosen === null) return found;
       }
       if (chosen !== null) {

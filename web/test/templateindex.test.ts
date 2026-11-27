@@ -511,9 +511,52 @@ test("a field inside an arm is found in the arm the switch's field chose", () =>
   assert.equal(at({ value: "7" }, "", "size"), after("_ => Body", "size:"));
   // An enumeration's value ends with its number; its edit text is the label.
   assert.equal(at({ value: "big (0x20)", edit: "big" }, "", "size"), after("0x20 => Body", "size:"));
+  // A label that is a number itself is not the value's number.
+  assert.equal(at({ value: "1 (0x20)", edit: "1" }, "", "size"), after("0x20 => Body", "size:"));
   // Quoted keys, spaces inside the quotes included.
   assert.equal(at({}, "abcd", "v"), after('"abcd" => Named', "v:"));
   assert.equal(at({}, "fmt ", "v"), after("'fmt ' => Named", "v:"));
+  // An enumeration of four-character codes: its number is the key's bytes,
+  // read either way round.
+  assert.equal(at({}, "fmt, format (0x666d7420)", "v"), after("'fmt ' => Named", "v:"));
+  assert.equal(at({}, "fmt, format (0x20746d66)", "v"), after("'fmt ' => Named", "v:"));
+  // Compared as numbers, no key matching is certain, so the default arm.
+  assert.equal(at({}, "zzzz, other (0x7a7a7a7a)", "v"), after("_ => Named", "v:"));
+});
+
+// The field a switch reads is in an enclosing structure, and a switch nested
+// in another arm reads a field of the same name that is not that one.
+const NESTED = `template nested
+
+root N {
+  kind: u8be
+  entry: Entry {
+    type: u8be
+    value: switch kind {
+      1 => Thing {
+        type: u8be
+        inner: switch type {
+          1 => Leaf {
+            x: u8be
+          }
+        }
+      }
+      2 => Leaf {
+        // two
+        x: u8be
+      }
+    }
+  }
+}
+`;
+
+test("a switch's field may be in an enclosing structure; a switch elsewhere is not compared", () => {
+  const idx = indexTemplate(NESTED);
+  const lines = NESTED.split("\n");
+  const two = lines.findIndex((l, i) => i > lines.findIndex((m) => m.includes("// two")) && l.includes("x: u8be"));
+  const kids = (depth: number): { name: string; type: string; value?: string }[] | null =>
+    depth === 0 ? [{ name: "kind", type: "u8", value: "2" }, { name: "entry", type: "Entry" }] : depth === 1 ? [{ name: "type", type: "u8", value: "1" }, { name: "value", type: "Leaf" }] : null;
+  assert.equal(findLine(idx, [node("file", "N"), node("entry", "Entry"), node("value", "Leaf"), node("x", "u8")], kids), two);
 });
 
 test("an arm is not chosen when the value cannot be compared with every key", () => {
