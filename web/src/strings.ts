@@ -5036,3 +5036,10 @@ export const VIZ = {
     goToRun: (parent: string): string => `Go to these bytes in ${parent}`,
   },
 } as const;
+
+/** The tabs at the top of the right sidebar, and the Template tab's text. */
+export const SIDEBAR = {
+  atCursor: "At cursor",
+  template: "Template",
+  noTemplate: "No template for this file.",
+} as const;
