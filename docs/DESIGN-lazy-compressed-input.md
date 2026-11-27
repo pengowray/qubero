@@ -5,8 +5,9 @@ built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
 from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
 "Order of work", "Built (part 5)" and "Built (part 6)"). Part 7 is split into
-7a, 7b and 7c (see "Review before part 7"), and 7a is built (2026-11-28; see
-"Built (part 7a)"). Parts 7b, 7c and 8 to 11 are not. It follows
+7a, 7b and 7c (see "Review before part 7"), and 7a and 7b are built
+(2026-11-28; see "Built (part 7a)" and "Built (part 7b)"). Parts 7c and 8 to
+11 are not. It follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
 read a span at a time. This design does the same for the compressed input, so
@@ -1402,7 +1403,12 @@ changes parts 6 to 10: read it first.
    its run through the `RunInput` that `run_input` gives once the pass is
    over, and a tab passing the store's limit on. The passes still read a
    copy of the run, and the 64 MiB limit is unchanged. See "Built (part 7a)"
-   under "Review before part 7".
+   under "Review before part 7". **7b done 2026-11-28**: the deflate, zlib,
+   gzip and zstd passes read their run through its handle a window at a
+   time, answer `NeedsInput`, and wait in `Unfinished` across `Pending`,
+   when the source has room for two windows; any other pass still reads a
+   copy. xz, the 64 MiB limit and the web are unchanged. See "Built (part
+   7b)" under "Review before part 7".
 8. **xz's layout in steps.** xz joins `can_step`.
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
@@ -1786,6 +1792,186 @@ compressed size is unchanged. Where the code differs from the text above:
   the walk has finished. `Doc.read`, `textWindow`, `textIndex`, `textBack` and
   `stringsScan` already fetch the chunks a read names as chunks of the file.
 
+### Built (part 7b)
+
+**Built on 2026-11-28.** A deflate, zlib, gzip or zstd pass now reads its run
+through the run's handle a window at a time, and holds no copy of the run,
+when a handle reaches the run and the source has room for a window. In the
+browser that is every such run of the file that no edit touched, read
+through the file's chunk store. When a step's window is missing chunks of
+the file, the step answers `Stepped::NeedsInput` with those chunks, and
+`index_pass` answers `EvalError::Pending` with them, as the pseudocode in
+"How `Pending` fits the go machinery" shows. xz runs are still gathered into
+one copy, and the stream is laid out from that copy. The 64 MiB limit on a
+run's compressed size and `stream_len_at` are unchanged. Where the code
+differs from the text above:
+
+- **The step's window.** A step reads from the byte that holds its first
+  bit up to `Limits::step_input` bytes past that byte, plus the decoder's
+  margin: `DEFLATE_MARGIN` (65,541 bytes) or `ZSTD_MARGIN` (128 KiB + 25
+  bytes). `step_input` is 256 KiB (`STEP_INPUT`) by default. `step_input` is
+  a field of `Limits` so that the tests can read runs of a few hundred
+  kilobytes in dozens of windows. A step stops at the first place the
+  decoder can stop at or past `step_input` bytes from its start, whatever
+  `in_bits` value the caller passes, even when its window reaches the end
+  of the deflate data. When the window reaches the end of the deflate
+  data, the step reads on to the end of the run, so that a copy of a block
+  header near the end has the same bytes as one made from the whole run.
+  Between steps the pass keeps the bytes from where the last step stopped
+  (`PassWindow` in `input.rs`), and the next step reads only the bytes of
+  its window that the pass does not hold already.
+- **The first step** reads the run's last 8 bytes for zlib and gzip, and
+  nothing for raw deflate. It reads the start of the run in the same read
+  as its first window, so that the wrapper's header and the first window
+  arrive in one round, and it names the missing chunks of both in one
+  answer. When `inflate::framing` says the gzip header goes on past the
+  bytes read, the step reads twice as many bytes, but no more than half of
+  the source's resident limit. A gzip header longer than half of the
+  source's resident limit is refused as `Refusal::TooMuchAtOnce`. The design
+  set no limit on the header's length. Only a gzip name or comment can make
+  a header that long, and without the limit the pass would ask for the same
+  chunks for ever. The first step also decides, from the gzip trailer's
+  ISIZE, whether the pass starts as `known_large`. A call of
+  `Indexing::known_large` made before the first step is kept until then
+  (`Phase::Start`).
+- **Header copies** are made during the pass. When a step ends, each
+  checkpoint it took inside a Huffman-coded block gets a copy of that
+  block's header. If the block started before the step, the copy is the one
+  the pass already holds for that block. If the block started in the step,
+  the copy is made from the step's window, which holds the block's header.
+  The pass then keeps a copy of the header of the block the step stopped
+  in, and the next step reads that header and its tables from the copy.
+  When the output passes the cap, the pass goes back to the last checkpoint
+  and takes that checkpoint's copy. Each copy has the same bytes as in part
+  7a: up to `MAX_HEAD_BYTES` bytes, from the byte where the header starts,
+  cut short at the end of the run. The checkpoints inside one block still
+  share one copy.
+- **zstd.** `ZstdWalk` skips the contents of a skippable frame without
+  reading them. When a skipped frame ends past the window's end, the step
+  reads a new window from the byte the walk has reached, and goes on while
+  its `step_input` bytes last. So the pass reads the contents of a
+  skippable frame only as far as the step's window happens to reach, at
+  most one window. A block whose header claims more than `ZSTD_MARGIN`
+  bytes is refused as failed before it is read. `ruzstd` refuses a block
+  over 128 KiB as failed too.
+- **Which passes read a window at a time.** `lazy::reads_in_windows`
+  answers true when the source under the handle answers any read whole, or
+  when its resident limit is at least twice what one step reads at once:
+  655,370 bytes for deflate and 786,482 bytes for zstd, under the default
+  limits. The browser's chunk store keeps 32 MiB, and a tab whose stream is
+  read through an index passes on the index's span cache, 16 MiB, as its
+  limit. A pass whose source has less room than that reads a copy of the
+  run, as in part 7a (`Indexing::from_copy`, over a copy made by
+  `gather_run` or `Held::Gathering`), and the index it makes still reads
+  the handle once the pass is over. So does a pass that no handle reaches:
+  a run in a stitched space, in an edited stretch, or in a `MemSource`. The
+  design meant every pass over a handle to read windows. The tests use
+  stores of 2 to 48 chunks, which cannot hold one window, and a step that
+  needs more of the file than the store keeps would ask for the same chunks
+  for ever.
+- **The constructors.** `Indexing::through(codec, input, limits)` reads
+  nothing when it is called. The pass and the index it makes both read
+  `input`. `Indexing::from_copy(codec, packed, input, limits)` is what part
+  7a called `through`: the pass reads `packed`, and the index reads
+  `input`. `Indexing::new` and `decode_or_index_with` read a run held in
+  memory, and `decode_or_index_through` keeps its signature and its pass
+  reads `packed`.
+- **In the evaluator,** `index_pass` starts a pass over a handle at once,
+  with no gather. The pass takes one of the two places in `Unfinished` when
+  the go has an allowance. It also takes one in a go with no allowance when
+  the source has a resident limit, since a step can then wait for chunks.
+  When a step answers `NeedsInput`, `index_steps` puts the pass back in its
+  place and answers `Pending`, which never reaches `refused_runs`. When the
+  pass is the call's own, `index_steps` also records the pass's progress,
+  as it does when a go runs out, so `Evaluator::unpacking` answers while
+  the pass waits for chunks.
+- **The web is unchanged.** The wasm crate's `Editor::unpacking` answers
+  after a "pending" reply too. The listing still shows `REPORT.reading`
+  while a pass waits for chunks: `slice_reply` includes `unpacking` only in
+  a "working" reply, and `flatten.ts` reads `unpacking` only from a
+  "working" reply. To show the percentage while the pass waits,
+  `slice_reply` has to include `unpacking` in a "pending" reply and
+  `Flattener.kids` has to read it there. That change, `Doc.openSpace`
+  returning the progress with a "pending" reply, and the changes to
+  `waitToOpen` and the status bar are left for 7c, with the rest of the
+  web side.
+- **`UNFINISHED_PASSES` stays at 2.** A pass past the cap now holds less
+  than 10 MiB: its checkpoints' windows (at most 8 MiB), its block starts
+  (at most 1 MiB), its window of output, its window of the run and its
+  header copies. A pass that might still come to a run held whole holds up
+  to 64 MiB of output and its trace. A pass cannot be told apart from the
+  other kind before it starts: a gzip pass learns whether its run is large
+  from the trailer at its first step. Keeping more passes would need two
+  kinds of place, and `wait_for_a_place` would have to carry on a pass that
+  frees the kind of place the waiting call needs. That change is not
+  simple, so it was not made. See "Still to do".
+- **Speed and memory.** Measured on 2026-11-28 with
+  `examples/pass_memory.rs`, in release builds with LTO off
+  (`CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units), pinned to one
+  core. The example makes the
+  pass the evaluator makes for a run of the file, over an `ArcSource`
+  handle, and steps it with the evaluator's step sizes until it ends.
+  Before this part, the pass read a copy of the run, so the example made
+  that copy as the evaluator's gather did. "Peak heap" is the most heap the
+  example had allocated during the pass, less what it had allocated before
+  the pass: the copy, the pass, and the index the pass makes. Before and
+  after were run by turns, three to five times each, with 7 tries a run for
+  the Rubin raw and 5 for the other file, and the table gives the fastest
+  try. The peak was the same in every try. The load average was 4 to 9 on
+  12 cores, and runs of one build varied by up to 30%, so the times are the
+  same within the noise.
+
+  | File | Packed | Unpacked | Steps, before | Steps, after | Time, before | Time, after | Peak heap, before | Peak heap, after |
+  |---|---|---|---|---|---|---|---|---|
+  | The Rubin raw, gzip | 94,940 B | 75,677,760 B | 289 | 289 | 310.6 ms | 314.1 ms | 2,992,244 B | 2,992,781 B |
+  | Text and noise, gzip level 6 | 43,149,999 B | 74,211,974 B | 283 | 283 | 578.8 ms | 574.3 ms | 46,057,351 B | 3,497,327 B |
+
+  The index each pass makes holds the same number of bytes before and
+  after: 2,380,120 for the Rubin raw and 2,342,596 for the text and noise.
+  The Rubin raw's run, 94,940 bytes, is shorter than one window, so its pass
+  holds as much of the run as before. For the text and noise, the 43 MB copy
+  is gone. The rest of its peak, about 1.15 MB, is the pass's window of the
+  run, its window of output and the buffers the decoder works in.
+  The second file is about 1.7 MB of CSV-like rows and then 1 MiB of noise,
+  by turns, packed by Python's `gzip` at level 6.
+- **Tests.** In `codec/lazy/tests.rs`, each pass reads a store of 1 KiB
+  chunks with room for two windows of 8 KiB plus the margin, and is fed only
+  the chunks each step names. Over deflate, zlib and gzip runs of more than
+  400 KB, made of one block, of blocks every 3,000 bytes and of flushed
+  blocks, and over zstd runs of many frames with skippable frames, each
+  pass makes the same index as one window over the whole run in memory:
+  the same checkpoints with their windows and header copies, the same block
+  starts, sums and span traces. Under a larger cap each comes back whole,
+  with the same bytes and trace. No answer names more than one window's
+  chunks, no chunk is asked for more than twice, and the pass never holds
+  more of the run than one window, the trailer and one header copy. A pass
+  over a skippable frame of 900,000 bytes reads no more than one window of
+  it. Over 400,000 empty blocks, steps given no limit on the bits they read
+  still stop after their `step_input` bytes and one empty block. A wrong
+  CRC, Adler-32 or ISIZE, and a run that is not a gzip, are refused as
+  failed when read from a store. A gzip with a 60 KiB extra field and a
+  100 KiB comment is indexed from a store; one with a 300 KiB comment is
+  refused as too much at once there, and is indexed from memory. In
+  `eval/tests/resident.rs`, a zlib run three times longer than a store of
+  160 chunks opens in goes. Each `Pending` names at most one window's
+  chunks, `Evaluator::unpacking` answers after each one with progress that
+  never goes back, no refusal is kept, the pass starts once, and the index
+  matches the one made in memory. In `crates/wasm/tests/open_space_waits.rs`,
+  `open_unpacked_on_a_stream_longer_than_the_store_unpacks_it_a_window_at_a_time`
+  opens a zlib stream of 52 chunks of 64 KiB over a store of 16.
+  `Editor::unpacking` answers after every "pending" reply but the first,
+  which waits for the zlib header before the pass starts. No reply names
+  more than 6 chunks, and every chunk of the file is asked for once.
+- **Tests changed on purpose.**
+  `a_zip_entry_longer_than_the_store_lists_a_window_at_a_time` and
+  `a_gzip_member_longer_than_the_store_is_measured_and_its_stream_reads`
+  keep 16 chunks, so their passes now read through the store, a step's
+  window of up to 6 chunks at a time. They allowed a reply of at most 4
+  chunks, the gather window, and now allow 6.
+- **Strings.** None was added or changed. A gzip header longer than half
+  of the store is refused with the existing words for `too-much-at-once`:
+  "too large for the editor to keep in memory at once".
+
 ## Still to do
 
 - **A joined stream walked twice.** `join_whole` gives a finished walk to
@@ -1809,10 +1995,14 @@ compressed size is unchanged. Where the code differs from the text above:
   the limit to 512 MiB per span.
 - **`UNFINISHED_PASSES`.** Two passes are kept, because one in its traced
   phase (the part of the pass that may still come to a run held whole) holds
-  up to 64 MiB. A pass past the cap holds only its window and checkpoints, so
-  more of those could be kept. Today a listing that shows three large zip
-  entries at once starts one of the three passes again from the beginning
-  each time the listing carries it on.
+  up to 64 MiB. Since part 7b a pass past the cap holds less than 10 MiB, so
+  more of those could be kept, in places of a second kind, with
+  `wait_for_a_place` carrying on a pass that frees the kind of place the
+  waiting call needs. Part 7b left it at 2; see "Built (part 7b)". A listing
+  that shows three large zip entries at once no longer starts a pass again
+  from the beginning, as this item said before part 2: the third entry's call
+  carries on one of the other two passes until a place is free, so the third
+  entry shows no percentage until its own pass starts.
 - **`CHUNK_CAPACITY`.** A larger store would let `unit_input` grow. That is a
   choice about the browser's memory, not part of this design.
 
