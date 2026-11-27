@@ -47,6 +47,13 @@ export class TemplatePanel {
   /** A parent's children, by path, for choosing between same-named structures. */
   private kids = new Map<string, readonly { name: string; type: string }[] | null>();
   private charWidth = 0;
+  /** The marked line moved while the text had no size (the sidebar folded),
+   *  so it is scrolled to once the text has one again. */
+  private revealOwed = false;
+  /** Whether the file has been checked for a template yet. Until it has,
+   *  having none is not yet an answer, and nothing is shown. */
+  private known = false;
+  private builtKnown = false;
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -60,8 +67,14 @@ export class TemplatePanel {
     this.scroller.append(this.body);
     this.el.append(this.scroller);
     doc.onChange(() => {
+      // An edit can change which structure a node is (ELF's `class` decides
+      // which ELFHeader is read), so the children are asked again.
+      this.kids.clear();
       if (this.visible && this.waiting) this.follow();
     });
+    new ResizeObserver(() => {
+      if (this.revealOwed && this.marked !== null && this.scroller.clientHeight > 0) this.reveal(this.marked);
+    }).observe(this.scroller);
   }
 
   /** The tab was shown or hidden. */
@@ -72,6 +85,12 @@ export class TemplatePanel {
     // `.ksy` pasted again is a new template under the same name.
     this.stale = true;
     this.refresh();
+  }
+
+  /** The file has been checked for a template, whatever the answer. */
+  sniffed(): void {
+    this.known = true;
+    this.templateChanged();
   }
 
   /** The file is read by another template now. */
@@ -102,7 +121,8 @@ export class TemplatePanel {
   }
 
   private build(text: string): void {
-    if (text === this.text) return;
+    if (text === this.text && (text !== "" || this.builtKnown === this.known)) return;
+    this.builtKnown = this.known;
     this.text = text;
     this.generation++;
     this.kids.clear();
@@ -115,7 +135,7 @@ export class TemplatePanel {
       this.index = null;
       const empty = document.createElement("div");
       empty.className = "tp-empty";
-      empty.textContent = SIDEBAR.noTemplate;
+      empty.textContent = this.known ? SIDEBAR.noTemplate : "";
       this.body.replaceChildren(empty);
       this.body.style.minWidth = "";
       return;
@@ -158,6 +178,9 @@ export class TemplatePanel {
     for (let i = c.from; i < c.to; i++) {
       const row = document.createElement("div");
       row.className = "tp-line";
+      // An empty block copies as nothing at all, so a blank line would be
+      // lost from copied text without something in it.
+      if (lines[i] === "") row.append(document.createElement("br"));
       for (const s of tokenizeLine(lines[i] ?? "", kinds[i] ?? "plain", decls[i])) {
         if (s.cls === "") row.append(s.text);
         else {
@@ -201,17 +224,26 @@ export class TemplatePanel {
       chain.push({ name: r.node.name, type: r.node.type, list: r.node.list });
     }
     const p = path;
-    const line = findLine(index, chain, (depth) => this.childrenOf(p.slice(0, depth)));
+    let loading = false;
+    const line = findLine(index, chain, (depth) => {
+      const kids = this.childrenOf(p.slice(0, depth));
+      if (kids === "loading") loading = true;
+      return kids === "loading" ? null : kids;
+    });
+    // Marked now at the enclosing line, and again when the children arrive.
+    this.waiting = loading;
     this.mark(line);
   }
 
-  private childrenOf(path: readonly number[]): readonly { name: string; type: string }[] | null {
+  private childrenOf(path: readonly number[]): readonly { name: string; type: string }[] | null | "loading" {
     const key = path.join("/");
     if (this.kids.has(key)) return this.kids.get(key)!;
     const node = this.doc.templateNode(path);
+    if (node.status === "pending" || node.status === "working") return "loading";
     if (node.status !== "ok") return null;
     const r = this.doc.templateChildren(path, 0, Math.min(node.node.child_count, 256));
     // Not kept while the answer is still coming, so the next move asks again.
+    if (r.status === "pending" || r.status === "working") return "loading";
     if (r.status !== "ok") return null;
     const kids = r.node.map((n) => ({ name: n.name, type: n.type }));
     this.kids.set(key, kids);
@@ -232,6 +264,8 @@ export class TemplatePanel {
   /** Scroll the marked line into view, leaving the view alone if it already is. */
   private reveal(line: number): void {
     const s = this.scroller;
+    this.revealOwed = s.clientHeight === 0;
+    if (this.revealOwed) return;
     const top = line * LINE;
     if (top < s.scrollTop || top + LINE > s.scrollTop + s.clientHeight) s.scrollTop = Math.max(0, top - s.clientHeight / 3);
     if (this.charWidth === 0) {

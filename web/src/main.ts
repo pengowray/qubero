@@ -10,7 +10,6 @@ import { RV } from "./report/text.ts";
 import { COUNT_TURN_MS, countLimit } from "./diagramcounts.ts";
 import { Inspector } from "./inspector.ts";
 import { TemplatePanel } from "./templatepanel.ts";
-import "./toggleseg.css";
 import { saveBlob, saveDoc, type SaveOutcome } from "./save.ts";
 import { askSaveAs, type SaveAsChoice } from "./saveasdialog.ts";
 import { FolderList } from "./folderview.ts";
@@ -315,10 +314,10 @@ function panel(tabs: readonly SideTab[], onToggle: () => void): HTMLElement {
   const chevron = el("span", { className: "panel-chevron" });
   const name = el("span", { className: "panel-name" });
   const toggle = el("button", { type: "button", className: "panel-toggle" }, chevron, name);
-  // The list pane's small segmented buttons: this bar is the same 22px strip.
-  const seg = el("span", { className: "toggle-seg panel-tabs" });
+  // Drawn as the toolbar's view switcher, since both pick what a pane shows.
+  const seg = el("span", { className: "tb-views panel-tabs" });
   const buttons = tabs.map((t) => {
-    const b = el("button", { type: "button", textContent: t.label });
+    const b = el("button", { type: "button", className: "tb-view", textContent: t.label });
     b.addEventListener("click", () => {
       rememberChoice(tabKey, t.id);
       pick(t.id);
@@ -332,6 +331,7 @@ function panel(tabs: readonly SideTab[], onToggle: () => void): HTMLElement {
     tabs.forEach((t, i) => {
       const on = t.id === id;
       buttons[i]?.setAttribute("aria-pressed", String(on));
+      buttons[i]?.classList.toggle("is-on", on);
       t.content.hidden = !on;
       if (on) name.textContent = t.label;
     });
@@ -1076,8 +1076,12 @@ function buildDocument(tab: Tab): Page {
   if (!doc.isFile) {
     structure.setMatched(doc.template !== null);
     showMember(doc.template);
+    templatePanel.sniffed();
   } else
   void doc.sniffTemplate().then(async (name) => {
+    // Set before the template is, in the same task, so the panel never draws
+    // its no-template line for a file that has one.
+    templatePanel.sniffed();
     const templated = name !== null;
     structure.setMatched(templated);
     if (name !== null) {

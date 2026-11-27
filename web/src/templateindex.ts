@@ -227,11 +227,6 @@ export function fieldSpan(index: TemplateIndex, line: number): readonly [number,
   return [line, end];
 }
 
-/** The line in `block` that declares `field`, or null. */
-export function fieldLine(block: Block, field: string): number | null {
-  return block.fields.get(field) ?? null;
-}
-
 /** The structures called `name`, the ones inside `scope` first. Null scope, or
  *  none inside it, falls back to those declared at the top level, then to all. */
 export function blocksNamed(index: TemplateIndex, name: string, scope: readonly (readonly [number, number])[]): readonly Block[] {

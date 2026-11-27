@@ -1380,12 +1380,8 @@ button.welcome-crystal {
   display: none;
 }
 .panel-tabs {
-  margin: 2px 0;
-}
-/* Taller than the list pane's 22px-bar buttons: these are the sidebar's only
-   way between its panels, and are tapped on a phone. */
-.panel-tabs button {
-  min-height: 24px;
+  margin: 3px 0;
+  font-size: 12px;
 }
 
 /* ---- the Template tab ---- */
