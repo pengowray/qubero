@@ -60,14 +60,16 @@ export function byteDigits(byte: number | bigint): string {
 /**
  * The value of a field the template uses as a position, written the way
  * addresses are: `0x40` where addresses are hex. Null where the plain value
- * should stand: the field is not a position, not an unsigned number, or
- * addresses are decimal, which is how the value is written anyway.
+ * should stand: the field is not a position, not a whole number of zero or
+ * more, or addresses are decimal, which is how the value is written anyway.
+ * A signed offset is a position too: a CDF writes its offsets as `Int64`, and
+ * the -1 that means "nowhere" stays decimal.
  *
  * Worked out from `edit_text`, the decimal digits the editor starts from, so
  * a 64-bit offset keeps every digit.
  */
 export function positionValue(node: { readonly locates?: boolean; readonly kind: string; readonly edit_text: string }): string | null {
-  if (addressBase !== "hex" || !node.locates || node.kind !== "uint") return null;
+  if (addressBase !== "hex" || !node.locates || (node.kind !== "uint" && node.kind !== "int")) return null;
   const digits = node.edit_text;
   if (!/^\d+$/.test(digits)) return null;
   return `0x${BigInt(digits).toString(16)}`;

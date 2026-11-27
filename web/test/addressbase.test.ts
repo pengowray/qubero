@@ -28,7 +28,9 @@ test("an offset value is written in hex only where it locates something and addr
     // Every digit of a 64-bit offset, which a double would round.
     assert.equal(positionValue({ ...offset, edit_text: "18446744073709551615" }), "0xffffffffffffffff");
     assert.equal(positionValue({ ...offset, locates: false }), null);
-    assert.equal(positionValue({ ...offset, kind: "int" }), null);
+    assert.equal(positionValue({ ...offset, kind: "int" }), "0x40");
+    assert.equal(positionValue({ ...offset, kind: "int", edit_text: "-1" }), null);
+    assert.equal(positionValue({ ...offset, kind: "float", edit_text: "64" }), null);
     assert.equal(positionValue({ ...offset, edit_text: "" }), null);
     setAddressBase("dec");
     assert.equal(positionValue(offset), null);
