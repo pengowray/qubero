@@ -115,13 +115,20 @@ pub(super) fn read_span_through(
     let held = lock(cache).take(k as u64);
     let mut p = held.unwrap_or_else(|| Prefix::new(l, units.clone()));
     let run_len = input.len() as usize;
-    let mut copy = None;
+    let (mut copy, mut asked) = (None, None);
     loop {
         let window = match &copy {
             Some(copy) => Copied::window(copy, input.len()),
             None => Window::of(&[], 0, run_len).expect("an empty window"),
         };
         let Some(next) = p.reach(window, l, units.clone(), upto)? else { break };
+        // If the copy made for block `next` still does not hold it, the
+        // block's data runs past the stream's end, which `xz::layout` never
+        // lays out. The read is refused, so that it does not copy the block
+        // again for ever.
+        if asked.replace(next) == Some(next) {
+            return Err(Refusal::Failed.into());
+        }
         match input.copy(p.needs(l, units.clone(), upto, next, most)) {
             Ok(more) => copy = Some(more),
             Err(missing) => {
