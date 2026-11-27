@@ -21,9 +21,33 @@
 //!              | "type" NAME "=" ty                anything else, under the name a
 //!                                                  `Named` reaches it by
 //!
-//! ty          := struct | wrapper ty | ty annotation | leaf
+//! ty          := struct | wrapper ty | ty annotation | choice | leaf
 //! struct      := NAME ["(" attr {"," attr} ")"] "{" {field} "}"
 //! field       := NAME ":" ty {extra}
+//!
+//! choice      := "switch" expr "{" {arm} "}"        read as the arm whose key is the
+//!                                                   expression's value
+//!              | "match" expr "{" {arm} "}"         the same, for an expression that is
+//!                                                   text: the keys are in double quotes
+//! arm         := key "=>" ty                        one arm on each line, or all on one
+//!                                                   line with commas between them
+//!              | "_ =>" ty                          any other value; always the last arm
+//!              | key "=>" same | "_ =>" same
+//! same        := "same as case" key                 the arm above whose line starts with
+//!                                                   that key is this arm's type too
+//!              | "same as case" key ", but big-endian"
+//!              | "same as case" key ", but little-endian"
+//!                                                   that arm with every `le` or `be` on
+//!                                                   something wider than a byte read as
+//!                                                   `be`, or as `le`
+//!
+//! A `same as` line points only at an arm written out in full, never at
+//! another `same as` line, and only at an arm that takes more than one line.
+//! In an arm `but big-endian` points at, every `le` and `be` on something one
+//! byte wide or narrower is as that arm writes it, since that narrow it says
+//! which end of the byte a field is taken from rather than byte order. Such an
+//! arm never holds a type reached by name or by `schema`, or a `u(expr)`,
+//! because the line could not speak for the numbers in those.
 //!
 //! wrapper     := "sized(" expr ")"                  parsed inside an N-byte window
 //!              | "sizedbits(" expr ")"              the same, counted in bits
@@ -32,15 +56,22 @@
 //!              | "origin"                           offsets inside count from here
 //!              | "decoded(" codec ")"               unpacked, and read from that
 //!              | "repeat(" until ")"                one after another
-//!              | "pointers(" ... ")"                placed at offsets read earlier
+//!              | "pointers(at" path "from" anchor {"," option} ")"
+//!                                                   placed at offsets read earlier
 //!              | "chain(" ... ")"                   each element points at the next
-//!              | "gather(" ... ")"                  placed at offsets found by a walk
+//!              | "gather(" ... {"," option} ")"     placed at offsets found by a walk
 //!              | "stitched(" ... ")"                one stream joined from runs a walk finds
 //!              | "raster(" ... ")"                  pixels placed from rows or Adam7 passes
 //! annotation  := "[" expr "]"                       a list of that many elements
 //!              | "enum" NAME "{" {int "=" NAME} "}"
 //!              | "flags" NAME "{" {"bit" int "=" NAME} "}"
 //!              | "unset" number                     that value means "nothing here"
+//! option      := "to the next"                      each element runs to where the next
+//!                                                   one starts
+//!              | "skip missing"                     an entry of the offsets list that
+//!                                                   has no such field places nothing,
+//!                                                   and the list still reads
+//!              | "skip zero"                        an offset of 0 places nothing
 //! anchor      := "file" | "window" | "origin" | "own start aligned to" int
 //! until       := "until end" | "until element." NAME ("is" bytes | "==" int)
 //!              | "until" expr                       asked inside each element
@@ -58,8 +89,20 @@
 //!              | "time" epoch zone ["unset" int]
 //!              | "name from" expr                   the row's label is read here
 //!              | "element name from" expr           each element's label is
-//!              | "aside"                            a second reading of bytes
-//!                                                   counted where they were declared
+//!              | "aside"                            a second reading of bytes another
+//!                                                   field describes; they are counted
+//!                                                   there, not here
+//!              | "valid" expr                       the value has to equal expr
+//!              | "valid" expr ["saying" text]       expr has to come to something
+//!                                                   other than 0; `this` in it is the
+//!                                                   value. Written the same way as
+//!                                                   the line above when there is no
+//!                                                   `saying`, which is two readings
+//!              | "valid min" expr ["max" expr] | "valid max" expr
+//!              | "valid one of" expr {"," expr}     equal to one of these
+//!              | "valid in enum"                    one of the values the enum names
+//!              | "valid finite"                     a float that is neither NaN nor
+//!                                                   an infinity
 //! covers      := named                              that field's own bytes
 //!              | "unpacked" named ["of" expr "bytes"]
 //!              | "unpacked" named "member packed at" named
@@ -647,13 +690,447 @@ fn line_part(p: &LinePart) -> String {
 }
 
 /// A choice of types: the cases, then the default under `_`.
+///
+/// An arm whose type is the same as an arm written out in full above it is
+/// written as one line that names that arm by its key: `2 => same as case 1`.
+/// So is an arm that is that type with every number wider than a byte set to
+/// one byte order, `2 => same as case 1, but big-endian` (see [`in_order`]).
+/// Only an arm that takes more than one line is ever pointed at, since a line
+/// saying `same as` is no shorter than `2 => u16be`, and an arm is only ever
+/// pointed at when it is written out, never when it is itself a `same as`
+/// line.
+///
+/// A diagram key ([`ty_text`]) writes every arm out, so the keys stay what
+/// they were.
 fn write_choice(out: &mut Vec<String>, ind: usize, head: &str, on: &str, cases: &[(String, &Ty)], default: &Ty, tail: &str) {
     out.push(format!("{}{head}{on} {{", pad(ind)));
-    for (key, ty) in cases {
+    let keyed = WRITING_KEY.with(|k| k.get());
+    let mut written: Vec<Written> = Vec::new();
+    let arms = cases.iter().map(|(k, t)| (k.as_str(), *t)).chain(std::iter::once(("_", default)));
+    for (key, ty) in arms {
+        if !keyed {
+            if let Some(same) = same_as(&mut written, ty) {
+                out.push(format!("{}{key} => {same}", pad(ind + 1)));
+                continue;
+            }
+        }
+        let start = out.len();
         write_ty(out, ind + 1, &format!("{key} => "), ty, "");
+        if out.len() - start > 1 {
+            written.push(Written { key: key.to_string(), ty, big: None, little: None });
+        }
     }
-    write_ty(out, ind + 1, "_ => ", default, "");
     out.push(format!("{}}}{tail}", pad(ind)));
+}
+
+/// An arm of a choice that was written out in full, and the same type set to
+/// each byte order, worked out the first time a later arm is compared with it.
+/// The outer `None` is not worked out yet; the inner one is a type that cannot
+/// be set to that byte order, or is already in it.
+struct Written<'a> {
+    key: String,
+    ty: &'a Ty,
+    big: Option<Option<Ty>>,
+    little: Option<Option<Ty>>,
+}
+
+/// What a later arm is written as when it repeats an arm in `written`: the
+/// same type first, then the same type in the other byte order.
+fn same_as(written: &mut [Written], ty: &Ty) -> Option<String> {
+    if let Some(w) = written.iter().find(|w| w.ty == ty) {
+        return Some(format!("same as case {}", w.key));
+    }
+    for w in written.iter_mut() {
+        let big = w.big.get_or_insert_with(|| in_order(w.ty, Endian::Big));
+        if big.as_ref() == Some(ty) {
+            return Some(format!("same as case {}, but big-endian", w.key));
+        }
+        let little = w.little.get_or_insert_with(|| in_order(w.ty, Endian::Little));
+        if little.as_ref() == Some(ty) {
+            return Some(format!("same as case {}, but little-endian", w.key));
+        }
+    }
+    None
+}
+
+/// `ty` with every number wider than a byte read in byte order `e`, or None
+/// when that changes nothing or when `ty` holds something whose byte order
+/// cannot be set from here.
+///
+/// "A number" is every place the notation writes `le` or `be` on something
+/// wider than a byte: a field's integer, float or fixed-point type, `utf16`,
+/// and a `peek` in any expression. One byte or less is left as it is, and two
+/// arms that differ there are not the same: `le` and `be` on a field that
+/// narrow say which end of the byte it is taken from, which is not byte
+/// order.
+///
+/// Three things make the answer None, because the arm would then hold a
+/// number that `but big-endian` says nothing about: a type named from the
+/// template's table (its numbers are written under `type`, not here), a type
+/// the file describes, and an integer as wide as an expression says, which
+/// may be a byte or less.
+///
+/// Compared with `==`, which is the IR's own structure: no text is compared.
+fn in_order(ty: &Ty, e: Endian) -> Option<Ty> {
+    let mut out = ty.clone();
+    if !order_ty(&mut out, e) || &out == ty {
+        return None;
+    }
+    Some(out)
+}
+
+/// Set every number wider than a byte in `ty` to `e`. False when `ty` holds
+/// something [`in_order`] refuses.
+///
+/// Every arm is listed, with no catch-all, so that a type added to the IR has
+/// to say here whether it carries a byte order.
+fn order_ty(ty: &mut Ty, e: Endian) -> bool {
+    let wide = |bits: u32, endian: &mut Endian| {
+        if bits > 8 {
+            *endian = e;
+        }
+    };
+    match ty {
+        Ty::UInt { bits, endian } | Ty::Int { bits, endian } | Ty::SignMagnitude { bits, endian } => wide(*bits, endian),
+        Ty::Fixed { bits, endian, .. } => wide(*bits, endian),
+        Ty::F16(endian) | Ty::BF16(endian) | Ty::F32(endian) | Ty::F64(endian) | Ty::F80(endian) | Ty::IbmF32(endian) => {
+            *endian = e
+        }
+        Ty::UIntExpr { .. } | Ty::Named(_) | Ty::Schema { .. } => return false,
+        Ty::Nullable { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::Enum { inner, .. }
+        | Ty::Flags { inner, .. } => return order_ty(inner, e),
+        Ty::F8 { .. }
+        | Ty::Leb128 { .. }
+        | Ty::Zigzag
+        | Ty::EbmlVint { .. }
+        | Ty::Vlq
+        | Ty::Magic(_)
+        | Ty::SqliteVarint
+        | Ty::SevenZipNumber
+        | Ty::Json(..)
+        | Ty::Pickle(_)
+        | Ty::Insn { .. }
+        | Ty::Traced { .. }
+        | Ty::CodeBits { .. } => {}
+        Ty::Computed(x) | Ty::ComputedText(x) | Ty::ComputedReal(x) | Ty::Bytes(x) => order_expr(x, e),
+        Ty::Str { len, enc } => {
+            order_strlen(len, e);
+            order_encoding(enc, e);
+        }
+        Ty::TextInt { len, .. } => order_strlen(len, e),
+        Ty::Struct(def) => {
+            let def = Arc::make_mut(def);
+            if let Some(c) = &mut def.colour {
+                if let Some(d) = &mut c.depth {
+                    order_expr(d, e);
+                }
+            }
+            for f in &mut def.fields {
+                if !order_field(f, e) {
+                    return false;
+                }
+            }
+        }
+        Ty::Array { elem, count } => {
+            order_expr(count, e);
+            return order_ty(elem, e);
+        }
+        Ty::Repeat { elem, until } => {
+            match until {
+                Until::Cond(x) | Until::While(x) => order_expr(x, e),
+                Until::End | Until::FieldBytes { .. } | Until::FieldValue { .. } => {}
+            }
+            return order_ty(elem, e);
+        }
+        Ty::PointerList { adjust, elem, .. } => {
+            order_expr(adjust, e);
+            return order_ty(elem, e);
+        }
+        Ty::Chain { first, adjust, elem, .. } => {
+            order_expr(first, e);
+            order_expr(adjust, e);
+            return order_ty(elem, e);
+        }
+        Ty::Gather { from, offset, adjust, elem, .. } => {
+            order_steps(from, e);
+            order_expr(offset, e);
+            order_expr(adjust, e);
+            return order_ty(elem, e);
+        }
+        Ty::Stitched { from, part_len, len, inner } => {
+            order_steps(from, e);
+            for x in [part_len, len].into_iter().flatten() {
+                order_expr(x, e);
+            }
+            return order_ty(inner, e);
+        }
+        Ty::At { at: x, inner, .. }
+        | Ty::Sized { size: x, inner }
+        | Ty::SizedBits { bits: x, inner }
+        | Ty::When { cond: x, inner } => {
+            order_expr(x, e);
+            return order_ty(inner, e);
+        }
+        Ty::Switch { on, cases, default } => {
+            order_expr(on, e);
+            let mut list = cases.to_vec();
+            for (_, t) in &mut list {
+                if !order_ty(t, e) {
+                    return false;
+                }
+            }
+            *cases = list.into();
+            return order_ty(Arc::make_mut(default), e);
+        }
+        Ty::Match { on, cases, default } => {
+            order_expr(on, e);
+            let mut list = cases.to_vec();
+            for (_, t) in &mut list {
+                if !order_ty(t, e) {
+                    return false;
+                }
+            }
+            *cases = list.into();
+            return order_ty(Arc::make_mut(default), e);
+        }
+        Ty::Decoded { codec, inner } => {
+            match codec {
+                Packing::Fixed(_) => {}
+                Packing::Lzma1 { props, dict_size, unpacked } => {
+                    order_expr(props, e);
+                    order_expr(dict_size, e);
+                    if let Some(u) = unpacked {
+                        order_expr(u, e);
+                    }
+                }
+                Packing::Rar5 { dictionary, unpacked } => {
+                    order_expr(dictionary, e);
+                    order_expr(unpacked, e);
+                }
+                Packing::PngScanlines(h) => {
+                    let h = Arc::make_mut(h);
+                    for x in [&mut h.width, &mut h.height, &mut h.bit_depth, &mut h.color_type, &mut h.interlace] {
+                        order_expr(x, e);
+                    }
+                }
+                Packing::JpegScan { segments } => order_expr(segments, e),
+            }
+            return order_ty(inner, e);
+        }
+        Ty::Raster { width, height, bits_per_pixel, pixel, .. } => {
+            for x in [width, height, bits_per_pixel] {
+                order_expr(x, e);
+            }
+            return order_ty(pixel, e);
+        }
+    }
+    true
+}
+
+/// A field's type and every expression the template hangs off the field.
+fn order_field(f: &mut Field, e: Endian) -> bool {
+    for x in [&mut f.name_from, &mut f.elem_name_from].into_iter().flatten() {
+        order_expr(x, e);
+    }
+    for c in f.checks.iter_mut().chain(f.elem_check.as_mut()) {
+        order_check(c, e);
+    }
+    if let Some(v) = &mut f.valid {
+        match Arc::make_mut(v) {
+            Valid::Eq(x) | Valid::Min(x) | Valid::Max(x) | Valid::Expr { expr: x, .. } => order_expr(x, e),
+            Valid::Range { min, max } => {
+                order_expr(min, e);
+                order_expr(max, e);
+            }
+            Valid::AnyOf(items) => items.iter_mut().for_each(|x| order_expr(x, e)),
+            Valid::InEnum | Valid::Finite => {}
+        }
+    }
+    if let Some(t) = &mut f.table {
+        let t = Arc::make_mut(t);
+        for x in [&mut t.columns, &mut t.rate].into_iter().flatten() {
+            order_expr(x, e);
+        }
+        if let Some(g) = &mut t.groups {
+            order_expr(&mut g.count, e);
+        }
+        for fact in &mut t.facts {
+            order_expr(&mut fact.value, e);
+            if let Some(FactUnit::Bracketed(x)) = &mut fact.unit {
+                order_expr(x, e);
+            }
+        }
+    }
+    order_ty(&mut f.ty, e)
+}
+
+fn order_check(c: &mut Check, e: Endian) {
+    if let Some(w) = &mut c.when {
+        order_expr(w, e);
+    }
+    let named = |n: &mut Named| {
+        if let Named::Elem { index, .. } = n {
+            order_expr(index, e);
+        }
+    };
+    match &mut c.over {
+        Covers::Field { name } => named(name),
+        Covers::Unpacked { name, len } => {
+            named(name);
+            if let Some(l) = len {
+                order_expr(l, e);
+            }
+        }
+        Covers::UnpackedMember { name, packed } => {
+            named(name);
+            named(packed);
+        }
+        Covers::Run { at, len } => {
+            order_expr(at, e);
+            order_expr(len, e);
+        }
+        Covers::UpToHere => {}
+    }
+}
+
+fn order_strlen(l: &mut StrLen, e: Endian) {
+    match l {
+        StrLen::Fixed(x) | StrLen::Padded { size: x, .. } => order_expr(x, e),
+        StrLen::Scan { .. } | StrLen::Terminated { .. } => {}
+    }
+}
+
+fn order_encoding(enc: &mut Encoding, e: Endian) {
+    match enc {
+        Encoding::Utf16(endian) => *endian = e,
+        Encoding::Bom { fallback } => order_encoding(fallback, e),
+        Encoding::Utf8
+        | Encoding::Ascii
+        | Encoding::Latin1
+        | Encoding::Cp437
+        | Encoding::Cp437Screen
+        | Encoding::Unknown
+        | Encoding::P8scii
+        | Encoding::Ebcdic => {}
+    }
+}
+
+fn order_steps(steps: &mut Arc<[Step]>, e: Endian) {
+    let mut list = steps.to_vec();
+    for s in &mut list {
+        if let Step::Tagged { tag, .. } = s {
+            order_tag(tag, e);
+        }
+    }
+    *steps = list.into();
+}
+
+fn order_tag(t: &mut Tag, e: Endian) {
+    match t {
+        Tag::Computed(x) | Tag::ComputedText(x) => order_expr(Arc::make_mut(x), e),
+        Tag::Int(_) | Tag::Bytes(_) | Tag::Text(_) | Tag::TextAnyCase(_) => {}
+    }
+}
+
+/// Every `peek` wider than a byte in `x` set to `e`. Every arm is listed, as
+/// in [`order_ty`].
+fn order_expr(x: &mut Expr, e: Endian) {
+    match x {
+        Expr::Peek { bits, endian } => {
+            if *bits > 8 {
+                *endian = e;
+            }
+        }
+        Expr::PeekAt { skip: a, bits, endian } | Expr::PeekIn { at: a, bits, endian } => {
+            if *bits > 8 {
+                *endian = e;
+            }
+            order_expr(a, e);
+        }
+        Expr::Lit(_)
+        | Expr::Ref(_)
+        | Expr::Remaining
+        | Expr::SizeOf(_)
+        | Expr::BitsOf(_)
+        | Expr::Idx
+        | Expr::This
+        | Expr::Pos
+        | Expr::WindowSize
+        | Expr::SpacePos
+        | Expr::SpaceSize
+        | Expr::LenOf(_)
+        | Expr::ProductOf(_)
+        | Expr::SumOf(_)
+        | Expr::MaxOf(_)
+        | Expr::PopCount(_)
+        | Expr::Deduced(_)
+        | Expr::ToMarker { .. }
+        | Expr::Find { .. }
+        | Expr::Run { .. }
+        | Expr::StreamLen(_)
+        | Expr::Prev(_)
+        | Expr::Sibling(_)
+        | Expr::Within(_)
+        | Expr::Real(_) => {}
+        Expr::StartOf(a)
+        | Expr::Placer(a)
+        | Expr::Not(a)
+        | Expr::BitNot(a)
+        | Expr::Log2(a)
+        | Expr::RealText(a)
+        | Expr::Lower(a)
+        | Expr::Pow2(a)
+        | Expr::Pow10(a)
+        | Expr::Trunc(a)
+        | Expr::Bit(a, _)
+        | Expr::PadTo { n: a, .. }
+        | Expr::Words { value: a, .. }
+        | Expr::BytesEq { field: a, .. }
+        | Expr::Elem { index: a, .. }
+        | Expr::ElemWithin { index: a, .. }
+        | Expr::Product { index: a, .. }
+        | Expr::EntryOf { name: a, .. } => order_expr(a, e),
+        Expr::Tagged(t) => {
+            let t = Arc::make_mut(t);
+            if let Some(a) = &mut t.array {
+                order_expr(a, e);
+            }
+            order_tag(&mut t.tag, e);
+        }
+        Expr::FindText(f) => order_expr(&mut Arc::make_mut(f).text, e),
+        Expr::Or(a, b)
+        | Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Mod(a, b)
+        | Expr::Less(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b)
+        | Expr::Both(a, b)
+        | Expr::Either(a, b)
+        | Expr::Shl(a, b)
+        | Expr::Shr(a, b)
+        | Expr::And(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
+        | Expr::Min(a, b)
+        | Expr::Max(a, b)
+        | Expr::DivCeil(a, b) => {
+            order_expr(a, e);
+            order_expr(b, e);
+        }
+        Expr::Cond { when, then, otherwise } => {
+            order_expr(when, e);
+            order_expr(then, e);
+            order_expr(otherwise, e);
+        }
+    }
 }
 
 /// A braced body of short items, greedily filled across lines.
@@ -1779,5 +2256,90 @@ mod tests {
         assert_eq!(blue, ty_text(&colours("blue")));
         let t = Template::new("pixel", colours("blue"));
         assert!(render(&t).contains("colour: u8be enum Colour {0 = red, 1 = green, 2 = blue}"), "{}", render(&t));
+    }
+
+    /// A header of one byte and two numbers, `wide` bits for the second.
+    fn header(e: Endian, wide: u32) -> Ty {
+        let b = Ty::UInt { bits: wide, endian: e };
+        Ty::structure("Header", vec![("tag", Ty::u8()), ("count", Ty::u16(e)), ("offset", b)])
+    }
+
+    fn choice(arms: Vec<(i128, Ty)>) -> String {
+        let root = Ty::structure("File", vec![("kind", Ty::u8()), ("header", Ty::switch(E::field("kind"), arms, Ty::Bytes(E::lit(0))))]);
+        render(&Template::new("demo", root))
+    }
+
+    #[test]
+    fn an_arm_the_same_as_an_earlier_one_is_one_line() {
+        let text = choice(vec![(1, header(Endian::Little, 32)), (2, header(Endian::Little, 32))]);
+        assert!(text.contains("\n    2 => same as case 1\n"), "{text}");
+        assert_eq!(text.matches("Header {").count(), 1, "{text}");
+        // A diagram key still writes both, so the keys do not change.
+        let key = ty_text(&Ty::switch(E::field("k"), vec![(1, header(Endian::Little, 32)), (2, header(Endian::Little, 32))], Ty::u8()));
+        assert_eq!(key.matches("Header {").count(), 2, "{key}");
+    }
+
+    #[test]
+    fn an_arm_in_the_other_byte_order_says_which() {
+        let text = choice(vec![(1, header(Endian::Little, 32)), (2, header(Endian::Big, 32))]);
+        assert!(text.contains("\n    2 => same as case 1, but big-endian\n"), "{text}");
+        assert_eq!(text.matches("Header {").count(), 1, "{text}");
+        let text = choice(vec![(1, header(Endian::Big, 32)), (2, header(Endian::Little, 32))]);
+        assert!(text.contains("\n    2 => same as case 1, but little-endian\n"), "{text}");
+        // The default is an arm like any other.
+        let root = Ty::switch(E::field("kind"), vec![(1, header(Endian::Big, 32))], header(Endian::Little, 32));
+        let text = render(&Template::new("demo", Ty::structure("File", vec![("kind", Ty::u8()), ("header", root)])));
+        assert!(text.contains("\n    _ => same as case 1, but little-endian\n"), "{text}");
+    }
+
+    #[test]
+    fn arms_that_differ_in_anything_but_byte_order_are_both_written() {
+        // One number wider.
+        let text = choice(vec![(1, header(Endian::Little, 32)), (2, header(Endian::Big, 64))]);
+        assert!(!text.contains("same as"), "{text}");
+        assert_eq!(text.matches("Header {").count(), 2, "{text}");
+        let text = choice(vec![(1, header(Endian::Little, 32)), (2, header(Endian::Little, 64))]);
+        assert!(!text.contains("same as"), "{text}");
+        // Every number flipped is not one byte order: case 1 made big-endian
+        // would have `offset: u32be` as well.
+        let mixed = |a: Endian, b: Endian| Ty::structure("Header", vec![("count", Ty::u16(a)), ("offset", Ty::u32(b))]);
+        let text = choice(vec![(1, mixed(Endian::Little, Endian::Big)), (2, mixed(Endian::Big, Endian::Little))]);
+        assert!(!text.contains("same as"), "{text}");
+        // A byte or less is not byte order, so it has to match as it is.
+        let nibble = |a: Endian, n: Endian| Ty::structure("Header", vec![("count", Ty::u16(a)), ("low", Ty::UInt { bits: 4, endian: n })]);
+        let text = choice(vec![(1, nibble(Endian::Little, Endian::Little)), (2, nibble(Endian::Big, Endian::Big))]);
+        assert!(!text.contains("same as"), "{text}");
+        // A named type keeps its own numbers, which the line could not speak for.
+        let named = |a: Endian| Ty::structure("Header", vec![("count", Ty::u16(a)), ("rest", Ty::Named("Rest".into()))]);
+        let text = choice(vec![(1, named(Endian::Little)), (2, named(Endian::Big))]);
+        assert!(!text.contains("same as"), "{text}");
+    }
+
+    /// What is already big-endian in case 1 stays so: a `peek` that reads a
+    /// tag as big-endian in both arms is still what `but big-endian` says.
+    #[test]
+    fn a_number_already_in_that_byte_order_may_stay_as_it_is() {
+        let probe = || Ty::computed(E::peek(32, Endian::Big));
+        let arm = |e: Endian| Ty::structure("Header", vec![("count", Ty::u16(e)), ("tag", probe())]);
+        let text = choice(vec![(1, arm(Endian::Little)), (2, arm(Endian::Big))]);
+        assert!(text.contains("2 => same as case 1, but big-endian"), "{text}");
+        // And the other way it is not: case 1 made little-endian would peek
+        // little-endian.
+        let text = choice(vec![(1, arm(Endian::Big)), (2, arm(Endian::Little))]);
+        assert!(!text.contains("same as"), "{text}");
+    }
+
+    #[test]
+    fn a_repeat_inside_a_written_arm_is_shortened_too() {
+        let inner = |wide: u32| {
+            Ty::switch(E::field("data"), vec![(1, header(Endian::Little, wide)), (2, header(Endian::Big, wide))], Ty::Bytes(E::lit(0)))
+        };
+        let text = choice(vec![(1, inner(32)), (2, inner(64))]);
+        assert_eq!(text.matches("      2 => same as case 1, but big-endian\n").count(), 2, "{text}");
+        assert_eq!(text.matches("Header {").count(), 2, "{text}");
+        // Two outer arms the same are one line, and what they hold is written once.
+        let text = choice(vec![(1, inner(32)), (2, inner(32))]);
+        assert!(text.contains("\n    2 => same as case 1\n"), "{text}");
+        assert_eq!(text.matches("Header {").count(), 1, "{text}");
     }
 }

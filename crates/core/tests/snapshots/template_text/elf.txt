@@ -267,24 +267,7 @@ root ELF {
             offset: u32le
             info: u32le
           }[section_headers[index].size / 8]
-          11 => Symbol (unit symbol) {
-            name_offset: u32le
-            value: u32le
-            size: u32le
-            info: SymbolInfo (inline) {
-              binding: u4be enum SymbolBinding {
-                0 = local, 1 = global, 2 = weak, 10 = GNU unique
-              }
-              type: u4be enum SymbolType {
-                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
-                6 = TLS, 10 = GNU ifunc
-              }
-            }
-            visibility: u8be enum SymbolVisibility {
-              0 = default, 1 = internal, 2 = hidden, 3 = protected
-            }
-            section_index: u16le
-          }[section_headers[index].size / 16]
+          11 => same as case 2
           _ => bytes[section_headers[index].size]
         }
       }
@@ -540,24 +523,7 @@ root ELF {
             offset: u32be
             info: u32be
           }[section_headers[index].size / 8]
-          11 => Symbol (unit symbol) {
-            name_offset: u32be
-            value: u32be
-            size: u32be
-            info: SymbolInfo (inline) {
-              binding: u4be enum SymbolBinding {
-                0 = local, 1 = global, 2 = weak, 10 = GNU unique
-              }
-              type: u4be enum SymbolType {
-                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
-                6 = TLS, 10 = GNU ifunc
-              }
-            }
-            visibility: u8be enum SymbolVisibility {
-              0 = default, 1 = internal, 2 = hidden, 3 = protected
-            }
-            section_index: u16be
-          }[section_headers[index].size / 16]
+          11 => same as case 2
           _ => bytes[section_headers[index].size]
         }
       }
@@ -824,24 +790,7 @@ root ELF {
             }
             symbol: u32le
           }[section_headers[index].size / 16]
-          11 => Symbol (unit symbol) {
-            name_offset: u32le
-            info: SymbolInfo (inline) {
-              binding: u4be enum SymbolBinding {
-                0 = local, 1 = global, 2 = weak, 10 = GNU unique
-              }
-              type: u4be enum SymbolType {
-                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
-                6 = TLS, 10 = GNU ifunc
-              }
-            }
-            visibility: u8be enum SymbolVisibility {
-              0 = default, 1 = internal, 2 = hidden, 3 = protected
-            }
-            section_index: u16le
-            value: u64le
-            size: u64le
-          }[section_headers[index].size / 24]
+          11 => same as case 2
           _ => bytes[section_headers[index].size]
         }
       }
@@ -1105,24 +1054,7 @@ root ELF {
               4 = R_BPF_64_NODYLD32, 10 = R_BPF_64_32
             }
           }[section_headers[index].size / 16]
-          11 => Symbol (unit symbol) {
-            name_offset: u32be
-            info: SymbolInfo (inline) {
-              binding: u4be enum SymbolBinding {
-                0 = local, 1 = global, 2 = weak, 10 = GNU unique
-              }
-              type: u4be enum SymbolType {
-                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
-                6 = TLS, 10 = GNU ifunc
-              }
-            }
-            visibility: u8be enum SymbolVisibility {
-              0 = default, 1 = internal, 2 = hidden, 3 = protected
-            }
-            section_index: u16be
-            value: u64be
-            size: u64be
-          }[section_headers[index].size / 24]
+          11 => same as case 2
           _ => bytes[section_headers[index].size]
         }
       }

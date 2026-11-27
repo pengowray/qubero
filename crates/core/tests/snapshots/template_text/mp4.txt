@@ -102,23 +102,7 @@ type Box = switch remaining >= 8 and peek(u32be at 32 bits) == 'mdat' {
             _ => bytes[size - 8]
           }
         }
-        'moac' => repeat(until end) BlackmagicMotionSample {
-          size: u32be
-          type: text[4] latin1
-          value: sized(size - 8) switch type {
-            'mogy' => Gyroscope {
-              x: f32le
-              y: f32le
-              z: f32le
-            }
-            'moac' => Accelerometer {
-              x: f32le
-              y: f32le
-              z: f32le
-            }
-            _ => bytes[size - 8]
-          }
-        }
+        'moac' => same as case 'mogy'
         _ => bytes[remaining]
       }
       1 => LargeBox {
@@ -178,23 +162,7 @@ type Box = switch remaining >= 8 and peek(u32be at 32 bits) == 'mdat' {
               _ => bytes[size - 8]
             }
           }
-          'moac' => repeat(until end) BlackmagicMotionSample {
-            size: u32be
-            type: text[4] latin1
-            value: sized(size - 8) switch type {
-              'mogy' => Gyroscope {
-                x: f32le
-                y: f32le
-                z: f32le
-              }
-              'moac' => Accelerometer {
-                x: f32le
-                y: f32le
-                z: f32le
-              }
-              _ => bytes[size - 8]
-            }
-          }
+          'moac' => same as case 'mogy'
           _ => bytes[remaining]
         }
       }
@@ -253,23 +221,7 @@ type Box = switch remaining >= 8 and peek(u32be at 32 bits) == 'mdat' {
             _ => bytes[size - 8]
           }
         }
-        'moac' => repeat(until end) BlackmagicMotionSample {
-          size: u32be
-          type: text[4] latin1
-          value: sized(size - 8) switch type {
-            'mogy' => Gyroscope {
-              x: f32le
-              y: f32le
-              z: f32le
-            }
-            'moac' => Accelerometer {
-              x: f32le
-              y: f32le
-              z: f32le
-            }
-            _ => bytes[size - 8]
-          }
-        }
+        'moac' => same as case 'mogy'
         _ => bytes[remaining]
       }
     }  aside
@@ -317,11 +269,7 @@ type BoxBody = switch type {
     minor_version: u32be
     compatible_brands: (text[4] latin1)[remaining / 4]
   }
-  'styp' => FileType {
-    major_brand: text[4] latin1
-    minor_version: u32be
-    compatible_brands: (text[4] latin1)[remaining / 4]
-  }
+  'styp' => same as case 'ftyp'
   'mvhd' => MovieHeader {
     version: u8be
     flags: u24be
@@ -1304,169 +1252,7 @@ type BoxBody = switch type {
             }
           }
         }
-        2 => InitialObjectDescriptorBody {
-          object_descriptor_id: u10be
-          url_flag: u1be
-          include_inline_profile_level_flag: u1be
-          reserved: u4be
-          url_length: optional(when url_flag) u8be
-          url: optional(when url_flag) text[url_length] utf8
-          od_profile_level: optional(when not url_flag) u8be
-          scene_profile_level: optional(when not url_flag) u8be
-          // 0xff: no audio capability required.
-          audio_profile_level: optional(when not url_flag) u8be
-          visual_profile_level: optional(when not url_flag) u8be
-          graphics_profile_level: optional(when not url_flag) u8be
-          descriptors: repeat(until end) Descriptor (named by tag) {
-            tag: u8be enum DescriptorTag {
-              0x01 = object descriptor, 0x02 = initial object descriptor, 0x03 = ES descriptor,
-              0x04 = decoder config descriptor, 0x05 = decoder specific info,
-              0x06 = SL config descriptor, 0x0e = ES ID inc, 0x0f = ES ID ref,
-              0x10 = MP4 initial object descriptor, 0x11 = MP4 object descriptor
-            }
-            // How many bytes the body has. The size is coded seven bits per byte, with the top
-                bit set on every byte but the last.
-            size: vlq
-            body: sized(min(size, remaining)) switch tag {
-              6 => SlConfigDescriptor {
-                // 2: the fixed settings ISO 14496-14 requires inside an MP4 file.
-                predefined: u8be
-                custom: bytes[remaining]
-              }
-              14 => EsIdInc {
-                track_id: u32be
-              }
-              4 => DecoderConfigDescriptor {
-                object_type_indication: u8be enum ObjectType {
-                  0x20 = MPEG-4 Visual, 0x21 = H.264, 0x23 = HEVC, 0x40 = MPEG-4 Audio (AAC),
-                  0x60 = MPEG-2 Visual Simple, 0x61 = MPEG-2 Visual Main,
-                  0x66 = MPEG-2 AAC Main, 0x67 = MPEG-2 AAC LC, 0x68 = MPEG-2 AAC SSR,
-                  0x69 = MPEG-2 Audio (MP3), 0x6a = MPEG-1 Visual, 0x6b = MPEG-1 Audio (MP3),
-                  0x6c = JPEG, 0x6d = PNG, 0xa5 = AC-3, 0xa6 = E-AC-3, 0xa9 = DTS, 0xad = Opus,
-                  0xdd = Vorbis
-                }
-                stream_type: u6be enum StreamType {
-                  1 = object descriptor, 2 = clock reference, 3 = scene description,
-                  4 = visual, 5 = audio, 6 = MPEG-7, 7 = IPMP, 8 = object content info,
-                  9 = MPEG-J, 10 = interaction, 11 = IPMP tool
-                }
-                up_stream: u1be
-                reserved: u1be
-                buffer_size_db: u24be
-                max_bitrate: u32be
-                // Bits per second, or 0 when the bit rate varies.
-                avg_bitrate: u32be
-                descriptors: repeat(until end) Descriptor (named by tag) {
-                  tag: u8be enum DescriptorTag {
-                    0x01 = object descriptor, 0x02 = initial object descriptor,
-                    0x03 = ES descriptor, 0x04 = decoder config descriptor,
-                    0x05 = decoder specific info, 0x06 = SL config descriptor,
-                    0x0e = ES ID inc, 0x0f = ES ID ref, 0x10 = MP4 initial object descriptor,
-                    0x11 = MP4 object descriptor
-                  }
-                  // How many bytes the body has. The size is coded seven bits per byte, with
-                      the top bit set on every byte but the last.
-                  size: vlq
-                  body: sized(min(size, remaining)) switch tag {
-                    6 => SlConfigDescriptor {
-                      // 2: the fixed settings ISO 14496-14 requires inside an MP4 file.
-                      predefined: u8be
-                      custom: bytes[remaining]
-                    }
-                    14 => EsIdInc {
-                      track_id: u32be
-                    }
-                    5 => switch object_type_indication == 64 or object_type_indication == 102 or
-                        object_type_indication == 103 or object_type_indication == 104 {
-                      1 => AudioSpecificConfigBits (named by header, contents header) {
-                        header: AudioSpecificConfig {
-                          audio_object_type: u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
-                          }
-                          // When audio_object_type is 31, the type is 32 plus this value.
-                          audio_object_type_ext: optional(when audio_object_type == 31) u6be
-                          sampling_frequency_index: u4be enum SamplingFrequency {
-                            0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
-                            4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
-                            8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = given in sampling_frequency
-                          }
-                          sampling_frequency: optional(when sampling_frequency_index == 15)
-                              u24be
-                          channel_configuration: u4be enum ChannelConfiguration {
-                            0 = in the program config element, 1 = mono, 2 = stereo,
-                            3 = 3.0 (C, L, R), 4 = 4.0 (C, L, R, rear C), 5 = 5.0, 6 = 5.1,
-                            7 = 7.1
-                          }
-                          // 0: 1024 samples per frame. 1: 960 samples per frame.
-                          frame_length_flag: optional(when audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) u1be
-                          depends_on_core_coder:
-                              optional(when audio_object_type == 1 or audio_object_type == 2 or
-                              audio_object_type == 3 or audio_object_type == 4 or
-                              audio_object_type == 6 or audio_object_type == 7 or
-                              audio_object_type == 17 or audio_object_type == 19 or
-                              audio_object_type == 20 or audio_object_type == 21 or
-                              audio_object_type == 22 or audio_object_type == 23) u1be
-                          core_coder_delay: optional(when (audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) and depends_on_core_coder) u14be
-                          extension_flag: optional(when audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) u1be
-                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
-                              SyncExtension {
-                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                                LC can ignore it.
-                            sync_extension_type: u11be
-                            extension_audio_object_type: u5be enum AudioObjectType {
-                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
-                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
-                            }
-                            // 1: HE-AAC, with spectral band replication doubling the output
-                                sample rate.
-                            sbr_present_flag: optional(when extension_audio_object_type == 5)
-                                u1be
-                          }
-                        }
-                        // The bits of the rest that come before the next byte boundary.
-                        rest_bits: u((8 - bitsof(header) % 8) % 8)be
-                        // What follows the fields read here: settings for other object types,
-                            or padding.
-                        rest: bytes[remaining]
-                      }
-                      _ => bytes[remaining]
-                    }
-                    _ => bytes[remaining]
-                  }
-                }
-              }
-              _ => bytes[remaining]
-            }
-          }
-        }
+        2 => same as case 16
         _ => bytes[remaining]
       }
     }
@@ -2615,169 +2401,7 @@ type BoxBody = switch type {
             }
           }
         }
-        2 => InitialObjectDescriptorBody {
-          object_descriptor_id: u10be
-          url_flag: u1be
-          include_inline_profile_level_flag: u1be
-          reserved: u4be
-          url_length: optional(when url_flag) u8be
-          url: optional(when url_flag) text[url_length] utf8
-          od_profile_level: optional(when not url_flag) u8be
-          scene_profile_level: optional(when not url_flag) u8be
-          // 0xff: no audio capability required.
-          audio_profile_level: optional(when not url_flag) u8be
-          visual_profile_level: optional(when not url_flag) u8be
-          graphics_profile_level: optional(when not url_flag) u8be
-          descriptors: repeat(until end) Descriptor (named by tag) {
-            tag: u8be enum DescriptorTag {
-              0x01 = object descriptor, 0x02 = initial object descriptor, 0x03 = ES descriptor,
-              0x04 = decoder config descriptor, 0x05 = decoder specific info,
-              0x06 = SL config descriptor, 0x0e = ES ID inc, 0x0f = ES ID ref,
-              0x10 = MP4 initial object descriptor, 0x11 = MP4 object descriptor
-            }
-            // How many bytes the body has. The size is coded seven bits per byte, with the top
-                bit set on every byte but the last.
-            size: vlq
-            body: sized(min(size, remaining)) switch tag {
-              6 => SlConfigDescriptor {
-                // 2: the fixed settings ISO 14496-14 requires inside an MP4 file.
-                predefined: u8be
-                custom: bytes[remaining]
-              }
-              14 => EsIdInc {
-                track_id: u32be
-              }
-              4 => DecoderConfigDescriptor {
-                object_type_indication: u8be enum ObjectType {
-                  0x20 = MPEG-4 Visual, 0x21 = H.264, 0x23 = HEVC, 0x40 = MPEG-4 Audio (AAC),
-                  0x60 = MPEG-2 Visual Simple, 0x61 = MPEG-2 Visual Main,
-                  0x66 = MPEG-2 AAC Main, 0x67 = MPEG-2 AAC LC, 0x68 = MPEG-2 AAC SSR,
-                  0x69 = MPEG-2 Audio (MP3), 0x6a = MPEG-1 Visual, 0x6b = MPEG-1 Audio (MP3),
-                  0x6c = JPEG, 0x6d = PNG, 0xa5 = AC-3, 0xa6 = E-AC-3, 0xa9 = DTS, 0xad = Opus,
-                  0xdd = Vorbis
-                }
-                stream_type: u6be enum StreamType {
-                  1 = object descriptor, 2 = clock reference, 3 = scene description,
-                  4 = visual, 5 = audio, 6 = MPEG-7, 7 = IPMP, 8 = object content info,
-                  9 = MPEG-J, 10 = interaction, 11 = IPMP tool
-                }
-                up_stream: u1be
-                reserved: u1be
-                buffer_size_db: u24be
-                max_bitrate: u32be
-                // Bits per second, or 0 when the bit rate varies.
-                avg_bitrate: u32be
-                descriptors: repeat(until end) Descriptor (named by tag) {
-                  tag: u8be enum DescriptorTag {
-                    0x01 = object descriptor, 0x02 = initial object descriptor,
-                    0x03 = ES descriptor, 0x04 = decoder config descriptor,
-                    0x05 = decoder specific info, 0x06 = SL config descriptor,
-                    0x0e = ES ID inc, 0x0f = ES ID ref, 0x10 = MP4 initial object descriptor,
-                    0x11 = MP4 object descriptor
-                  }
-                  // How many bytes the body has. The size is coded seven bits per byte, with
-                      the top bit set on every byte but the last.
-                  size: vlq
-                  body: sized(min(size, remaining)) switch tag {
-                    6 => SlConfigDescriptor {
-                      // 2: the fixed settings ISO 14496-14 requires inside an MP4 file.
-                      predefined: u8be
-                      custom: bytes[remaining]
-                    }
-                    14 => EsIdInc {
-                      track_id: u32be
-                    }
-                    5 => switch object_type_indication == 64 or object_type_indication == 102 or
-                        object_type_indication == 103 or object_type_indication == 104 {
-                      1 => AudioSpecificConfigBits (named by header, contents header) {
-                        header: AudioSpecificConfig {
-                          audio_object_type: u5be enum AudioObjectType {
-                            1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                            5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP, 9 = HVXC,
-                            17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                            22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                            32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                            39 = ER AAC ELD, 42 = USAC (xHE-AAC)
-                          }
-                          // When audio_object_type is 31, the type is 32 plus this value.
-                          audio_object_type_ext: optional(when audio_object_type == 31) u6be
-                          sampling_frequency_index: u4be enum SamplingFrequency {
-                            0 = 96000 Hz, 1 = 88200 Hz, 2 = 64000 Hz, 3 = 48000 Hz,
-                            4 = 44100 Hz, 5 = 32000 Hz, 6 = 24000 Hz, 7 = 22050 Hz,
-                            8 = 16000 Hz, 9 = 12000 Hz, 10 = 11025 Hz, 11 = 8000 Hz,
-                            12 = 7350 Hz, 15 = given in sampling_frequency
-                          }
-                          sampling_frequency: optional(when sampling_frequency_index == 15)
-                              u24be
-                          channel_configuration: u4be enum ChannelConfiguration {
-                            0 = in the program config element, 1 = mono, 2 = stereo,
-                            3 = 3.0 (C, L, R), 4 = 4.0 (C, L, R, rear C), 5 = 5.0, 6 = 5.1,
-                            7 = 7.1
-                          }
-                          // 0: 1024 samples per frame. 1: 960 samples per frame.
-                          frame_length_flag: optional(when audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) u1be
-                          depends_on_core_coder:
-                              optional(when audio_object_type == 1 or audio_object_type == 2 or
-                              audio_object_type == 3 or audio_object_type == 4 or
-                              audio_object_type == 6 or audio_object_type == 7 or
-                              audio_object_type == 17 or audio_object_type == 19 or
-                              audio_object_type == 20 or audio_object_type == 21 or
-                              audio_object_type == 22 or audio_object_type == 23) u1be
-                          core_coder_delay: optional(when (audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) and depends_on_core_coder) u14be
-                          extension_flag: optional(when audio_object_type == 1 or
-                              audio_object_type == 2 or audio_object_type == 3 or
-                              audio_object_type == 4 or audio_object_type == 6 or
-                              audio_object_type == 7 or audio_object_type == 17 or
-                              audio_object_type == 19 or audio_object_type == 20 or
-                              audio_object_type == 21 or audio_object_type == 22 or
-                              audio_object_type == 23) u1be
-                          sync_extension: optional(when remaining >= 2 and peek(u11be) == 695)
-                              SyncExtension {
-                            // 0x2b7: an SBR extension follows. A decoder that only supports AAC
-                                LC can ignore it.
-                            sync_extension_type: u11be
-                            extension_audio_object_type: u5be enum AudioObjectType {
-                              1 = AAC Main, 2 = AAC LC, 3 = AAC SSR, 4 = AAC LTP,
-                              5 = SBR (HE-AAC), 6 = AAC Scalable, 7 = TwinVQ, 8 = CELP,
-                              9 = HVXC, 17 = ER AAC LC, 19 = ER AAC LTP, 20 = ER AAC Scalable,
-                              22 = ER BSAC, 23 = ER AAC LD, 29 = PS (HE-AAC v2), 31 = escape,
-                              32 = Layer-1, 33 = Layer-2, 34 = Layer-3 (MP3), 36 = ALS,
-                              39 = ER AAC ELD, 42 = USAC (xHE-AAC)
-                            }
-                            // 1: HE-AAC, with spectral band replication doubling the output
-                                sample rate.
-                            sbr_present_flag: optional(when extension_audio_object_type == 5)
-                                u1be
-                          }
-                        }
-                        // The bits of the rest that come before the next byte boundary.
-                        rest_bits: u((8 - bitsof(header) % 8) % 8)be
-                        // What follows the fields read here: settings for other object types,
-                            or padding.
-                        rest: bytes[remaining]
-                      }
-                      _ => bytes[remaining]
-                    }
-                    _ => bytes[remaining]
-                  }
-                }
-              }
-              _ => bytes[remaining]
-            }
-          }
-        }
+        2 => same as case 16
         _ => bytes[remaining]
       }
     }
@@ -3160,42 +2784,7 @@ type H264NalUnit = NalUnit (named by unit_type) {
       }
       _ => bytes[remaining]
     }
-    5 => switch find(00 00 03) + 2 >= min(6, remaining) {
-      1 => SliceRbsp (named by header, contents header) {
-        header: SliceHeader (named by slice_type) {
-          first_mb_in_slice: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: repeat(while peek(u1be) == 0) u1be
-            marker: u1be
-            info: u(count of leading_zeros)be
-            value: computed (1 << count of leading_zeros) - 1 + info
-          }
-          // I: decoded on its own. P: predicted from earlier pictures. B: predicted from up to
-              two pictures per block. 5 to 9: as 0 to 4, and every slice in the picture has the
-              same type.
-          slice_type: ExpGolomb (named by value, machinery leading_zeros marker info) {
-            leading_zeros: repeat(while peek(u1be) == 0) u1be
-            marker: u1be
-            info: u(count of leading_zeros)be
-            value: computed (1 << count of leading_zeros) - 1 + info enum SliceType {
-              0 = P, 1 = B, 2 = I, 3 = SP, 4 = SI, 5 = P (all), 6 = B (all), 7 = I (all),
-              8 = SP (all), 9 = SI (all)
-            }
-          }
-          pic_parameter_set_id: ExpGolomb (named by value, machinery leading_zeros marker info)
-              {
-            leading_zeros: repeat(while peek(u1be) == 0) u1be
-            marker: u1be
-            info: u(count of leading_zeros)be
-            value: computed (1 << count of leading_zeros) - 1 + info
-          }
-        }
-        // The bits of the rest that come before the next byte boundary.
-        rest_bits: u((8 - bitsof(header) % 8) % 8)be
-        // The rest of the slice header and the slice data, CAVLC or CABAC coded.
-        rest: bytes[remaining]
-      }
-      _ => bytes[remaining]
-    }
+    5 => same as case 1
     6 => SeiRbsp {
       messages: repeat(while remaining > 1) SeiMessage
           (named by payload_type, machinery type_code size_code) {
@@ -3689,14 +3278,7 @@ type SampleContent = switch format {
       _ => bytes[remaining]
     }
   }
-  'text' => TextSample (named by text) {
-    length: u16be
-    text: text[min(length, remaining)] utf8
-    modifiers: switch 8 <= remaining and 8 <= peek(u32be) and peek(u32be) <= remaining {
-      1 => repeat(until end) Box
-      _ => bytes[remaining]
-    }
-  }
+  'text' => same as case 'tx3g'
   'tmcd' => TimecodeSample {
     frame_number: u32be
   }
