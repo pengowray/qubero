@@ -126,6 +126,16 @@ impl Seekable {
         &self.input
     }
 
+    /// The most output this index keeps decoded at once, when it reads its
+    /// run from a source that keeps only part of the file: its span cache.
+    /// A read of more output than that in one call decodes spans that push
+    /// out the ones before them, whose compressed bytes the store may have
+    /// pushed out too, and would ask for them again for ever. `None` when
+    /// the run is read from a source that answers any read whole.
+    pub fn resident_limit(&self) -> Option<u64> {
+        self.input.resident_limit().map(|_| self.limits.span_cache as u64)
+    }
+
     /// Read the run through `input` from now on, in place of the input the
     /// index pass gave it: for a test over a source that loses chunks.
     #[cfg(test)]

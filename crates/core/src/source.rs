@@ -271,11 +271,12 @@ impl Source for ChunkStore {
         }
     }
 
-    /// Every chunk it keeps. A store with a source behind it reads that
-    /// source and keeps nothing, so it has no limit.
+    /// Every chunk it keeps. A store with a source behind it keeps nothing,
+    /// and says what that source says: a tab over a stream read through an
+    /// index keeps as much as the index keeps decoded.
     fn resident_limit(&self) -> Option<u64> {
-        match self.behind {
-            Some(_) => None,
+        match &self.behind {
+            Some(source) => source.resident_limit(),
             None => self.kept.resident_limit(),
         }
     }

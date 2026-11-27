@@ -454,6 +454,26 @@ impl Source for SpaceSource {
             Ok(()) | Err(ReadError::Refused(_)) => Vec::new(),
         }
     }
+
+    /// For a stream read through an index whose run is read from a store
+    /// that keeps part of the file, as much output as the index keeps
+    /// decoded: see [`Seekable::resident_limit`]. A reading over the stream,
+    /// a recognised tab's, then reads a long run a window at a time and
+    /// refuses a read that can never fit, as a reading of the file does.
+    /// Nothing for bytes held whole.
+    fn resident_limit(&self) -> Option<u64> {
+        match self {
+            SpaceSource::Whole(_) => None,
+            SpaceSource::Lazy(index) => index.resident_limit(),
+            SpaceSource::Joined(joined) => joined.resident_limit(),
+        }
+    }
+
+    /// Another over the same bytes, which copies none of them: what an index
+    /// over a run inside this stream reads the run through.
+    fn share(&self) -> Option<Arc<dyn Source + Send + Sync>> {
+        Some(Arc::new(self.clone()))
+    }
 }
 
 /// A stream joined from parts, too large to hold whole, read a part at a
@@ -498,6 +518,18 @@ impl Joined {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// The least that any part read through its index keeps decoded at once,
+    /// when such a part reads its run from a store that keeps part of the
+    /// file. The other parts are held, or decoded from a copy of their run,
+    /// and never wait for bytes.
+    pub fn resident_limit(&self) -> Option<u64> {
+        let indexed = self.parts.iter().filter_map(|(_, bytes)| match bytes {
+            JoinedBytes::Indexed(index) => index.resident_limit(),
+            JoinedBytes::Held(_) | JoinedBytes::Packed { .. } => None,
+        });
+        indexed.min()
     }
 
     fn part_at(&self, byte: u64) -> Option<usize> {

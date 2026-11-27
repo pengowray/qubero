@@ -400,6 +400,74 @@ fn a_gzip_member_past_the_measuring_cap_is_refused_where_it_passes_the_cap() {
     assert_eq!(unpacked(&ev, &[0, 0, 10]), content);
 }
 
+// ----- streams read through an index from the store -----
+
+/// Limits small enough that 160 KiB is past the cap: spans of 16 KiB of
+/// output, and four of them kept decoded.
+fn small_lazy() -> crate::codec::lazy::Limits {
+    crate::codec::lazy::Limits { whole: 64 << 10, spacing: 16 << 10, checkpoints: 32, span_cache: 64 << 10, ..Default::default() }
+}
+
+/// A zlib file whose stream is a gzip file of 160 KiB of noise, as the file
+/// and the gzip file. Neither packs, so the file's run is as long as the
+/// gzip, about three times what the stores below keep.
+fn zlib_of_a_gzip() -> (Vec<u8>, Vec<u8>) {
+    let member = gzip_member(&noise(160 << 10));
+    (miniz_oxide::deflate::compress_to_vec_zlib(&member, 1), member)
+}
+
+/// The zlib template's `compressed`.
+const ZLIB_RUN: &[usize] = &[6];
+
+/// A tab over a stream read through an index, whose run is read from a store
+/// that keeps part of the file, keeps no more than the index keeps decoded.
+/// So a run inside the stream that is read whole is read a window at a time,
+/// in the file's reading and in the tab's own, and a read that still has to
+/// be made in one call and is longer than that is refused with the reason.
+/// Without that, each of those reads decodes spans that push out the ones
+/// before them, whose chunks of the file the store has pushed out too, and
+/// asks for the same chunks for ever.
+///
+/// The index is made from a copy of the run, and then reads the run through
+/// a handle onto the file's store.
+#[test]
+fn a_reading_over_a_tab_reads_a_long_run_a_window_at_a_time() {
+    use crate::codec::lazy::{decode_or_index_with, Decoded, RunInput};
+    let (file, member) = zlib_of_a_gzip();
+    let mut d = stored(&file, 48);
+    let run = 2..file.len() - 4;
+    let Ok(Decoded::Indexed(mut index)) = decode_or_index_with(Codec::Deflate, std::sync::Arc::new(file[run.clone()].to_vec()), small_lazy()) else {
+        panic!("indexed")
+    };
+    index.set_input(RunInput::new(d.source().share().expect("a store hands out a handle"), run.start as u64, run.len() as u64));
+    let mut ev = Evaluator::new(crate::formats::builtin("zlib").unwrap());
+    ev.spaces.set_lazy_limits(small_lazy());
+    ev.spaces.keep_index((0, run.start as u64 * 8, run.len() as u64 * 8), Codec::Deflate, std::sync::Arc::new(index));
+    let id = fed(&mut d, &file, |d| ev.open_space(d, 0, ZLIB_RUN)).unwrap().expect("the stream opens");
+    let len = member.len() as u64;
+
+    // In the file's reading, the whole of the stream read as a run.
+    assert!(ev.gathers(&d, id, 0, len * 8));
+    let got = fed(&mut d, &file, |d| ev.gather_run(d, id, 0, len * 8)).unwrap().unwrap();
+    assert!(got == member, "the stream gathered differs");
+
+    let space = ev.space_mut(id).unwrap();
+    assert_eq!((space.template.as_str(), space.recognised), ("gzip", true));
+    assert_eq!(space.source().resident_limit(), Some(64 << 10));
+    // What the web opens the tab over says the same.
+    assert_eq!(ChunkStore::behind(Box::new(space.source().clone()), CHUNK).resident_limit(), Some(64 << 10));
+    let (tab, tab_doc) = space.reading().expect("a recognised stream has a reading of its own");
+    assert_eq!(tab_doc.resident_limit(), Some(64 << 10));
+    match tab.read_in(tab_doc, 0, 0, len * 8) {
+        Err(EvalError::Failed(why)) => assert_eq!(why, "Can't load 160.1 KiB of the file at once: the editor keeps at most 64 KiB in memory"),
+        other => panic!("{other:?}"),
+    }
+    // The member's run, between its ten bytes of header and eight of
+    // trailer, read whole by the tab's reading.
+    let got = fed(&mut d, &file, |_| tab.gather_run(tab_doc, 0, 80, (len - 18) * 8)).unwrap().unwrap();
+    assert!(got == member[10..member.len() - 8], "the member's run gathered differs");
+}
+
 /// Three runs longer than the store, each asked for in turn in goes, the way
 /// a listing showing all three asks. Only two passes are kept unfinished,
 /// and a pass reads its run into its place, so the third waits for a place,

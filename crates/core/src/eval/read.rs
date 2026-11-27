@@ -141,10 +141,13 @@ impl Evaluator {
     }
 
     /// How many bytes of the file a read of `n` bits at bit `at` of `space`
-    /// needs at once. For the file, the bytes the read covers. For a
-    /// stitched space, the bytes of the file its stored parts give the read,
-    /// which [`Self::read_stitched`] reads one after another in the same
-    /// call. Nothing for a space whose bytes are in memory, and nothing for a
+    /// needs at once. For the file, the bytes the read covers. For a space
+    /// read through an index, the bytes the read covers too: each span it
+    /// reaches is decoded from compressed bytes of the file read as it goes,
+    /// and kept in a cache that holds only so many. For a stitched space, the
+    /// bytes of the file its stored parts give the read, which
+    /// [`Self::read_stitched`] reads one after another in the same call.
+    /// Nothing for a space whose bytes are in memory, and nothing for a
     /// packed part, which is unpacked by a read of its own and kept once it
     /// is. What decides whether a whole run is read a window at a time:
     /// see [`Self::gathers`].
@@ -152,7 +155,7 @@ impl Evaluator {
         if n == 0 {
             return 0;
         }
-        if space == 0 {
+        if space == 0 || self.spaces.lazy(space).is_some() {
             return (at + n).div_ceil(8) - at / 8;
         }
         let Some(stitch) = self.spaces.stitch(space) else { return 0 };
