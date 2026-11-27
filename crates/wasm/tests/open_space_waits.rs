@@ -403,14 +403,16 @@ fn a_code_deep_in_a_run_longer_than_the_store_is_read_from_its_own_bytes() {
 
 /// The same for a run whose stream is past 64 MiB and is read through an
 /// index rather than held whole, as most runs longer than the store are. The
-/// trace that names the code is its block's, made from the index's own copy
-/// of the run, and of the file only the bytes the code is in are read. The
-/// run is the zlib of a tar of zeros, written by hand as one block in the
-/// fixed codes, so a code that deep is known: a length of 258, then a
-/// distance of 1.
+/// trace that names the code is its block's, which the index makes from the
+/// block's compressed bytes, read through the store, and then keeps. After
+/// that, of the file only the bytes the code is in are read. The run is the
+/// zlib of a tar of zeros, written by hand in the fixed codes, so a code that
+/// deep is known: a length of 258, then a distance of 1. It is written in
+/// blocks of about 32 KiB of the run, so that the store holds all of one: a
+/// block's trace reads the block whole.
 #[test]
 fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
-    let file = zlib_of_a_tar_of_zeros(70 << 20);
+    let file = zlib_of_a_tar_of_zeros_in_blocks(70 << 20, 20_000);
     let store = 2;
     assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
     let mut ed = unfed(&file, store as u32, "zlib");
@@ -427,6 +429,9 @@ fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
     assert_eq!(end - start, 13, "{step}");
     let own: Vec<u64> = ((run_at + start) / 8 / CHUNK as u64..=(run_at + end - 1) / 8 / CHUNK as u64).collect();
     assert!(own[0] >= store as u64, "the code is in chunk {}, among the first {store}", own[0]);
+    // The block's trace, made once and kept.
+    let made = feeder.ask(&mut ed, |ed| ed.decode_step(tab, start as f64));
+    assert_eq!(made["status"], "ok", "{made}");
     for c in 0..store as u64 {
         feed(&mut ed, &file, c);
     }
@@ -438,6 +443,7 @@ fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
     }
     let reply = parse(&ed.decode_step(tab, start as f64));
     assert_eq!(reply["status"], "ok", "{reply}");
+    assert_eq!(reply, made);
     let got = &reply["node"];
     assert_eq!(got["kind"], "match", "{got}");
     assert_eq!(got["block_kind"], "fixed", "{got}");
@@ -448,6 +454,79 @@ fn a_code_deep_in_an_indexed_run_is_read_from_its_own_bytes() {
     let distance = inflate::DecodedCode { symbol: 0, code_bits: 5, extra_bits: 0, extra: 0, value: 1, entry: None, entry_child: None };
     assert!(code_is(&got["symbol"], &length), "{got}");
     assert!(code_is(&got["distance"], &distance), "{got}");
+}
+
+/// A zlib stream that unpacks to `size` bytes, byte `p` of them `p % 256`:
+/// the 256 values as literals, then copies of 258 bytes from 256 back, in one
+/// block of the fixed codes. Written by hand, as the zeros are, but not
+/// zeros, since a read that fails reads as zeros.
+fn zlib_of_a_pattern(size: usize) -> Vec<u8> {
+    let mut b = Bits::default();
+    b.put(1, 1); // the last block
+    b.put(1, 2); // in the fixed codes
+    for v in 0..=255 {
+        b.literal(v);
+    }
+    let mut done = 256;
+    while size - done >= 258 {
+        b.code(0xc5, 8); // length 258, code 285
+        b.code(15, 5); // distance code 15, 193 to 256
+        b.put(256 - 193, 6); // 256
+        done += 258;
+    }
+    for p in done..size {
+        b.literal(p as u8);
+    }
+    b.code(0, 7); // end of block
+    let mut file = vec![0x78, 0x01];
+    file.extend(b.done());
+    // The Adler-32, its sums taken modulo 65,521 every 5,552 bytes, as zlib
+    // takes them, so that neither overflows.
+    let (mut a, mut s) = (1u64, 0u64);
+    for from in (0..size).step_by(5552) {
+        for p in from..size.min(from + 5552) {
+            a += (p % 256) as u64;
+            s += a;
+        }
+        (a, s) = (a % 65521, s % 65521);
+    }
+    file.extend((((s << 16) | a) as u32).to_be_bytes());
+    file
+}
+
+/// Once a stream is indexed, the index reads its run through the file's
+/// chunk store rather than a copy of its own. A read of the tab's end, just
+/// after it opens, finds the chunks the pass read last still in the store
+/// and asks for nothing. A read further back, whose chunks the store has
+/// pushed out since, answers with those chunks of the file, which the store
+/// no longer has, and gives the right bytes once they are fed.
+#[test]
+fn an_indexed_stream_reads_its_run_through_the_store() {
+    let size = 70 << 20;
+    let file = zlib_of_a_pattern(size);
+    let store = 4;
+    let chunks = file.len().div_ceil(CHUNK) as u64;
+    assert!(chunks > 2 * store, "{} bytes is too few for a store of {store} chunks", file.len());
+    let mut ed = unfed(&file, store as u32, "zlib");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[6]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), size as f64);
+    let pattern = |at: usize, n: usize| (at..at + n).map(|p| p as u8).collect::<Vec<u8>>();
+
+    assert!(ed.has_chunk(0, (chunks - 1) as f64), "the last chunk of the run is not in the store");
+    assert_eq!(tab_bytes(&mut ed, tab, size - 100, 100), pattern(size - 100, 100));
+
+    let at = size / 5;
+    let mut got = vec![0u8; 100];
+    let missing = ed.read_bytes(tab, at as f64, &mut got);
+    assert!(!missing.is_empty(), "a fifth of the way along, the chunks were still in the store");
+    assert_eq!(got, [0u8; 100]);
+    for &c in &missing {
+        assert!(!ed.has_chunk(0, c), "chunk {c} was asked for and is in the store");
+        feed(&mut ed, &file, c as u64);
+    }
+    assert_eq!(tab_bytes(&mut ed, tab, at, 100), pattern(at, 100));
 }
 
 /// A .gz of two members, the first longer than the chunk store. A member is
@@ -577,23 +656,38 @@ impl Bits {
 /// Written by hand because packing seventy megabytes with a compressor built
 /// for debugging takes longer than the test does.
 fn deflate_head_then_zeros(head: &[u8], zeros: usize) -> Vec<u8> {
+    deflate_head_then_zeros_in_blocks(head, zeros, usize::MAX)
+}
+
+/// The same in as many blocks as it takes to hold at most `copies` copies
+/// each, every block in the fixed codes.
+fn deflate_head_then_zeros_in_blocks(head: &[u8], zeros: usize, copies: usize) -> Vec<u8> {
+    let (all, rest) = ((zeros - 1) / 258, (zeros - 1) % 258);
+    let blocks = all.div_ceil(copies).max(1);
     let mut b = Bits::default();
-    b.put(1, 1); // the last block
-    b.put(1, 2); // in the fixed codes
-    for &v in head {
-        b.literal(v);
+    let mut left = all;
+    for k in 0..blocks {
+        let last = k + 1 == blocks;
+        b.put(u32::from(last), 1);
+        b.put(1, 2); // in the fixed codes
+        if k == 0 {
+            for &v in head {
+                b.literal(v);
+            }
+            b.literal(0);
+        }
+        for _ in 0..left.min(copies) {
+            b.code(0xc5, 8); // length 258, code 285
+            b.code(0, 5); // distance 1
+        }
+        left -= left.min(copies);
+        if last {
+            for _ in 0..rest {
+                b.literal(0);
+            }
+        }
+        b.code(0, 7); // end of block
     }
-    b.literal(0);
-    let mut left = zeros - 1;
-    while left >= 258 {
-        b.code(0xc5, 8); // length 258, code 285
-        b.code(0, 5); // distance 1
-        left -= 258;
-    }
-    for _ in 0..left {
-        b.literal(0);
-    }
-    b.code(0, 7); // end of block
     b.done()
 }
 
@@ -618,9 +712,14 @@ fn tar_of_zeros(size: usize) -> (Vec<u8>, usize) {
 /// megabyte of file, which is past the 64 MiB a stream is unpacked whole
 /// under.
 fn zlib_of_a_tar_of_zeros(size: usize) -> Vec<u8> {
+    zlib_of_a_tar_of_zeros_in_blocks(size, usize::MAX)
+}
+
+/// The same in blocks of at most `copies` copies each.
+fn zlib_of_a_tar_of_zeros_in_blocks(size: usize, copies: usize) -> Vec<u8> {
     let (header, zeros) = tar_of_zeros(size);
     let mut file = vec![0x78, 0x01];
-    file.extend(deflate_head_then_zeros(&header, zeros));
+    file.extend(deflate_head_then_zeros_in_blocks(&header, zeros, copies));
     // The Adler-32 of the header and then the zeros, which leave the first
     // sum where the header left it and add it to the second once a byte.
     let a_b = adler32(&header);

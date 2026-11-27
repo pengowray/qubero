@@ -23,10 +23,11 @@ use crate::source::Missing;
 /// The run's compressed bytes are read through a [`RunInput`], by each read
 /// as it needs them: a span's, a block's, or the stretch between two kept
 /// block starts. A read that finds chunks of them missing answers
-/// [`ReadError::Missing`] and caches nothing. Until the index pass reads
-/// through a handle onto the file as well, the input is over the pass's own
-/// copy of the run, which is at most [`CAP_BYTES`] and never finds a chunk
-/// missing. See `docs/DESIGN-lazy-compressed-input.md`.
+/// [`ReadError::Missing`] and caches nothing. The input is a handle onto
+/// the source the run is in, the file's chunk store in the browser, when one
+/// reaches the run, and otherwise a copy of the run, at most [`CAP_BYTES`],
+/// which never finds a chunk missing. The index pass itself still reads a
+/// copy of its own. See `docs/DESIGN-lazy-compressed-input.md`.
 ///
 /// [`CAP_BYTES`]: crate::codec::CAP_BYTES
 pub struct Seekable {

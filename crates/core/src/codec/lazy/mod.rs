@@ -256,7 +256,11 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
 /// once it is made: the same bytes as `packed`, which the pass reads now.
 /// When `input`'s source has a resident limit, the index is held to
 /// [`Limits::unit_input`] and [`Limits::span_input`].
-fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
+///
+/// An index over a handle onto the file holds no copy of the run once the
+/// pass is over: `packed` goes with the pass. See
+/// `docs/DESIGN-lazy-compressed-input.md`, "Where a `RunInput` comes from".
+pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
     if packed.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
     }
@@ -320,8 +324,9 @@ impl Indexing {
     }
 
     /// [`Indexing::new`], for an index that reads the run through `input`
-    /// once it is made, as [`decode_or_index_through`] says.
-    fn through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
+    /// once it is made, as [`decode_or_index_through`] says. The pass still
+    /// reads `packed`, and lets go of it when it ends.
+    pub fn through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
         if packed.len() > CAP_BYTES {
             return Err(Refusal::TooLarge);
         }

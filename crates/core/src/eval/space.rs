@@ -659,8 +659,10 @@ pub(super) type RunKey = (u32, u64, u64);
 /// run is indexed once however many things read it: the `Decoded` node over
 /// it, a stitched stream with it as a part, and the tab.
 ///
-/// Each index reads its compressed run through a copy of it, so the total of
-/// those is capped, and the index used longest ago goes first.
+/// An index whose run no handle reaches reads it through a copy of it, so
+/// the total of those copies is capped, and the index used longest ago goes
+/// first. An index over a handle owns no copy, and weighs nothing here (see
+/// [`lazy::RunInput::owned_bytes`]).
 #[derive(Default)]
 pub(super) struct Indexes {
     entries: Vec<(RunKey, Codec, Arc<Seekable>, u64)>,
@@ -677,8 +679,8 @@ impl Indexes {
     }
 
     fn put(&mut self, key: RunKey, codec: Codec, index: Arc<Seekable>) {
-        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.input().len()).sum::<u64>();
-        while !self.entries.is_empty() && held(&self.entries) + index.input().len() > INDEXED_RUN_BYTES as u64 {
+        let held = |entries: &[(RunKey, Codec, Arc<Seekable>, u64)]| entries.iter().map(|e| e.2.input().owned_bytes()).sum::<u64>();
+        while !self.entries.is_empty() && held(&self.entries) + index.input().owned_bytes() > INDEXED_RUN_BYTES as u64 {
             let oldest = (0..self.entries.len()).min_by_key(|&i| self.entries[i].3).expect("not empty");
             self.entries.swap_remove(oldest);
         }
@@ -687,8 +689,8 @@ impl Indexes {
     }
 }
 
-/// The most compressed bytes the indexes hold between them. The same as the
-/// most one run may be.
+/// The most the copies of compressed runs that indexes read through may
+/// hold between them. The same as the most one run may be.
 const INDEXED_RUN_BYTES: usize = crate::codec::CAP_BYTES;
 
 /// Runs whose indexing pass has started and not finished, by where each run
@@ -1470,21 +1472,86 @@ impl super::Evaluator {
                 return self.carry_on(doc, key, codec, Held::Gathering { bytes: Vec::new(), known_large }, true);
             }
         }
-        let packed = match self.gather_run(doc, key.0, key.1, key.2)? {
-            Ok(packed) => Arc::new(packed),
+        // What the index will read the run through once it is made, and the
+        // pass's own copy of the run, which goes when the pass does. Where
+        // no handle reaches the run, the input is that copy.
+        let input = match self.run_input(doc, key)? {
+            Ok(input) => input,
             Err(why) => return Ok(Err(why)),
+        };
+        let packed = match input.held_copy() {
+            Some(copy) => copy.clone(),
+            None => match self.gather_run(doc, key.0, key.1, key.2)? {
+                Ok(packed) => Arc::new(packed),
+                Err(why) => return Ok(Err(why)),
+            },
         };
         #[cfg(test)]
         self.spaces.passes.set(self.spaces.passes.get() + 1);
         if !lazy::can_step(codec) {
-            return Ok(lazy::decode_or_index_with(codec, packed, self.spaces.lazy_limits));
+            return Ok(lazy::decode_or_index_through(codec, packed, input, self.spaces.lazy_limits));
         }
-        let pass = match lazy::Indexing::new(codec, packed, self.spaces.lazy_limits) {
+        let pass = match lazy::Indexing::through(codec, packed, input, self.spaces.lazy_limits) {
             Ok(pass) if known_large => pass.known_large(),
             Ok(pass) => pass,
             Err(why) => return Ok(Err(why)),
         };
         self.index_steps(key, codec, pass, true)
+    }
+
+    /// Where an index of the run at `key` reads the run from once it is
+    /// made: a handle that copies nothing when one reaches the run, and
+    /// otherwise a copy of the run. See `docs/DESIGN-lazy-compressed-input.md`,
+    /// "Where a `RunInput` comes from".
+    ///
+    /// - A run of the file, in a stretch no edit touched, is read through a
+    ///   handle onto the file's source ([`Source::share`]), from where the
+    ///   stretch is in the source ([`Document::source_offset_of`]). In the
+    ///   browser that is the file's chunk store, which the file's tab keeps
+    ///   anyway.
+    /// - A run in a space held whole is read from the space's bytes.
+    /// - A run in a space read through an index is read through that space's
+    ///   source, which decodes it as it is read.
+    /// - Any other run is gathered whole ([`Self::gather_run`]) and the copy
+    ///   kept: a run in a stitched space, in a stretch an edit touched, or in
+    ///   a source that gives no handle, such as a [`MemSource`]. A run longer
+    ///   than the cap is refused as [`Refusal::TooLarge`] before anything of
+    ///   it is read. A handle is never refused here.
+    ///
+    /// A handle made before an edit reads the source it was given, at the
+    /// place it was given, and never the edited bytes. Every edit drops the
+    /// indexes that hold such handles ([`Spaces::forget`]).
+    ///
+    /// [`MemSource`]: crate::source::MemSource
+    pub(super) fn run_input<S: Source>(&self, doc: &Document<S>, key: RunKey) -> super::R<Result<lazy::RunInput, Refusal>> {
+        if let Some(input) = self.shared_input(doc, key) {
+            return Ok(Ok(input));
+        }
+        if key.2 / 8 > crate::codec::CAP_BYTES as u64 {
+            return Ok(Err(Refusal::TooLarge));
+        }
+        Ok(self.gather_run(doc, key.0, key.1, key.2)?.map(|bytes| lazy::RunInput::held(Arc::new(bytes))))
+    }
+
+    /// The handle [`Self::run_input`] makes for the run at `key`, when one
+    /// reaches it. Reads nothing.
+    #[inline(never)]
+    fn shared_input<S: Source>(&self, doc: &Document<S>, (space, at, n): RunKey) -> Option<lazy::RunInput> {
+        if n % 8 != 0 {
+            return None;
+        }
+        let (source, from): (Arc<dyn Source + Send + Sync>, u64) = match space {
+            0 => {
+                let from = doc.source_offset_of(at, n)?;
+                (doc.source().share()?, from)
+            }
+            _ if at % 8 != 0 => return None,
+            _ => match self.spaces.buf(space) {
+                Some(bytes) => (Arc::new(crate::source::ArcSource(bytes.clone())), at / 8),
+                None => (Arc::new(SpaceSource::Lazy(self.spaces.lazy(space)?.clone())), at / 8),
+            },
+        };
+        Some(lazy::RunInput::new(source, from, n / 8))
     }
 
     /// Carry on what the place for the run at `key` holds, taken out of it:
@@ -1507,7 +1574,11 @@ impl super::Evaluator {
                 }
                 #[cfg(test)]
                 self.spaces.passes.set(self.spaces.passes.get() + 1);
-                match lazy::Indexing::new(codec, Arc::new(bytes), self.spaces.lazy_limits) {
+                // As in `index_pass`: a handle when one reaches the run, and
+                // otherwise the copy just gathered.
+                let packed = Arc::new(bytes);
+                let input = self.shared_input(doc, key).unwrap_or_else(|| lazy::RunInput::held(packed.clone()));
+                match lazy::Indexing::through(codec, packed, input, self.spaces.lazy_limits) {
                     Ok(pass) if known_large => pass.known_large(),
                     Ok(pass) => pass,
                     Err(why) => return Ok(Err(why)),

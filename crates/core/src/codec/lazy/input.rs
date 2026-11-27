@@ -24,24 +24,42 @@ pub struct RunInput {
     source: Arc<dyn Source + Send + Sync>,
     at: u64,
     len: u64,
+    /// The copy of the run it reads, for an input made over a copy of its
+    /// own rather than over a handle onto a source something else holds.
+    copy: Option<Arc<Vec<u8>>>,
 }
 
 impl RunInput {
-    /// Bytes `at..at + len` of `source`.
+    /// Bytes `at..at + len` of `source`, a handle onto bytes something else
+    /// holds: the input owns none of them.
     pub fn new(source: Arc<dyn Source + Send + Sync>, at: u64, len: u64) -> RunInput {
-        RunInput { source, at, len }
+        RunInput { source, at, len, copy: None }
     }
 
-    /// A run whose bytes are held in memory: all of `bytes`, read through an
-    /// [`ArcSource`] over them, which never finds a chunk missing.
+    /// A run whose bytes are held in memory: all of `bytes`, a copy the input
+    /// owns, read through an [`ArcSource`] over them, which never finds a
+    /// chunk missing.
     pub fn held(bytes: Arc<Vec<u8>>) -> RunInput {
         let len = bytes.len() as u64;
-        RunInput::new(Arc::new(ArcSource(bytes)), 0, len)
+        RunInput { source: Arc::new(ArcSource(bytes.clone())), at: 0, len, copy: Some(bytes) }
     }
 
     /// How many bytes the run is.
     pub fn len(&self) -> u64 {
         self.len
+    }
+
+    /// How many bytes of memory the input holds for itself: the run's length
+    /// for a copy ([`RunInput::held`]), and none for a handle onto a source,
+    /// whose bytes are the source's. What an index is weighed by while it is
+    /// kept.
+    pub fn owned_bytes(&self) -> u64 {
+        self.copy.as_ref().map_or(0, |c| c.len() as u64)
+    }
+
+    /// The copy of the run, for an input made over one.
+    pub fn held_copy(&self) -> Option<&Arc<Vec<u8>>> {
+        self.copy.as_ref()
     }
 
     pub fn is_empty(&self) -> bool {

@@ -419,6 +419,46 @@ fn zlib_of_a_gzip() -> (Vec<u8>, Vec<u8>) {
 /// The zlib template's `compressed`.
 const ZLIB_RUN: &[usize] = &[6];
 
+/// A zlib run past the cap and longer than the store is read a window at a
+/// time to index it, and the index then reads the run through a handle onto
+/// the store: it holds no copy of the run, and keeps as much as its span
+/// cache. A read of a span whose chunks the store has pushed out since waits
+/// for them, and then gives the bytes the run unpacks to.
+#[test]
+fn a_run_longer_than_the_store_is_read_from_the_store_once_indexed() {
+    // Each line with a number in hex that does not repeat, so that the run
+    // packs to about half.
+    let mut x = 0x9e37_79b9_7f4a_7c15_u64;
+    let content: Vec<u8> = (0..12_000)
+        .flat_map(|i| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            format!("line {i}: {x:016x}\n").into_bytes()
+        })
+        .collect();
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&content, 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    assert!(bytes.len() > 96 * CHUNK as usize, "{} bytes is too few for a store of 48 chunks", bytes.len());
+    let mut d = stored(&bytes, 48);
+    let mut ev = Evaluator::new(one_run(packed.len(), Codec::Zlib));
+    ev.spaces.set_lazy_limits(small_lazy());
+    fed(&mut d, &bytes, |d| ev.node(d, &[1, 0])).unwrap();
+    let Some(Opened::Space(id)) = ev.spaces.get(&[1]) else { panic!("the stream did not open") };
+    let index = ev.spaces.lazy(id).expect("read through an index").clone();
+    assert_eq!(index.input().owned_bytes(), 0, "the index holds a copy of the run");
+    assert_eq!(index.resident_limit(), Some(64 << 10));
+    let mut waited = 0;
+    for at in [content.len() / 3, 10, content.len() / 2, content.len() - 100] {
+        let mut asked = Vec::new();
+        let got = fed_noting(&mut d, &bytes, &mut asked, |d| ev.read_in(d, id, at as u64 * 8, 800)).unwrap();
+        assert!(got == content[at..at + 100], "100 bytes at {at} differ");
+        waited += asked.len();
+    }
+    assert!(waited >= 3, "{waited} waits: the reads found their chunks in the store");
+}
+
 /// A tab over a stream read through an index, whose run is read from a store
 /// that keeps part of the file, keeps no more than the index keeps decoded.
 /// So a run inside the stream that is read whole is read a window at a time,
