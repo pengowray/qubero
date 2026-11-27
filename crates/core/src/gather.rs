@@ -154,6 +154,19 @@ impl<S: Source> Source for Gathered<S> {
         missing.dedup();
         missing
     }
+
+    /// What the source it gathers from keeps.
+    fn resident_limit(&self) -> Option<u64> {
+        self.inner.resident_limit()
+    }
+
+    /// The same parts gathered from a handle onto the source, when the
+    /// source gives one. The handle alone would read the file, not the
+    /// stream its parts make.
+    fn share(&self) -> Option<std::sync::Arc<dyn Source + Send + Sync>> {
+        let inner = self.inner.share()?;
+        Some(std::sync::Arc::new(Gathered { inner, extents: self.extents.clone(), starts: self.starts.clone() }))
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +231,25 @@ mod tests {
         let g = Gathered::new(file(), [Extent::new(60, 4), Extent::new(62, 4), Extent::new(0, 0)]);
         assert_eq!(g.extents(), [Extent::new(60, 4)]);
         assert_eq!(g.len_bytes(), 4);
+    }
+
+    /// A handle onto the gathered stream reads the stream, not the file it
+    /// was gathered from, and there is one only when the file gives one. What
+    /// the file keeps at once is what the stream keeps.
+    #[test]
+    fn a_handle_onto_the_parts_reads_the_stream_they_make() {
+        use crate::source::{ArcSource, ChunkStore};
+        use std::sync::Arc;
+        let extents = [Extent::new(10, 4), Extent::new(30, 4)];
+        let arc = ArcSource(Arc::new((0..64u8).collect()));
+        let g = Gathered::new(&arc, extents);
+        let handle = g.share().expect("the file gives a handle");
+        let mut out = vec![0u8; 8];
+        assert!(handle.read_bytes(0, &mut out).is_empty());
+        assert_eq!(out, vec![10, 11, 12, 13, 30, 31, 32, 33]);
+        assert!(Gathered::new(file(), extents).share().is_none());
+        let store = ChunkStore::new(64, 16, 2);
+        assert_eq!(Gathered::new(&store, extents).resident_limit(), Some(32));
     }
 
     /// A document reads one of these the way it reads a file, which is the
