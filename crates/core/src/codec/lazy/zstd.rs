@@ -2,12 +2,11 @@
 //! tracing its spans.
 
 use std::ops::Range;
-use std::sync::Arc;
 
-use super::input::{Copied, ReadError, RunInput};
+use super::input::{Copied, PassWindow, ReadError, RunInput};
 use super::seekable::{seekable, Kind};
 use super::{Checkpoints, Decoded, Limits, Progress, Start, Stepped};
-use crate::codec::frames::{self, FrameAt, Walked, ZstdWalk};
+use crate::codec::frames::{self, FrameAt, Walked, ZstdWalk, ZSTD_MARGIN};
 use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBuilder, Window, MAX_STEPS};
 
 /// A zstd run's index pass, done a step at a time as deflate's is. Frames
@@ -20,6 +19,13 @@ use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBu
 /// walk keeps the frame's decoder from one step to the next; see
 /// [`ZstdWalk::run`] for how far past its share of output, and of the run, a
 /// step goes.
+///
+/// The pass reads the run a window at a time, as deflate's does: a step
+/// reads from where the walk is to [`Limits::step_input`] and
+/// [`ZSTD_MARGIN`] past it, which holds the block or frame header the walk
+/// reads after its share, and keeps the bytes from where it stopped on. The
+/// contents of a skippable frame are never read: a step whose walk skips
+/// past its window reads a window again from where the walk has got to.
 ///
 /// A frame larger than [`Limits::span`] is refused as
 /// [`Refusal::TooLargeUnit`] however many frames there are, since a span is
@@ -44,9 +50,12 @@ use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBu
 /// pass has finished once it is past the cap, and one finished while the run
 /// might still be held whole once the run turns out not to fit.
 pub(super) struct ZstdPass {
-    packed: Arc<Vec<u8>>,
+    /// Where the pass reads the run from: `input`, or a copy of the run.
+    reads: RunInput,
     /// Where the index reads the run from once it is made.
     input: RunInput,
+    /// The bytes of the run the pass holds between steps.
+    held: PassWindow,
     limits: Limits,
     marks: Checkpoints,
     phase: Phase,
@@ -76,12 +85,19 @@ enum Phase {
     Over,
 }
 
+/// What one walk over a step's window came to: the step's answer, or the
+/// bytes of the run the walk reads next, which the window does not hold.
+enum Went {
+    Stepped(Stepped),
+    Needs(Range<usize>),
+}
+
 impl ZstdPass {
-    pub(super) fn new(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> ZstdPass {
-        let walk = ZstdWalk::new(0..packed.len(), 0, limits.span.max(limits.whole) as u64);
+    pub(super) fn new(reads: RunInput, input: RunInput, limits: Limits) -> ZstdPass {
+        let walk = ZstdWalk::new(0..input.len() as usize, 0, limits.span.max(limits.whole) as u64);
         let phase = Phase::Whole { walk, out: Vec::new(), trace: TraceBuilder::default(), last: (0, 0), largest: 0, widest: 0 };
         let marks = Checkpoints::new(&limits);
-        ZstdPass { packed, input, limits, marks, phase, open: None, furthest: 0, most: 0 }
+        ZstdPass { reads, input, held: PassWindow::default(), limits, marks, phase, open: None, furthest: 0, most: 0 }
     }
 
     /// The same pass for a run the caller knows comes to more than the cap,
@@ -91,30 +107,84 @@ impl ZstdPass {
     /// indexed too.
     pub(super) fn known_large(mut self) -> ZstdPass {
         if matches!(&self.phase, Phase::Whole { walk, .. } if walk.reached() == 0) {
-            let walk = ZstdWalk::new(0..self.packed.len(), 0, self.limits.span as u64);
+            let walk = ZstdWalk::new(0..self.input.len() as usize, 0, self.limits.span as u64);
             self.phase = Phase::Index { walk, count: 0 };
         }
         self
     }
 
     pub(super) fn progress(&self) -> Progress {
-        let run_bits = self.packed.len() as u64 * 8;
+        let run_bits = self.input.len() * 8;
         Progress { read_bits: self.furthest, run_bits, unpacked: self.most }
+    }
+
+    /// How many bytes of the run the pass holds between steps.
+    #[cfg(test)]
+    pub(super) fn holds(&self) -> usize {
+        self.held.len()
     }
 
     pub(super) fn step(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
         let stepped = self.step_on(out_bytes, usize::try_from(in_bits / 8).unwrap_or(usize::MAX));
         let (at, out) = match &self.phase {
             Phase::Whole { walk, .. } | Phase::Index { walk, .. } => (walk.reached() as u64 * 8, walk.let_go()),
-            Phase::Over => (self.packed.len() as u64 * 8, 0),
+            Phase::Over => (self.input.len() * 8, 0),
         };
         self.furthest = self.furthest.max(at);
         self.most = self.most.max(out);
         stepped
     }
 
+    /// The step: its window read, and the walk over it. A walk that skips
+    /// skippable frames past the window's end reads a window again from
+    /// where it has got to, within the step's `reach`; one that needs a
+    /// block longer than the window holds gets a window that holds it, when
+    /// the block is no longer than a zstd block may be.
     fn step_on(&mut self, out_bytes: u64, reach: usize) -> Result<Stepped, Refusal> {
-        let data = &self.packed[..];
+        let run_len = self.reads.len() as usize;
+        let step = self.limits.step_input.max(1);
+        let reach = reach.min(step);
+        let first = self.reached().ok_or(Refusal::Failed)?;
+        let mut need: Option<Range<usize>> = None;
+        loop {
+            let start = self.reached().ok_or(Refusal::Failed)?;
+            let left = reach.saturating_sub(start - first);
+            if start > first && left == 0 {
+                return Ok(Stepped::Working);
+            }
+            let mut to = start.saturating_add(step).saturating_add(ZSTD_MARGIN).min(run_len);
+            if let Some(n) = need.as_ref().filter(|n| n.start == start) {
+                to = to.max(n.end.min(run_len));
+            }
+            if let Err(missing) = self.held.reach(&self.reads, start, to) {
+                return Ok(Stepped::NeedsInput(missing));
+            }
+            let held = std::mem::take(&mut self.held);
+            let went = self.walk_on(&held, out_bytes, left.max(1));
+            self.held = held;
+            match went? {
+                Went::Stepped(stepped) => return Ok(stepped),
+                // Only a block header that claims more than a zstd block
+                // may be asks for more than the margin: the decoder refuses
+                // such a block.
+                Went::Needs(range) if range.start == start && (range.end <= to || range.len() > ZSTD_MARGIN) => return Err(Refusal::Failed),
+                Went::Needs(range) => need = Some(range),
+            }
+        }
+    }
+
+    /// Where the walk reads next, while there is a walk.
+    fn reached(&self) -> Option<usize> {
+        match &self.phase {
+            Phase::Whole { walk, .. } | Phase::Index { walk, .. } => Some(walk.reached()),
+            Phase::Over => None,
+        }
+    }
+
+    /// The walk over `held`, which holds the run from where the walk is.
+    fn walk_on(&mut self, held: &PassWindow, out_bytes: u64, reach: usize) -> Result<Went, Refusal> {
+        let run_len = self.reads.len() as usize;
+        let window = held.window(run_len);
         let limits = self.limits;
         let marks = &mut self.marks;
         let open = &mut self.open;
@@ -137,8 +207,8 @@ impl ZstdPass {
                 too_much(Some(ended(marks, was, walk.frames_end())))?;
             }
             let rest = walk.frames_end();
-            if rest < data.len() && marks.due_by_input(data.len() as u64 * 8) {
-                marks.take(rest as u64 * 8, len, || Start::Frame { own: data.len() });
+            if rest < run_len && marks.due_by_input(run_len as u64 * 8) {
+                marks.take(rest as u64 * 8, len, || Start::Frame { own: run_len });
             }
             Ok(())
         };
@@ -146,7 +216,7 @@ impl ZstdPass {
             Phase::Whole { mut walk, mut out, mut trace, mut last, mut largest, mut widest } => {
                 let mut over = false;
                 let walked = walk.run(
-                    Window::whole(data),
+                    window,
                     out_bytes,
                     reach,
                     &mut trace,
@@ -165,12 +235,16 @@ impl ZstdPass {
                         Ok(())
                     },
                 );
-                match walked.and_then(Walked::of_whole) {
-                    Ok(None) => {
+                match walked {
+                    Ok(Walked::Stopped) => {
                         self.phase = Phase::Whole { walk, out, trace, last, largest, widest };
-                        Ok(Stepped::Working)
+                        Ok(Went::Stepped(Stepped::Working))
                     }
-                    Ok(Some(end)) => Ok(Stepped::Done(Decoded::Whole(out, frames::zstd_done(trace, data.len(), end)))),
+                    Ok(Walked::Needs(range)) => {
+                        self.phase = Phase::Whole { walk, out, trace, last, largest, widest };
+                        Ok(Went::Needs(range))
+                    }
+                    Ok(Walked::Ended(end)) => Ok(Went::Stepped(Stepped::Done(Decoded::Whole(out, frames::zstd_done(trace, run_len, end))))),
                     Err(Refusal::TooLarge) if over => {
                         drop((out, trace));
                         if largest > limits.span as u64 {
@@ -181,10 +255,10 @@ impl ZstdPass {
                         // walk stopped in, counting the output and keeping
                         // none of it.
                         let (at, before) = last;
-                        let walk = ZstdWalk::new(at..data.len(), before, limits.span as u64);
+                        let walk = ZstdWalk::new(at..run_len, before, limits.span as u64);
                         *open = None;
                         self.phase = Phase::Index { walk, count: before };
-                        Ok(Stepped::Working)
+                        Ok(Went::Stepped(Stepped::Working))
                     }
                     // A frame past the walk's cap, which is at least the span
                     // limit.
@@ -193,27 +267,31 @@ impl ZstdPass {
                 }
             }
             Phase::Index { mut walk, mut count } => {
-                let walked = walk.run(Window::whole(data), out_bytes, reach, &mut TraceBuilder::off(), &mut |f| too_much(mark(f, marks, open)), &mut |bytes| {
+                let walked = walk.run(window, out_bytes, reach, &mut TraceBuilder::off(), &mut |f| too_much(mark(f, marks, open)), &mut |bytes| {
                     count += bytes.len() as u64;
                     match count > limits.lazy {
                         true => Err(Refusal::TooLargeLazy),
                         false => Ok(()),
                     }
                 });
-                let walked = match walked.and_then(Walked::of_whole) {
+                let walked = match walked {
                     // A frame past the walk's cap, which is the span limit.
                     Err(Refusal::TooLarge) if walk.frame_too_large() => return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
                     w => w?,
                 };
                 match walked {
-                    None => {
+                    Walked::Stopped => {
                         self.phase = Phase::Index { walk, count };
-                        Ok(Stepped::Working)
+                        Ok(Went::Stepped(Stepped::Working))
                     }
-                    Some(len) => {
+                    Walked::Needs(range) => {
+                        self.phase = Phase::Index { walk, count };
+                        Ok(Went::Needs(range))
+                    }
+                    Walked::Ended(len) => {
                         finish(&walk, marks, open, len)?;
                         let list = std::mem::take(&mut marks.list);
-                        Ok(Stepped::Done(Decoded::Indexed(seekable(Codec::Zstd, self.input.clone(), Kind::Zstd, len, list, limits))))
+                        Ok(Went::Stepped(Stepped::Done(Decoded::Indexed(seekable(Codec::Zstd, self.input.clone(), Kind::Zstd, len, list, limits)))))
                     }
                 }
             }

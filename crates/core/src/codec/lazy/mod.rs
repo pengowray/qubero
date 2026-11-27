@@ -49,6 +49,7 @@ use std::sync::Arc;
 
 use crate::codec::inflate::{Resume, Wrapper};
 use crate::codec::{Codec, Refusal, Trace, CAP_BYTES};
+use crate::source::Missing;
 
 mod deflate;
 mod input;
@@ -100,6 +101,18 @@ pub const UNIT_INPUT: usize = 16 << 20;
 /// [`Refusal::TooMuchAtOnce`]. A deflate span never reaches it: its input is at
 /// most the input spacing and one stored block for each thinning, 8.5 MiB.
 pub const SPAN_INPUT: usize = 16 << 20;
+
+/// How far past where it starts one step of a deflate or zstd index pass may
+/// stop, in bytes of the run: the step reads its run a window at a time,
+/// from the byte its first bit is in to this much past it and the decoder's
+/// margin beyond that ([`DEFLATE_MARGIN`] or [`ZSTD_MARGIN`]), and stops
+/// before the window runs out. As many bytes as a step's share of output
+/// has, so that a run whose output is at least as large as the run still
+/// ends each step at its share of output.
+///
+/// [`DEFLATE_MARGIN`]: crate::codec::inflate::DEFLATE_MARGIN
+/// [`ZSTD_MARGIN`]: crate::codec::frames::ZSTD_MARGIN
+pub const STEP_INPUT: usize = 256 << 10;
 
 /// How much decoded output one run keeps, in spans, before the span read
 /// longest ago is dropped. One span is kept whatever its size. An xz span
@@ -181,6 +194,9 @@ pub struct Limits {
     /// [`SPAN_INPUT`]. Held to only when the run is read from a source with
     /// a resident limit, as `unit_input` is.
     pub span_input: usize,
+    /// [`STEP_INPUT`]. A limit of its own so that a test can read a run of a
+    /// few hundred kilobytes in windows of every size.
+    pub step_input: usize,
 }
 
 impl Default for Limits {
@@ -199,8 +215,33 @@ impl Default for Limits {
             measure: CAP_BYTES as u64,
             unit_input: UNIT_INPUT,
             span_input: SPAN_INPUT,
+            step_input: STEP_INPUT,
         }
     }
+}
+
+impl Limits {
+    /// The most of the run one step of the pass over a run packed with
+    /// `codec` reads at once: [`Limits::step_input`] and the decoder's
+    /// margin past where the step may stop.
+    fn step_window(&self, codec: Codec) -> usize {
+        let margin = match codec {
+            Codec::Zstd => crate::codec::frames::ZSTD_MARGIN,
+            _ => crate::codec::inflate::DEFLATE_MARGIN,
+        };
+        self.step_input.max(1).saturating_add(margin)
+    }
+}
+
+/// Whether the pass over a run packed with `codec` can read the run through
+/// `input` a window at a time, holding no copy of it: the pass is one that
+/// steps ([`can_step`]), and the source answers any read whole or keeps at
+/// least twice what one step reads at once, so that a step's window fits
+/// beside the other reads of a go. In the browser the file's store keeps
+/// 32 MiB and a step reads at most about 384 KiB. A pass that cannot is
+/// made over a copy of the run ([`Indexing::from_copy`]).
+pub fn reads_in_windows(codec: Codec, input: &RunInput, limits: &Limits) -> bool {
+    can_step(codec) && input.fits(limits.step_window(codec))
 }
 
 /// Whether a run packed with `codec` can be read a piece at a time.
@@ -260,16 +301,23 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
 /// An index over a handle onto the file holds no copy of the run once the
 /// pass is over: `packed` goes with the pass. See
 /// `docs/DESIGN-lazy-compressed-input.md`, "Where a `RunInput` comes from".
+/// The evaluator steps the pass over a deflate, zlib, gzip or zstd run
+/// itself, reading it through `input` with no copy when it can
+/// ([`reads_in_windows`]); it calls this for xz, whose layout still reads a
+/// copy of the whole stream.
 pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
     if packed.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
     }
     match codec {
         _ if can_step(codec) => {
-            let mut pass = Indexing::through(codec, packed, input, limits)?;
+            let mut pass = Indexing::from_copy(codec, packed, input, limits)?;
             loop {
-                if let Stepped::Done(decoded) = pass.step(u64::MAX, u64::MAX)? {
-                    return Ok(decoded);
+                match pass.step(u64::MAX, u64::MAX)? {
+                    Stepped::Done(decoded) => return Ok(decoded),
+                    Stepped::Working => {}
+                    // A copy in memory never finds a chunk missing.
+                    Stepped::NeedsInput(_) => return Err(Refusal::Failed),
                 }
             }
         }
@@ -302,6 +350,9 @@ enum Pass {
 pub enum Stepped {
     /// Not finished yet. Step again to carry on.
     Working,
+    /// The step's window of the run is missing these chunks of the file, and
+    /// the step did nothing. Step again once they are loaded.
+    NeedsInput(Vec<Missing>),
     Done(Decoded),
 }
 
@@ -315,24 +366,49 @@ pub struct Progress {
 }
 
 impl Indexing {
-    /// Start indexing `packed`. `codec` is one [`can_step`] says yes to; any
-    /// other, xz included, is refused as [`Refusal::Failed`]. Nothing is
-    /// decoded until the first step.
+    /// Start indexing `packed`, a run held in memory. `codec` is one
+    /// [`can_step`] says yes to; any other, xz included, is refused as
+    /// [`Refusal::Failed`]. Nothing is decoded until the first step.
     pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
-        let input = RunInput::held(packed.clone());
-        Indexing::through(codec, packed, input, limits)
+        Indexing::through(codec, RunInput::held(packed), limits)
     }
 
-    /// [`Indexing::new`], for an index that reads the run through `input`
-    /// once it is made, as [`decode_or_index_through`] says. The pass still
-    /// reads `packed`, and lets go of it when it ends.
-    pub fn through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
-        if packed.len() > CAP_BYTES {
+    /// Start indexing the run `input` reads, which the pass reads a window
+    /// at a time and the index reads once it is made. Nothing is read until
+    /// the first step: that step reads the run's last bytes, which hold the
+    /// trailer, and its head until the wrapper's header ends. A step whose
+    /// window has chunks missing answers [`Stepped::NeedsInput`].
+    ///
+    /// So a pass over a handle onto the file holds only its window, at most
+    /// [`Limits::step_input`] and the decoder's margin, besides what any pass
+    /// holds: its checkpoints and their copies of block headers, and up to
+    /// the cap of output while the run might still be held whole. When
+    /// `input`'s source has a resident limit, the index is held to
+    /// [`Limits::unit_input`] and [`Limits::span_input`].
+    pub fn through(codec: Codec, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
+        let reads = input.clone();
+        Indexing::reading(codec, reads, input, limits)
+    }
+
+    /// [`Indexing::through`], for a pass that reads `packed`, a copy of the
+    /// run, while the index reads the run through `input` once it is made:
+    /// for a run the pass cannot read through `input` a window at a time
+    /// (see [`reads_in_windows`]). The pass lets go of the copy when it ends.
+    pub fn from_copy(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
+        if packed.len() as u64 != input.len() {
+            return Err(Refusal::Failed);
+        }
+        Indexing::reading(codec, RunInput::held(packed), input, limits)
+    }
+
+    /// The pass reads the run through `reads`, and the index through `input`.
+    fn reading(codec: Codec, reads: RunInput, input: RunInput, limits: Limits) -> Result<Indexing, Refusal> {
+        if input.len() > CAP_BYTES as u64 {
             return Err(Refusal::TooLarge);
         }
         Ok(Indexing(match codec {
-            Codec::Zstd => Pass::Zstd(ZstdPass::new(packed, input, limits)),
-            _ => Pass::Deflate(DeflatePass::new(codec, packed, input, limits)?),
+            Codec::Zstd => Pass::Zstd(ZstdPass::new(reads, input, limits)),
+            _ => Pass::Deflate(DeflatePass::new(codec, reads, input, limits)?),
         }))
     }
 
@@ -364,11 +440,25 @@ impl Indexing {
     /// Decode about `out_bytes` more output, or read about `in_bits` more
     /// bits of the run, whichever comes first, and stop; or finish. A deflate
     /// step goes past either by at most one stored block (64 KiB), and a zstd
-    /// step by at most one zstd block (128 KiB).
+    /// step by at most one zstd block (128 KiB). A step also stops
+    /// [`Limits::step_input`] past where it started, before its window of
+    /// the run runs out; or does nothing and answers
+    /// [`Stepped::NeedsInput`] with the chunks its window is missing.
     pub fn step(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
         match &mut self.0 {
             Pass::Deflate(p) => p.step(out_bytes, in_bits),
             Pass::Zstd(p) => p.step(out_bytes, in_bits),
+        }
+    }
+
+    /// How many bytes of the run the pass holds between steps, for tests:
+    /// its window and, for deflate, its trailer and the copy of the header
+    /// of the block it stopped in.
+    #[cfg(test)]
+    fn holds(&self) -> usize {
+        match &self.0 {
+            Pass::Deflate(p) => p.holds(),
+            Pass::Zstd(p) => p.holds(),
         }
     }
 

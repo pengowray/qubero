@@ -26,8 +26,10 @@ use crate::source::Missing;
 /// [`ReadError::Missing`] and caches nothing. The input is a handle onto
 /// the source the run is in, the file's chunk store in the browser, when one
 /// reaches the run, and otherwise a copy of the run, at most [`CAP_BYTES`],
-/// which never finds a chunk missing. The index pass itself still reads a
-/// copy of its own. See `docs/DESIGN-lazy-compressed-input.md`.
+/// which never finds a chunk missing. The index pass reads the run through
+/// the same input a window at a time, or reads a copy of its own when the
+/// input's source keeps too little for a window ([`super::reads_in_windows`]).
+/// See `docs/DESIGN-lazy-compressed-input.md`.
 ///
 /// [`CAP_BYTES`]: crate::codec::CAP_BYTES
 pub struct Seekable {

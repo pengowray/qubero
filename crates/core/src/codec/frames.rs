@@ -158,20 +158,6 @@ pub(super) enum Walked {
     Needs(std::ops::Range<usize>),
 }
 
-impl Walked {
-    /// What a walk over a window that holds its whole span came to: the
-    /// output at the span's end, or nothing when it stopped to be carried on.
-    /// Such a window never runs out, so [`Walked::Needs`] is the walk
-    /// disagreeing with itself.
-    pub(super) fn of_whole(self) -> Result<Option<u64>, Refusal> {
-        match self {
-            Walked::Ended(end) => Ok(Some(end)),
-            Walked::Stopped => Ok(None),
-            Walked::Needs(_) => Err(Refusal::Failed),
-        }
-    }
-}
-
 /// A walk over the frames of `data[span]`, which decodes them and says which
 /// bits of each made which bytes: a step for each frame header, each block
 /// header and each block, and one for the checksum at the end of a frame that

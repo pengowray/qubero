@@ -26,6 +26,7 @@ fn small() -> Limits {
         measure: crate::codec::CAP_BYTES as u64,
         unit_input: 16 << 20,
         span_input: 16 << 20,
+        step_input: STEP_INPUT,
     }
 }
 
@@ -401,6 +402,7 @@ fn in_steps_of(mut pass: Indexing, out_bytes: u64, in_bits: u64) -> (Result<Deco
                 was = now;
             }
             Ok(Stepped::Done(d)) => return (Ok(d), steps),
+            Ok(Stepped::NeedsInput(m)) => panic!("a copy in memory missing {m:?}"),
             Err(why) => return (Err(why), steps),
         }
     }
@@ -491,6 +493,7 @@ fn a_pass_in_steps_records_each_block_once() {
                             Ok(Stepped::Working) => {}
                             Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
                             Ok(Stepped::Done(Decoded::Whole(..))) => panic!("{at}: came back whole"),
+                            Ok(Stepped::NeedsInput(m)) => panic!("a copy in memory missing {m:?}"),
                             Err(why) => panic!("{at}: refused: {why:?}"),
                         }
                         match &pass.deflate().phase {
@@ -613,6 +616,7 @@ fn a_run_of_empty_blocks_is_indexed_in_many_steps() {
                         Ok(Stepped::Working) => {}
                         Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
                         Ok(Stepped::Done(Decoded::Whole(..))) => panic!("{at}: came back whole"),
+                        Ok(Stepped::NeedsInput(m)) => panic!("a copy in memory missing {m:?}"),
                         Err(why) => panic!("{at}: refused: {why:?}"),
                     }
                     let now = pass.progress();
@@ -1084,6 +1088,7 @@ fn a_run_of_empty_zstd_frames_is_indexed_in_many_steps() {
                 Ok(Stepped::Working) => {}
                 Ok(Stepped::Done(Decoded::Indexed(s))) => break s,
                 Ok(Stepped::Done(Decoded::Whole(..))) => panic!("told {told}: came back whole"),
+                Ok(Stepped::NeedsInput(m)) => panic!("a copy in memory missing {m:?}"),
                 Err(why) => panic!("told {told}: refused: {why:?}"),
             }
             let now = pass.progress();
@@ -2239,7 +2244,7 @@ fn a_frame_or_block_too_large_to_read_at_once_is_refused_only_from_a_store() {
         assert!(matches!(held, Ok(Decoded::Whole(..))), "{codec:?}: a run held whole has no span to read");
     }
     for told in [false, true] {
-        let pass = Indexing::through(Codec::Zstd, Arc::new(frames.clone()), from_a_store(&frames, 32 << 20), limits).expect("starts");
+        let pass = Indexing::from_copy(Codec::Zstd, Arc::new(frames.clone()), from_a_store(&frames, 32 << 20), limits).expect("starts");
         let pass = if told { pass.known_large() } else { pass };
         assert_eq!(in_steps_of(pass, 3000, 8 * 2000).0.err(), Some(Refusal::TooMuchAtOnce), "told {told}");
     }
@@ -2339,4 +2344,332 @@ fn a_long_stretch_between_kept_block_starts_is_refused_from_a_store() {
         assert!(held.block(i).is_ok(), "block {i}");
     }
     assert!(over > 0, "{over} stretches over the limit, {under} under it");
+}
+
+// ----- the pass reading its run a window at a time -----
+//
+// The pass reads its run through the run's input a window at a time, so a
+// pass over a handle onto the file's chunk store holds a window and not the
+// run. These read runs from a store of 1 KiB chunks that keeps the chunks
+// read most recently and pushes out the rest, fed exactly the chunks each
+// step names, as the browser feeds it.
+
+/// [`small`], with steps that read 8 KiB of the run and the margin past it,
+/// so that runs of a few hundred kilobytes take dozens of windows.
+fn in_windows() -> Limits {
+    Limits { step_input: 8 << 10, ..small() }
+}
+
+/// The same limits with one window over the whole run, as the pass read it
+/// before it read windows: the index to compare with.
+fn one_window(limits: Limits) -> Limits {
+    Limits { step_input: usize::MAX, ..limits }
+}
+
+/// The run `packed` in a file read from a store of `capacity` chunks of
+/// 1 KiB with none of them loaded, and the run's input, a handle onto it.
+fn in_a_chunk_store(packed: &[u8], capacity: usize) -> (Vec<u8>, crate::source::ChunkStore, RunInput) {
+    use crate::source::Source;
+    let (file, run_at) = in_a_file(packed);
+    let store = crate::source::ChunkStore::new(file.len() as u64, 1024, capacity);
+    let input = RunInput::new(store.share().expect("a store hands out a handle"), run_at as u64, packed.len() as u64);
+    (file, store, input)
+}
+
+/// What a pass over a store came to, fed the chunks each step named.
+struct Fed {
+    got: Result<Decoded, Refusal>,
+    /// The chunks each step that waited named.
+    waits: Vec<Vec<u64>>,
+    /// The most bytes of the run the pass held between two steps.
+    most_held: usize,
+}
+
+/// Step `pass` to its end, feeding `store` the chunks of `file` each step
+/// names. A chunk asked for more than twice is the wait that never ends.
+fn fed_pass(mut pass: Indexing, store: &mut crate::source::ChunkStore, file: &[u8], out_bytes: u64, in_bits: u64) -> Fed {
+    let mut times = std::collections::BTreeMap::<u64, usize>::new();
+    let (mut waits, mut most_held) = (Vec::new(), 0);
+    for _ in 0..1_000_000 {
+        let stepped = pass.step(out_bytes, in_bits);
+        most_held = most_held.max(pass.holds());
+        match stepped {
+            Ok(Stepped::Working) => {}
+            Ok(Stepped::NeedsInput(missing)) => {
+                assert!(!missing.is_empty(), "a step that waits on nothing");
+                for m in &missing {
+                    let n = times.entry(m.chunk).or_default();
+                    *n += 1;
+                    assert!(*n <= 2, "chunk {} asked for {n} times", m.chunk);
+                    let at = m.chunk as usize * 1024;
+                    store.insert(m.chunk, file[at..file.len().min(at + 1024)].into());
+                }
+                waits.push(missing.iter().map(|m| m.chunk).collect());
+            }
+            Ok(Stepped::Done(d)) => return Fed { got: Ok(d), waits, most_held },
+            Err(why) => return Fed { got: Err(why), waits, most_held },
+        }
+    }
+    panic!("no end to the steps");
+}
+
+/// What two indexes of the same run have to agree on, read from each: the
+/// checkpoints with their windows and copies of block headers, the block
+/// starts with what their headers say, the sums, and the trace of a span in
+/// every few. `ours` reads its run from a copy here, and `whole` from
+/// wherever it was made.
+fn same_index(ours: &mut Seekable, whole: &Seekable, packed: &[u8], at: &str) {
+    assert_eq!(ours.marks(), whole.marks(), "{at}");
+    for (k, (a, b)) in ours.checkpoints.iter().zip(&whole.checkpoints).enumerate() {
+        assert!(a.window() == b.window(), "{at}: checkpoint {k}'s window");
+        assert_eq!(a.head(), b.head(), "{at}: checkpoint {k}'s copy of its block's header");
+        assert_eq!(a.own(), b.own(), "{at}: checkpoint {k}");
+    }
+    assert_eq!((&ours.blocks, ours.blocks_end), (&whole.blocks, whole.blocks_end), "{at}");
+    assert_eq!((ours.len(), ours.crc32(), ours.adler32()), (whole.len(), whole.crc32(), whole.adler32()), "{at}");
+    assert_eq!(ours.held_bytes(), whole.held_bytes(), "{at}");
+    ours.set_input(RunInput::held(Arc::new(packed.to_vec())));
+    for k in (0..ours.spans()).step_by((ours.spans() / 5).max(1)) {
+        assert!(shape(&ours.span_trace(k).expect("traces")) == shape(&whole.span_trace(k).expect("traces")), "{at}: span {k}'s trace");
+    }
+    for i in (0..ours.blocks()).step_by((ours.blocks() as usize / 5).max(1)) {
+        assert_eq!(ours.block(i), whole.block(i), "{at}: block {i}");
+    }
+}
+
+/// The most of the run one step of a pass under `limits` reads at once.
+fn window_of(codec: Codec, limits: &Limits) -> usize {
+    limits.step_window(codec)
+}
+
+/// A deflate, zlib or gzip run several times longer than the chunk store
+/// is indexed a window at a time from the store, each step that waits naming
+/// the chunks of one window, and comes to the index a pass over the whole
+/// run in memory makes: the same checkpoints, with the same windows and
+/// copies of block headers, the same block starts and sums, and the same
+/// traces. The pass never holds more of the run than a window and the
+/// trailer. Under the cap the run comes back whole, with the same bytes and
+/// trace. Runs of one block, blocks every 3,000 bytes, and blocks flushed
+/// every 2,000 bytes with an empty stored block after each, told the run is
+/// large and not.
+#[test]
+fn a_deflate_pass_reads_its_run_from_a_store_a_window_at_a_time() {
+    let data = mixed(1_200_000, 211);
+    let limits = in_windows();
+    let window = window_of(Codec::Deflate, &limits);
+    let capacity = (2 * window).div_ceil(1024) + 4;
+    let raws = [miniz_oxide::deflate::compress_to_vec(&data, 6), deflate_in_blocks(&data, 3000), flushed(&data, 1, 2000)];
+    for (r, raw) in raws.iter().enumerate() {
+        for codec in [Codec::Deflate, Codec::Zlib, Codec::Gzip] {
+            let packed = wrapped(codec, raw, &data);
+            assert!(packed.len() > 2 * capacity * 1024, "{} bytes is too short for a store of {capacity} KiB", packed.len());
+            for (whole_cap, told) in [(limits.whole, false), (limits.whole, true), (2 << 20, false)] {
+                let limits = Limits { whole: whole_cap, ..limits };
+                let at = format!("{codec:?}, run {r}, cap {whole_cap}, told {told}");
+                let start = |input: RunInput, limits: Limits| {
+                    let pass = Indexing::through(codec, input, limits).expect("starts");
+                    if told { pass.known_large() } else { pass }
+                };
+                let held = RunInput::held(Arc::new(packed.clone()));
+                let (whole, _) = in_steps(start(held, one_window(limits)), u64::MAX);
+                let (file, mut store, input) = in_a_chunk_store(&packed, capacity);
+                let fed = fed_pass(start(input, limits), &mut store, &file, 256 << 10, (256 << 10) * 8);
+                assert!(fed.waits.len() > packed.len() / window / 2, "{at}: {} waits", fed.waits.len());
+                for named in &fed.waits {
+                    assert!(named.len() <= window / 1024 + 3, "{at}: a step named {} chunks", named.len());
+                }
+                assert!(fed.most_held <= window + 8 + inflate::MAX_HEAD_BYTES, "{at}: the pass held {} bytes of the run", fed.most_held);
+                match (whole.expect("indexes from memory"), fed.got.expect("indexes from the store")) {
+                    (Decoded::Indexed(whole), Decoded::Indexed(mut ours)) => {
+                        assert!(ours.input().owned_bytes() == 0, "{at}: the index holds a copy");
+                        same_index(&mut ours, &whole, &packed, &at);
+                        let mut all = vec![0u8; data.len()];
+                        ours.read(0, &mut all).expect("reads");
+                        assert!(all == data, "{at}: the output differs");
+                    }
+                    (Decoded::Whole(bytes, trace), Decoded::Whole(ours, t)) => {
+                        assert!(ours == bytes && bytes == data, "{at}: the bytes differ");
+                        assert!(shape(&t) == shape(&trace), "{at}: the traces differ");
+                    }
+                    _ => panic!("{at}: from memory and from the store disagree about holding it whole"),
+                }
+            }
+        }
+    }
+}
+
+/// A zstd run of many frames several times longer than the store, with a
+/// skippable frame in front of each, is indexed a window at a time from the
+/// store and comes to the index one window over the whole run makes, and
+/// held whole under the cap the same bytes and trace. A skippable frame
+/// longer than a window is read no further than one window into it: the
+/// walk skips its contents, and the next step reads from past them.
+#[test]
+fn a_zstd_pass_reads_its_run_from_a_store_a_window_at_a_time() {
+    let data = mixed(1_500_000, 223);
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let window = window_of(Codec::Zstd, &limits);
+    let capacity = (2 * window).div_ceil(1024) + 4;
+    let many = zstd_of(&data, 10_000, true);
+    let skip = 900_000;
+    let front = zstd_of(&data[..600_000], 10_000, false);
+    let long = [front.clone(), skippable_frame(skip, 227), zstd_of(&data[600_000..], 10_000, true)].concat();
+    for (packed, what) in [(&many, "many frames"), (&long, "a long skippable frame")] {
+        assert!(packed.len() > 2 * capacity * 1024, "{what}: {} bytes is too short", packed.len());
+        for (whole_cap, told) in [(limits.whole, false), (limits.whole, true), (4 << 20, false)] {
+            let limits = Limits { whole: whole_cap, ..limits };
+            let at = format!("{what}, cap {whole_cap}, told {told}");
+            let start = |input: RunInput, limits: Limits| {
+                let pass = Indexing::through(Codec::Zstd, input, limits).expect("starts");
+                if told { pass.known_large() } else { pass }
+            };
+            let (whole, _) = in_steps(start(RunInput::held(Arc::new(packed.clone())), one_window(limits)), u64::MAX);
+            let (file, mut store, input) = in_a_chunk_store(packed, capacity);
+            let run_at = in_a_file(packed).1;
+            let fed = fed_pass(start(input, limits), &mut store, &file, 256 << 10, (256 << 10) * 8);
+            // Past the first window into the skippable frame, and short of
+            // its last chunk, nothing is read.
+            let inside = ((run_at + front.len() + window) / 1024 + 1) as u64..((run_at + front.len() + skip) / 1024) as u64;
+            for named in &fed.waits {
+                assert!(named.len() <= window / 1024 + 3, "{at}: a step named {} chunks", named.len());
+                if what != "many frames" {
+                    assert!(named.iter().all(|c| !inside.contains(c)), "{at}: a chunk inside the skippable frame was read");
+                }
+            }
+            assert!(fed.most_held <= window, "{at}: the pass held {} bytes of the run", fed.most_held);
+            match (whole.expect("indexes from memory"), fed.got.expect("indexes from the store")) {
+                (Decoded::Indexed(whole), Decoded::Indexed(mut ours)) => {
+                    same_index(&mut ours, &whole, packed, &at);
+                    reads_back(&ours, &data, 229);
+                }
+                (Decoded::Whole(bytes, trace), Decoded::Whole(ours, t)) => {
+                    assert!(ours == bytes && bytes == data, "{at}: the bytes differ");
+                    assert!(shape(&t) == shape(&trace), "{at}: the traces differ");
+                }
+                _ => panic!("{at}: from memory and from the store disagree about holding it whole"),
+            }
+        }
+    }
+}
+
+/// A run of empty deflate blocks makes no output, and a step told it may
+/// read as much of the run as it likes still stops by the end of its
+/// window: a step over empty blocks reads no more than its share of input
+/// and one empty block past it, and any step no more than its share and one
+/// stored block, which a step is not stopped in. The index is the one a pass
+/// over the whole run makes.
+#[test]
+fn a_step_over_empty_blocks_stops_by_the_end_of_its_window() {
+    let data = mixed(100_000, 233);
+    let blocks = empty_blocks(400_000);
+    let raw = deflate_around(&[&data[..20_000], &data[20_000..]], &blocks);
+    let limits = in_windows();
+    let mut pass = Indexing::new(Codec::Deflate, Arc::new(raw.clone()), limits).expect("starts");
+    let (mut was, mut steps, mut idle) = (pass.progress(), 0, 0);
+    let mut ours = loop {
+        steps += 1;
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Done(Decoded::Indexed(s)) => break s,
+            Stepped::Done(Decoded::Whole(..)) => panic!("came back whole"),
+            Stepped::NeedsInput(m) => panic!("a copy in memory missing {m:?}"),
+            Stepped::Working => {}
+        }
+        let now = pass.progress();
+        let read = now.read_bits - was.read_bits;
+        assert!(read <= (limits.step_input + inflate::DEFLATE_MARGIN) as u64 * 8, "step {steps} read {read} bits");
+        if now.unpacked == was.unpacked {
+            idle += 1;
+            assert!(read <= (limits.step_input as u64 + 2) * 8, "step {steps} read {read} bits and made nothing");
+        }
+        was = now;
+    };
+    // The steps that start or end the empty blocks make output as well.
+    assert!(idle + 2 >= blocks.len() / limits.step_input, "{steps} steps, {idle} of them over empty blocks alone");
+    let whole = indexed(Codec::Deflate, &raw, one_window(limits));
+    same_index(&mut ours, &whole, &raw, "empty blocks");
+}
+
+/// A gzip whose trailer disagrees with what came out, a zlib whose sum does,
+/// and a gzip whose size in its trailer is wrong about the run being large,
+/// are refused as failed when the pass reads them from a store, as from
+/// memory. So is a run that is not the wrapper it is said to be, at the
+/// first step.
+#[test]
+fn a_wrong_trailer_read_from_a_store_is_refused() {
+    let data = mixed(400_000, 239);
+    let window = window_of(Codec::Deflate, &in_windows());
+    let capacity = (2 * window).div_ceil(1024) + 4;
+    let mut gzip = gzip_of(&data, 6);
+    let n = gzip.len();
+    gzip[n - 8] ^= 1;
+    let mut zlib = miniz_oxide::deflate::compress_to_vec_zlib(&data, 6);
+    let n = zlib.len();
+    zlib[n - 1] ^= 1;
+    let short = mixed(50_000, 241);
+    let mut lying = wrapped(Codec::Gzip, &deflate_in_blocks(&short, 3000), &short);
+    let n = lying.len();
+    lying[n - 4..].copy_from_slice(&(1u32 << 20).to_le_bytes());
+    let not_gzip = [&[0x1f, 0x8c][..], &gzip[2..]].concat();
+    let runs = [(Codec::Gzip, &gzip, "a wrong CRC"), (Codec::Zlib, &zlib, "a wrong Adler"), (Codec::Gzip, &lying, "a wrong size"), (Codec::Gzip, &not_gzip, "not a gzip")];
+    for (codec, packed, what) in runs {
+        let (file, mut store, input) = in_a_chunk_store(packed, capacity);
+        let fed = fed_pass(Indexing::through(codec, input, in_windows()).expect("starts"), &mut store, &file, 256 << 10, (256 << 10) * 8);
+        assert_eq!(fed.got.err(), Some(Refusal::Failed), "{what}");
+        assert_eq!(decode_or_index_with(codec, Arc::new(packed.clone()), in_windows()).err(), Some(Refusal::Failed), "{what}, from memory");
+    }
+}
+
+/// A gzip whose header has an extra field of 60 KiB, a name, and a comment
+/// of 100 KiB is read by the first step, which reads more of the run's head
+/// until the header ends there, and is indexed from a store with room for
+/// it, the header included. One whose header is longer than half of what
+/// the store keeps is refused as too much to keep in memory at once, and
+/// indexes from memory.
+#[test]
+fn a_long_gzip_header_is_read_from_a_store_with_room_for_it() {
+    let data = mixed(300_000, 251);
+    let raw = deflate_in_blocks(&data, 3000);
+    let header = |comment: usize| {
+        let mut h = vec![0x1f, 0x8b, 8, 0x04 | 0x08 | 0x10, 0, 0, 0, 0, 0, 3];
+        let extra = noise(60 << 10, 253);
+        h.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+        h.extend_from_slice(&extra);
+        h.extend_from_slice(b"name.fits\0");
+        h.extend(std::iter::repeat_n(b'c', comment));
+        h.push(0);
+        h
+    };
+    let tail = [&raw[..], &crc32(&data).to_le_bytes(), &(data.len() as u32).to_le_bytes()].concat();
+    let limits = in_windows();
+    for (comment, opens) in [(100 << 10, true), (300 << 10, false)] {
+        let packed = [header(comment), tail.clone()].concat();
+        let (file, mut store, input) = in_a_chunk_store(&packed, 400);
+        let fed = fed_pass(Indexing::through(Codec::Gzip, input, limits).expect("starts"), &mut store, &file, 256 << 10, (256 << 10) * 8);
+        let whole = indexed(Codec::Gzip, &packed, one_window(limits));
+        match opens {
+            true => {
+                let Ok(Decoded::Indexed(mut ours)) = fed.got else { panic!("a comment of {comment}: not indexed") };
+                same_index(&mut ours, &whole, &packed, &format!("a comment of {comment}"));
+            }
+            false => assert_eq!(fed.got.err(), Some(Refusal::TooMuchAtOnce), "a comment of {comment}"),
+        }
+    }
+}
+
+/// A pass reads its run a window at a time from a source that answers any
+/// read whole, or from one that keeps at least twice what a step reads at
+/// once; any other pass reads a copy of the run. In the browser the store
+/// keeps 32 MiB, and a step reads at most about 384 KiB. An xz stream's
+/// layout reads a copy whatever the source.
+#[test]
+fn a_pass_reads_in_windows_only_from_a_store_with_room_for_two() {
+    let limits = Limits::default();
+    let packed = vec![0u8; 1000];
+    for (codec, window) in [(Codec::Gzip, STEP_INPUT + inflate::DEFLATE_MARGIN), (Codec::Zstd, STEP_INPUT + crate::codec::frames::ZSTD_MARGIN)] {
+        assert_eq!(window_of(codec, &limits), window);
+        assert!(reads_in_windows(codec, &RunInput::held(Arc::new(packed.clone())), &limits), "{codec:?} from memory");
+        assert!(reads_in_windows(codec, &from_a_store(&packed, 2 * window as u64), &limits), "{codec:?}");
+        assert!(!reads_in_windows(codec, &from_a_store(&packed, 2 * window as u64 - 1), &limits), "{codec:?}");
+    }
+    assert!(!reads_in_windows(Codec::Xz, &RunInput::held(Arc::new(packed)), &limits));
 }

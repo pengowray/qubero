@@ -83,6 +83,19 @@ impl RunInput {
         bytes > limit && self.resident_limit().is_some()
     }
 
+    /// The most bytes of the run one read at once may take: half of what the
+    /// source keeps, so that the read fits beside the other reads a go
+    /// makes. No limit for a source that answers any read whole.
+    pub(super) fn most_at_once(&self) -> usize {
+        self.resident_limit().map_or(usize::MAX, |keeps| usize::try_from(keeps / 2).unwrap_or(usize::MAX))
+    }
+
+    /// Whether a read of `bytes` of the run at once is within
+    /// [`RunInput::most_at_once`].
+    pub(super) fn fits(&self, bytes: usize) -> bool {
+        bytes <= self.most_at_once()
+    }
+
     /// Bytes `at..at + out.len()` of the run, or every chunk of the source
     /// the read is missing, all at once. On a miss `out` holds zeroes where
     /// the missing chunks are. Bytes past the run's end are not read, and
@@ -142,6 +155,57 @@ impl Copied {
     /// The copy as a window of the run, which is `run_len` bytes long.
     pub(super) fn window(&self, run_len: u64) -> Window<'_> {
         Window::of(&self.bytes, self.at, run_len as usize).expect("a copy is cut short at the run's end")
+    }
+}
+
+/// The bytes of a run an index pass holds between its steps: bytes `at..at +
+/// bytes.len()`. A step asks for the stretch it decodes from, and reads
+/// through the run's [`RunInput`] only the part of it that is not held. What
+/// comes before where the step starts is let go of, since the pass never
+/// reads it again, except when it goes back to a checkpoint at the cap, and
+/// then it reads it again.
+#[derive(Default)]
+pub(super) struct PassWindow {
+    at: usize,
+    bytes: Vec<u8>,
+}
+
+impl PassWindow {
+    /// Hold bytes `from..to` of the run, `to` cut short at the run's end, or
+    /// name every chunk the part not held yet is missing, and change
+    /// nothing. Bytes held past `to` are kept.
+    pub(super) fn reach(&mut self, input: &RunInput, from: usize, to: usize) -> Result<(), Vec<Missing>> {
+        let to = to.min(input.len() as usize).max(from);
+        let end = self.at + self.bytes.len();
+        let kept = from >= self.at && from <= end;
+        let read_from = if kept { end.max(from) } else { from };
+        let mut more = vec![0u8; to.saturating_sub(read_from)];
+        if !more.is_empty() {
+            input.read(read_from as u64, &mut more)?;
+        }
+        if kept {
+            self.bytes.drain(..from - self.at);
+            self.bytes.extend_from_slice(&more);
+        } else {
+            self.bytes = more;
+        }
+        self.at = from;
+        Ok(())
+    }
+
+    /// The bytes held, as a window of the run, which is `run_len` bytes long.
+    pub(super) fn window(&self, run_len: usize) -> Window<'_> {
+        Window::of(&self.bytes, self.at, run_len).expect("a window is cut short at the run's end")
+    }
+
+    /// The bytes held.
+    pub(super) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// How many bytes are held.
+    pub(super) fn len(&self) -> usize {
+        self.bytes.len()
     }
 }
 

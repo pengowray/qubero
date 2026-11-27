@@ -1491,7 +1491,7 @@ impl super::Evaluator {
         if !lazy::can_step(codec) {
             return Ok(lazy::decode_or_index_through(codec, packed, input, self.spaces.lazy_limits));
         }
-        let pass = match lazy::Indexing::through(codec, packed, input, self.spaces.lazy_limits) {
+        let pass = match lazy::Indexing::from_copy(codec, packed, input, self.spaces.lazy_limits) {
             Ok(pass) if known_large => pass.known_large(),
             Ok(pass) => pass,
             Err(why) => return Ok(Err(why)),
@@ -1578,7 +1578,7 @@ impl super::Evaluator {
                 // otherwise the copy just gathered.
                 let packed = Arc::new(bytes);
                 let input = self.shared_input(doc, key).unwrap_or_else(|| lazy::RunInput::held(packed.clone()));
-                match lazy::Indexing::through(codec, packed, input, self.spaces.lazy_limits) {
+                match lazy::Indexing::from_copy(codec, packed, input, self.spaces.lazy_limits) {
                     Ok(pass) if known_large => pass.known_large(),
                     Ok(pass) => pass,
                     Err(why) => return Ok(Err(why)),
@@ -1607,6 +1607,9 @@ impl super::Evaluator {
             }
             match pass.step(INDEX_STEP_BYTES, INDEX_STEP_BITS) {
                 Ok(Stepped::Working) => {}
+                // The pass reads a copy of the run, which never finds a
+                // chunk missing.
+                Ok(Stepped::NeedsInput(_)) => return Ok(Err(Refusal::Failed)),
                 Ok(Stepped::Done(decoded)) => return Ok(Ok(decoded)),
                 Err(why) => return Ok(Err(why)),
             }
