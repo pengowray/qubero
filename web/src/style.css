@@ -1434,6 +1434,13 @@ button.welcome-crystal {
   content: attr(data-note);
   margin-left: 2ch;
   font-family: var(--sans);
+  /* Held at the panel's right edge, over the end of a line longer than the
+     panel, so the note is in view without scrolling sideways. */
+  position: sticky;
+  right: 0;
+  display: inline-block;
+  padding: 0 8px;
+  background: var(--accent-soft);
 }
 .tp-field {
   color: var(--accent);
