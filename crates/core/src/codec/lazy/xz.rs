@@ -27,7 +27,7 @@ use crate::codec::{xz, Codec, Refusal, SpanUnit, StepField, StepKind, Trace, Tra
 /// Nothing is decoded here, so a block whose unpacked size differs from the
 /// index is found only when a read reaches the block, and that read is
 /// refused. See [`Prefix`].
-pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, Refusal> {
+pub(super) fn index_xz(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
     let Some(l) = xz::layout(&packed).filter(|l| l.total_out > limits.whole as u64) else {
         return whole(Codec::Xz, &packed);
     };
@@ -40,16 +40,19 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, limits: Limits) -> Result<Decoded, 
     if l.total_out > limits.lazy {
         return Err(Refusal::TooLargeLazy);
     }
-    let mut marks = Checkpoints::new(limits.spacing, limits.checkpoints);
+    let mut marks = Checkpoints::new(&limits);
     let mut out = 0u64;
     for (i, blk) in l.blocks.iter().enumerate() {
         // The first span starts with the stream header, which is no block's.
         let at = if i == 0 { 0 } else { blk.at as u64 * 8 };
-        marks.offer(at, out, || Start::Unit(i));
+        // A block of the input spacing or more is a span of its own: the
+        // block after it starts the spacing on, so is due by the input.
+        marks.take_if_long(at, l.block_len(i) as u64 * 8, out, || Start::Unit(i));
+        marks.offer(at, at, out, || Start::Unit(i));
         out += blk.unpacked;
     }
     let len = l.total_out;
-    Ok(Decoded::Indexed(seekable(Codec::Xz, RunInput::held(packed), Kind::Xz(l), len, marks.list, limits)))
+    Ok(Decoded::Indexed(seekable(Codec::Xz, input, Kind::Xz(l), len, marks.list, limits)))
 }
 
 /// Bytes `from..from + dst.len()` of span `k`, whose blocks are `units`,

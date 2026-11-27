@@ -81,7 +81,7 @@ pub fn zstd(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let cap = super::CAP_BYTES as u64;
     let mut out = Vec::new();
     let mut b = TraceBuilder::default();
-    let end = zstd_walk(Window::whole(data), 0..data.len(), 0, cap, &mut b, &mut |_, _| {}, &mut |bytes| {
+    let end = zstd_walk(Window::whole(data), 0..data.len(), 0, cap, &mut b, &mut |bytes| {
         if out.len() + bytes.len() > cap as usize {
             return Err(Refusal::TooLarge);
         }
@@ -112,10 +112,9 @@ pub(super) fn zstd_walk(
     out: u64,
     frame_cap: u64,
     b: &mut TraceBuilder,
-    on_frame: &mut dyn FnMut(usize, u64),
     sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
 ) -> Result<u64, Refusal> {
-    match ZstdWalk::new(span, out, frame_cap).run(window, u64::MAX, usize::MAX, b, on_frame, sink)? {
+    match ZstdWalk::new(span, out, frame_cap).run(window, u64::MAX, usize::MAX, b, &mut |_| Ok(()), sink)? {
         Walked::Ended(end) => Ok(end),
         // A walk with no limit stops only at the end, and one given its whole
         // span never runs out of window.
@@ -186,9 +185,8 @@ impl Walked {
 /// later decodes exactly what carrying on at once would have.
 ///
 /// Bytes go to the sink as the decoder lets go of them, and every frame is
-/// announced before it is decoded, with the byte it starts at and how much
-/// output comes before it. The skippable frames in front of a frame are
-/// counted as part of it. A frame that comes to more than `frame_cap`, or asks
+/// announced before it is decoded, as a [`FrameAt`]. The skippable frames in
+/// front of a frame are counted as part of it. A frame that comes to more than `frame_cap`, or asks
 /// for a window larger than [`MAX_WINDOW`], is [`Refusal::TooLarge`]. A frame
 /// whose checksum does not match what it decoded is [`Refusal::Failed`].
 ///
@@ -222,6 +220,22 @@ pub(super) struct ZstdWalk {
     out: u64,
     frame_cap: u64,
     frame: Option<Frame>,
+    /// Where the last frame the walk finished ends, which is where any
+    /// skippable frames after it start: the start of the span until a frame
+    /// ends.
+    ended: usize,
+}
+
+/// A frame a [`ZstdWalk`] is about to decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FrameAt {
+    /// Where the skippable frames in front of it start, or where it starts
+    /// when there are none: the byte the frame is counted from.
+    pub(super) front: usize,
+    /// Where its own magic is, after those skippable frames.
+    pub(super) own: usize,
+    /// How much output comes before it.
+    pub(super) out: u64,
 }
 
 /// A frame decoded part of the way, between two blocks.
@@ -242,7 +256,13 @@ struct Frame {
 impl ZstdWalk {
     /// A walk over `span`, with `out` bytes of output before it.
     pub(super) fn new(span: std::ops::Range<usize>, out: u64, frame_cap: u64) -> ZstdWalk {
-        ZstdWalk { end: span.end, at: span.start, front: None, out, frame_cap, frame: None }
+        ZstdWalk { end: span.end, at: span.start, front: None, out, frame_cap, frame: None, ended: span.start }
+    }
+
+    /// Where the last frame the walk has finished ends: the start of any
+    /// skippable frames after it. The start of the span until a frame ends.
+    pub(super) fn frames_end(&self) -> usize {
+        self.ended
     }
 
     /// How far into the run the decoder has read.
@@ -295,13 +315,16 @@ impl ZstdWalk {
     /// `window` is the part of the run the walk reads from; positions count
     /// from the run's front whatever part it is. See [`ZstdWalk`] for what the
     /// walk does when the window runs out.
+    ///
+    /// `on_frame` is told of each frame before it is decoded, and a refusal
+    /// from it ends the walk there.
     pub(super) fn run(
         &mut self,
         window: Window<'_>,
         share: u64,
         reach: usize,
         b: &mut TraceBuilder,
-        on_frame: &mut dyn FnMut(usize, u64),
+        on_frame: &mut dyn FnMut(FrameAt) -> Result<(), Refusal>,
         sink: &mut dyn FnMut(&[u8]) -> Result<(), Refusal>,
     ) -> Result<Walked, Refusal> {
         use ruzstd::decoding::BlockDecodingStrategy;
@@ -333,7 +356,7 @@ impl ZstdWalk {
                     if self.at == self.end {
                         return Ok(Walked::Ended(self.out));
                     }
-                    on_frame(starts, self.out);
+                    on_frame(FrameAt { front: starts, own: self.at, out: self.out })?;
                     let frame = self.start_frame(held(window, self.at, end)?)?;
                     b.push(self.at as u64 * 8, self.out, StepKind::Header(StepField::FrameHeader, 0));
                     self.frame.insert(frame)
@@ -410,6 +433,7 @@ impl ZstdWalk {
                 b.push(sum_at as u64 * 8, self.out, StepKind::Header(StepField::Footer, 0));
             }
             self.at = f.at + f.read;
+            self.ended = self.at;
             self.frame = None;
         }
     }
@@ -466,7 +490,7 @@ fn lacks(window: Window<'_>, from: usize, to: usize, end: usize) -> Option<std::
 /// How long a skippable frame is, if `head`, the bytes at hand from where it
 /// would start, starts one. `left` is how much of the span is left from
 /// there, which its length has to fit in.
-fn skippable(head: &[u8], left: usize) -> Option<usize> {
+pub(super) fn skippable(head: &[u8], left: usize) -> Option<usize> {
     let magic = u32::from_le_bytes(head.get(..4)?.try_into().ok()?);
     if !(0x184d_2a50..=0x184d_2a5f).contains(&magic) {
         return None;

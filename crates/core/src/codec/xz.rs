@@ -105,6 +105,15 @@ pub(super) struct Layout {
     pub(super) plain: bool,
 }
 
+impl Layout {
+    /// How many bytes of the stream block `i` takes: its header, its
+    /// compressed data, its padding and its check, up to where the next
+    /// block or the index starts.
+    pub(super) fn block_len(&self, i: usize) -> usize {
+        self.blocks.get(i + 1).map_or(self.index_at, |b| b.at) - self.blocks[i].at
+    }
+}
+
 /// An xz stream: the bytes, and a trace over them.
 ///
 /// The trace is per symbol when every block is plain LZMA2 and per block when

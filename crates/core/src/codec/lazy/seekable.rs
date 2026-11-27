@@ -227,6 +227,14 @@ impl Seekable {
         (self.checkpoints[k].in_bit / 8) as usize..end
     }
 
+    /// The bytes of the run zstd span `k`'s frames take: from where its first
+    /// frame starts itself, past the skippable frames in front of it, to the
+    /// next checkpoint. What a read of its bytes reads.
+    pub(super) fn frames_in(&self, k: usize) -> std::ops::Range<usize> {
+        let range = self.span_in(k);
+        self.checkpoints[k].own().unwrap_or(range.start).min(range.end)..range.end
+    }
+
     /// The xz blocks span `k` holds, as numbers in the stream's index.
     pub(super) fn span_units(&self, k: usize, l: &xz::Layout) -> std::ops::Range<usize> {
         let end = self.checkpoints.get(k + 1).map_or(l.blocks.len(), |c| c.unit());
@@ -260,7 +268,7 @@ impl Seekable {
                 self.deflate_span(k, copies.input(self.input.len()))?
             }
             Kind::Zstd => {
-                let (range, out) = (self.span_in(k), self.checkpoints[k].out);
+                let (range, out) = (self.frames_in(k), self.checkpoints[k].out);
                 let copy = self.input.copy(range.clone())?;
                 super::zstd::decode_span(copy.window(self.input.len()), range, out, want, self.limits.span)?
             }
@@ -333,9 +341,14 @@ impl Seekable {
         let t = Arc::new(match &self.kind {
             Kind::Deflate(_) => self.deflate_span_trace(k, self.deflate_span_copies(k)?.input(len))?,
             Kind::Zstd => {
-                let range = self.span_in(k);
-                let copy = self.input.copy(range.clone())?;
-                super::zstd::span_trace(copy.window(len), range, c.out, self.limits.span)?
+                // The skippable frames in front of the span's first frame are
+                // read a header at a time, and their first piece with the
+                // frames, so that a span behind a short one reads at once.
+                let (front, frames) = (self.span_in(k).start, self.frames_in(k));
+                let first = (front < frames.start).then(|| front..frames.start.min(front + super::zstd::FRONT_PIECE));
+                let [copy, first] = self.input.copies([Some(frames.clone()), first])?;
+                let skips = super::zstd::skippable_starts(&self.input, front, frames.start, first)?;
+                super::zstd::span_trace(copy.expect("asked for").window(len), front, &skips, frames, c.out, self.limits.span)?
             }
             Kind::Xz(l) => {
                 let range = self.span_in(k);

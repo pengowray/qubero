@@ -12,7 +12,21 @@ use crate::codec::{BlockKind, Step, StepField, StepKind};
 /// indexed past 64 KiB, checkpoints are 8 KiB apart until there are more
 /// than 12 of them, and the cache holds 40 KiB.
 fn small() -> Limits {
-    Limits { whole: 64 << 10, lazy: 4 << 20, spacing: 8 << 10, checkpoints: 12, span_cache: 40 << 10, span_steps: 1_000_000, whole_steps: crate::codec::MAX_STEPS, block_marks: MAX_BLOCK_MARKS, span: 64 << 10, measure: crate::codec::CAP_BYTES as u64 }
+    Limits {
+        whole: 64 << 10,
+        lazy: 4 << 20,
+        spacing: 8 << 10,
+        in_spacing: 8 << 10,
+        checkpoints: 12,
+        span_cache: 40 << 10,
+        span_steps: 1_000_000,
+        whole_steps: crate::codec::MAX_STEPS,
+        block_marks: MAX_BLOCK_MARKS,
+        span: 64 << 10,
+        measure: crate::codec::CAP_BYTES as u64,
+        unit_input: 16 << 20,
+        span_input: 16 << 20,
+    }
 }
 
 fn rand_from(mut seed: u64) -> impl FnMut() -> u64 {
@@ -642,6 +656,94 @@ fn a_run_of_empty_blocks_under_the_cap_comes_back_whole_in_steps_of_bits() {
     }
 }
 
+/// Noise that no encoder can pack.
+fn noise(len: usize, seed: u64) -> Vec<u8> {
+    let mut rand = rand_from(seed);
+    (0..len).map(|_| rand() as u8).collect()
+}
+
+/// A checkpoint is due by the run's input as well as by the output, so a
+/// span's input is bounded however little the span makes: 160,000 empty
+/// fixed blocks, which make nothing, stored blocks, and noise packed as well
+/// as an encoder can, each over 200 KB of input. With room for every
+/// checkpoint, no span reads more than the input spacing and the longest
+/// stretch no checkpoint can be put inside, a stored block. A byte is never
+/// read from a span of no output, and such a span's trace names its bits as
+/// the whole trace does.
+#[test]
+fn checkpoints_are_taken_by_input_as_well_as_output() {
+    let data = mixed(100_000, 109);
+    let noise = noise(300_000, 113);
+    let limits = Limits { checkpoints: 1000, ..small() };
+    let stored = inflate::DEFLATE_MARGIN as u64 * 8;
+    let runs = [
+        ("empty blocks", deflate_around(&[&data[..50_000], &data[50_000..]], &empty_blocks(160_000)), &data),
+        ("stored blocks", miniz_oxide::deflate::compress_to_vec(&noise, 0), &noise),
+        ("noise", miniz_oxide::deflate::compress_to_vec(&noise, 9), &noise),
+    ];
+    for (what, raw, out) in runs {
+        assert!(raw.len() > 200_000, "{what}: {} bytes", raw.len());
+        let s = indexed(Codec::Deflate, &raw, limits);
+        let by_output = indexed(Codec::Deflate, &raw, Limits { in_spacing: u64::MAX, ..limits });
+        // A stored block is never stopped in, so its spans are its blocks
+        // either way, and noise packs to about as much as it comes to.
+        let more = if what == "empty blocks" { 10 } else { 0 };
+        assert!(s.spans() >= by_output.spans() + more, "{what}: {} spans, {} by the output alone", s.spans(), by_output.spans());
+        let marks = s.marks();
+        let ends = marks.iter().skip(1).map(|m| m.0).chain([raw.len() as u64 * 8]);
+        for (k, (m, end)) in marks.iter().zip(ends).enumerate() {
+            assert!(end - m.0 <= limits.in_spacing * 8 + stored, "{what}: span {k} reads {} bits", end - m.0);
+        }
+        reads_back(&s, out, 127);
+        for (k, m) in marks.iter().enumerate() {
+            if m.1 < s.len() {
+                let holding = s.span_of_byte(m.1).expect("a span holds it");
+                assert!(s.span_bytes(holding).contains(&m.1), "{what}: byte {} of span {k} read from span {holding}", m.1);
+            }
+        }
+        let (_, whole) = crate::codec::decode_traced(Codec::Deflate, &raw).expect("decodes whole");
+        let mut empty = 0;
+        for k in (0..s.spans()).filter(|&k| s.span_bytes(k).is_empty()) {
+            empty += 1;
+            let t = s.span_trace(k).expect("traces");
+            t.check_tiles().unwrap_or_else(|e| panic!("{what}: span {k}: {e}"));
+            let end = marks.get(k + 1).map_or(raw.len() as u64 * 8, |m| m.0);
+            for bit in (marks[k].0..end).step_by(((end - marks[k].0) / 30).max(1) as usize) {
+                assert_eq!(t.map_in(bit), whole.map_in(bit), "{what}: span {k}, bit {bit}");
+                assert_eq!(s.map_in(bit), Ok(whole.map_in(bit)), "{what}: span {k}, bit {bit}");
+            }
+        }
+        assert_eq!(empty > 10, what == "empty blocks", "{what}: {empty} spans of no output");
+    }
+}
+
+/// Thinning doubles both spacings, and a checkpoint is then due by either
+/// at twice the distance. A place offered twice is kept once.
+#[test]
+fn thinning_doubles_both_spacings() {
+    let limits = Limits { spacing: 100, in_spacing: 10, checkpoints: 4, ..small() };
+    let mut marks = Checkpoints::new(&limits);
+    let unit = || Start::Unit(0);
+    // A checkpoint every 100 bytes of output, at one byte of input each.
+    for i in 0..5u64 {
+        marks.offer(i * 8, i * 8, i * 100, unit);
+        marks.offer(i * 8, i * 8, i * 100, unit);
+    }
+    let kept = |m: &Checkpoints| m.list.iter().map(|c| (c.in_bit, c.out)).collect::<Vec<_>>();
+    assert_eq!(kept(&marks), [(0, 0), (16, 200), (32, 400)]);
+    assert_eq!((marks.spacing, marks.in_spacing), (200, 160));
+    // By the output, the next is due 200 bytes on; by the input, 20 bytes on.
+    marks.offer(40, 40, 599, unit);
+    marks.offer(32 + 159, 32 + 159, 400, unit);
+    assert_eq!(kept(&marks).len(), 3);
+    marks.offer(32 + 160, 32 + 160, 400, unit);
+    assert_eq!(kept(&marks).last(), Some(&(192, 400)));
+    // The fifth, thinned out with every second one, the first kept.
+    marks.offer(200, 200, 600, unit);
+    assert_eq!(kept(&marks), [(0, 0), (32, 400), (200, 600)]);
+    assert_eq!((marks.spacing, marks.in_spacing), (400, 320));
+}
+
 /// A pass told the run is large starts with the trace off and comes to the
 /// same index as one that found out at the cap; one told so of a run
 /// under the cap indexes it all the same. A gzip run's trailer tells it.
@@ -961,12 +1063,17 @@ fn a_run_of_empty_zstd_frames_is_indexed_in_many_steps() {
     ]
     .concat();
     let packed = Arc::new(packed);
+    // Room for every checkpoint, the ones the empty frames' input makes
+    // included, so that none is thinned out and the one looked for below
+    // is kept.
+    let limits = Limits { checkpoints: 64, ..small() };
     for told in [false, true] {
         let start = || {
-            let pass = Indexing::new(Codec::Zstd, packed.clone(), small()).expect("starts");
+            let pass = Indexing::new(Codec::Zstd, packed.clone(), limits).expect("starts");
             if told { pass.known_large() } else { pass }
         };
         let Ok(Decoded::Indexed(one)) = in_steps(start(), u64::MAX).0 else { panic!("told {told}: not indexed in one go") };
+        assert!(one.marks().windows(2).any(|w| w[0].1 == w[1].1), "told {told}: no span of empty frames alone");
         let skips_at = zstd_of(&data[..20_000], 20_000, false).len() as u64 * 8;
         assert!(one.marks().iter().any(|m| m.0 == skips_at), "told {told}: no checkpoint at the first skippable frame");
         let mut pass = start();
@@ -1513,7 +1620,7 @@ fn zstd_walk_in_windows(packed: &[u8], size: usize) -> (Vec<u8>, Trace, [usize; 
             out.extend_from_slice(bytes);
             Ok(())
         };
-        match walk.run(window(&copy, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut sink).expect("walks") {
+        match walk.run(window(&copy, packed), 20_000, 1 << 20, &mut b, &mut |_| Ok(()), &mut sink).expect("walks") {
             Walked::Ended(end) => return (out, zstd_done(b, packed.len(), end), asked),
             Walked::Stopped => (from, to) = (walk.reached(), walk.reached() + size),
             Walked::Needs(need) => {
@@ -1528,7 +1635,7 @@ fn zstd_walk_in_windows(packed: &[u8], size: usize) -> (Vec<u8>, Trace, [usize; 
                 }] += 1;
                 if need.len() > 1 {
                     let short = copy_of(packed, need.start, need.end - 1);
-                    let again = walk.run(window(&short, packed), 20_000, 1 << 20, &mut b, &mut |_, _| {}, &mut |_| panic!("decoded from a short window"));
+                    let again = walk.run(window(&short, packed), 20_000, 1 << 20, &mut b, &mut |_| Ok(()), &mut |_| panic!("decoded from a short window"));
                     assert_eq!(again, Ok(Walked::Needs(need.clone())));
                 }
                 (from, to) = (need.start, need.end.max(need.start + size));
@@ -1584,7 +1691,7 @@ fn a_zstd_span_from_a_window_is_the_span_from_the_whole_run() {
             let mut bytes = vec![0u8; got.len()];
             s.read(want.start, &mut bytes).expect("reads");
             assert!(got == bytes, "skippable {skippable}, span {k}: the bytes differ");
-            let t = zstd::span_trace(window(&copy, &packed), range, c.out, small().span).expect("traces");
+            let t = zstd::span_trace(window(&copy, &packed), range.start, &[], range, c.out, small().span).expect("traces");
             assert!(shape(&t) == shape(&s.span_trace(k).expect("traces")), "skippable {skippable}, span {k}: the traces differ");
         }
     }
@@ -1743,9 +1850,10 @@ fn a_read_through_an_input_missing_chunks_names_them_and_reads_once_they_are_fed
             // What is named is the span's own bytes, in the file, past what
             // comes before the run: for deflate from its checkpoint's byte to
             // the byte of the next one's bit, with the header of the block the
-            // checkpoint is inside; for zstd its frames. An xz read names only
-            // the blocks it decodes, which are inside the span.
-            let mut range = s.span_in(k);
+            // checkpoint is inside; for zstd its frames, without the skippable
+            // frame in front of the first. An xz read names only the blocks it
+            // decodes, which are inside the span.
+            let mut range = if codec == Codec::Zstd { s.frames_in(k) } else { s.span_in(k) };
             if codec == Codec::Zlib {
                 range.end = s.checkpoints.get(k + 1).map_or(packed.len(), |n| n.in_bit.div_ceil(8) as usize);
             }
@@ -1863,4 +1971,133 @@ fn traces_and_blocks_through_an_input_missing_chunks_wait_for_them() {
         assert_eq!(waiting(&lossy, || s.map_out(byte)).0, held.map_out(byte).unwrap(), "byte {byte}");
     }
     assert!(named > 10, "only {named} reads named chunks");
+}
+
+/// A skippable zstd frame of `len` bytes of noise.
+fn skippable_frame(len: usize, seed: u64) -> Vec<u8> {
+    [&0x184d_2a50u32.to_le_bytes()[..], &(len as u32).to_le_bytes(), &noise(len, seed)].concat()
+}
+
+/// Limits under which a frame or block of 32 KiB of input or more is large,
+/// and the frames or blocks of a span of small ones take less than twice
+/// that.
+fn by_input() -> Limits {
+    Limits { spacing: 64 << 10, in_spacing: 32 << 10, checkpoints: 64, span: 1 << 20, ..small() }
+}
+
+/// A zstd run of small frames and a large one, with long skippable frames in
+/// front of one frame and after the last: the large frame is a span of its
+/// own, the long skippable frames start a span, and those at the end are a
+/// span of no output. No other span's frames take twice the input spacing,
+/// and every span reads back and traces as the whole run does.
+fn frames_large_and_small() -> (Vec<u8>, std::ops::Range<usize>, [usize; 2]) {
+    let text = mixed(240_000, 131);
+    let parts = [
+        zstd_of(&text[..120_000], 10_000, true),
+        zstd_of(&noise(100_000, 137), 100_000, true),
+        zstd_of(&text[120_000..180_000], 10_000, false),
+        skippable_frame(100_000, 139),
+        zstd_of(&text[180_000..], 10_000, true),
+        skippable_frame(40_000, 149),
+    ];
+    let at = |i: usize| parts[..i].iter().map(Vec::len).sum::<usize>();
+    // The large frame without the skippable frame in front of it, where the
+    // long skippable frame starts, and where those at the end do.
+    (parts.concat(), at(1) + 12..at(2), [at(3), at(5)])
+}
+
+#[test]
+fn a_large_zstd_frame_is_a_span_of_its_own() {
+    let (packed, frame, [skip, tail]) = frames_large_and_small();
+    let s = indexed(Codec::Zstd, &packed, by_input());
+    let starts: Vec<usize> = s.marks().iter().map(|m| (m.0 / 8) as usize).collect();
+    for at in [frame.start - 12, frame.end, skip, tail] {
+        assert!(starts.contains(&at), "no checkpoint at byte {at}: {starts:?}");
+    }
+    let k = s.span_of_bit(frame.start as u64 * 8).expect("a span");
+    assert_eq!(s.frames_in(k), frame, "the large frame's span");
+    let last = s.spans() - 1;
+    assert_eq!((s.span_bytes(last).is_empty(), s.frames_in(last).len(), s.span_in(last).start), (true, 0, tail), "the skippable frames at the end");
+    for k in 0..s.spans() {
+        let n = s.frames_in(k).len();
+        assert!(n < 2 * (32 << 10) || s.frames_in(k) == frame, "span {k}'s frames take {n} bytes");
+    }
+    let (bytes, whole) = crate::codec::decode_traced(Codec::Zstd, &packed).expect("decodes whole");
+    reads_back(&s, &bytes, 151);
+    traces_agree(&s, &whole, 157);
+    // The pass in steps, and told the run is large, comes to the same.
+    for told in [false, true] {
+        let pass = Indexing::new(Codec::Zstd, Arc::new(packed.clone()), by_input()).expect("starts");
+        let pass = if told { pass.known_large() } else { pass };
+        let Ok(Decoded::Indexed(ours)) = in_steps_of(pass, 3000, 8 * 2000).0 else { panic!("told {told}: not indexed") };
+        assert_eq!(ours.marks(), s.marks(), "told {told}");
+    }
+}
+
+/// A read of a zstd span's bytes reads its frames and none of the skippable
+/// frames in front of them, however long; the span's trace reads a piece of
+/// them and their headers. Both name only those chunks.
+#[test]
+fn a_zstd_span_read_skips_the_skippable_frames_in_front() {
+    let (packed, _, [skip, _]) = frames_large_and_small();
+    let mut s = indexed(Codec::Zstd, &packed, by_input());
+    let held = indexed(Codec::Zstd, &packed, by_input());
+    let k = s.span_of_bit(skip as u64 * 8).expect("a span");
+    assert_eq!(s.span_in(k).start, skip);
+    let frames = s.frames_in(k);
+    assert_eq!(frames.start, skip + 100_008 + 12, "the frame after both skippable frames");
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file, 1024);
+    s.set_input(RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64));
+    let want = s.span_bytes(k);
+    let mut got = vec![0u8; (want.end - want.start) as usize];
+    let asked = read_waiting(&s, &lossy, want.start, &mut got);
+    let mut expect = vec![0u8; got.len()];
+    held.read(want.start, &mut expect).expect("reads");
+    assert!(got == expect);
+    assert_eq!(asked, [lossy.chunks(run_at + frames.start..run_at + frames.end)], "the read names the frames' chunks alone");
+    lossy.drop_all();
+    let mut named = Vec::new();
+    let t = loop {
+        match s.span_trace(k) {
+            Ok(t) => break t,
+            Err(ReadError::Missing(m)) => {
+                assert!(named.len() < 10, "asked {named:?}");
+                lossy.feed(&m);
+                named.extend(m);
+            }
+            Err(ReadError::Refused(why)) => panic!("refused: {why:?}"),
+        }
+    };
+    assert!(shape(&t) == shape(&held.span_trace(k).unwrap()), "the traces differ");
+    let piece = lossy.chunks(run_at + skip..run_at + skip + zstd::FRONT_PIECE);
+    let second = lossy.chunks(run_at + skip + 100_008..run_at + skip + 100_008 + 8);
+    let frames = lossy.chunks(run_at + frames.start..run_at + frames.end);
+    assert!(named.iter().all(|m| piece.contains(m) || second.contains(m) || frames.contains(m)), "the trace read {named:?}");
+}
+
+/// An xz block of the input spacing or more, among small ones, is a span of
+/// its own, and every span reads back and traces as the whole stream does.
+#[test]
+fn a_large_xz_block_is_a_span_of_its_own() {
+    use crate::codec::xz::tests::{pack, wrap};
+    let text = mixed(200_000, 163);
+    let mut data: Vec<Vec<u8>> = text.chunks(10_000).map(<[u8]>::to_vec).collect();
+    data.insert(8, noise(60_000, 167));
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.iter().map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.clone())).collect();
+    let packed = wrap(&blocks, true);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let large = l.blocks[8].at..l.blocks[9].at;
+    assert!(large.len() > 60_000 && (0..l.blocks.len()).filter(|&i| i != 8).all(|i| l.block_len(i) < 32 << 10));
+    let s = indexed(Codec::Xz, &packed, by_input());
+    let k = s.span_of_bit(large.start as u64 * 8).expect("a span");
+    assert_eq!(s.span_in(k), large, "the large block's span");
+    assert_eq!(s.span_units(k, &l), 8..9);
+    for k in 0..s.spans() {
+        let n = s.span_in(k).len();
+        assert!(n < 2 * (32 << 10) + 1024 || s.span_in(k) == large, "span {k} takes {n} bytes");
+    }
+    let (bytes, whole) = crate::codec::decode_traced(Codec::Xz, &packed).expect("decodes whole");
+    reads_back(&s, &bytes, 173);
+    traces_agree(&s, &whole, 179);
 }

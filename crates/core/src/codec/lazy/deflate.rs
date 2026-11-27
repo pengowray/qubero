@@ -22,6 +22,8 @@ use crate::codec::{Codec, Refusal, StepField, StepKind, TraceBuilder, CAP_BYTES}
 pub(super) struct DeflatePass {
     codec: Codec,
     packed: Arc<Vec<u8>>,
+    /// Where the index reads the run from once it is made.
+    input: RunInput,
     framing: Framing,
     limits: Limits,
     pub(super) phase: Phase,
@@ -55,7 +57,7 @@ impl DeflatePass {
     /// [`DeflatePass::known_large`] does. The trailer gives the size modulo
     /// 4 GiB, so a size past the cap there is past it in fact; a trailer that
     /// is wrong about it fails the check at the end either way.
-    pub(super) fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<DeflatePass, Refusal> {
+    pub(super) fn new(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<DeflatePass, Refusal> {
         let wrapper = wrapper(codec).ok_or(Refusal::Failed)?;
         if packed.len() > CAP_BYTES {
             return Err(Refusal::TooLarge);
@@ -66,12 +68,12 @@ impl DeflatePass {
             trace.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
         }
         let mut sink = WindowSink::new(Vec::new(), 0, limits.whole as u64, false);
-        sink.marks = Some(Checkpoints::new(limits.spacing, limits.checkpoints));
+        sink.marks = Some(Checkpoints::new(&limits));
         sink.blocks = Some(BlockMarks::new(limits.block_marks));
         sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
         sink.mid_block = true;
         let phase = Phase::Whole { sink, trace, from: None };
-        let pass = DeflatePass { codec, packed, framing, limits, phase, furthest: 0, most: 0 };
+        let pass = DeflatePass { codec, packed, input, framing, limits, phase, furthest: 0, most: 0 };
         let says = match pass.packed.len().checked_sub(4) {
             Some(at) if wrapper == Wrapper::Gzip => u32::from_le_bytes(pass.packed[at..].try_into().expect("four bytes")),
             _ => 0,
@@ -90,7 +92,7 @@ impl DeflatePass {
     pub(super) fn known_large(mut self) -> DeflatePass {
         if matches!(self.phase, Phase::Whole { from: None, .. }) {
             let mut sink = WindowSink::new(Vec::new(), 0, self.limits.lazy, true);
-            sink.marks = Some(Checkpoints::new(self.limits.spacing, self.limits.checkpoints));
+            sink.marks = Some(Checkpoints::new(&self.limits));
             sink.blocks = Some(BlockMarks::new(self.limits.block_marks));
             sink.sums = Some(Sums { crc: 0, adler: 1, upto: 0 });
             sink.mid_block = true;
@@ -223,7 +225,7 @@ impl DeflatePass {
             return Err(Refusal::Failed);
         }
         let checkpoints = sink.marks.take().expect("set when the pass started").list;
-        let mut s = seekable(self.codec, RunInput::held(self.packed.clone()), Kind::Deflate(self.framing), len, checkpoints, self.limits);
+        let mut s = seekable(self.codec, self.input.clone(), Kind::Deflate(self.framing), len, checkpoints, self.limits);
         s.blocks = sink.blocks.take().expect("set when the pass started");
         s.blocks_end = blocks_end;
         s.crc32 = Some(sums.crc);
@@ -396,7 +398,7 @@ impl Sink for WindowSink {
             let keep = (WINDOW as u64).min(out) as usize;
             let window = &self.hist[self.hist.len() - keep..];
             let blocks = self.blocks.as_ref().map_or(0, |b| b.count);
-            marks.offer(in_bit, out, || Start::Deflate { block, blocks, window: window.into() });
+            marks.offer(in_bit, in_bit, out, || Start::Deflate { block, blocks, window: window.into() });
         }
         // After the checkpoint, so that a step ending here takes the one a
         // pass in one go would have taken, and the step after does not take
