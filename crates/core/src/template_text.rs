@@ -17,6 +17,7 @@
 //!                ["deducer: in code"]
 //!                "root" ty
 //!                {type}                            in alphabetical order
+//!                {decoder}                         in alphabetical order
 //! type        := "type" struct                     a structure filed under its own name
 //!              | "type" NAME "=" ty                anything else, under the name a
 //!                                                  `Named` reaches it by
@@ -210,6 +211,54 @@
 //!   running the file. `deducer: in code` at the head says the template has
 //!   something to run.
 //!
+//! ## Decoders
+//!
+//! What a decoder's trace lays down under `traced blocks` is written once per
+//! decoder family, after the named types, for each family some `decoded(...)`
+//! in the template reaches. It comes from the family's table in
+//! `codec::tracekind`, not from the template.
+//!
+//! ```text
+//! decoder     := "decoder" FAMILY ["for" CODEC {"," CODEC}] "{" row "}"
+//!                                                   FAMILY is the word every kind of
+//!                                                   the family starts with: `deflate`
+//!                                                   for `deflate.literal`. Each CODEC is
+//!                                                   the word a `decoded(...)` that
+//!                                                   reaches it starts with, in
+//!                                                   alphabetical order; the list is left
+//!                                                   out when it is FAMILY alone
+//! row         := NAME ":" [many] "traced" rowpart "{" {kind} "}"
+//!                                                   a node over other nodes; the lines
+//!                                                   inside are the kinds its children
+//!                                                   can be, in the order a reader meets
+//!                                                   them. Which ones a node has is the
+//!                                                   decoder's: a stored deflate block
+//!                                                   has no `hlit`
+//! kind        := row
+//!              | NAME ":" [many] form {"or" form}   one of these forms, whichever the
+//!                                                   node took
+//! many        := "repeat(any number)"               any number of these, none included;
+//!                                                   without it, at most one
+//! rowpart     := "blocks" | "block" | "symbols" | "unit"
+//! form        := ["width(" sizing {"or" sizing} ")"] ty
+//!              | "codebits" NAME "(" sizing {"or" sizing} ")"
+//! sizing      := "fixed" | "table" | "encoded" | "trace" | "nothing"
+//! ```
+//!
+//! NAME is the kind without its family: `literal` is `deflate.literal`. The
+//! same kind is written under each row that lists it. A form is the type a
+//! node of the kind reads as, with what differs from node to node left out:
+//! `computed` and `bytes` with no expression after them are a number and
+//! bytes the decoder read, and a `Symbol` record's `kind` is written with its
+//! value because that is the same for every node of the kind. `width(...)`
+//! says how the node's width was settled: `fixed` by the format, `table` by
+//! a code-length table in the file, `encoded` by its own bits, `trace` as far
+//! as the decoder read, `nothing` for no width at all. A form with no
+//! `width(...)` is `trace`. A code says its width in its own brackets, as it
+//! does in the rest of the text. Two forms that differ only in width are
+//! written once, with both widths: `codebits Huffman code (fixed or table)`.
+//! A form written over several lines, a record, comes last.
+//!
 //! ## Expressions
 //!
 //! Infix, bracketed only where the brackets change the reading. Binding from
@@ -287,6 +336,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use crate::codec::tracekind::{self, Family, Form, KindEntry, Reads, Role};
 use crate::eval::Sizing;
 use crate::template::*;
 
@@ -294,8 +344,32 @@ use crate::template::*;
 const WIDTH: usize = 96;
 
 /// The whole template as text: the root, then every named type in alphabetical
-/// order. Two renders of one template are the same string.
+/// order, then a section for each decoder family the template reaches, in
+/// alphabetical order. Two renders of one template are the same string.
 pub fn render(t: &Template) -> String {
+    render_parts(t).0
+}
+
+/// Where a decoder kind's line is in [`render`]'s text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KindLine {
+    /// The kind, such as `deflate.literal`.
+    pub kind: &'static str,
+    /// The kind of the row the line is inside, such as `deflate.codes`, or
+    /// `None` for a family's blocks row. A kind listed under two rows, as
+    /// LZ4's token is, has a line under each.
+    pub parent: Option<&'static str>,
+    /// The line, counted from 0.
+    pub line: usize,
+}
+
+/// The line of every kind in the decoder sections of [`render`]'s text, in
+/// the order they are written.
+pub fn kind_lines(t: &Template) -> Vec<KindLine> {
+    render_parts(t).1
+}
+
+fn render_parts(t: &Template) -> (String, Vec<KindLine>) {
     let mut out: Vec<String> = Vec::new();
     out.push(format!("template {}", t.name));
     if t.deducer.is_some() {
@@ -325,13 +399,249 @@ pub fn render(t: &Template) -> String {
         };
         write_ty(&mut out, 0, &head, ty, "");
     }
+    let mut marks: Vec<(usize, &'static str, Option<&'static str>)> = Vec::new();
+    for (family, words) in decoders(t).into_values() {
+        out.push(String::new());
+        write_decoder(&mut out, &mut marks, family, &words.into_iter().collect::<Vec<_>>());
+    }
     let mut wrapped = Vec::with_capacity(out.len());
+    // Where each line of `out` starts once folded.
+    let mut starts = Vec::with_capacity(out.len());
     for line in &out {
+        starts.push(wrapped.len());
         wrap_line(line, &mut wrapped);
     }
+    let kinds = marks.into_iter().map(|(at, kind, parent)| KindLine { kind, parent, line: starts[at] }).collect();
     let mut s = wrapped.join("\n");
     s.push('\n');
-    s
+    (s, kinds)
+}
+
+/// Every decoder family some `decoded(...)` in the template reaches, by the
+/// family's word, with the word each of those `decoded(...)` starts with.
+fn decoders(t: &Template) -> std::collections::BTreeMap<&'static str, (Family, std::collections::BTreeSet<&'static str>)> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut seen = |p: &Packing| {
+        if let Some(f) = packing_family(p) {
+            found.entry(f.as_str()).or_insert_with(|| (f, std::collections::BTreeSet::new())).1.insert(packing_word(p));
+        }
+    };
+    reach_decoders(&t.root, &mut seen);
+    for ty in t.types.values() {
+        reach_decoders(ty, &mut seen);
+    }
+    found
+}
+
+/// The family whose kinds a run decoded this way has.
+fn packing_family(p: &Packing) -> Option<Family> {
+    match p {
+        Packing::Fixed(c) => Family::of(*c),
+        Packing::Lzma1 { .. } => Some(Family::Lzma),
+        Packing::Rar5 { .. } => Some(Family::Rar5),
+        Packing::PngScanlines(_) => Some(Family::PngScanlines),
+        Packing::JpegScan { .. } => Some(Family::JpegScan),
+    }
+}
+
+/// The words [`packing`] starts with, without the numbers after them:
+/// `lzma` for `lzma props 93 dict 65536`, `jpeg baseline` for `jpeg baseline
+/// segments 2`.
+fn packing_word(p: &Packing) -> &'static str {
+    match p {
+        Packing::Fixed(c) => c.as_str(),
+        Packing::Lzma1 { .. } => "lzma",
+        Packing::Rar5 { .. } => "rar5",
+        Packing::PngScanlines(_) => "png scanlines",
+        Packing::JpegScan { .. } => "jpeg baseline",
+    }
+}
+
+/// Hands `seen` every packing a `Decoded` inside `ty` uses. Named types are
+/// not followed: [`decoders`] walks each of them itself.
+fn reach_decoders(ty: &Ty, seen: &mut dyn FnMut(&Packing)) {
+    match ty {
+        Ty::Decoded { codec, inner } => {
+            seen(codec);
+            reach_decoders(inner, seen);
+        }
+        Ty::Struct(def) => {
+            for f in &def.fields {
+                reach_decoders(&f.ty, seen);
+            }
+        }
+        Ty::Switch { cases, default, .. } => {
+            for (_, t) in cases.iter() {
+                reach_decoders(t, seen);
+            }
+            reach_decoders(default, seen);
+        }
+        Ty::Match { cases, default, .. } => {
+            for (_, t) in cases.iter() {
+                reach_decoders(t, seen);
+            }
+            reach_decoders(default, seen);
+        }
+        Ty::Nullable { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::Enum { inner, .. }
+        | Ty::Flags { inner, .. }
+        | Ty::At { inner, .. }
+        | Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::When { inner, .. }
+        | Ty::Stitched { inner, .. } => reach_decoders(inner, seen),
+        Ty::Array { elem, .. }
+        | Ty::Repeat { elem, .. }
+        | Ty::PointerList { elem, .. }
+        | Ty::Chain { elem, .. }
+        | Ty::Gather { elem, .. } => reach_decoders(elem, seen),
+        Ty::Raster { pixel, .. } => reach_decoders(pixel, seen),
+        Ty::UInt { .. }
+        | Ty::Int { .. }
+        | Ty::SignMagnitude { .. }
+        | Ty::UIntExpr { .. }
+        | Ty::F16(_)
+        | Ty::BF16(_)
+        | Ty::F32(_)
+        | Ty::F64(_)
+        | Ty::F80(_)
+        | Ty::IbmF32(_)
+        | Ty::F8 { .. }
+        | Ty::Computed(_)
+        | Ty::ComputedText(_)
+        | Ty::ComputedReal(_)
+        | Ty::Leb128 { .. }
+        | Ty::Zigzag
+        | Ty::EbmlVint { .. }
+        | Ty::Vlq
+        | Ty::Fixed { .. }
+        | Ty::Magic(_)
+        | Ty::Bytes(_)
+        | Ty::Str { .. }
+        | Ty::TextInt { .. }
+        | Ty::Schema { .. }
+        | Ty::SqliteVarint
+        | Ty::SevenZipNumber
+        | Ty::Json(..)
+        | Ty::Pickle(_)
+        | Ty::Insn { .. }
+        | Ty::Named(_)
+        | Ty::Traced { .. }
+        | Ty::CodeBits { .. } => {}
+    }
+}
+
+/// One decoder family's section: its blocks row and, under every row, the
+/// kinds its children can be. `words` are the `decoded(...)` words that reach
+/// it, written after `for` unless the family's own word is the only one.
+/// Each kind's line goes into `marks` as its place in `out`, its kind and
+/// the kind of the row it is under.
+fn write_decoder(out: &mut Vec<String>, marks: &mut Vec<(usize, &'static str, Option<&'static str>)>, family: Family, words: &[&str]) {
+    let name = family.as_str();
+    match words {
+        [only] if *only == name => out.push(format!("decoder {name} {{")),
+        _ => out.push(format!("decoder {name} for {} {{", words.join(", "))),
+    }
+    if let Some(blocks) = family.entry(Role::Blocks) {
+        write_kind(out, marks, 1, family, blocks, None, false);
+    }
+    out.push("}".to_string());
+}
+
+/// One kind's line, or for a row over other nodes, its block of lines with
+/// a line for each kind its children can be.
+fn write_kind(
+    out: &mut Vec<String>,
+    marks: &mut Vec<(usize, &'static str, Option<&'static str>)>,
+    ind: usize,
+    family: Family,
+    e: &'static KindEntry,
+    parent: Option<&'static KindEntry>,
+    repeated: bool,
+) {
+    let short = e.kind.split_once('.').map_or(e.kind, |(_, s)| s);
+    let head = format!("{short}: {}", if repeated { "repeat(any number) " } else { "" });
+    marks.push((out.len(), e.kind, parent.map(|p| p.kind)));
+    if !e.children.is_empty() {
+        out.push(format!("{}{head}traced {} {{", pad(ind), traced_word(e.role)));
+        for &c in e.children {
+            // A row listing itself, or a row above it, would never end; no
+            // table does, and `tracekind`'s tests would say so first.
+            let Some(child) = family.entry(c) else { continue };
+            if child.role == e.role || parent.is_some_and(|p| p.role == child.role) {
+                continue;
+            }
+            write_kind(out, marks, ind + 1, family, child, Some(e), tracekind::repeats(family, e.role, c));
+        }
+        out.push(format!("{}}}", pad(ind)));
+        return;
+    }
+    let forms = kind_forms(e.forms);
+    let Some((last, before)) = forms.split_last() else { return };
+    let mut head = head;
+    for f in before {
+        head.push_str(&format!("{}{} or ", f.0, inline(&f.1).unwrap_or_default()));
+    }
+    head.push_str(&last.0);
+    write_ty(out, ind, &head, &last.1, "");
+}
+
+/// The word `traced` is followed by for a row in `role`, the one the IR's
+/// `Ty::Traced` is written with.
+fn traced_word(role: Role) -> &'static str {
+    match role {
+        Role::Blocks => "blocks",
+        Role::Codes => "symbols",
+        Role::Unit => "unit",
+        _ => "block",
+    }
+}
+
+/// A kind's forms, each as the width written in front of it and the type it
+/// reads as. Forms that differ only in width are one, with the widths
+/// joined by `or`. A form that cannot be written on one line, a record, goes
+/// last, since the forms before it are written on its first line.
+fn kind_forms(forms: &[Form]) -> Vec<(String, Ty)> {
+    let mut grouped: Vec<(Reads, Vec<Sizing>)> = Vec::new();
+    for f in forms {
+        match grouped.iter_mut().find(|g| g.0 == f.reads) {
+            Some(g) if !g.1.contains(&f.sized) => g.1.push(f.sized),
+            Some(_) => {}
+            None => grouped.push((f.reads, vec![f.sized])),
+        }
+    }
+    let widths = |w: &[Sizing]| w.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" or ");
+    let mut out: Vec<(String, Ty)> = grouped
+        .iter()
+        .map(|(reads, sized)| {
+            let width = match sized.as_slice() {
+                [Sizing::Trace] => String::new(),
+                w => format!("width({}) ", widths(w)),
+            };
+            match reads {
+                // A code's name says its width itself, in its own brackets.
+                Reads::CodeBits(name) => (String::new(), Ty::Named(Arc::from(format!("codebits {name} ({})", widths(sized)).as_str()))),
+                Reads::Computed => (width, varying("computed")),
+                Reads::Enum(def) => (width, Ty::enumeration(def.name, varying("computed"), def.cases)),
+                Reads::Bytes => (width, varying("bytes")),
+                Reads::Traced(name) => (width, varying(&format!("traced {name}"))),
+                Reads::Struct { kind, fields } => {
+                    let mut tys = vec![(fields[0], Ty::enumeration(tracekind::SYMBOL_KIND.name, Ty::Computed(Expr::Lit(*kind)), tracekind::SYMBOL_KIND.cases))];
+                    tys.extend(fields[1..].iter().map(|f| (*f, varying("computed"))));
+                    (width, Ty::structure(tracekind::RECORD_NAME, tys))
+                }
+            }
+        })
+        .collect();
+    out.sort_by_key(|f| inline(&f.1).is_none());
+    out
+}
+
+/// A type written as a bare word, `computed` or `bytes`, for a value that
+/// differs from node to node and so has no expression to write.
+fn varying(word: &str) -> Ty {
+    Ty::Named(Arc::from(word))
 }
 
 /// One line, folded onto as many as it takes to stay inside [`WIDTH`].
@@ -2835,5 +3145,143 @@ mod tests {
         let text = choice(vec![(1, inner(32)), (2, inner(32))]);
         assert!(text.contains("\n    2 => same as case 1\n"), "{text}");
         assert_eq!(text.matches("Header {").count(), 1, "{text}");
+    }
+
+    /// The section for one family on its own, as `render` writes it, with
+    /// the kinds' lines counted from the section's first line.
+    fn section(family: Family, words: &[&str]) -> (String, Vec<(usize, &'static str, Option<&'static str>)>) {
+        let (mut out, mut marks) = (Vec::new(), Vec::new());
+        write_decoder(&mut out, &mut marks, family, words);
+        let mut wrapped = Vec::new();
+        let mut starts = Vec::new();
+        for l in &out {
+            starts.push(wrapped.len());
+            wrap_line(l, &mut wrapped);
+        }
+        for m in &mut marks {
+            m.0 = starts[m.0];
+        }
+        (wrapped.join("\n"), marks)
+    }
+
+    /// A kind with two forms that differ only in width is one type with both
+    /// widths, and one whose forms read differently is both, joined by `or`.
+    #[test]
+    fn a_kind_with_several_forms_is_one_line() {
+        let (text, _) = section(Family::Deflate, &["deflate"]);
+        assert!(text.starts_with("decoder deflate {\n  blocks: traced blocks {\n    block: repeat(any number) traced block {\n"), "{text}");
+        assert!(text.contains("\n        literal: repeat(any number) codebits Huffman code (fixed or table)\n"), "{text}");
+        assert!(text.contains("\n        end_of_block: codebits Huffman code (fixed or table)\n"), "{text}");
+        assert!(text.contains("\n      bfinal: width(fixed) computed enum DeflateFinal {\n        0 = more blocks follow, 1 = the last block\n      }\n"), "{text}");
+        assert!(text.contains("\n      code_length: repeat(any number) computed\n"), "{text}");
+        let (text, _) = section(Family::Lzma, &["xz"]);
+        assert!(text.starts_with("decoder lzma for xz {\n"), "{text}");
+        assert!(text.contains("\n      properties: width(trace or nothing) computed\n"), "{text}");
+        // A number or a record: the record is written out, after the number.
+        let (text, _) = section(Family::Lz4, &["lz4 frame"]);
+        assert!(text.contains("\n      token: computed or Symbol {\n        kind: computed 4 enum SymbolKind {\n"), "{text}");
+    }
+
+    /// JPEG's blocks hold units, and a unit's codes are listed under it.
+    #[test]
+    fn a_jpeg_scan_lists_its_units_codes() {
+        let (text, marks) = section(Family::JpegScan, &["jpeg baseline"]);
+        assert!(
+            text.starts_with("decoder jpegscan for jpeg baseline {\n  mcus: traced blocks {\n    mcu: repeat(any number) traced block {\n      unit: repeat(any number) traced unit {\n"),
+            "{text}"
+        );
+        assert!(text.contains("\n        dc: codebits Huffman code (table) or codebits Huffman code and value bits (encoded)\n"), "{text}");
+        assert!(text.contains("\n        ac: repeat(any number) codebits Huffman code and value bits (encoded)\n"), "{text}");
+        assert!(text.contains("\n        eob: codebits Huffman code (table)\n"), "{text}");
+        let lines: Vec<&str> = text.lines().collect();
+        let dc = marks.iter().find(|m| m.1 == "jpegscan.dc").expect("a line for dc");
+        assert_eq!(dc.2, Some("jpegscan.unit"));
+        assert!(lines[dc.0].trim_start().starts_with("dc: "), "{}", lines[dc.0]);
+    }
+
+    /// Every kind of every family is reached from its blocks row and has a
+    /// line that starts with its name, once under each row that lists it.
+    #[test]
+    fn every_kind_has_a_line_under_each_row_that_lists_it() {
+        for &family in Family::ALL {
+            let (text, marks) = section(family, &[family.as_str()]);
+            let lines: Vec<&str> = text.lines().collect();
+            for e in family.kinds() {
+                let short = e.kind.split_once('.').unwrap().1;
+                let parents: Vec<&str> = family.kinds().iter().filter(|p| p.children.contains(&e.role)).map(|p| p.kind).collect();
+                let mine: Vec<_> = marks.iter().filter(|m| m.1 == e.kind).collect();
+                assert!(!mine.is_empty(), "{} has no line\n{text}", e.kind);
+                for m in &mine {
+                    assert!(lines[m.0].trim_start().starts_with(&format!("{short}: ")), "{} is on {:?}", e.kind, lines[m.0]);
+                }
+                if e.role == Role::Blocks {
+                    assert_eq!(mine.iter().map(|m| m.2).collect::<Vec<_>>(), vec![None], "{}", e.kind);
+                } else {
+                    let under: Vec<&str> = mine.iter().filter_map(|m| m.2).collect();
+                    assert_eq!(under, parents, "{} under the wrong rows", e.kind);
+                }
+            }
+            assert!(text.lines().all(|l| l.chars().count() <= WIDTH), "{text}");
+        }
+    }
+
+    /// Two fields decoded by one family, and a third by another codec of it,
+    /// make one section, which names both codecs.
+    #[test]
+    fn fields_on_one_family_print_one_section() {
+        use crate::codec::Codec;
+        let root = Ty::structure(
+            "Two",
+            vec![
+                ("a", Ty::decoded(E::lit(4), Codec::Deflate, Ty::Bytes(E::lit(1)))),
+                ("b", Ty::decoded(E::lit(4), Codec::Deflate, Ty::Bytes(E::lit(1)))),
+                ("c", Ty::Named("Packed".into())),
+            ],
+        );
+        let t = Template::new("two", root).with_type("Packed", Ty::decoded(E::lit(4), Codec::Zlib, Ty::Bytes(E::lit(1))));
+        let text = render(&t);
+        assert_eq!(text.matches("\ndecoder ").count(), 1, "{text}");
+        assert!(text.contains("\n\ndecoder deflate for deflate, zlib {\n"), "{text}");
+        let kinds = kind_lines(&t);
+        let lines: Vec<&str> = text.lines().collect();
+        let literal = kinds.iter().find(|k| k.kind == "deflate.literal").unwrap();
+        assert!(lines[literal.line].trim_start().starts_with("literal: "), "{}", lines[literal.line]);
+        // A codec whose nodes have no kinds prints no section.
+        let t = Template::new("one", Ty::decoded(E::lit(4), Codec::Zstd, Ty::Bytes(E::lit(1))));
+        assert!(!render(&t).contains("decoder"), "{}", render(&t));
+        assert!(kind_lines(&t).is_empty());
+    }
+
+    /// Every built-in's `decoded(...)` words that have a family are in exactly
+    /// one section's head, and every kind's line starts with its name.
+    #[test]
+    fn every_decoded_word_is_in_one_section_head() {
+        for name in crate::formats::builtin_names() {
+            let Some(t) = crate::formats::builtin(name) else { continue };
+            let text = render(&t);
+            let heads: Vec<&str> = text.lines().filter(|l| l.starts_with("decoder ")).collect();
+            let mut words = Vec::new();
+            reach_decoders(&t.root, &mut |p| words.push((packing_family(p), packing_word(p), packing(p))));
+            for ty in t.types.values() {
+                reach_decoders(ty, &mut |p| words.push((packing_family(p), packing_word(p), packing(p))));
+            }
+            for (family, word, written) in words {
+                assert!(written.starts_with(word), "{name}: {written} does not start with {word}");
+                let Some(family) = family else { continue };
+                let has = |h: &&&str| {
+                    let rest = h.strip_prefix("decoder ").unwrap().strip_suffix(" {").unwrap();
+                    match rest.split_once(" for ") {
+                        Some((f, list)) => f == family.as_str() && list.split(", ").any(|w| w == word),
+                        None => rest == family.as_str() && word == family.as_str(),
+                    }
+                };
+                assert_eq!(heads.iter().filter(has).count(), 1, "{name}: decoded({word}) is not in one head of {heads:?}");
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            for k in kind_lines(&t) {
+                let short = k.kind.split_once('.').unwrap().1;
+                assert!(lines[k.line].trim_start().starts_with(&format!("{short}: ")), "{name}: {} is on {:?}", k.kind, lines[k.line]);
+            }
+        }
     }
 }

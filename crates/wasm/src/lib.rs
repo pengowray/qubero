@@ -1241,6 +1241,26 @@ impl Editor {
         }
     }
 
+    /// Which line of `template_text` each decoder kind is on, as a JSON array
+    /// of `{kind, parent, line}`: `deflate.literal`, the kind of the row it is
+    /// written under (empty for a family's blocks row), and the line counted
+    /// from 0. A kind listed under two rows has an entry for each. Empty when
+    /// no template is selected.
+    pub fn template_kind_lines(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct KindLineDto {
+            kind: &'static str,
+            parent: &'static str,
+            line: usize,
+        }
+        let Some(e) = self.sheets[0].eval.as_ref() else { return "[]".into() };
+        let lines: Vec<KindLineDto> = qubero_core::template_text::kind_lines(e.template())
+            .into_iter()
+            .map(|k| KindLineDto { kind: k.kind, parent: k.parent.unwrap_or(""), line: k.line })
+            .collect();
+        serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into())
+    }
+
     /// Best current projection for a variable-size array being walked, or an
     /// empty string when no unfinished walk has enough information yet.
     pub fn extent_estimate(&mut self, space: u32) -> String {

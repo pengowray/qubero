@@ -11,7 +11,10 @@
 // (`worded "{} bytes"`).
 
 /** What a line is, as far as colouring goes. */
-export type LineKind = "field" | "comment" | "plain";
+/** `kind` is a line of a `decoder` section that names a kind of trace node,
+ *  or a field of a kind's record: coloured as a field is, but not a field of
+ *  the template, so it cannot be clicked. */
+export type LineKind = "field" | "comment" | "plain" | "kind";
 
 /** One structure block: `root X {`, `type X {`, `field: X (...) {`, `3 => X {`. */
 export type Block = {
@@ -67,6 +70,9 @@ export type TemplateIndex = {
   readonly armOf: ReadonlyMap<number, Choice>;
   /** A structure's first line, to the structure. */
   readonly opens: ReadonlyMap<number, Block>;
+  /** Each `decoder ... {` section: its first line and its closing `}`. Nothing
+   *  inside one is a block, a field, a statement or part of a type's span. */
+  readonly decoders: readonly (readonly [number, number])[];
 };
 
 /** One `same as case` or `same as type` line. `target` is the first line of
@@ -195,6 +201,9 @@ export function indexTemplate(text: string): TemplateIndex {
    *  arm indentation. */
   let stmtChoice: Choice | null = null;
   let topType: { name: string; start: number } | null = null;
+  const decoders: [number, number][] = [];
+  /** The decoder section being read. */
+  let section: [number, number] | null = null;
 
   const closeTopType = (last: number): void => {
     if (topType !== null) typeSpans.set(topType.name, [topType.start, last]);
@@ -260,6 +269,25 @@ export function indexTemplate(text: string): TemplateIndex {
 
   for (let i = 0; i < lines.length; i++) {
     const line = ln(i);
+    // A decoder section describes what a decoder lays down, not the
+    // template's own fields, and runs to the `}` at the start of a line.
+    if (section !== null) {
+      section[1] = i;
+      if (line === "}") section = null;
+      else if (/^\s+[a-z_]+: /.test(line)) kinds[i] = "kind";
+      continue;
+    }
+    if (line.startsWith("decoder ")) {
+      finish(i - 1);
+      while (stack.length > 0) {
+        const f = stack.pop()!;
+        if (f.block !== null) f.block.end = i - 1;
+      }
+      closeTopType(i - 1);
+      section = [i, i];
+      decoders.push(section);
+      continue;
+    }
     if (line.trim() === "") {
       finish(i - 1);
       continue;
@@ -316,7 +344,7 @@ export function indexTemplate(text: string): TemplateIndex {
     }
     d.sort((a, b) => a[0] - b[0]);
   }
-  return { lines, kinds, decls, blocks, byName, typeSpans, root, rootLine, stmtEnd, sameAs, alias, armOf, opens };
+  return { lines, kinds, decls, blocks, byName, typeSpans, root, rootLine, stmtEnd, sameAs, alias, armOf, opens, decoders };
 }
 
 /** The byte order a block is also read in: the order of a `same as case N,
@@ -833,7 +861,7 @@ const KEYWORDS = new Set(["switch", "match", "enum", "flags", "from", "until", "
  *  field may well be called `chain`. */
 const CALL_KEYWORDS = new Set(["sized", "sizedbits", "optional", "at", "decoded", "repeat", "pointers", "chain", "gather", "stitched", "raster", "schema"]);
 /** Words of the notation at the start of a line. */
-const LEAD_KEYWORDS = new Set(["template", "root", "type", "deducer"]);
+const LEAD_KEYWORDS = new Set(["template", "root", "type", "deducer", "decoder"]);
 
 /**
  * One line cut into coloured runs. `kind` and `decls` come from the index: a
@@ -845,7 +873,7 @@ export function tokenizeLine(text: string, kind: LineKind, decls: readonly (read
   const marks: { at: number; end: number; cls: Segment["cls"] }[] = [];
   for (const [a, z] of decls) marks.push({ at: a, end: z, cls: "decl" });
   const lead = indentOf(text);
-  if (kind === "field") {
+  if (kind === "field" || kind === "kind") {
     const colon = text.indexOf(": ", lead);
     if (colon > lead) marks.push({ at: lead, end: colon, cls: "field" });
   }
@@ -876,4 +904,29 @@ export function tokenizeLine(text: string, kind: LineKind, decls: readonly (read
   }
   if (pos < text.length) out.push({ text: text.slice(pos), cls: "" });
   return out;
+}
+
+/** Which line of the template text one decoder kind is on, as the core's
+ *  `template_kind_lines` gives it: `deflate.literal`, the kind of the row it
+ *  is written under (empty for a family's blocks row), and the line. */
+export type KindLine = { readonly kind: string; readonly parent: string; readonly line: number };
+
+/**
+ * The line for the node at the cursor when it is one a decoder laid down.
+ * `chain` is the trace kind of each node from the root to the cursor, or
+ * undefined for a node that has none. The deepest node with a kind decides,
+ * so a field of a literal's record marks the literal's line. A kind written
+ * under two rows, as LZ4's token is, is found under its parent's kind. Null
+ * when no node in the chain has a kind the text has a line for.
+ */
+export function kindLineAt(lines: readonly KindLine[], chain: readonly (string | undefined)[]): number | null {
+  for (let d = chain.length - 1; d >= 0; d--) {
+    const kind = chain[d];
+    if (kind === undefined) continue;
+    const parent = chain[d - 1] ?? "";
+    const all = lines.filter((l) => l.kind === kind);
+    const hit = all.find((l) => l.parent === parent) ?? all[0];
+    if (hit !== undefined) return hit.line;
+  }
+  return null;
 }
