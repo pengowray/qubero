@@ -71,7 +71,9 @@ export type TemplateIndex = {
   /** A structure's first line, to the structure. */
   readonly opens: ReadonlyMap<number, Block>;
   /** Each `decoder ... {` section: its first line and its closing `}`. Nothing
-   *  inside one is a block, a field, a statement or part of a type's span. */
+   *  inside one is a block, a field, a statement or part of a type's span, and
+   *  the same holds for the top-level `enum ... {` block written above them,
+   *  which is not listed here. */
   readonly decoders: readonly (readonly [number, number])[];
 };
 
@@ -202,8 +204,11 @@ export function indexTemplate(text: string): TemplateIndex {
   let stmtChoice: Choice | null = null;
   let topType: { name: string; start: number } | null = null;
   const decoders: [number, number][] = [];
-  /** The decoder section being read. */
+  /** The decoder section, or the top-level `enum` block their records share,
+   *  being read. */
   let section: [number, number] | null = null;
+  /** Whether `section` is a decoder section, whose lines name kinds. */
+  let sectionHasKinds = false;
 
   const closeTopType = (last: number): void => {
     if (topType !== null) typeSpans.set(topType.name, [topType.start, last]);
@@ -270,14 +275,16 @@ export function indexTemplate(text: string): TemplateIndex {
   for (let i = 0; i < lines.length; i++) {
     const line = ln(i);
     // A decoder section describes what a decoder lays down, not the
-    // template's own fields, and runs to the `}` at the start of a line.
+    // template's own fields, and runs to the `}` at the start of a line. The
+    // `enum SymbolKind {` block above the sections holds the cases their
+    // records name, and is skipped the same way without being a section.
     if (section !== null) {
       section[1] = i;
       if (line === "}") section = null;
-      else if (/^\s+[a-z_]+: /.test(line)) kinds[i] = "kind";
+      else if (sectionHasKinds && /^\s+[a-z_]+: /.test(line)) kinds[i] = "kind";
       continue;
     }
-    if (line.startsWith("decoder ")) {
+    if (line.startsWith("decoder ") || line.startsWith("enum ")) {
       finish(i - 1);
       while (stack.length > 0) {
         const f = stack.pop()!;
@@ -285,7 +292,8 @@ export function indexTemplate(text: string): TemplateIndex {
       }
       closeTopType(i - 1);
       section = [i, i];
-      decoders.push(section);
+      sectionHasKinds = line.startsWith("decoder ");
+      if (sectionHasKinds) decoders.push(section);
       continue;
     }
     if (line.trim() === "") {

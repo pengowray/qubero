@@ -17,6 +17,7 @@
 //!                ["deducer: in code"]
 //!                "root" ty
 //!                {type}                            in alphabetical order
+//!                {shared}                          see Decoders
 //!                {decoder}                         in alphabetical order
 //! type        := "type" struct                     a structure filed under its own name
 //!              | "type" NAME "=" ty                anything else, under the name a
@@ -219,6 +220,9 @@
 //! `codec::tracekind`, not from the template.
 //!
 //! ```text
+//! shared      := "enum" NAME "{" {int "=" NAME} "}"  an enum the records of the
+//!                                                   sections below use, written once,
+//!                                                   and only when some record uses it
 //! decoder     := "decoder" FAMILY ["for" CODEC {"," CODEC}] "{" row "}"
 //!                                                   FAMILY is the word every kind of
 //!                                                   the family starts with: `deflate`
@@ -243,6 +247,10 @@
 //! form        := ["width(" sizing {"or" sizing} ")"] ty
 //!              | "codebits" NAME "(" sizing {"or" sizing} ")"
 //! sizing      := "fixed" | "table" | "encoded" | "trace" | "nothing"
+//! recordkind  := "kind:" "computed" int "(" NAME ")" "enum" NAME
+//!                                                   a record's `kind`: its value, the
+//!                                                   name of that case, and the `shared`
+//!                                                   enum the case is from
 //! ```
 //!
 //! NAME is the kind without its family: `literal` is `deflate.literal`. The
@@ -250,7 +258,11 @@
 //! node of the kind reads as, with what differs from node to node left out:
 //! `computed` and `bytes` with no expression after them are a number and
 //! bytes the decoder read, and a `Symbol` record's `kind` is written with its
-//! value because that is the same for every node of the kind. `width(...)`
+//! value because that is the same for every node of the kind. The `kind` line
+//! is a `recordkind`: `kind: computed 3 (stored) enum SymbolKind`. The cases
+//! of `SymbolKind` are in the `shared` block above the first section, not on
+//! each record, while an enum on any other line, such as deflate's `bfinal`,
+//! keeps its cases on that line. `width(...)`
 //! says how the node's width was settled: `fixed` by the format, `table` by
 //! a code-length table in the file, `encoded` by its own bits, `trace` as far
 //! as the decoder read, `nothing` for no width at all. A form with no
@@ -399,11 +411,24 @@ fn render_parts(t: &Template) -> (String, Vec<KindLine>) {
         };
         write_ty(&mut out, 0, &head, ty, "");
     }
+    // The decoder sections are written apart first, because the enums their
+    // records share are written once above them, and which those are is only
+    // known once the sections are written.
+    let mut sections: Vec<String> = Vec::new();
     let mut marks: Vec<(usize, &'static str, Option<&'static str>)> = Vec::new();
+    let mut shared: Vec<tracekind::EnumDef> = Vec::new();
     for (family, words) in decoders(t).into_values() {
-        out.push(String::new());
-        write_decoder(&mut out, &mut marks, family, &words.into_iter().collect::<Vec<_>>());
+        sections.push(String::new());
+        write_decoder(&mut sections, &mut marks, &mut shared, family, &words.into_iter().collect::<Vec<_>>());
     }
+    for def in &shared {
+        out.push(String::new());
+        write_shared_enum(&mut out, def);
+    }
+    for m in &mut marks {
+        m.0 += out.len();
+    }
+    out.extend(sections);
     let mut wrapped = Vec::with_capacity(out.len());
     // Where each line of `out` starts once folded.
     let mut starts = Vec::with_capacity(out.len());
@@ -537,14 +562,20 @@ fn reach_decoders(ty: &Ty, seen: &mut dyn FnMut(&Packing)) {
 /// it, written after `for` unless the family's own word is the only one.
 /// Each kind's line goes into `marks` as its place in `out`, its kind and
 /// the kind of the row it is under.
-fn write_decoder(out: &mut Vec<String>, marks: &mut Vec<(usize, &'static str, Option<&'static str>)>, family: Family, words: &[&str]) {
+fn write_decoder(
+    out: &mut Vec<String>,
+    marks: &mut Vec<(usize, &'static str, Option<&'static str>)>,
+    shared: &mut Vec<tracekind::EnumDef>,
+    family: Family,
+    words: &[&str],
+) {
     let name = family.as_str();
     match words {
         [only] if *only == name => out.push(format!("decoder {name} {{")),
         _ => out.push(format!("decoder {name} for {} {{", words.join(", "))),
     }
     if let Some(blocks) = family.entry(Role::Blocks) {
-        write_kind(out, marks, 1, family, blocks, None, false);
+        write_kind(out, marks, shared, 1, family, blocks, None, false);
     }
     out.push("}".to_string());
 }
@@ -554,6 +585,7 @@ fn write_decoder(out: &mut Vec<String>, marks: &mut Vec<(usize, &'static str, Op
 fn write_kind(
     out: &mut Vec<String>,
     marks: &mut Vec<(usize, &'static str, Option<&'static str>)>,
+    shared: &mut Vec<tracekind::EnumDef>,
     ind: usize,
     family: Family,
     e: &'static KindEntry,
@@ -572,12 +604,12 @@ fn write_kind(
             if child.role == e.role || parent.is_some_and(|p| p.role == child.role) {
                 continue;
             }
-            write_kind(out, marks, ind + 1, family, child, Some(e), tracekind::repeats(family, e.role, c));
+            write_kind(out, marks, shared, ind + 1, family, child, Some(e), tracekind::repeats(family, e.role, c));
         }
         out.push(format!("{}}}", pad(ind)));
         return;
     }
-    let forms = kind_forms(e.forms);
+    let forms = kind_forms(e.forms, shared);
     let Some((last, before)) = forms.split_last() else { return };
     let mut head = head;
     for f in before {
@@ -601,8 +633,10 @@ fn traced_word(role: Role) -> &'static str {
 /// A kind's forms, each as the width written in front of it and the type it
 /// reads as. Forms that differ only in width are one, with the widths
 /// joined by `or`. A form that cannot be written on one line, a record, goes
-/// last, since the forms before it are written on its first line.
-fn kind_forms(forms: &[Form]) -> Vec<(String, Ty)> {
+/// last, since the forms before it are written on its first line. A record's
+/// `kind` names its enum without the cases, and the enum goes into `shared`
+/// to be written once at the top level.
+fn kind_forms(forms: &[Form], shared: &mut Vec<tracekind::EnumDef>) -> Vec<(String, Ty)> {
     let mut grouped: Vec<(Reads, Vec<Sizing>)> = Vec::new();
     for f in forms {
         match grouped.iter_mut().find(|g| g.0 == f.reads) {
@@ -627,7 +661,12 @@ fn kind_forms(forms: &[Form]) -> Vec<(String, Ty)> {
                 Reads::Bytes => (width, varying("bytes")),
                 Reads::Traced(name) => (width, varying(&format!("traced {name}"))),
                 Reads::Struct { kind, fields } => {
-                    let mut tys = vec![(fields[0], Ty::enumeration(tracekind::SYMBOL_KIND.name, Ty::Computed(Expr::Lit(*kind)), tracekind::SYMBOL_KIND.cases))];
+                    let def = tracekind::SYMBOL_KIND;
+                    if !shared.contains(&def) {
+                        shared.push(def);
+                    }
+                    let case = def.cases.iter().find(|c| c.0 == *kind).map_or("not a case", |c| c.1);
+                    let mut tys = vec![(fields[0], varying(&format!("computed {kind} ({case}) enum {}", def.name)))];
                     tys.extend(fields[1..].iter().map(|f| (*f, varying("computed"))));
                     (width, Ty::structure(tracekind::RECORD_NAME, tys))
                 }
@@ -636,6 +675,13 @@ fn kind_forms(forms: &[Form]) -> Vec<(String, Ty)> {
         .collect();
     out.sort_by_key(|f| inline(&f.1).is_none());
     out
+}
+
+/// An enum the records of the decoder sections share, written once at the
+/// top level: `enum SymbolKind {`, its cases, `}`.
+fn write_shared_enum(out: &mut Vec<String>, def: &tracekind::EnumDef) {
+    let cases: Vec<String> = def.cases.iter().map(|(v, n)| format!("{v} = {n}")).collect();
+    write_body(out, 0, &format!("enum {} ", def.name), &cases, "");
 }
 
 /// A type written as a bare word, `computed` or `bytes`, for a value that
@@ -3151,7 +3197,7 @@ mod tests {
     /// the kinds' lines counted from the section's first line.
     fn section(family: Family, words: &[&str]) -> (String, Vec<(usize, &'static str, Option<&'static str>)>) {
         let (mut out, mut marks) = (Vec::new(), Vec::new());
-        write_decoder(&mut out, &mut marks, family, words);
+        write_decoder(&mut out, &mut marks, &mut Vec::new(), family, words);
         let mut wrapped = Vec::new();
         let mut starts = Vec::new();
         for l in &out {
@@ -3179,7 +3225,7 @@ mod tests {
         assert!(text.contains("\n      properties: width(trace or nothing) computed\n"), "{text}");
         // A number or a record: the record is written out, after the number.
         let (text, _) = section(Family::Lz4, &["lz4 frame"]);
-        assert!(text.contains("\n      token: computed or Symbol {\n        kind: computed 4 enum SymbolKind {\n"), "{text}");
+        assert!(text.contains("\n      token: computed or Symbol {\n        kind: computed 4 (not named) enum SymbolKind\n"), "{text}");
     }
 
     /// JPEG's blocks hold units, and a unit's codes are listed under it.
@@ -3242,6 +3288,12 @@ mod tests {
         let text = render(&t);
         assert_eq!(text.matches("\ndecoder ").count(), 1, "{text}");
         assert!(text.contains("\n\ndecoder deflate for deflate, zlib {\n"), "{text}");
+        // The records' enum is written once, between the named types and the
+        // first section, and each record names only its own case.
+        assert_eq!(text.matches("enum SymbolKind {").count(), 1, "{text}");
+        assert!(text.contains("\n\nenum SymbolKind {\n  0 = literal, 1 = match, 2 = end of block,"), "{text}");
+        assert!(text.find("enum SymbolKind {").unwrap() < text.find("\ndecoder ").unwrap(), "{text}");
+        assert!(text.contains("\n        stored_data: Symbol {\n          kind: computed 3 (stored) enum SymbolKind\n"), "{text}");
         let kinds = kind_lines(&t);
         let lines: Vec<&str> = text.lines().collect();
         let literal = kinds.iter().find(|k| k.kind == "deflate.literal").unwrap();
@@ -3249,6 +3301,7 @@ mod tests {
         // A codec whose nodes have no kinds prints no section.
         let t = Template::new("one", Ty::decoded(E::lit(4), Codec::Zstd, Ty::Bytes(E::lit(1))));
         assert!(!render(&t).contains("decoder"), "{}", render(&t));
+        assert!(!render(&t).contains("enum SymbolKind"), "{}", render(&t));
         assert!(kind_lines(&t).is_empty());
     }
 

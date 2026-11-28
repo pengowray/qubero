@@ -3967,12 +3967,19 @@ more than one form writes them joined by `or`, and forms that differ only in
 how their width was settled share one type: `(fixed or table)`. The kinds'
 descriptions are not in the text; the `trace_kinds` wasm export has them.
 
+A record a decoder lays down, such as deflate's stored data, is a `Symbol`
+whose `kind` is the same for every node of that kind. The record's line names
+the value and its case, and only the enum's name:
+`kind: computed 3 (stored) enum SymbolKind`. The enum's cases are written once,
+as a top-level `enum SymbolKind { ... }` block between the named types and the
+first `decoder` section, and only when a section has such a record.
+
 The core says which line each kind is on (`template_text::kind_lines`, the
 wasm `template_kind_lines`), so the web does not parse the sections. With the
 cursor on a decoded node, the Template tab marks its kind's line, under the
 row of its parent's kind when the kind is listed under two rows. The web's
-index of the text leaves the sections out, so a decoder line is never taken
-for a field: it cannot be clicked.
+index of the text leaves the sections out, and the shared enum block above
+them, so a decoder line is never taken for a field: it cannot be clicked.
 
 Snapshots of the text for several formats are in
 `crates/core/tests/snapshots/template_text/`; regenerate them with
