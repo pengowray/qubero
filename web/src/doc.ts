@@ -761,6 +761,58 @@ export type StringInsideKind = "numbers" | "code" | "packed";
  *  low bits of pixels. */
 export type CodecKind = "compression" | "encoding" | "scrambling" | "stored" | "filter" | "steganography";
 
+/** One codec family's kinds of trace node, as the core's `trace_kinds` export
+ *  answers with (an array of these). `family` is the word every kind starts
+ *  with: `deflate` for `deflate.literal`. See `qubero_core::codec::tracekind`. */
+export interface TraceKindFamily {
+  readonly family: string;
+  /** In the order a reader meets them. */
+  readonly kinds: readonly TraceKindShape[];
+}
+
+/** What a node of one `TemplateNode.trace_kind` is. */
+export interface TraceKindShape {
+  readonly kind: string;
+  /** One line for a programmer. */
+  readonly about: string;
+  /** Every way a node of this kind can read; never empty. A deflate literal
+   *  has two: a code of fixed width in a fixed-Huffman block, and one its
+   *  block's own table sized in a dynamic block. */
+  readonly forms: readonly TraceKindForm[];
+  /** For a row over other nodes, the kinds its children can be. Empty for
+   *  every other kind; a record's fields are not kinds. */
+  readonly children: readonly string[];
+}
+
+export interface TraceKindForm {
+  readonly reads: TraceKindReads;
+  /** How the node's width was settled: by the format, by a code-length table
+   *  in the file, by its own bits, measured by the decoder, or no width. */
+  readonly sized: "fixed" | "table" | "encoded" | "trace" | "nothing";
+}
+
+/** What a node reads as, in the IR's terms. `name` is what the type column
+ *  says. A JPEG code that lies across a stuffed 00 byte adds
+ *  `, plus a stuffed 00 byte` to its code's name. */
+export type TraceKindReads =
+  | { readonly type: "rows"; readonly name: string }
+  | { readonly type: "number" }
+  | { readonly type: "enum"; readonly name: string; readonly cases: readonly TraceKindCase[] }
+  | { readonly type: "code"; readonly name: string }
+  | {
+      readonly type: "record";
+      readonly name: string;
+      /** The value the record's first field, `kind`, holds. */
+      readonly kind: TraceKindCase;
+      readonly fields: readonly { readonly name: string; readonly type: string }[];
+    }
+  | { readonly type: "bytes" };
+
+export interface TraceKindCase {
+  readonly value: number;
+  readonly name: string;
+}
+
 export type StringInside = {
   readonly kind: StringInsideKind;
   /** The run, or the stream: what opens a packed one in a tab of its own. */

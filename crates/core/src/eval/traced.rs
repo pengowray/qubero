@@ -39,9 +39,9 @@ use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 use crate::codec::lazy::{refused_as_none, Seekable};
-use crate::codec::tracekind::{Family, Role, TraceKind};
+use crate::codec::tracekind::{self as tk, EnumDef, Family, Form, Reads, Role, TraceKind};
 use crate::codec::{Block, BlockKind, Codec, Step, StepField, StepKind, TableField, Trace, Unit};
-use crate::eval::{EvalError, Evaluator, Sizing, R};
+use crate::eval::{EvalError, Evaluator, R};
 use crate::template::{Expr as E, Ty as T};
 
 /// Where the `blocks` row and the rows under it get their facts: the trace of
@@ -361,14 +361,11 @@ fn scanline_name(trace: &Trace, block: &Block) -> String {
         (None, Some(r)) => format!("row {r}"),
         _ => "scanline".to_string(),
     };
-    match filter.and_then(|f| PNG_FILTERS.get(f as usize)) {
+    match filter.and_then(|f| tk::PNG_FILTER.cases.get(f as usize)) {
         Some((_, name)) => format!("{at}, filter {name}"),
         None => at,
     }
 }
-
-/// RFC 2083's five filter types, by the number a scanline's filter byte holds.
-const PNG_FILTERS: [(i128, &str); 5] = [(0, "none"), (1, "sub"), (2, "up"), (3, "average"), (4, "paeth")];
 
 /// What one of a block's units is called: which channel, and where that
 /// channel's 8×8 block is, counted in blocks across and down.
@@ -399,14 +396,12 @@ pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, 
         n => format!("{what}, plus {n} stuffed 00 bytes"),
     };
     let code = match step.kind {
-        StepKind::Dc { size: 0, .. } | StepKind::Zrl { .. } | StepKind::Eob { .. } => {
-            Some(T::code_bits(&with("Huffman code"), Sizing::Table))
-        }
-        StepKind::Dc { .. } | StepKind::Ac { .. } => Some(T::code_bits(&with("Huffman code and value bits"), Sizing::Encoded)),
+        StepKind::Dc { size: 0, .. } | StepKind::Zrl { .. } | StepKind::Eob { .. } => Some(tk::HUFFMAN_TABLE),
+        StepKind::Dc { .. } | StepKind::Ac { .. } => Some(tk::CODE_AND_VALUE_BITS),
         _ => None,
     };
     match code {
-        Some(code) => (name, sized(bits, code)),
+        Some(form) => (name, sized(bits, T::code_bits(&with(code_name(form)), form.sized))),
         None => match step.kind {
             StepKind::Header(StepField::Restart, _) => ("restart marker".to_string(), head_field(step, None).1),
             // The run after the last MCU holds nothing a decoder reads.
@@ -433,30 +428,46 @@ pub(super) fn head_field(step: &Step, family: Option<Family>) -> (String, T) {
     }
 }
 
-/// A header field's value, named where the format names its values.
+/// A header field's value, named where the format names its values. Which
+/// fields those are, and the names, are in [`tk::header_enum`].
 fn header_ty(field: StepField, value: u32, bits: u64) -> T {
     let inner = T::computed(E::lit(value as i128));
-    let named = match field {
-        StepField::Bfinal => {
-            T::enumeration("DeflateFinal", inner, &[(0, "more blocks follow"), (1, "the last block")])
-        }
-        StepField::Btype => T::enumeration(
-            "DeflateBlockType",
-            inner,
-            &[(0, "stored"), (1, "fixed Huffman"), (2, "dynamic Huffman"), (3, "reserved")],
-        ),
-        // RFC 2083 section 6: how the encoder predicted this row.
-        StepField::Filter => T::enumeration("PngFilter", inner, &PNG_FILTERS),
-        // T.81's own names for the eight markers, which count 0 to 7 and
-        // round again.
-        StepField::Restart => T::enumeration(
-            "RestartMarker",
-            inner,
-            &[(0, "RST0"), (1, "RST1"), (2, "RST2"), (3, "RST3"), (4, "RST4"), (5, "RST5"), (6, "RST6"), (7, "RST7")],
-        ),
-        _ => inner,
+    let named = match tk::header_enum(field) {
+        Some(def) => enum_ty(def, inner),
+        None => inner,
     };
     sized(bits, named)
+}
+
+fn enum_ty(def: &EnumDef, inner: T) -> T {
+    T::enumeration(def.name, inner, def.cases)
+}
+
+/// What the type column calls a code of this form. Every form passed here is
+/// a [`Reads::Code`].
+fn code_name(form: Form) -> &'static str {
+    match form.reads {
+        Reads::Code(name) => name,
+        _ => "code",
+    }
+}
+
+/// A code of this form, as wide as `bits`.
+fn code_of(form: Form) -> T {
+    T::code_bits(code_name(form), form.sized)
+}
+
+/// A step that is not one code, as the record `form` lays out: its kind, and
+/// then a number for each of the form's other fields, from `values` in
+/// order.
+fn record_of(form: Form, values: [i128; 2]) -> T {
+    let Reads::Record { kind, fields } = form.reads else { return T::structure(tk::RECORD_NAME, Vec::new()) };
+    let mut out = Vec::with_capacity(fields.len());
+    out.push((fields[0], enum_ty(&tk::SYMBOL_KIND, T::computed(E::lit(kind)))));
+    for (field, v) in fields[1..].iter().zip(values) {
+        out.push((*field, T::computed(E::lit(v))));
+    }
+    T::structure(tk::RECORD_NAME, out)
 }
 
 /// One entry of a Huffman table, as the decoder read it.
@@ -578,39 +589,20 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
     if step.kind == StepKind::Filtered {
         return (name, sized(bits, T::bytes(E::lit(bytes as i128))));
     }
-    let kind = |k: i128| {
-        T::enumeration(
-            "SymbolKind",
-            T::computed(E::lit(k)),
-            &[
-                (0, "literal"),
-                (1, "match"),
-                (2, "end of block"),
-                (3, "stored"),
-                (4, "not named"),
-                (5, "pixel"),
-                (6, "padding"),
-                (7, "base64 group"),
-                (8, "ignored"),
-            ],
-        )
+    // The records' layouts are in `tracekind`; this gives each its numbers.
+    let bytes = bytes as i128;
+    let (form, values) = match step.kind {
+        StepKind::Literal(v) => (tk::LITERAL_RECORD, [v as i128, 0]),
+        StepKind::Match { len, dist } => (tk::MATCH_RECORD, [len as i128, dist as i128]),
+        StepKind::EndOfBlock => (tk::END_RECORD, [0, 0]),
+        StepKind::Header(StepField::Padding, _) => (tk::PADDING_RECORD, [0, 0]),
+        StepKind::Stored => (tk::STORED_RECORD, [bytes, 0]),
+        StepKind::Pixel => (tk::PIXEL_RECORD, [bytes, 0]),
+        StepKind::Base64 { .. } => (tk::BASE64_RECORD, [bytes, 0]),
+        StepKind::Ignored => (tk::IGNORED_RECORD, [0, 0]),
+        _ => (tk::UNNAMED_RECORD, [bytes, 0]),
     };
-    let fields = match step.kind {
-        StepKind::Literal(v) => vec![("kind", kind(0)), ("value", T::computed(E::lit(v as i128)))],
-        StepKind::Match { len, dist } => vec![
-            ("kind", kind(1)),
-            ("length", T::computed(E::lit(len as i128))),
-            ("distance", T::computed(E::lit(dist as i128))),
-        ],
-        StepKind::EndOfBlock => vec![("kind", kind(2))],
-        StepKind::Header(StepField::Padding, _) => vec![("kind", kind(6))],
-        StepKind::Stored => vec![("kind", kind(3)), ("length", T::computed(E::lit(bytes as i128)))],
-        StepKind::Pixel => vec![("kind", kind(5)), ("length", T::computed(E::lit(bytes as i128)))],
-        StepKind::Base64 { .. } => vec![("kind", kind(7)), ("length", T::computed(E::lit(bytes as i128)))],
-        StepKind::Ignored => vec![("kind", kind(8))],
-        _ => vec![("kind", kind(4)), ("length", T::computed(E::lit(bytes as i128)))],
-    };
-    (name, sized(bits, T::structure("Symbol", fields)))
+    (name, sized(bits, record_of(form, values)))
 }
 
 /// The type of a step that is one entropy-coded thing, or `None` for a step
@@ -636,12 +628,12 @@ fn code_ty(step: &Step, coding: BlockKind) -> Option<T> {
     }
     // Only `Dynamic` is left, the guard above having refused the rest.
     let one_code = match coding {
-        BlockKind::Fixed => Sizing::Fixed,
-        _ => Sizing::Table,
+        BlockKind::Fixed => tk::HUFFMAN_FIXED,
+        _ => tk::HUFFMAN_TABLE,
     };
     match step.kind {
-        StepKind::Literal(_) | StepKind::EndOfBlock => Some(T::code_bits("Huffman code", one_code)),
-        StepKind::Match { .. } => Some(T::code_bits("length and distance codes", Sizing::Encoded)),
+        StepKind::Literal(_) | StepKind::EndOfBlock => Some(code_of(one_code)),
+        StepKind::Match { .. } => Some(code_of(tk::LENGTH_AND_DISTANCE)),
         _ => None,
     }
 }
@@ -724,7 +716,7 @@ fn sized(bits: u64, inner: T) -> T {
 mod tests {
     use super::*;
     use crate::document::Document;
-    use crate::eval::Evaluator;
+    use crate::eval::{Evaluator, Sizing};
     use crate::source::MemSource;
 
     /// The zlib template's `compressed` field, which is the deflate run.

@@ -211,6 +211,9 @@ fn how_long_listing_a_trace_takes() {
 #[derive(Default)]
 struct Seen {
     kinds: std::collections::BTreeMap<&'static str, std::collections::BTreeMap<&'static str, usize>>,
+    /// Which of each kind's declared forms some node took, by kind and the
+    /// form's place in the row.
+    forms: std::collections::BTreeSet<(&'static str, usize)>,
     unnamed: std::collections::BTreeMap<String, usize>,
     streams: usize,
     failures: Vec<String>,
@@ -235,6 +238,7 @@ fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &mut Vec<usize>, de
                 Some(k) => {
                     let prefix = k.as_str().split('.').next().unwrap();
                     *seen.kinds.entry(prefix).or_default().entry(k.as_str()).or_default() += 1;
+                    check_shape(ev, doc, path, &blocks, None, file, seen);
                     let mut budget = STREAM_BUDGET;
                     walk_blocks(ev, doc, path, Some(k.family()), file, seen, &mut budget);
                 }
@@ -282,22 +286,24 @@ fn walk_blocks(
             return;
         }
         *budget -= 1;
+        path.push(i);
         match (family, k.trace_kind) {
             (Some(f), Some(kind)) if kind.family() == f && f.kinds().iter().any(|e| e.kind == kind.as_str()) => {
                 let prefix = kind.as_str().split('.').next().unwrap();
                 *seen.kinds.entry(prefix).or_default().entry(kind.as_str()).or_default() += 1;
+                check_shape(ev, doc, path, k, n.trace_kind, file, seen);
             }
             (None, None) => {}
             (f, kind) => seen.failures.push(format!(
-                "{file} {path:?}/{i} {}: kind {:?} under a stream of family {f:?}",
+                "{file} {path:?} {}: kind {:?} under a stream of family {f:?}",
                 k.name,
                 kind.map(|k| k.as_str())
             )),
         }
         if k.child_count == 0 {
+            path.pop();
             continue;
         }
-        path.push(i);
         match k.trace_kind.map(|t| t.role()) {
             // A step that is not one code reads as a record, `kind` and
             // `length` or `value`, the same record for every codec. Its fields
@@ -315,6 +321,68 @@ fn walk_blocks(
     }
 }
 
+/// Checks the node at `path` against its kind's row: it is a child its
+/// parent's row lists, and it reads as one of the row's forms, type and
+/// fields and, where the type carries it, sizing.
+///
+/// Sizing is checked for codes, numbers and rows only. A record or an enum
+/// is wrapped in a width the trace measured and written as a literal, which
+/// `shape` reports as `fixed` whatever the format did; the row says how the
+/// width was really settled.
+fn check_shape(
+    ev: &mut Evaluator,
+    doc: &Document<MemSource>,
+    path: &[usize],
+    n: &NodeInfo,
+    parent: Option<qubero_core::codec::tracekind::TraceKind>,
+    file: &str,
+    seen: &mut Seen,
+) {
+    use qubero_core::codec::tracekind::{Reads, RECORD_NAME};
+    use qubero_core::eval::Value;
+    let Some(kind) = n.trace_kind else { return };
+    let entry = kind.entry();
+    if let Some(p) = parent {
+        if !p.entry().children.contains(&entry.role) {
+            seen.failures.push(format!("{file} {path:?} {}: {} under {}, whose row does not list it", n.name, entry.kind, p.as_str()));
+        }
+    }
+    let sized = ev.shape(doc, path).map(|s| s.sized).ok();
+    let fields: Vec<NodeInfo> = match entry.forms.iter().any(|f| matches!(f.reads, Reads::Record { .. })) {
+        true => ev.children(doc, path, 0, n.child_count).unwrap_or_default(),
+        false => Vec::new(),
+    };
+    let matches = |f: &qubero_core::codec::tracekind::Form| match f.reads {
+        Reads::Rows(name) => n.type_name == name && sized == Some(f.sized),
+        Reads::Number => n.type_name == "computed" && matches!(n.value, Value::Int(_)) && sized == Some(f.sized) && n.child_count == 0,
+        Reads::Enum(def) => n.type_name == def.name && matches!(n.value, Value::Enum { .. }) && n.child_count == 0,
+        Reads::Code(name) => {
+            let stuffed = n.type_name.strip_prefix(name).is_some_and(|rest| {
+                rest.is_empty() || (rest.starts_with(", plus ") && (rest.ends_with(" stuffed 00 byte") || rest.ends_with(" stuffed 00 bytes")))
+            });
+            stuffed && matches!(n.value, Value::Str(_)) && sized == Some(f.sized) && n.child_count == 0
+        }
+        Reads::Record { kind, fields: names } => {
+            n.type_name == RECORD_NAME
+                && fields.iter().map(|c| c.name.as_str()).eq(names.iter().copied())
+                && matches!(fields.first().map(|c| &c.value), Some(Value::Enum { raw, .. }) if *raw == kind)
+        }
+        Reads::Bytes => n.type_name.starts_with("bytes") && matches!(n.value, Value::Bytes { .. }) && n.child_count == 0,
+    };
+    match entry.forms.iter().position(matches) {
+        Some(i) => {
+            seen.forms.insert((entry.kind, i));
+        }
+        None => seen.failures.push(format!(
+            "{file} {path:?} {}: a {} that reads as {:?} sized {sized:?} with fields {:?}, which none of its forms is",
+            n.name,
+            entry.kind,
+            n.type_name,
+            fields.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+        )),
+    }
+}
+
 /// The folders of the collection whose files hold deflate streams or JPEG
 /// scans, or streams of other codecs inside them.
 const FOLDERS: &[&str] = &[
@@ -324,7 +392,9 @@ const FOLDERS: &[&str] = &[
 
 /// Every node under a stream's `blocks` row has a kind from its codec's
 /// table, for the codecs that name their nodes; none does for the rest; and
-/// no node a template declared has one. Prints the kinds no sample reached.
+/// no node a template declared has one. Every named node also has the shape
+/// its row declares, by [`check_shape`]. Prints the kinds and the forms no
+/// sample reached.
 #[test]
 fn every_node_a_trace_lays_down_has_a_kind_from_its_codecs_table() {
     let Some(root) = qubero_samples::root() else {
@@ -355,6 +425,7 @@ fn every_node_a_trace_lays_down_has_a_kind_from_its_codecs_table() {
             Ok(s) => {
                 seen.streams += s.streams;
                 seen.failures.extend(s.failures);
+                seen.forms.extend(s.forms);
                 for (k, v) in s.unnamed {
                     *seen.unnamed.entry(k).or_default() += v;
                 }
@@ -379,6 +450,15 @@ fn every_node_a_trace_lays_down_has_a_kind_from_its_codecs_table() {
         let never: Vec<_> = family.kinds().iter().map(|e| e.kind).filter(|k| !counts.contains_key(k)).collect();
         if !never.is_empty() {
             eprintln!("{prefix}: kinds in the table no sample has: {never:?}");
+        }
+        let unformed: Vec<_> = family
+            .kinds()
+            .iter()
+            .filter(|e| counts.contains_key(e.kind))
+            .flat_map(|e| (0..e.forms.len()).filter(|&i| !seen.forms.contains(&(e.kind, i))).map(move |i| (e.kind, e.forms[i].reads, e.forms[i].sized)))
+            .collect();
+        if !unformed.is_empty() {
+            eprintln!("{prefix}: forms no sample node took: {unformed:?}");
         }
     }
     eprintln!("streams whose nodes have no kind yet, by stream type: {:?}", seen.unnamed);
