@@ -2608,6 +2608,10 @@ export const REPORT = {
    *  truncated, damaged, or in a variant the browser does not handle; the
    *  card cannot tell which, so it says only what happened. */
   imageFailed: "Couldn't decode this image",
+  /** The picture's bytes did not all load from the file: a read failed, or
+   *  the file needs more of itself in memory at once than the editor keeps.
+   *  Pairs with `imageLoading`, which the card said before. */
+  imageNotLoaded: "Couldn't load the image's bytes",
   /** A file past the size the card is willing to hand the browser whole.
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */

@@ -60,7 +60,9 @@ export type ImageState =
       /** The decoded picture, for drawing on a canvas. */
       readonly image: HTMLImageElement;
     }
-  | { readonly status: "failed" }
+  /** `load`: the bytes did not all load from the file. `decode`: they did,
+   *  and the browser could not make a picture of them. */
+  | { readonly status: "failed"; readonly why: "load" | "decode" }
   | { readonly status: "too-large"; readonly bytes: number };
 
 /** How long an edited file waits before its picture is decoded again. A
@@ -177,7 +179,7 @@ class ImageCard {
     const at = doc.pieceCount;
     const read = await doc.readLoaded(0, len).catch(() => null);
     if (read === null || !read.complete) {
-      this.set({ status: "failed" });
+      this.set({ status: "failed", why: "load" });
       this.decodedAt = at;
       return;
     }
@@ -200,7 +202,7 @@ class ImageCard {
       this.readLayers();
     } catch {
       URL.revokeObjectURL(url);
-      this.set({ status: "failed" });
+      this.set({ status: "failed", why: "decode" });
     }
     this.decodedAt = at;
   }
@@ -265,7 +267,7 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
       body.append(el("p", "rp-card-note", REPORT.imageDecoding));
       break;
     case "failed":
-      body.append(el("p", "rp-card-note", REPORT.imageFailed));
+      body.append(el("p", "rp-card-note", s.why === "load" ? REPORT.imageNotLoaded : REPORT.imageFailed));
       break;
     case "too-large":
       body.append(el("p", "rp-card-note", REPORT.imageTooLarge(formatBytes(s.bytes), formatBytes(IMAGE_LIMIT_BYTES))));
