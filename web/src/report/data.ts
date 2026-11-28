@@ -105,6 +105,9 @@ export class ReportData {
     const until = performance.now() + STEP_MS;
     let r = this.doc.overviewStep(SCAN_BUCKETS);
     while (r.status === "ok" && !r.node.done && performance.now() < until) r = this.doc.overviewStep(SCAN_BUCKETS);
+    // A scan that reaches bytes that cannot be made, a part of a joined stream
+    // that will not unpack, is refused from then on. What it found before
+    // them stays, and says the rest was not read.
     if (r.status === "ok") this.scanState = r.node;
     return this.scanState;
   }

@@ -5474,6 +5474,15 @@ table.rec tr.is-on td {
 .tv-row.is-lossy .tv-mark {
   background: var(--warn-soft, var(--accent-soft));
 }
+/* Characters over bytes that cannot be made, drawn as `?`: muted, as the hex
+   view's `??` is, with the reason on hover, which the help cursor says. */
+.tv-unreadable {
+  color: var(--muted);
+  cursor: help;
+}
+.tv-row.is-unreadable .tv-mark {
+  cursor: help;
+}
 
 /* A text file that turns out to describe another file. One row above the
    views: what was found on the left, the way to it on the right, and the two

@@ -19,6 +19,7 @@ import { fieldHue } from "./fieldstyle.ts";
 import { markMap } from "./filemap.ts";
 import type { MapMark } from "./filemap.ts";
 import { REPORT } from "./strings.ts";
+import { hexMarked } from "./hexcell.ts";
 
 /** Fields asked for in one strip. Past this the strip is not the thing to be
  *  reading, and the item's own rows are. */
@@ -53,10 +54,10 @@ function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: n
   const at = Math.floor(span.offset_bits / 8);
   const len = Math.ceil(((span.offset_bits % 8) + span.size_bits) / 8);
   const take = Math.min(len, BYTES_SHOWN);
-  const { bytes, complete } = doc.read(at, take);
-  if (!complete) return { text: "", rest: 0 };
-  const hex = Array.from(bytes.subarray(0, take), (b) => b.toString(16).padStart(2, "0")).join(" ");
-  return { text: hex, rest: len - take };
+  const { bytes, complete, unreadable } = doc.read(at, take);
+  // Bytes that cannot be made are written as `??`.
+  if (!complete && !unreadable) return { text: "", rest: 0 };
+  return { text: hexMarked(bytes.subarray(0, take), at, unreadable), rest: len - take };
 }
 
 /**

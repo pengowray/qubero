@@ -214,6 +214,11 @@ function codes(
   block.append(disclosure(c, key, open ? JPEG.huffmanHide : JPEG.huffmanShow));
   if (!open || symbolsNode === null) return;
   const read = c.doc.read(symbolsNode.offset_bits / 8, symbolsNode.size_bits / 8);
+  // Bytes that cannot be made read as zeroes, which no code is built from.
+  if (read.unreadable) {
+    block.append(el("div", "bs-wait", read.unreadable.why));
+    return;
+  }
   if (!read.complete) {
     block.append(el("div", "bs-wait", JPEG.waiting));
     return;
@@ -371,6 +376,7 @@ function restartCount(doc: Doc, entropy: TemplateNode): number | null {
   const had = known.get(key);
   if (had !== undefined) return had;
   const read = doc.read(entropy.offset_bits / 8, bytes);
+  // Zeroes read for bytes that cannot be made would count no restarts.
   if (!read.complete) return null;
   const n = countRestarts(read.bytes);
   known.set(key, n);

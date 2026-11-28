@@ -688,6 +688,10 @@ export type TextLine = {
   readonly text: string;
   readonly escapes: readonly number[];
   readonly lossy: boolean;
+  /** Stretches of the line's bytes that cannot be made, cut to the line, in
+   *  bytes of the document. They read as zeroes. Absent when there are none.
+   *  See `Unreadable`. */
+  readonly unreadable?: readonly Unreadable[];
 };
 
 export type TextWindow = {
@@ -835,6 +839,9 @@ export type StringScan = {
   readonly hits: readonly StringHit[];
   readonly missing: readonly number[];
   readonly next: number;
+  /** Stretches of the bytes scanned that cannot be made. No string is found
+   *  in them, nor one that runs into them. See `Unreadable`. */
+  readonly unreadable?: readonly Unreadable[];
   /** True when the template ran out of time before it could place the first
    *  string, so nothing came back. Ask again. */
   readonly busy?: boolean;
@@ -890,6 +897,9 @@ export type SelectionText = {
   readonly refused: readonly string[];
   readonly read: number;
   readonly all: boolean;
+  /** Why the selection is not read as text, when some of its bytes cannot be
+   *  made: `readings` and `refused` are then empty. See `Unreadable`. */
+  readonly unreadable?: string;
 };
 
 /** Typed text turned back into bytes, or the character that stopped it. */

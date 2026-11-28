@@ -179,6 +179,10 @@ export class MinimapPanel {
   private readonly focusGaps: HTMLElement;
 
   private state: OverviewState | null = null;
+  /** Why the scan stopped short, when it reached bytes that cannot be made:
+   *  a part of a joined stream that will not unpack. Said where the progress
+   *  would be, since the map stops there. */
+  private refused: string | null = null;
   private focusState: FocusState | null = null;
   /** The block being looked at, in bytes, or null when none is. */
   private block: { from: number; to: number } | null = null;
@@ -367,7 +371,13 @@ export class MinimapPanel {
     while (r.status === "ok" && !r.node.done && performance.now() - start < 10) {
       r = this.doc.overviewStep(MAP_BUCKETS);
     }
+    if (r.status === "error" && this.state !== null) {
+      this.refused = r.message;
+      this.render();
+      return;
+    }
     if (r.status !== "ok") return;
+    this.refused = null;
     // An edit throws the scan away, so `done` can go back to false here.
     this.state = r.node;
     this.render();
@@ -564,7 +574,7 @@ export class MinimapPanel {
     if (!s.done) {
       const p = document.createElement("span");
       p.className = "ov-progress";
-      p.textContent = SCANNING(Math.round((s.read_bytes / Math.max(1, this.doc.lengthBytes)) * 100));
+      p.textContent = this.refused ?? SCANNING(Math.round((s.read_bytes / Math.max(1, this.doc.lengthBytes)) * 100));
       chips.push(p);
     }
     this.legend.replaceChildren(...chips);

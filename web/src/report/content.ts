@@ -113,6 +113,9 @@ function plainText(ctx: ReportCtx): Rendered {
   const n = Math.min(ctx.doc.lengthBytes, TEXT_SNIFF);
   if (n === 0) return null;
   const r = ctx.doc.read(0, n);
+  // Bytes that cannot be made read as zeroes, which say nothing of whether
+  // the file is text.
+  if (r.unreadable) return null;
   if (!r.complete) return WAIT;
   let text = 0;
   for (const b of r.bytes) if ((b >= 0x20 && b !== 0x7f) || b === 9 || b === 10 || b === 13) text++;

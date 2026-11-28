@@ -535,7 +535,9 @@ function readZarrMetadata(doc: Doc, entry: ZipEntry): { readonly meta: Record<st
   }
   const dataNode = doc.templateNode([...entry.path, 1, 14]);
   if (dataNode.status !== "ok") return { meta: null, pending: true };
-  const { bytes, complete } = doc.read(dataNode.node.offset_bits / 8, entry.compressedBytes);
+  const { bytes, complete, unreadable } = doc.read(dataNode.node.offset_bits / 8, entry.compressedBytes);
+  // Bytes that cannot be made read as zeroes, and will not read later.
+  if (unreadable) return { meta: null, pending: false };
   if (!complete) return { meta: null, pending: true };
   try {
     return { meta: jsonObject(JSON.parse(new TextDecoder().decode(bytes))), pending: false };

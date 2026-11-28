@@ -40,6 +40,7 @@ import { LineIndex } from "./lineindex.ts";
 import type { Endings } from "./lineindex.ts";
 import { moveRows, needsPaint, paintWindow } from "./paintwindow.ts";
 import { TEXTVIEW } from "./strings.ts";
+import { stretchAt } from "./unreadable.ts";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: rows are
  *  placed by arithmetic on it. */
@@ -81,6 +82,12 @@ const PROBE = 1 * 1024 * 1024;
 
 /** Line endings named the way the core names them. */
 const ENDINGS = new Set(["LF", "CRLF", "CR", "no ending", "cut"]);
+
+/** What the view draws for a character over bytes that cannot be made, a part
+ *  of a joined stream that will not unpack: one per character, as the hex
+ *  view draws `??` for such a byte. Styled apart from the text, so a real
+ *  question mark is not taken for one. */
+const UNREADABLE_CHAR = "?";
 
 export class TextView {
   readonly el: HTMLElement;
@@ -1345,13 +1352,19 @@ export class TextView {
     let runText = "";
     let runClass = "";
     let runStart = 0;
+    let runWhy = "";
     const flush = (): void => {
       if (runText === "") return;
       const span = el("span", { className: `tv-text${runClass}`, textContent: runText });
       span.dataset.cell = String(runStart);
+      if (runWhy !== "") span.title = runWhy;
       row.append(span);
       runText = "";
     };
+    // Bytes that cannot be made read as zeroes. Each character over them is
+    // drawn as `?`, the way the hex view draws such a byte as `??`, and the
+    // reason is on hover over the run and on the mark at the line's end.
+    const unreadable = line.unreadable ?? [];
     for (let i = first; i < shown; i++) {
       const cell = cells[i];
       if (cell === undefined) continue;
@@ -1360,15 +1373,17 @@ export class TextView {
         flush();
         row.append(el("span", { className: "tv-caret" }));
       }
-      const picture = control(c);
-      let classes = escapes[i] === true ? " tv-esc" : picture === null ? "" : " tv-ctl";
+      const why = unreadable.length === 0 ? "" : stretchAt(unreadable, at, width)?.why ?? "";
+      const picture = why !== "" ? UNREADABLE_CHAR : control(c);
+      let classes = why !== "" ? " tv-unreadable" : escapes[i] === true ? " tv-esc" : picture === null ? "" : " tv-ctl";
       // The cursor may sit inside a character rather than on its front, which
       // is what a selection made over the bytes elsewhere can do.
       if (this.cursor >= at && this.cursor < at + width) classes += " is-cursor";
       if (sel !== null && at < sel.end && at + width > sel.start) classes += " is-sel";
-      if (classes !== runClass) {
+      if (classes !== runClass || why !== runWhy) {
         flush();
         runClass = classes;
+        runWhy = why;
         runStart = i;
       } else if (runText === "") {
         runStart = i;
@@ -1390,6 +1405,11 @@ export class TextView {
       row.append(el("span", { className: "tv-mark", textContent: line.ending }));
     }
     if (line.lossy) row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineLossy(this.reading.encoding) }));
+    const firstUnreadable = unreadable[0];
+    if (firstUnreadable !== undefined) {
+      row.classList.add("is-unreadable");
+      row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineUnreadable, title: firstUnreadable.why }));
+    }
     return row;
   }
 
@@ -1450,6 +1470,10 @@ export class TextView {
       storedChoice(CODEPAGE_A_KEY, CODEPAGES_A, CODEPAGE_A_DEFAULT),
       storedChoice(CODEPAGE_B_KEY, CODEPAGES_B, CODEPAGE_B_DEFAULT),
     );
+    if (got?.unreadable !== undefined) {
+      this.onMessage(TEXTVIEW.copyUnreadable(got.unreadable));
+      return;
+    }
     const text = got?.readings[0]?.text;
     if (text === undefined) return;
     try {

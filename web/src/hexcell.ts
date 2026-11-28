@@ -219,6 +219,21 @@ export type GlyphSet = readonly string[];
 export const UNREADABLE_HEX = "??";
 export const UNREADABLE_BITS = "????????";
 
+/**
+ * `bytes`, read from byte `at`, as hex digits joined by spaces, with each byte
+ * inside `unreadable` written as `??` rather than as the zero the read gave
+ * for it. For the views that write a run of bytes as text: the listing's byte
+ * strips and the report's byte dump.
+ */
+export function hexMarked(bytes: Uint8Array, at: number, unreadable: { readonly at: number; readonly len: number } | null | undefined): string {
+  const out: string[] = [];
+  bytes.forEach((b, i) => {
+    const lost = unreadable != null && at + i >= unreadable.at && at + i < unreadable.at + unreadable.len;
+    out.push(lost ? UNREADABLE_HEX : HEX[b] ?? "");
+  });
+  return out.join(" ");
+}
+
 /** What a cell writes for a byte its set has no character for. A full stop
  *  raised off the baseline, so a row of them does not read as sentences. */
 export const STAND_IN = "·";
