@@ -31,7 +31,7 @@ pub(crate) struct SpaceDto {
 
 /// Bytes of a tab that read as zeroes because they cannot be made, and why.
 /// See `Editor::unreadable`.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub(crate) struct UnreadableDto {
     /// Where the stretch starts in the tab and how long it is. It is a whole
     /// part of a joined stream, so it may start before the read that was
