@@ -305,7 +305,6 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // it. This column has no room for a second line saying so, which is why the
   // hover is the only place that fact can live here.
   if (written) at.append(...address(formatAddress(fieldStart(n.offset_bits, n.lsb_first), n.space), n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE));
-  row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
   const name = el("span", `rp-field ${fieldClass(n.kind)}`, n.name);
@@ -362,8 +361,18 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // A structure's type is its name (`ProgramHeader`), and a row reached
   // through a pointer says so here: both say what the thing is, so they stay
   // when the encoding columns are hidden. `u64 le` on a number is encoding.
-  row.append(el("span", `rp-type${n.composite || item.via !== null ? " is-kind" : ""}`, item.via ?? n.type));
-  row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
+  const kind = n.composite || item.via !== null;
+  const type = el("span", `rp-type${kind ? " is-kind" : ""}`, item.via ?? n.type);
+  if (kind) row.append(type);
+  // The address, the encoding and the size, which the row under the pointer
+  // and the selected row add (`rp-extra` in style.css): together, so that each
+  // shows whole or not at all in the width the value leaves over. With
+  // Settings' "Address, size and number type" at "Every row" they are columns
+  // like any other.
+  const extra = el("span", "rp-extra");
+  if (!kind) extra.append(type);
+  extra.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored), at);
+  row.append(extra);
   // A toggle that opens a strip of nothing is a dead control, and so is one
   // over bytes that are not in the file.
   if (n.size_bits > 0 && n.space === 0) row.append(bytesButton(c, item.key));

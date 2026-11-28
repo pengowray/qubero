@@ -3967,8 +3967,12 @@ button.insp-xrow-where:hover {
   padding-inline-start: calc(97px + var(--rp-ind, 0px));
   background: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 12px) 101px 0 / var(--rp-guides, 0px) 100% no-repeat;
 }
+/* Sized from its text (`auto`, not the zero of `flex: 1`) so that the columns
+   shown on the row under the pointer can give way to it: see the rule that
+   shows them. It still takes all the spare width, and still ends in an
+   ellipsis when its text is longer than the row. */
 .rp-value {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4065,6 +4069,46 @@ button.insp-xrow-where:hover {
 .report:not(.rp-all) .rp-gap:is(:hover, .is-on) > .rp-at {
   display: revert;
 }
+/* On a field's row the three sit together in `rp-extra`, which the row under
+   the pointer and the selected row show. It takes only the width the value
+   leaves over: its shrink factor is far above the value's. Inside it each
+   column fits whole or wraps onto a second line, which the row's height cuts
+   off: the address goes first, then the size, then the type. Part of a
+   column ("B…", "@0…") says nothing, so none is shown. With fixed widths, in
+   a narrow pane the type took the whole value of a short row, and hovering a
+   base showed "Base" where "A (1)" had been. The At cursor panel gives all
+   three in full. The empty first item is there because the first item on a
+   line always stays on it, and the type has to be able to go too. It is a
+   row tall: a line holding only an item of no height is no height either,
+   and the next line would then show at the top. */
+.rp-extra {
+  display: none;
+}
+.report:not(.rp-all) .rp-row:is(:hover, .is-on) > .rp-extra {
+  display: flex;
+  flex: 0 1000 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  min-width: 0;
+  height: var(--rp-row);
+  overflow: hidden;
+}
+.report:not(.rp-all) .rp-extra::before {
+  content: "";
+  height: var(--rp-row);
+}
+.report:not(.rp-all) .rp-extra > * {
+  width: auto;
+  margin-inline-start: 8px;
+  line-height: var(--rp-row);
+}
+/* On every row they are columns of the row again, the address first. */
+.report.rp-all .rp-extra {
+  display: contents;
+}
+.report.rp-all .rp-extra > .rp-at {
+  order: -1;
+}
 .report:not(.rp-all) .rp-at {
   order: 1;
   width: auto;
@@ -4084,7 +4128,7 @@ button.insp-xrow-where:hover {
   .rp-tree {
     width: min(var(--rp-tree, 228px), 46%);
   }
-  .report .rp-row > :is(.rp-size, .rp-type:not(.is-kind)) {
+  .report .rp-row :is(.rp-size, .rp-type:not(.is-kind)) {
     display: none !important;
   }
   /* The button that shows a row's bytes is invisible until the row is hovered
