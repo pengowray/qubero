@@ -10,6 +10,7 @@ export const REFUSAL_TAGS = [
   "too-large-input",
   "too-large-zstd-frame",
   "too-large-xz-block",
+  "too-many-xz-blocks",
   "too-large-zstd-window",
   "too-much-at-once",
   "failed",

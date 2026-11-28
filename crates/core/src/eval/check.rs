@@ -801,6 +801,7 @@ fn refused(why: Refusal) -> String {
         Refusal::Unsupported(u) => format!("is {}", u.message()),
         Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame) => "is in a zstd frame that is too large to unpack (over 64 MiB unpacked)".into(),
         Refusal::TooLargeUnit(crate::codec::SpanUnit::XzBlock) => "is in an xz block that is too large to unpack (over 64 MiB unpacked)".into(),
+        Refusal::TooManyXzBlocks => "is in an xz stream that has too many blocks to unpack (over 65,536 blocks)".into(),
         Refusal::TooLargeWindow => "is in a zstd frame that the editor doesn't unpack (window over 128 MiB)".into(),
         Refusal::Unaligned => "doesn't start on a byte".into(),
         Refusal::Settings => "doesn't say how it was packed".into(),

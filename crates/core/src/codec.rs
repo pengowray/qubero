@@ -529,6 +529,15 @@ pub enum Refusal {
     /// say [`Refusal::TooLargeOutput`] for the same frame, since there the
     /// whole run is past the cap.
     TooLargeUnit(SpanUnit),
+    /// An xz stream whose index lists more blocks than
+    /// [`lazy::Limits::block_marks`], 65,536. An index read a piece at a
+    /// time keeps an entry for every block for as long as it is kept, so the
+    /// count bounds its memory: a hostile index of 16 MiB could otherwise
+    /// list 8 Mi blocks, 256 MiB of entries. Said from the index's count,
+    /// before any block header is read, whatever the stream unpacks to.
+    /// Ordinary files have far fewer: `xz -T0` writes a block for every
+    /// 24 MiB of output.
+    TooManyXzBlocks,
     /// A zstd frame whose header asks for a window of more than 128 MiB,
     /// which is what `zstd --long=28` and higher may write. The decoder keeps
     /// a frame's last window of output until the frame ends, so the frame is
@@ -639,6 +648,7 @@ refusal_tags! {
     TooLargeInput => "too-large-input",
     TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
     TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
+    TooManyXzBlocks => "too-many-xz-blocks",
     TooLargeWindow => "too-large-zstd-window",
     TooMuchAtOnce => "too-much-at-once",
     Failed => "failed",
@@ -673,6 +683,7 @@ impl Refusal {
             Refusal::TooLargeInput => "too large to unpack (over 512 MiB packed)",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB unpacked)",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB unpacked)",
+            Refusal::TooManyXzBlocks => "too many xz blocks to unpack (over 65,536 blocks)",
             Refusal::TooLargeWindow => "zstd with a window over 128 MiB, not unpacked",
             Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
@@ -695,6 +706,7 @@ impl Refusal {
             }
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB unpacked)".into(),
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB unpacked)".into(),
+            Refusal::TooManyXzBlocks => "has too many xz blocks to unpack (over 65,536 blocks)".into(),
             Refusal::TooLargeWindow => "has a zstd frame that the editor doesn't unpack (window over 128 MiB)".into(),
             Refusal::Failed | Refusal::Settings | Refusal::Unaligned | Refusal::Unsupported(_) => return None,
         })
