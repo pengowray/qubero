@@ -608,8 +608,10 @@ The output is divided into spans, one per checkpoint, from that checkpoint to
 the next. A read of bytes `[a, b)` finds the spans it covers by binary search,
 and for each span either takes it from the cache or decodes it from its own
 checkpoint and caches it. One decode per span: there is no decoding from an
-earlier checkpoint and throwing output away. Spans are at most twice the
-spacing plus 64 KiB, so a read costs at most one span decode per span it
+earlier checkpoint and throwing output away. A span can end past its
+spacing by one stored block (up to 64 KiB), so a span holds at most the
+output spacing, which reaches at most 8 MiB, plus 64 KiB for each time the
+checkpoints were thinned. A read costs at most one span decode per span it
 touches (about 15 ms native for a 1 MiB span of text). The cache drops the
 span read longest ago once it holds more than `SPAN_CACHE_BYTES`. An xz span
 is decoded only as far as the read reaches instead: see "Reading an xz span"
@@ -937,10 +939,11 @@ the chunks of the file it waits on. Open unpacked (`openUnpacked` in
 `main.ts`) hands both to `waitToOpen` (`openwait.ts`), which asks again
 after the page has drawn or once `Doc.fileChunks` has the chunks, and opens
 the tab at the end, all from one press. Meanwhile the status bar says
-`UNPACKED.loading` ("Loading {field} from the file…") until a pass has said
-how far it has got, and `UNPACKED.unpacking` with the percentage after that,
-on "pending" replies as well as "working" ones. A press while a wait is
-under way puts a new wait in its place.
+`UNPACKED.unpacking` with the last percentage a pass gave, or 0% before any
+pass has given one, on "working" replies, and on "pending" replies once a
+pass has said how far it has got. A "pending" reply before that says
+`UNPACKED.loading` ("Loading {field} from the file…"). A press while a wait
+is under way puts a new wait in its place.
 
 `waitToOpen` stops by the rule in `ChunkWait` (`chunkwait.ts`). It gives
 up, and says `UNPACKED.tooMuchAtOnce`, when the core asks again for a chunk
