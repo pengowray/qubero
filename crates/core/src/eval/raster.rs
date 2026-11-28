@@ -61,7 +61,7 @@ impl Evaluator {
         if limit > pr.limit {
             return fail("field extends beyond its parent");
         }
-        Ok(Some(Place { name: Name::Index(idx), ty: pixel, offset, limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
+        Ok(Some(Place { name: Name::Index(idx), ty: pixel, offset, limit, space: pr.space, machinery: false, elsewhere: false, aside: false, trace_kind: None }))
     }
 
     /// How many pixels the raster at `path` has.

@@ -303,6 +303,13 @@ export type TemplateNode = {
   /** For a decoded run, what its codec does to the bytes. Null for every other
    *  field. Optional so that a node made by hand in a test needs no value. */
   readonly codec_kind?: CodecKind | null;
+  /** For a node a decoder's trace laid down under a stream's `blocks` row,
+   *  what sort of node it is apart from the values in its name:
+   *  `deflate.block`, `deflate.literal`, `jpegscan.dc`. A codec name, a dot,
+   *  and a noun. Absent for every node a template declared, and for the nodes
+   *  of a codec that does not name them yet. Not `kind`, which says how the
+   *  value reads. */
+  readonly trace_kind?: string;
   /** True for the one node a stream holds, whose parent is the stream. There is
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
@@ -492,6 +499,9 @@ export type Span = {
    *  or the contents of one. What the annotation column marks so a reader
    *  running down the bytes can see there is a file in front of them. */
   readonly opens: boolean;
+  /** What sort of node a decoder's trace laid down this is. See
+   *  `TemplateNode.trace_kind`. */
+  readonly trace_kind?: string;
   /** The template wrote this structure to hold one value in several fields, so
    *  the name it gave the structure is its own bookkeeping: `Elsewhere` is not
    *  a word the TIFF specification uses, and nothing shows it to a reader. */

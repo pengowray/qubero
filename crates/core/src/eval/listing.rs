@@ -66,6 +66,9 @@ pub struct Span {
     /// front of them. It is the same question either surface asks, so it is
     /// answered once, here.
     pub opens: bool,
+    /// What sort of node a decoder's trace laid down this is. See
+    /// `NodeInfo::trace_kind`.
+    pub trace_kind: Option<crate::codec::tracekind::TraceKind>,
     /// The colour this structure says it is. See `NodeInfo::colour`.
     pub colour: Option<String>,
     /// The element of a list this field is part of, where its bytes hold the
@@ -1251,6 +1254,7 @@ impl Evaluator {
             // unpacked off; a template may fold the stream itself away and
             // show only its contents, so both spellings have to be caught.
             opens: (info.decoded && info.refused.is_none()) || info.space_root,
+            trace_kind: info.trace_kind,
             colour: info.colour.clone(),
             element: self.element_of(doc, path, info.offset_bits)?,
             placed_by: self.pointer_placing(doc, path, info.offset_bits)?,

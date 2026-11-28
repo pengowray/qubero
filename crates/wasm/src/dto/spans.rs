@@ -36,6 +36,11 @@ pub(crate) struct SpanDto {
     pub(crate) bits: Option<BitRolesDto>,
     /// These bytes are a document of their own and can be opened as one.
     pub(crate) opens: bool,
+    /// For a node a decoder's trace laid down, what sort it is:
+    /// `deflate.literal`, `jpegscan.mcu`. Absent for everything else. See
+    /// `NodeDto::trace_kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trace_kind: Option<&'static str>,
     /// The template wrote this structure to hold one value in several fields,
     /// so the name it gave the structure is the template's own bookkeeping and
     /// is not shown to a reader.
@@ -186,6 +191,7 @@ pub(crate) fn span_dto(s: Span) -> SpanDto {
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
         opens: s.opens,
+        trace_kind: s.trace_kind.map(|k| k.as_str()),
         colour: s.colour,
         inline: s.inline,
         element: s.element.map(|e| SpanElementDto {

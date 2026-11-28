@@ -87,6 +87,13 @@ pub(crate) struct NodeDto {
     /// "scrambling" | "stored" | "filter" | "steganography". Null for every
     /// other field.
     pub(crate) codec_kind: Option<&'static str>,
+    /// For a node a decoder's trace laid down under a stream's `blocks` row,
+    /// what sort of node it is apart from the values in its name:
+    /// `deflate.block`, `deflate.literal`, `jpegscan.dc`. Absent for every
+    /// node a template declared. Not `kind`, which says how the value reads.
+    /// See `qubero_core::codec::tracekind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trace_kind: Option<&'static str>,
     /// True for the one node a stream holds. Its parent is the stream, so this
     /// is where the listing offers Open unpacked.
     pub(crate) space_root: bool,
@@ -264,6 +271,7 @@ pub(crate) fn dto(n: NodeInfo) -> NodeDto {
         refused: n.refused,
         decoded: n.decoded,
         codec_kind: n.codec_kind.map(|k| k.as_str()),
+        trace_kind: n.trace_kind.map(|k| k.as_str()),
         space_root: n.space_root,
         joined: n.joined,
         lsb_first: n.lsb_first,

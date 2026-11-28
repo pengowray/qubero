@@ -674,7 +674,7 @@ fn in_run(step: Step, run: &JoinedRun) -> Step {
 /// gigabyte is sixteen thousand parts, and holding them all unpacked is the
 /// thing a stitched space exists not to do.
 pub(super) enum Backing {
-    Whole { bytes: Arc<Vec<u8>>, trace: Trace },
+    Whole { bytes: Arc<Vec<u8>>, trace: Trace, codec: Codec },
     Stitched(Box<Stitch>),
     /// A run too large to hold whole, read through its checkpoints.
     Lazy(Arc<Seekable>),
@@ -1291,9 +1291,10 @@ impl Spaces {
         self.opened.get(path).copied()
     }
 
-    /// Keep a decoded buffer and its trace, and hand back the space it became.
-    pub(super) fn add(&mut self, path: &[usize], bytes: Vec<u8>, trace: Trace) -> u32 {
-        self.backings.push(Backing::Whole { bytes: Arc::new(bytes), trace });
+    /// Keep a decoded buffer, its trace and the codec that made both, and
+    /// hand back the space it became.
+    pub(super) fn add(&mut self, path: &[usize], bytes: Vec<u8>, trace: Trace, codec: Codec) -> u32 {
+        self.backings.push(Backing::Whole { bytes: Arc::new(bytes), trace, codec });
         let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id
@@ -1417,6 +1418,14 @@ impl Spaces {
     pub(super) fn trace(&self, space: u32) -> Option<&Trace> {
         match self.backings.get(space.checked_sub(1)? as usize)? {
             Backing::Whole { trace, .. } => Some(trace),
+            Backing::Stitched(_) | Backing::Lazy(_) => None,
+        }
+    }
+
+    /// The trace of a space held whole, and the codec that made it.
+    pub(super) fn trace_and_codec(&self, space: u32) -> Option<(&Trace, Codec)> {
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Whole { trace, codec, .. } => Some((trace, *codec)),
             Backing::Stitched(_) | Backing::Lazy(_) => None,
         }
     }
