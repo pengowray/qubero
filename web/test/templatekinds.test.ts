@@ -43,7 +43,7 @@ test("two sections are both left out, and a type's span stops before them", () =
   assert.ok(deflate > 0 && lzma > deflate);
   assert.equal(idx.decoders.length, 2);
   assert.deepEqual(idx.decoders.map((d) => d[0]), [deflate, lzma]);
-  for (const [, z] of idx.typeSpans) assert.ok(z < deflate);
+  for (const [, [, z]] of idx.typeSpans) assert.ok(z < deflate);
   // Every structure ends before the sections, the last one included.
   assert.ok(idx.blocks.length > 0 && idx.blocks.every((b) => b.end < deflate));
 });
