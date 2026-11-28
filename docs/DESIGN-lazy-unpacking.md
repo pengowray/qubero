@@ -799,39 +799,59 @@ that it is read a window at a time and decoded a step at a time, each charged
 to the go; it comes back held whole.
 
 `join_whole`, for a stream past `whole_cap` (64 MiB), makes a joined document
-(`Joined`) that is read a part at a time. A walk over the parts, kept from one
-go to the next, decodes once each packed part that will later be decoded
-whole, to check that it unpacks to the length its run claimed. Once the stream
-is open, a packed part that unpacks to 64 MiB or less is decoded whole on
-first read and kept in a cache of decoded parts, which holds 16 MiB
-(`STITCH_CACHE_BYTES`) and at most one part larger than that; a part that
-unpacks to more is read through its `Seekable`. Each stored part's bytes, and
-the run of each packed part decoded whole, are read through a handle onto the
-source they are in, when one reaches them (`Evaluator::joined_input`). What no
-handle reaches is copied and kept: a part in a stitched space, in an edited
-stretch or in a `MemSource`, and a packed run decoded whole that is longer
-than a gather window or an eighth of what the store keeps. Those copies are
-held to `whole_cap` between them. Past that the joined stream is refused as a
-document, as `TooLargeCopy`, and still reads a part at a time in the listing.
-A BAM read from the file's chunk store, or a single-member gzip of any output
-size up to 1 GiB, is not refused that way. See
+(`Joined`) that is read a part at a time. Each part's length is the one the
+file gives for it, such as a BGZF block's or a gzip member's ISIZE; a part
+the file gives no length for is unpacked once by the walk that finds the
+parts (`measure_run`). The walk that joins the stream, kept from one go to
+the next, decodes none of the parts that will be decoded whole, with three
+exceptions (`checked_when_joined`): a
+part that claims 0 bytes, a part of a codec with no index that claims more
+than 64 MiB, and a deflate, zlib or gzip part that claims more than 1,032
+times its run. The walk decodes those, and refuses the stream as `Failed`
+when one unpacks to another length.
+
+Every other part is checked by the first read that unpacks it
+(`Joined::unpacked`). A part that will not unpack, or unpacks to another
+length than the file says, is unreadable: it is kept in `Joined::troubles`,
+its bytes read as zeroes, and every read that reaches them is refused. The
+bytes after it do not move, since the stream is laid out from the lengths
+the file gives. Every reader of a tab marks those bytes or refuses with the
+reason: `Source::unreadable` and `Evaluator::unreadable` name them and say
+why, `read_in` in a tab's own reading fails with that reason, the wasm
+crate's calls that read a tab go through `refusing_unreadable`, and the web
+draws them as `??` (`web/src/unreadable.ts`). See
+DESIGN-lazy-compressed-input.md, "Faster opening of joined streams".
+
+Once the stream is open, a packed part that unpacks to 64 MiB or less is
+decoded whole on first read and kept in a cache of decoded parts, which holds
+16 MiB (`STITCH_CACHE_BYTES`) and at most one part larger than that; a part
+that unpacks to more is read through its `Seekable`. Each stored part's bytes,
+and the run of each packed part decoded whole, are read through a handle onto
+the source they are in, when one reaches them (`Evaluator::joined_input`).
+What no handle reaches is copied and kept: a part in a stitched space, in an
+edited stretch or in a `MemSource`, and a packed run decoded whole that is
+longer than a gather window or an eighth of what the store keeps. Those copies
+are held to `whole_cap` between them. Past that the joined stream is refused
+as a document, as `TooLargeCopy`, and still reads a part at a time in the
+listing. A BAM read from the file's chunk store, or a single-member gzip of
+any output size up to 1 GiB, is not refused that way. See
 DESIGN-lazy-compressed-input.md, "Built (part 10)".
 
-When the index pass of a packed part is refused as `TooLargeLazy` (the part
+A packed part too large to decode whole is read through an index whose pass
+runs in the walk. When that pass is refused as `TooLargeLazy` (the part
 unpacks to more than 1 GiB), `TooLargeInput` (its run is past 512 MiB),
-`TooLargeUnit` (one zstd frame or xz block of it unpacks to more than
-64 MiB) or `TooMuchAtOnce`, the joined stream is refused with that same
-refusal. Any other refusal from a part's index pass, `TooManyXzBlocks`
-included, refuses the stream as `Failed` (see "Still to do"). A read of the
-part in the listing says why after the part's name, in the words of
-`Refusal::after_name`: `blocks[0].compressed is too large to unpack (over
-1 GiB unpacked)`, or `member.run has a zstd frame that is too large to
-unpack (over 64 MiB unpacked)`. A read of a part that will not decode says
-`could not be unpacked`. A part of a codec with no index (bzip2, LZMA and
+`TooLargeUnit` (one zstd frame or xz block of it unpacks to more than 64 MiB),
+`TooManyXzBlocks` or `TooMuchAtOnce`, the joined stream is refused with that
+same refusal. Any other refusal from a part's index pass refuses the stream as
+`Failed`. A read of the part in the listing says why after the part's name, in
+the words of `Refusal::after_name`: `blocks[0].compressed is too large to
+unpack (over 1 GiB unpacked)`, or `member.run has a zstd frame that is too
+large to unpack (over 64 MiB unpacked)`. A read of a part that will not decode
+says `could not be unpacked`. A part of a codec with no index (bzip2, LZMA and
 the rest) is decoded whole: a read of one whose run is past 64 MiB says `is
-too large to unpack (over 64 MiB packed)`, and of one whose output is past
-64 MiB, `is too large to unpack (over 64 MiB unpacked)`. FITS tiles and
-Parquet pages use the words of `Refusal::message` too.
+too large to unpack (over 64 MiB packed)`, and of one whose output is past 64
+MiB, `is too large to unpack (over 64 MiB unpacked)`. FITS tiles and Parquet
+pages use the words of `Refusal::message` too.
 
 A packed part that will not decode, or that decodes to another length than
 the file says, is kept with the reason in its stitched space
@@ -854,7 +874,8 @@ held whole. `Space::bytes()` is for tests and callers that know the space is
 held whole, and panics otherwise; no code outside tests calls it.
 `template_for` sniffs the first 36 KiB through `read`, or no more than the
 stream's `resident_limit`, and answers `Pending` when the read finds chunks
-missing rather than sniff zeroes. `map_out` and `map_in` go to the
+missing rather than sniff zeroes. It looks only at the bytes before the
+first unreadable part of a joined stream. `map_out` and `map_in` go to the
 `Seekable` or the joined parts when there is no whole trace, and
 `Space::trace_at_bit(bit)` gives the wasm crate's `decode_step` the trace
 that holds a bit: the whole trace, or the trace of the block or the span
@@ -897,8 +918,7 @@ into words: `tooLarge` for `too-large-copy`, `partTooLarge` for
 `too-large-lazy`, `partTooLargeInput` for `too-large-input`,
 `partZstdFrameTooLarge` and `partXzBlockTooLarge` for
 `too-large-zstd-frame` and `too-large-xz-block`, `partXzTooManyBlocks` for
-`too-many-xz-blocks` (which this path does not reach yet: see "Still to
-do"), `partTooMuchAtOnce` for `too-much-at-once`, and
+`too-many-xz-blocks`, `partTooMuchAtOnce` for `too-much-at-once`, and
 `failed` for the rest. `DECODED_REFUSED` has words for every tag, and the
 report's finding for a stream left as bytes (`RV.refused` in
 `report/text.ts`) says the listing's words with a capital for each size
@@ -1577,15 +1597,12 @@ The `hash` feature makes that module 2.3 KB larger.
   last byte, up to 2 MiB past the read. Stopping at the read's last byte
   would need the range coder's state kept between reads, and a stop between
   two symbols in `decoder::run`.
-- A joined stream with a packed part whose xz index lists more than 65,536
-  blocks is refused as `failed` when Open joined stream is pressed, because
-  `join_part_lazily` passes on only `TooLargeLazy`, `TooLargeInput`,
-  `TooLargeUnit` and `TooMuchAtOnce` from a part's index pass. A read of the
-  part in the listing says `has too many xz blocks to unpack (over 65,536
-  blocks)`, and `JOINED.refused` has words for `too-many-xz-blocks`
-  (`JOINED.partXzTooManyBlocks`) that this path never reaches. Passing
-  `TooManyXzBlocks` on as well would make the two agree.
-- How a pass reads its compressed input has its own list: see
+- Joined streams read a part at a time: the walk to the parts still reads
+  every block's header and trailer before the tab opens; a part read
+  through its index that refuses a span is not kept as unreadable, so the
+  hex view shows zeroes there; a part's CRC-32 is not checked when it is
+  first read; and the listing and the tab each decode the parts they show.
+  These, and how a pass reads its compressed input, are in
   DESIGN-lazy-compressed-input.md, "Still to do".
 
 ## Tests
@@ -1610,9 +1627,13 @@ The `hash` feature makes that module 2.3 KB larger.
   past the cap read a part at a time; a stream of stored and packed parts
   past the cap, from a template of the test's own, whose bytes, `map_out` for
   every byte and `map_in` for every bit of the file match the same stream held
-  whole; and a part past `Limits::lazy` refusing the stream as `TooLargeLazy`,
+  whole; a part past `Limits::lazy` refusing the stream as `TooLargeLazy`,
   with a read of it saying so, beside a damaged part of the same size refusing
-  it as `Failed`.
+  it as `Failed`; and parts with a zstd frame past `Limits::span` and with
+  more xz blocks than `Limits::block_marks` refusing the stream as
+  `TooLargeUnit` and `TooManyXzBlocks`, with a read of each saying so. The
+  tests of parts checked on their first read are listed in
+  DESIGN-lazy-compressed-input.md, "Faster opening of joined streams".
 - A generated gzip of several hundred MB, timed with the release-mode bench in
   the session scratchpad rather than in `cargo test`, which runs in debug.
 - The pass in steps (`codec::lazy`): steps from 100 bytes to the whole run,
