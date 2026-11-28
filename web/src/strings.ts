@@ -5091,10 +5091,10 @@ export const SIDEBAR = {
    *  them, so the reader can find them on the lines above. */
   notInFileIs: (on: string, value: string): string => `not in this file: ${on} is ${value}`,
   /** The same, when the switch is read more than once (inside a list) and no
-   *  read takes the arm: `not in this file: no cmd is 0x19`. `keys` are the
+   *  read takes the arm: `not in this file: command is never 1`. `keys` are the
    *  arm's keys as written, at most three. */
   notInFileNone: (on: string, keys: readonly string[]): string =>
-    `not in this file: no ${on} is ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
+    `not in this file: ${on} is never ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
    *  named because the clicked field may be a list itself, and "elements"
