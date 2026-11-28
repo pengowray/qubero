@@ -444,10 +444,10 @@ fn enum_ty(def: &EnumDef, inner: T) -> T {
 }
 
 /// What the type column calls a code of this form. Every form passed here is
-/// a [`Reads::Code`].
+/// a [`Reads::CodeBits`].
 fn code_name(form: Form) -> &'static str {
     match form.reads {
-        Reads::Code(name) => name,
+        Reads::CodeBits(name) => name,
         _ => "code",
     }
 }
@@ -461,7 +461,7 @@ fn code_of(form: Form) -> T {
 /// then a number for each of the form's other fields, from `values` in
 /// order.
 fn record_of(form: Form, values: [i128; 2]) -> T {
-    let Reads::Record { kind, fields } = form.reads else { return T::structure(tk::RECORD_NAME, Vec::new()) };
+    let Reads::Struct { kind, fields } = form.reads else { return T::structure(tk::RECORD_NAME, Vec::new()) };
     let mut out = Vec::with_capacity(fields.len());
     out.push((fields[0], enum_ty(&tk::SYMBOL_KIND, T::computed(E::lit(kind)))));
     for (field, v) in fields[1..].iter().zip(values) {

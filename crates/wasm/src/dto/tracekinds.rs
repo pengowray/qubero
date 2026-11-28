@@ -35,18 +35,18 @@ pub(crate) struct TraceFormDto {
 /// What a node reads as, in the IR's terms. `name` is what the type column
 /// says, except for a record's fields.
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum TraceReadsDto {
     /// `Ty::Traced`: a row over other nodes.
-    Rows { name: &'static str },
+    Traced { name: &'static str },
     /// `Ty::Computed`.
-    Number,
+    Computed,
     /// `Ty::Enum` over a computed number.
     Enum { name: &'static str, cases: Vec<EnumCaseDto> },
     /// `Ty::CodeBits`: the code's own bits.
-    Code { name: &'static str },
+    CodeBits { name: &'static str },
     /// `Ty::Struct`. `kind` is the value its first field, `kind`, holds.
-    Record { name: &'static str, kind: EnumCaseDto, fields: Vec<RecordFieldDto> },
+    Struct { name: &'static str, kind: EnumCaseDto, fields: Vec<RecordFieldDto> },
     /// `Ty::Bytes`.
     Bytes,
 }
@@ -72,11 +72,11 @@ fn cases(def: &EnumDef) -> Vec<EnumCaseDto> {
 
 fn reads_dto(reads: Reads) -> TraceReadsDto {
     match reads {
-        Reads::Rows(name) => TraceReadsDto::Rows { name },
-        Reads::Number => TraceReadsDto::Number,
+        Reads::Traced(name) => TraceReadsDto::Traced { name },
+        Reads::Computed => TraceReadsDto::Computed,
         Reads::Enum(def) => TraceReadsDto::Enum { name: def.name, cases: cases(def) },
-        Reads::Code(name) => TraceReadsDto::Code { name },
-        Reads::Record { kind, fields } => TraceReadsDto::Record {
+        Reads::CodeBits(name) => TraceReadsDto::CodeBits { name },
+        Reads::Struct { kind, fields } => TraceReadsDto::Struct {
             name: RECORD_NAME,
             kind: EnumCaseDto {
                 value: kind as f64,

@@ -325,10 +325,9 @@ fn walk_blocks(
 /// parent's row lists, and it reads as one of the row's forms, type and
 /// fields and, where the type carries it, sizing.
 ///
-/// Sizing is checked for codes, numbers and rows only. A record or an enum
-/// is wrapped in a width the trace measured and written as a literal, which
-/// `shape` reports as `fixed` whatever the format did; the row says how the
-/// width was really settled.
+/// Sizing is checked for every form but a struct. A struct is wrapped in a
+/// width the trace measured and wrote as a literal, which `shape` reports as
+/// `fixed`, although the decoder decided it; the row says `trace`.
 fn check_shape(
     ev: &mut Evaluator,
     doc: &Document<MemSource>,
@@ -348,21 +347,21 @@ fn check_shape(
         }
     }
     let sized = ev.shape(doc, path).map(|s| s.sized).ok();
-    let fields: Vec<NodeInfo> = match entry.forms.iter().any(|f| matches!(f.reads, Reads::Record { .. })) {
+    let fields: Vec<NodeInfo> = match entry.forms.iter().any(|f| matches!(f.reads, Reads::Struct { .. })) {
         true => ev.children(doc, path, 0, n.child_count).unwrap_or_default(),
         false => Vec::new(),
     };
     let matches = |f: &qubero_core::codec::tracekind::Form| match f.reads {
-        Reads::Rows(name) => n.type_name == name && sized == Some(f.sized),
-        Reads::Number => n.type_name == "computed" && matches!(n.value, Value::Int(_)) && sized == Some(f.sized) && n.child_count == 0,
-        Reads::Enum(def) => n.type_name == def.name && matches!(n.value, Value::Enum { .. }) && n.child_count == 0,
-        Reads::Code(name) => {
+        Reads::Traced(name) => n.type_name == name && sized == Some(f.sized),
+        Reads::Computed => n.type_name == "computed" && matches!(n.value, Value::Int(_)) && sized == Some(f.sized) && n.child_count == 0,
+        Reads::Enum(def) => n.type_name == def.name && matches!(n.value, Value::Enum { .. }) && sized == Some(f.sized) && n.child_count == 0,
+        Reads::CodeBits(name) => {
             let stuffed = n.type_name.strip_prefix(name).is_some_and(|rest| {
                 rest.is_empty() || (rest.starts_with(", plus ") && (rest.ends_with(" stuffed 00 byte") || rest.ends_with(" stuffed 00 bytes")))
             });
             stuffed && matches!(n.value, Value::Str(_)) && sized == Some(f.sized) && n.child_count == 0
         }
-        Reads::Record { kind, fields: names } => {
+        Reads::Struct { kind, fields: names } => {
             n.type_name == RECORD_NAME
                 && fields.iter().map(|c| c.name.as_str()).eq(names.iter().copied())
                 && matches!(fields.first().map(|c| &c.value), Some(Value::Enum { raw, .. }) if *raw == kind)

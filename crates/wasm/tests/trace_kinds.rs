@@ -27,7 +27,7 @@ fn one_family_is_asked_for_by_its_prefix() {
     let deflate: Value = serde_json::from_str(&qubero_wasm::trace_kinds("deflate")).unwrap();
     let kinds = deflate[0]["kinds"].as_array().unwrap();
     let literal = kinds.iter().find(|k| k["kind"] == "deflate.literal").unwrap();
-    assert_eq!(literal["forms"][0]["reads"], serde_json::json!({ "type": "code", "name": "Huffman code" }));
+    assert_eq!(literal["forms"][0]["reads"], serde_json::json!({ "type": "codebits", "name": "Huffman code" }));
     assert_eq!(literal["forms"][0]["sized"], "fixed");
     assert_eq!(literal["forms"][1]["sized"], "table");
     let bfinal = kinds.iter().find(|k| k["kind"] == "deflate.bfinal").unwrap();
@@ -39,7 +39,7 @@ fn one_family_is_asked_for_by_its_prefix() {
     assert_eq!(
         stored["forms"][0]["reads"],
         serde_json::json!({
-            "type": "record",
+            "type": "struct",
             "name": "Symbol",
             "kind": { "value": 3.0, "name": "stored" },
             "fields": [{ "name": "kind", "type": "SymbolKind" }, { "name": "length", "type": "computed" }],

@@ -795,12 +795,12 @@ export interface TraceKindForm {
  *  says. A JPEG code that lies across a stuffed 00 byte adds
  *  `, plus a stuffed 00 byte` to its code's name. */
 export type TraceKindReads =
-  | { readonly type: "rows"; readonly name: string }
-  | { readonly type: "number" }
+  | { readonly type: "traced"; readonly name: string }
+  | { readonly type: "computed" }
   | { readonly type: "enum"; readonly name: string; readonly cases: readonly TraceKindCase[] }
-  | { readonly type: "code"; readonly name: string }
+  | { readonly type: "codebits"; readonly name: string }
   | {
-      readonly type: "record";
+      readonly type: "struct";
       readonly name: string;
       /** The value the record's first field, `kind`, holds. */
       readonly kind: TraceKindCase;

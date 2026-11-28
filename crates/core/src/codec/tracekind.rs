@@ -18,8 +18,12 @@
 //!
 //! Each row also says what a node of its kind is: a line about it, the
 //! [`Form`]s it can read as, and for a row over other nodes, which kinds its
-//! children are. The forms are the ones `eval::traced` builds each node's type
-//! from, so a row and the nodes it describes cannot disagree.
+//! children are. `eval::traced` builds each node's type from the same form
+//! constants, so a code's name, a record's fields and an enum's cases are
+//! written once. Which form a node takes is still chosen there, by its step,
+//! where it sits and how its block was coded, and nothing ties that choice to
+//! the forms a row lists except the walk over the samples in
+//! `tests/trace_kinds_real.rs`.
 
 use super::{Codec, StepField, StepKind, TableField};
 use crate::eval::Sizing;
@@ -273,7 +277,7 @@ pub const RESTART_MARKER: EnumDef = EnumDef {
     cases: &[(0, "RST0"), (1, "RST1"), (2, "RST2"), (3, "RST3"), (4, "RST4"), (5, "RST5"), (6, "RST6"), (7, "RST7")],
 };
 
-/// The `kind` field of a [`Reads::Record`].
+/// The `kind` field of a [`Reads::Struct`].
 pub const SYMBOL_KIND: EnumDef = EnumDef {
     name: "SymbolKind",
     cases: &[
@@ -289,7 +293,7 @@ pub const SYMBOL_KIND: EnumDef = EnumDef {
     ],
 };
 
-/// The name of the struct a [`Reads::Record`] is.
+/// The name of the struct a [`Reads::Struct`] is.
 pub const RECORD_NAME: &str = "Symbol";
 
 /// The enum a header field's value is named by, for the fields whose format
@@ -305,27 +309,31 @@ pub fn header_enum(field: StepField) -> Option<&'static EnumDef> {
 }
 
 /// What a node reads as, in the IR's terms. Each is one `Ty`, inside a
-/// `Ty::SizedBits` as wide as the bits the decoder read for it.
+/// `Ty::SizedBits` as wide as the bits the decoder read for it. The variants
+/// are named as `template_text` writes the `Ty`: `traced`, `computed`,
+/// `enum`, `codebits`, a struct, `bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reads {
     /// `Ty::Traced`: a row over other nodes, with no value of its own. The
     /// string is what the type column says: `blocks`, `block` or `codes`.
-    Rows(&'static str),
+    /// `template_text` writes the `Ty` as `traced blocks`, `traced block`,
+    /// `traced symbols` and `traced unit`.
+    Traced(&'static str),
     /// `Ty::Computed`: a number the decoder read, carried as it used it.
-    Number,
+    Computed,
     /// `Ty::Enum` over a computed number.
     Enum(&'static EnumDef),
     /// `Ty::CodeBits`: an entropy-coded symbol shown as its own bits. The
     /// string is what the type column says. A JPEG code that lies across a
     /// stuffed `00` byte adds `, plus a stuffed 00 byte` to it, or the count
     /// of them.
-    Code(&'static str),
+    CodeBits(&'static str),
     /// `Ty::Struct` named [`RECORD_NAME`]: a step that is not one code. The
     /// first field is always `kind`, a [`SYMBOL_KIND`] whose value is `kind`
     /// here; the others are computed numbers: `value` is a literal's byte,
     /// `length` how many bytes the step produced or a match copied, and
     /// `distance` how far back a match copied from.
-    Record { kind: i128, fields: &'static [&'static str] },
+    Struct { kind: i128, fields: &'static [&'static str] },
     /// `Ty::Bytes`: the step's bytes as they sit in the stream.
     Bytes,
 }
@@ -352,31 +360,33 @@ const fn form(reads: Reads, sized: Sizing) -> Form {
 
 /// A row over other nodes.
 const fn rows(name: &'static str) -> Form {
-    form(Reads::Rows(name), Sizing::Trace)
+    form(Reads::Traced(name), Sizing::Trace)
 }
 
 /// A header field or table entry the decoder read.
-pub const NUMBER: Form = form(Reads::Number, Sizing::Trace);
+pub const NUMBER: Form = form(Reads::Computed, Sizing::Trace);
 /// A number the decoder worked out that the run does not hold.
-pub const NO_BITS: Form = form(Reads::Number, Sizing::Nothing);
+pub const NO_BITS: Form = form(Reads::Computed, Sizing::Nothing);
 
+/// A header field whose format names its values. Each of these has a width
+/// its format fixes: 1 bit, 2 bits, a byte, a 2-byte marker.
 const fn named(def: &'static EnumDef) -> Form {
-    form(Reads::Enum(def), Sizing::Trace)
+    form(Reads::Enum(def), Sizing::Fixed)
 }
 
 /// A literal or end-of-block code in a fixed-Huffman block.
-pub const HUFFMAN_FIXED: Form = form(Reads::Code("Huffman code"), Sizing::Fixed);
+pub const HUFFMAN_FIXED: Form = form(Reads::CodeBits("Huffman code"), Sizing::Fixed);
 /// A literal or end-of-block code in a block that wrote its own table; and a
 /// JPEG code that carries no value bits.
-pub const HUFFMAN_TABLE: Form = form(Reads::Code("Huffman code"), Sizing::Table);
+pub const HUFFMAN_TABLE: Form = form(Reads::CodeBits("Huffman code"), Sizing::Table);
 /// A match: a length code, its extra bits, a distance code and its extra
 /// bits.
-pub const LENGTH_AND_DISTANCE: Form = form(Reads::Code("length and distance codes"), Sizing::Encoded);
+pub const LENGTH_AND_DISTANCE: Form = form(Reads::CodeBits("length and distance codes"), Sizing::Encoded);
 /// A JPEG DC or AC code and the value bits after it.
-pub const CODE_AND_VALUE_BITS: Form = form(Reads::Code("Huffman code and value bits"), Sizing::Encoded);
+pub const CODE_AND_VALUE_BITS: Form = form(Reads::CodeBits("Huffman code and value bits"), Sizing::Encoded);
 
 const fn record(kind: i128, fields: &'static [&'static str]) -> Form {
-    form(Reads::Record { kind, fields }, Sizing::Trace)
+    form(Reads::Struct { kind, fields }, Sizing::Trace)
 }
 
 pub const LITERAL_RECORD: Form = record(0, &["kind", "value"]);
@@ -405,7 +415,7 @@ pub struct KindEntry {
     pub forms: &'static [Form],
     /// For a row over other nodes, the roles its children can have, each a
     /// row of the same table. Empty for a node with no children of its own
-    /// kind; a [`Reads::Record`]'s fields are not kinds.
+    /// kind; a [`Reads::Struct`]'s fields are not kinds.
     pub children: &'static [Role],
 }
 
@@ -489,7 +499,7 @@ const DEFLATE: &[KindEntry] = &[
     k(R::Match, "deflate.match", "A length code and a distance code, each with its extra bits: a copy of earlier output.", &[LENGTH_AND_DISTANCE]),
     k(R::EndOfBlock, "deflate.end_of_block", "Code 256, which ends the block.", HUFFMAN_EITHER),
     // A block's codes once the trace stopped naming them. See `MAX_STEPS`.
-    k(R::Unnamed, "deflate.unnamed_codes", "The rest of a block's codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "deflate.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// A sequential Huffman-coded JPEG scan, read by `codec::jpeg`.
@@ -498,7 +508,7 @@ const JPEG_SCAN: &[KindEntry] = &[
     r(
         R::Block,
         "jpegscan.mcu",
-        "One minimum coded unit: an 8x8 block of each component, in the scan's order.",
+        "One minimum coded unit: each component's 8x8 blocks for one area of the image, in the scan's order.",
         BLOCK,
         &[R::Unit, R::Field(F::Padding), R::Field(F::Restart), R::Trailing],
     ),
@@ -508,7 +518,7 @@ const JPEG_SCAN: &[KindEntry] = &[
     k(R::Zrl, "jpegscan.zrl", "The code for AC symbol 0xF0: sixteen zero coefficients.", &[HUFFMAN_TABLE]),
     k(R::Eob, "jpegscan.eob", "The code for AC symbol 0x00: every coefficient left in the block is zero.", &[HUFFMAN_TABLE]),
     // A unit's codes once the trace stopped naming them. See `MAX_STEPS`.
-    k(R::Unnamed, "jpegscan.unnamed_codes", "The rest of a block's codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "jpegscan.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
     // The ones that pad an interval out to a byte, and the marker after it.
     k(R::Field(F::Padding), "jpegscan.padding", "The 1 bits that fill out the last byte of a restart interval or of the scan.", &[PADDING_RECORD]),
     k(R::Field(F::Restart), "jpegscan.restart", "A restart marker, FFD0 to FFD7, between two intervals.", &[named(&RESTART_MARKER)]),
@@ -534,7 +544,7 @@ const LZ4: &[KindEntry] = &[
     k(R::Stored, "lz4.literals", "A sequence's literal bytes, or a stored block's bytes, copied as they are.", &[STORED_RECORD]),
     k(R::Field(F::Offset), "lz4.offset", "A match's 16-bit little-endian offset.", NUMBER_OR_RECORD),
     k(R::Match, "lz4.match", "The copy a match makes, from the offset and length before it.", &[MATCH_RECORD]),
-    k(R::Unnamed, "lz4.unnamed_codes", "The rest of a block's sequences, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "lz4.unnamed_codes", "The rest of a block's sequences, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// One raw Snappy block, read by `codec::snappy`. The length in front of it
@@ -549,7 +559,7 @@ const SNAPPY: &[KindEntry] = &[
     // A block starts with literal bytes, since there is nothing yet to copy.
     k(R::Field(F::Offset), "snappy.offset", "A copy element's offset, 1, 2 or 4 bytes.", &[UNNAMED_RECORD]),
     k(R::Match, "snappy.match", "The copy a copy element makes, from the offset and length before it.", &[MATCH_RECORD]),
-    k(R::Unnamed, "snappy.unnamed_codes", "The rest of a block's elements, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "snappy.unnamed_codes", "The rest of a block's elements, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// One FastLZ block, read by `codec::fastlz`.
@@ -570,7 +580,7 @@ const FASTLZ: &[KindEntry] = &[
     k(R::Stored, "fastlz.literals", "A literal run's bytes, copied as they are.", &[STORED_RECORD]),
     k(R::Match, "fastlz.match", "The copy a match makes, from the length and offset before it.", &[MATCH_RECORD]),
     k(R::Field(F::Padding), "fastlz.padding", "Bytes after the last instruction that no instruction read.", &[PADDING_RECORD]),
-    k(R::Unnamed, "fastlz.unnamed_codes", "The rest of a block's instructions, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "fastlz.unnamed_codes", "The rest of a block's instructions, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// A `.Z` file's LZW codes, read by `codec::compress`. A block runs to a
@@ -581,10 +591,10 @@ const COMPRESS: &[KindEntry] = &[
     r(R::Block, "compress.block", "The codes from one dictionary reset to the next.", BLOCK, &[R::Codes]),
     r(R::Codes, "compress.codes", "A block's LZW codes.", CODES, &[R::Literal, R::Match, R::EndOfBlock, R::Field(F::Padding), R::Unnamed]),
     k(R::Literal, "compress.literal", "A code below 256: one byte of output.", &[LITERAL_RECORD]),
-    k(R::Match, "compress.match", "A code above 256: a string the dictionary holds, copied from earlier output.", &[MATCH_RECORD]),
+    k(R::Match, "compress.match", "A code above 255 other than the clear code: a string the dictionary holds, copied from earlier output.", &[MATCH_RECORD]),
     k(R::EndOfBlock, "compress.clear", "The clear code, 256, which resets the dictionary.", &[END_RECORD]),
     k(R::Field(F::Padding), "compress.padding", "Zero bits filling out a group of 8 codes when the code width grows or the dictionary is reset.", &[PADDING_RECORD]),
-    k(R::Unnamed, "compress.unnamed_codes", "The rest of a block's codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "compress.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// LHA's `-lh5-` family, read by `codec::lha`: per block, a symbol count,
@@ -606,7 +616,7 @@ const LZHUF: &[KindEntry] = &[
     r(R::Codes, "lzhuf.codes", "A block's codes.", CODES, &[R::Literal, R::Match, R::Unnamed]),
     k(R::Literal, "lzhuf.literal", "A code below 256: one byte of output.", &[HUFFMAN_TABLE]),
     k(R::Match, "lzhuf.match", "A length code and an offset code, each with its extra bits: a copy of earlier output.", &[LENGTH_AND_DISTANCE]),
-    k(R::Unnamed, "lzhuf.unnamed_codes", "The rest of a block's codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "lzhuf.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// RAR 5's compressed blocks, read by `codec::rar5`.
@@ -639,7 +649,7 @@ const RAR5: &[KindEntry] = &[
     k(R::Match, "rar5.match", "A length code and a distance code, each with its extra bits, or a repeat of a recent distance: a copy of earlier output.", &[LENGTH_AND_DISTANCE]),
     k(R::Field(F::FilterDef), "rar5.filter", "Code 256 and its fields: a filter to run over a range of the output.", NUMBER_OR_RECORD),
     k(R::Field(F::Padding), "rar5.padding", "The bits after a block's last code, up to where its header said it ends.", &[PADDING_RECORD]),
-    k(R::Unnamed, "rar5.unnamed_codes", "The rest of a block's codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "rar5.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// LZMA, read by `codec::lzma`: one block for an LZMA1 stream, one per chunk
@@ -662,7 +672,7 @@ const LZMA: &[KindEntry] = &[
     k(R::Match, "lzma.match", "A range-coded match or repeated match: a copy of earlier output.", &[MATCH_RECORD]),
     k(R::EndOfBlock, "lzma.end_marker", "The end-of-stream marker, a match with distance 0xFFFFFFFF.", &[END_RECORD]),
     k(R::Stored, "lzma.stored_data", "An uncompressed LZMA2 chunk's bytes, copied as they are.", &[STORED_RECORD]),
-    k(R::Unnamed, "lzma.unnamed_codes", "The rest of a block's symbols, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "lzma.unnamed_codes", "The rest of a block's symbols, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// PNG's scanlines, read by `codec::scanlines` and `codec::pixels`. A row's
@@ -694,7 +704,7 @@ const CDF_HUFFMAN: &[KindEntry] = &[
     k(R::Literal, "cdfhuffman.literal", "A Huffman code: one byte of output.", &[HUFFMAN_TABLE]),
     k(R::EndOfBlock, "cdfhuffman.end_of_stream", "The code that ends the stream.", &[HUFFMAN_TABLE]),
     k(R::Field(F::Padding), "cdfhuffman.padding", "The bits after the end code, to the end of the run.", &[PADDING_RECORD]),
-    k(R::Unnamed, "cdfhuffman.unnamed_codes", "The rest of the codes, past the number the trace names one by one.", &[UNNAMED_RECORD]),
+    k(R::Unnamed, "cdfhuffman.unnamed_codes", "The rest of the codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
 /// PICO-8's two code compressions, read by `codec::pico8`.
@@ -704,7 +714,7 @@ const PICO8: &[KindEntry] = &[
     r(R::Codes, "pico8.codes", "The block's literals and matches.", CODES, &[R::Literal, R::Match, R::EndOfBlock]),
     k(R::Literal, "pico8.literal", "One character of the code.", &[LITERAL_RECORD]),
     k(R::Match, "pico8.match", "A copy of earlier output.", &[MATCH_RECORD]),
-    k(R::EndOfBlock, "pico8.end", "The zero byte that ends the code.", &[END_RECORD]),
+    k(R::EndOfBlock, "pico8.end", "The end of the code: a zero byte after a pxa raw run, or two zero bytes in the old format.", &[END_RECORD]),
 ];
 
 /// Every kind a codec's nodes can be. Empty for a codec whose nodes have no
@@ -790,8 +800,8 @@ mod tests {
                 assert!(!e.forms.is_empty(), "{} has no forms", e.kind);
                 let over_rows = matches!(e.role, Role::Blocks | Role::Block | Role::Codes | Role::Unit);
                 for f in e.forms {
-                    assert_eq!(matches!(f.reads, Reads::Rows(_)), over_rows, "{} reads as {:?}", e.kind, f.reads);
-                    if let Reads::Record { kind, fields } = f.reads {
+                    assert_eq!(matches!(f.reads, Reads::Traced(_)), over_rows, "{} reads as {:?}", e.kind, f.reads);
+                    if let Reads::Struct { kind, fields } = f.reads {
                         assert_eq!(fields.first(), Some(&"kind"), "{}", e.kind);
                         assert!(SYMBOL_KIND.cases.iter().any(|c| c.0 == kind), "{}", e.kind);
                     }
