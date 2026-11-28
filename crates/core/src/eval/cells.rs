@@ -761,11 +761,11 @@ mod tests {
         assert_eq!(
             said,
             [
-                "0xb3 (unknown) \u{b7} seq 4903 \u{b7} 231 bytes",
+                "0xb3 (unrecognised) \u{b7} seq 4903 \u{b7} 231 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
-                "0x12 (unknown) \u{b7} seq 7 \u{b7} 8 bytes",
+                "0x12 (unrecognised) \u{b7} seq 7 \u{b7} 8 bytes",
             ]
         );
     }
