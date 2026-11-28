@@ -531,34 +531,43 @@ fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 ///
 /// Such a read needs every byte of the file it covers at once: a stored
 /// part's own bytes, and the whole run of each packed part it reaches, which
-/// it decodes. A packed part's run is at most `expand` bytes for each byte
-/// it unpacks to, and a read reaches into at most two parts it does not
-/// cover whole, whose runs are at most `longest`. So a read of `n` bytes
-/// needs at most `n × expand + 2 × longest` bytes of the file, and the limit
-/// is the `n` for which that comes to half of what the source keeps, as a
-/// read of a run is held to half of it (`RunInput::most_at_once`). The
-/// longest run a packed part read through a handle may have is an eighth of
-/// what the source keeps (see `Evaluator::joined_input`), so the limit is at
-/// least a quarter of it over `expand`. For a BAM in the browser, `expand`
-/// is 1 and the limit is 16 MiB less two blocks.
+/// it decodes. A packed part's run takes `run / len` bytes of the file for
+/// each byte the part unpacks to, and a read reaches into at most two parts
+/// it does not cover whole, whose runs are at most `longest`. So with
+/// `expand` the most of `run / len` over the packed parts, and at least 1
+/// for the stored ones, a read of `n` bytes needs at most `n × expand + 2 ×
+/// longest` bytes of the file. The limit is the `n` for which that comes to
+/// half of what the source keeps, as a read of a run is held to half of it
+/// (`RunInput::most_at_once`). The longest run a packed part read through a
+/// handle may have is an eighth of what the source keeps (see
+/// `Evaluator::joined_input`), so the limit is at least a quarter of it over
+/// `expand`. For a BAM in the browser, `expand` is 1 and the limit is 16 MiB
+/// less two blocks.
 fn handle_limit(parts: &[(std::ops::Range<u64>, JoinedBytes)]) -> Option<u64> {
-    let (mut keeps, mut longest, mut expand) = (None::<u64>, 0, 1);
-    for (out, bytes) in parts {
-        let (input, packed) = match bytes {
-            JoinedBytes::Stored(input) => (input, false),
-            JoinedBytes::Packed { input, .. } => (input, true),
-            JoinedBytes::Indexed(_) => continue,
-        };
-        let Some(k) = input.resident_limit() else { continue };
+    let read_through_handle = |bytes: &JoinedBytes| match bytes {
+        JoinedBytes::Stored(input) => input.resident_limit().map(|keeps| (keeps, None)),
+        JoinedBytes::Packed { input, .. } => input.resident_limit().map(|keeps| (keeps, Some(input.len()))),
+        JoinedBytes::Indexed(_) => None,
+    };
+    let (mut keeps, mut longest) = (None::<u64>, 0);
+    for (_, bytes) in parts {
+        let Some((k, run)) = read_through_handle(bytes) else { continue };
         keeps = Some(keeps.map_or(k, |was| was.min(k)));
-        if packed {
-            longest = longest.max(input.len());
-            if out.end > out.start {
-                expand = expand.max(input.len().div_ceil(out.end - out.start));
+        longest = longest.max(run.unwrap_or(0));
+    }
+    let room = (keeps? / 2).saturating_sub(2 * longest);
+    // `room / expand`, worked out part by part as `room × len / run`, for
+    // each part a read can reach: a part of no bytes, such as the empty
+    // block a BGZF file ends with, is never reached.
+    let mut limit = room;
+    for (out, bytes) in parts {
+        if let Some((_, Some(run))) = read_through_handle(bytes) {
+            if run > 0 && out.end > out.start {
+                limit = limit.min((u128::from(room) * u128::from(out.end - out.start) / u128::from(run)) as u64);
             }
         }
     }
-    keeps.map(|k| ((k / 2).saturating_sub(2 * longest) / expand).max(1))
+    Some(limit.max(1))
 }
 
 impl Joined {

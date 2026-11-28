@@ -1401,3 +1401,42 @@ fn a_gzip_member_and_a_zip_entry_past_64_mib_open_end_to_end() {
     a_gzip_member_opens(&content, 64, None);
     a_zip_entry_opens(&content, 64, None);
 }
+
+/// A BGZF block of `data`, its deflate stored blocks, which cost nothing to
+/// write or to inflate.
+fn bgzf_stored_block(data: &[u8]) -> Vec<u8> {
+    let deflated = stored_blocks(data);
+    let total = 12 + 6 + deflated.len() + 8;
+    let mut v = vec![0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, b'B', b'C', 2, 0];
+    v.extend_from_slice(&((total - 1) as u16).to_le_bytes());
+    v.extend_from_slice(&deflated);
+    v.extend_from_slice(&crc32(data).to_le_bytes());
+    v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    v
+}
+
+/// A BGZF file of 66 MiB of noise in blocks of 65,280 bytes, the size
+/// samtools writes, under the default limits: past the 64 MiB a joined
+/// stream may be held whole, and its runs past the 64 MiB a joined stream
+/// read a part at a time could copy before part 10. It opens from a store
+/// of 4 MiB, its blocks read through the store, and its tab reads the right
+/// bytes. Run on purpose, as the test before it is:
+/// `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+#[test]
+#[ignore]
+fn a_joined_stream_past_64_mib_compressed_opens_end_to_end() {
+    let content = noise(66 << 20);
+    let mut file: Vec<u8> = content.chunks(65_280).flat_map(bgzf_stored_block).collect();
+    file.extend_from_slice(&BGZF_EOF);
+    let mut ed = unfed(&file, 64, "bgzf");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[1]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), content.len() as f64);
+    for at in [content.len() / 2, 0, content.len() - 100, content.len() / 3] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "100 bytes at {at} differ");
+    }
+    let at = content.len() / 4;
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, 1 << 20) == content[at..at + (1 << 20)], "1 MiB at {at} differ");
+    assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
+}
