@@ -408,7 +408,7 @@ pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, 
     match code {
         Some(code) => (name, sized(bits, code)),
         None => match step.kind {
-            StepKind::Header(StepField::Restart, _) => ("restart marker".to_string(), head_field(step).1),
+            StepKind::Header(StepField::Restart, _) => ("restart marker".to_string(), head_field(step, None).1),
             // The run after the last MCU holds nothing a decoder reads.
             StepKind::Opaque if tail => ("bytes after the last MCU".to_string(), symbol_ty(step, BlockKind::Opaque).1),
             _ => symbol_ty(step, BlockKind::Opaque),
@@ -420,12 +420,13 @@ pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, 
 ///
 /// Two things at once because they come from the same match: the name is the
 /// format's own word for the field, and the type carries the value the decoder
-/// read, at the width the step took.
-pub(super) fn head_field(step: &Step) -> (String, T) {
+/// read, at the width the step took. `family` settles what a repeat code of
+/// a Huffman table did, which differs between codecs.
+pub(super) fn head_field(step: &Step, family: Option<Family>) -> (String, T) {
     let bits = step.in_bits.end - step.in_bits.start;
     match step.kind {
         StepKind::Header(field, value) => (field.as_str().to_string(), header_ty(field, value, bits)),
-        StepKind::Table(table) => table_field(table, bits),
+        StepKind::Table(table) => table_field(table, bits, family),
         // Not reached for a block's head, and better than a panic if it ever
         // is: bits nobody named.
         other => (other.as_str().to_string(), sized(bits, T::computed(E::lit(0)))),
@@ -470,7 +471,7 @@ fn header_ty(field: StepField, value: u32, bits: u64) -> T {
 /// thing in the same format and is not this. `code length 5` left the reader
 /// to work out that the second number was a symbol of the code-length
 /// alphabet rather than a second length.
-fn table_field(table: TableField, bits: u64) -> (String, T) {
+fn table_field(table: TableField, bits: u64, family: Option<Family>) -> (String, T) {
     let (name, value) = match table {
         TableField::CodeLen { sym, len } => (format!("code length for code-length symbol {sym}"), len as i128),
         TableField::LitLen { sym, len } => (format!("code length for symbol {sym}"), len as i128),
@@ -479,9 +480,9 @@ fn table_field(table: TableField, bits: u64) -> (String, T) {
         // by what it does rather than by which symbol it filled.
         TableField::Repeat { code, count, len, dist } => {
             let what = if dist { "distance codes" } else { "symbols" };
-            let name = match code {
-                16 => format!("repeat {len} for {count} more {what}"),
-                _ => format!("{count} {what} with no code"),
+            let name = match crate::codec::tracekind::repeats_length(family, code) {
+                true => format!("repeat {len} for {count} more {what}"),
+                false => format!("{count} {what} with no code"),
             };
             (name, count as i128)
         }
@@ -1278,10 +1279,25 @@ mod tests {
 
     #[test]
     fn a_run_length_code_is_named_by_what_it_did() {
-        let (name, _) = table_field(TableField::Repeat { code: 18, count: 40, len: 0, dist: false }, 7);
+        let (name, _) = table_field(TableField::Repeat { code: 18, count: 40, len: 0, dist: false }, 7, Some(Family::Deflate));
         assert_eq!(name, "40 symbols with no code");
-        let (name, _) = table_field(TableField::Repeat { code: 16, count: 5, len: 3, dist: true }, 2);
+        let (name, _) = table_field(TableField::Repeat { code: 16, count: 5, len: 3, dist: true }, 2, Some(Family::Deflate));
         assert_eq!(name, "repeat 3 for 5 more distance codes");
+    }
+
+    /// Each codec's own rule says which repeat codes repeat the length before
+    /// them. Deflate's 17 writes zeros; RAR 5's 17 repeats, with a wider count
+    /// than its 16, and its 15, 18 and 19 write zeros.
+    #[test]
+    fn a_repeat_code_is_named_by_its_codecs_rule() {
+        let name = |family, code, len| table_field(TableField::Repeat { code, count: 12, len, dist: false }, 10, Some(family)).0;
+        assert_eq!(name(Family::Deflate, 17, 0), "12 symbols with no code");
+        assert_eq!(name(Family::Rar5, 16, 4), "repeat 4 for 12 more symbols");
+        assert_eq!(name(Family::Rar5, 17, 4), "repeat 4 for 12 more symbols");
+        for code in [15, 18, 19] {
+            assert_eq!(name(Family::Rar5, code, 0), "12 symbols with no code", "RAR 5 code {code}");
+        }
+        assert_eq!(name(Family::Lzhuf, 2, 0), "12 symbols with no code");
     }
 
     /// A table row holds a width, and says which alphabet's symbol the width
@@ -1289,11 +1305,11 @@ mod tests {
     /// is a real thing in the same format and is not what the row holds.
     #[test]
     fn a_table_row_says_which_symbol_its_length_is_for() {
-        let (name, _) = table_field(TableField::LitLen { sym: 77, len: 9 }, 4);
+        let (name, _) = table_field(TableField::LitLen { sym: 77, len: 9 }, 4, None);
         assert_eq!(name, "code length for symbol 77");
-        let (name, _) = table_field(TableField::Dist { sym: 3, len: 5 }, 4);
+        let (name, _) = table_field(TableField::Dist { sym: 3, len: 5 }, 4, None);
         assert_eq!(name, "code length for distance symbol 3");
-        let (name, _) = table_field(TableField::CodeLen { sym: 16, len: 2 }, 3);
+        let (name, _) = table_field(TableField::CodeLen { sym: 16, len: 2 }, 3, None);
         assert_eq!(name, "code length for code-length symbol 16");
     }
 }

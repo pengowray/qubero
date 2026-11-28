@@ -173,9 +173,9 @@ impl Family {
             StepKind::Table(TableField::CodeLen { .. }) => Role::CodeLengthCodeLength,
             StepKind::Table(TableField::LitLen { .. }) => Role::CodeLength,
             StepKind::Table(TableField::Dist { .. }) => Role::DistanceCodeLength,
-            StepKind::Table(TableField::Repeat { code, .. }) => match (self, code) {
-                (Family::Deflate, 16) | (Family::Rar5, 16 | 17) => Role::RepeatLength,
-                _ => Role::ZeroLengths,
+            StepKind::Table(TableField::Repeat { code, .. }) => match repeats_length(Some(self), code) {
+                true => Role::RepeatLength,
+                false => Role::ZeroLengths,
             },
             StepKind::Literal(_) => Role::Literal,
             StepKind::Match { .. } => Role::Match,
@@ -193,6 +193,18 @@ impl Family {
             StepKind::Base64 { .. } => Role::Base64,
             StepKind::Ignored => Role::Ignored,
         }
+    }
+}
+
+/// Whether repeat code `code` of a Huffman table repeats the length before
+/// it, rather than writing zeros. Deflate's 16 repeats; RAR 5's 16 and 17
+/// repeat; every other repeat code writes zeros. A codec with no family is
+/// taken to follow deflate.
+pub fn repeats_length(family: Option<Family>, code: u8) -> bool {
+    match (family, code) {
+        (Some(Family::Rar5), 16 | 17) => true,
+        (Some(Family::Deflate) | None, 16) => true,
+        _ => false,
     }
 }
 

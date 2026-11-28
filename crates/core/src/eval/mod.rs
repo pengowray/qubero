@@ -3223,7 +3223,7 @@ impl Evaluator {
                 let head = view.head.len();
                 if idx < head {
                     let step = trace.step(view.head.start as usize + idx).expect("in range");
-                    let (name, ty) = traced::head_field(&step);
+                    let (name, ty) = traced::head_field(&step, family);
                     place(name, ty, step.in_bits.start, step_kind(&step, false))
                 } else if idx == head && view.block.kind == crate::codec::BlockKind::Scanline && view.symbols.len() == 1 {
                     // A scanline's one payload step is its filtered row, and a

@@ -73,6 +73,22 @@ fn dump_decoded_trees() {
         "zip/streamed-data-descriptors.zip",
         "jpeg/libjpeg-turbo-testorig-baseline.jpg",
         "jpeg/pillow-cmyk-adobe-restart.jpg",
+        "compressed/rar5-four-files.rar",
+        "compressed/rar5-one-file.rar",
+        "compressed/rar5-four-files-solid.rar",
+        "compressed/rar5-arm-filter.rar",
+        "compressed/words.Z",
+        "compressed/hello.lz4",
+        "compressed/hello.txt.xz",
+        "compressed/hello.lz",
+        "lha/h0_lh5-unix114i.lzh",
+        "lha/lh7_long-unix114i.lzh",
+        "pico8/p8png-test.p8.png",
+        "cdf/d103a2x.cdf",
+        "cdf/d103a2x-ahuff.cdf",
+        "parquet/datapage_v2.snappy.parquet",
+        "avro/types-snappy.avro",
+        "godot/godot4-probe-fastlz.res",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target-scratch");
     std::fs::create_dir_all(&dir).unwrap();
