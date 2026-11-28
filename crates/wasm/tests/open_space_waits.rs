@@ -710,6 +710,22 @@ fn a_joined_stream_with_a_block_that_lies_about_its_length_says_which_bytes_will
 
     assert!(tab_bytes_fed(&mut ed, &file, tab, 0, 100) == stream[..100]);
     assert!(parse(&ed.unreadable(tab, 0.0, 100.0))["node"].is_null());
+
+    // The lines hold no zero bytes, so a search for zeroes finds none: not
+    // the zeroes block 70 reads as. Forward from the front, and backward from
+    // the end.
+    for (backward, from) in [(false, 0.0), (true, stream.len() as f64)] {
+        let mut from = from;
+        let end = loop {
+            let step = feeder.ask(&mut ed, |ed| ed.search_step(tab, "hex", "00 00 00 00", false, backward, from));
+            assert_eq!(step["status"], "ok", "{step}");
+            match step["node"]["step"].as_str() {
+                Some("more") => from = step["node"]["resume"].as_f64().unwrap(),
+                _ => break step,
+            }
+        };
+        assert_eq!(end["node"]["step"], "end", "backward: {backward}: {end}");
+    }
 }
 
 /// Bits in the order deflate packs them, from the low bit of each byte up.

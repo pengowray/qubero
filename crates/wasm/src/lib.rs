@@ -2946,7 +2946,15 @@ impl Editor {
         }
         let s = if backward { Search::backward(n) } else { Search::forward(n) };
         reply(match s.step(&sh.doc, from as u64) {
-            Step::Found { at, len } => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
+            // A match over bytes that cannot be made, a part of a joined
+            // stream that will not unpack, is a match on the zeroes the read
+            // gave for them. The search carries on past them instead: forward
+            // from the end of those bytes, and backward from before the match.
+            Step::Found { at, len } => match sh.doc.unreadable_bits(at * 8, len.max(1) * 8) {
+                Some(_) if backward => Ok(StepDto::More { resume: at as f64 }),
+                Some((bits, _)) => Ok(StepDto::More { resume: bits.end.div_ceil(8).max(at + 1) as f64 }),
+                None => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
+            },
             Step::More { resume } => Ok(StepDto::More { resume: resume as f64 }),
             Step::End => Ok(StepDto::End),
             Step::Pending(m) => Err(EvalError::Pending(m)),
