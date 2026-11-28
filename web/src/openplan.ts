@@ -9,6 +9,7 @@
 
 import { formatBytes, formatOffset } from "./doc.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
+import { unreadableError } from "./unreadable.ts";
 
 /** The most this will open into a tab, packed or unpacked. Everything opened
  *  this way is held in memory whole, unlike a file on disk, which is streamed. */
@@ -159,6 +160,10 @@ function gzipInnerName(name: string): string {
  *  the file under them can be more than the store keeps as well. */
 async function loadBytes(doc: Doc, at: number, len: number): Promise<Uint8Array> {
   const read = await doc.readLoaded(at, len);
+  // Bytes of a joined stream that cannot be made read as zeroes, which are
+  // not to be opened as if they were the run.
+  const refused = unreadableError(read);
+  if (refused !== null) throw refused;
   if (!read.complete) throw new Error("Some of these bytes could not be loaded from the file.");
   return read.bytes;
 }

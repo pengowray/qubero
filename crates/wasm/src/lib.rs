@@ -82,6 +82,11 @@ struct Sheet {
     /// away on any edit: the classes describe bytes that may no longer be
     /// there.
     scan: Option<overview::Scan>,
+    /// Why that scan was refused, when it reached bytes that cannot be made:
+    /// a part of a joined stream that will not unpack. Every later step is
+    /// refused the same way, rather than scanning the file again from the
+    /// front to the same bytes. Thrown away with the scan on any edit.
+    scan_refused: Option<String>,
     /// The same over the one block a reader has picked out, at whatever
     /// resolution that block's own size allows.
     focus: Option<overview::Scan>,
@@ -164,6 +169,7 @@ impl Sheet {
             ne: None,
             template: String::new(),
             scan: None,
+            scan_refused: None,
             focus: None,
             kinds: None,
             census: None,
@@ -411,6 +417,11 @@ fn chunks_of(err: EvalError) -> Vec<f64> {
         EvalError::Pending(m) => m.into_iter().map(|m| m.chunk as f64).collect(),
         _ => Vec::new(),
     }
+}
+
+/// Bytes of a tab that cannot be made, as the host is told of them.
+fn unreadable_dto(u: qubero_core::source::Unreadable) -> UnreadableDto {
+    UnreadableDto { at: u.at as f64, len: u.len as f64, why: u.why }
 }
 
 /// Build a needle from what the search bar holds. `kind` is "hex", "text" or
@@ -923,6 +934,7 @@ impl Editor {
         sh.bpf_complete = false;
         sh.ne = None;
         sh.scan = None;
+        sh.scan_refused = None;
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
@@ -942,6 +954,7 @@ impl Editor {
         sh.bpf_complete = false;
         sh.ne = None;
         sh.scan = None;
+        sh.scan_refused = None;
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
@@ -953,6 +966,18 @@ impl Editor {
     /// `node` carrying everything found so far, so the host can draw a partial
     /// map while the rest is read. `done` on the node says when to stop asking.
     pub fn overview_step(&mut self, space: u32, buckets: u32) -> String {
+        let refused = self.sheets.get(space as usize).filter(|_| space != 0).and_then(|sh| sh.scan_refused.clone());
+        if let Some(why) = refused {
+            return reply::<()>(Err(EvalError::Failed(why)));
+        }
+        let (answer, why) = self.refusing_unreadable_why(space, |ed| ed.overview_step_read(space, buckets));
+        if let (Some(why), Some(sh)) = (why, self.sheets.get_mut(space as usize)) {
+            sh.scan_refused = Some(why);
+        }
+        answer
+    }
+
+    fn overview_step_read(&mut self, space: u32, buckets: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -990,6 +1015,10 @@ impl Editor {
     /// bucket of a block can read as dense while the first part of it is
     /// zeroes, because a bucket is judged as a whole.
     pub fn overview_focus_step(&mut self, space: u32, from: f64, to: f64, buckets: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.overview_focus_step_read(space, from, to, buckets))
+    }
+
+    fn overview_focus_step_read(&mut self, space: u32, from: f64, to: f64, buckets: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2083,6 +2112,10 @@ impl Editor {
     /// `template_node`. The blocks come as parallel arrays, in coding order,
     /// since a photograph has hundreds of thousands of them.
     pub fn jpeg_scan(&mut self, space: u32, path: &[u32]) -> String {
+        self.refusing_unreadable(space, |ed| ed.jpeg_scan_read(space, path))
+    }
+
+    fn jpeg_scan_read(&mut self, space: u32, path: &[u32]) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let mut tab = match self.tab(space) {
             Ok(tab) => tab,
@@ -2097,6 +2130,10 @@ impl Editor {
     /// {status:"ok",node:{..}}, or a null node. Its `path` and `mcu_path` are
     /// the tab's, for going to the block in the listing.
     pub fn jpeg_block(&mut self, space: u32, path: &[u32], index: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.jpeg_block_read(space, path, index))
+    }
+
+    fn jpeg_block_read(&mut self, space: u32, path: &[u32], index: u32) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let mut tab = match self.tab(space) {
             Ok(tab) => tab,
@@ -2135,6 +2172,10 @@ impl Editor {
     /// pass reads a few hundred fields and a symbol table's strings, and
     /// stopping part way would leave nothing to carry on from.
     pub fn hardening(&mut self, space: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.hardening_read(space))
+    }
+
+    fn hardening_read(&mut self, space: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2210,8 +2251,18 @@ impl Editor {
         };
         // Named through the tables of the program the sheet reads, which a
         // stream read where it was declared does not: its rows stay as the
-        // template reads them.
-        let named = self.name_instructions(found);
+        // template reads them. The tables are read from the sheet's bytes
+        // outside the template's reading, so a naming that read bytes that
+        // cannot be made is dropped, and the rows stay as the template reads
+        // them then too.
+        let before = self.unreadable_reads(space);
+        let named = self.name_instructions(found.clone());
+        if self.unreadable_reads(space) != before {
+            let live = if self.live < self.sheets.len() { self.live } else { 0 };
+            let sh = &mut self.sheets[live];
+            (sh.disasm, sh.bpf, sh.bpf_complete, sh.ne) = (None, None, false, None);
+            return reply(Ok(found.into_iter().map(span_dto).collect::<Vec<_>>()));
+        }
         reply(Ok(named))
     }
 
@@ -2224,6 +2275,10 @@ impl Editor {
     /// Pending while the few bytes near the front that decide it are still to
     /// come, so the host asks for them and asks again when they land.
     pub fn holds_hdf5(&mut self, space: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.holds_hdf5_read(space))
+    }
+
+    fn holds_hdf5_read(&mut self, space: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2240,6 +2295,10 @@ impl Editor {
     /// template's: {status:"ok",node:{objects,..}}. Empty for a file that holds
     /// no HDF5, since nothing else here has a group tree to walk.
     pub fn contents(&mut self, space: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.contents_read(space))
+    }
+
+    fn contents_read(&mut self, space: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2317,6 +2376,10 @@ impl Editor {
     /// group's, else the first tree under the root group. `limit` caps the
     /// nodes walked, and the answer says how many children it left out.
     pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.btree_read(space, path, limit))
+    }
+
+    fn btree_read(&mut self, space: u32, path: &[u32], limit: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2386,6 +2449,10 @@ impl Editor {
     /// Named ELF sections and a bounded prefix of its symbols. The semantic
     /// pass is cached because resolving names crosses several linked tables.
     pub fn elf_contents(&mut self, space: u32, symbol_limit: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.elf_contents_read(space, symbol_limit))
+    }
+
+    fn elf_contents_read(&mut self, space: u32, symbol_limit: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2452,6 +2519,10 @@ impl Editor {
     /// list of offsets nothing in the template placed. The two have no shape in
     /// common but the idea.
     pub fn root_contents(&mut self, space: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.root_contents_read(space))
+    }
+
+    fn root_contents_read(&mut self, space: u32) -> String {
         if let Err(why) = self.go(space) {
             return why;
         }
@@ -2571,6 +2642,10 @@ impl Editor {
 
     /// The primary ISO 9660 volume and its root-directory pointer.
     pub fn iso_volume(&mut self, space: u32) -> String {
+        self.refusing_unreadable(space, |ed| ed.iso_volume_read(space))
+    }
+
+    fn iso_volume_read(&mut self, space: u32) -> String {
         self.open_again(space);
         let sh = self.at(space);
         if sh.template != "iso9660" {
@@ -2638,6 +2713,10 @@ impl Editor {
     /// One ISO directory, bounded for display but counted in full. Child
     /// directories are read only when their logical row is opened.
     pub fn iso_directory(&mut self, space: u32, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
+        self.refusing_unreadable(space, |ed| ed.iso_directory_read(space, extent, size, block_size, limit, joliet))
+    }
+
+    fn iso_directory_read(&mut self, space: u32, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
         self.open_again(space);
         let sh = self.at(space);
         if sh.template != "iso9660" {
@@ -2966,7 +3045,15 @@ impl Editor {
         }
         let s = if backward { Search::backward(n) } else { Search::forward(n) };
         reply(match s.step(&sh.doc, from as u64) {
-            Step::Found { at, len } => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
+            // A match over bytes that cannot be made, a part of a joined
+            // stream that will not unpack, is a match on the zeroes the read
+            // gave for them. The search carries on past them instead: forward
+            // from the end of those bytes, and backward from before the match.
+            Step::Found { at, len } => match sh.doc.unreadable_bits(at * 8, len.max(1) * 8) {
+                Some(_) if backward => Ok(StepDto::More { resume: at as f64 }),
+                Some((bits, _)) => Ok(StepDto::More { resume: bits.end.div_ceil(8).max(at + 1) as f64 }),
+                None => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
+            },
             Step::More { resume } => Ok(StepDto::More { resume: resume as f64 }),
             Step::End => Ok(StepDto::End),
             Step::Pending(m) => Err(EvalError::Pending(m)),
@@ -3037,6 +3124,103 @@ impl Editor {
         }
         let sh = self.at(space);
         sh.doc.read_bytes(at as u64, out).into_iter().map(|m| m.chunk as f64).collect()
+    }
+
+    /// Which of the bytes `at..at + len` of the tab over `space` a read gave
+    /// zeroes for because they cannot be made, and why:
+    /// {status:"ok",node:{at,len,why}}, or a null node when they all read.
+    /// Asked after `read_bytes` or `read_bits` answered with no chunk
+    /// missing.
+    ///
+    /// Only a stream joined from parts and read a part at a time has such
+    /// bytes. It opens without unpacking its parts, each as long as the file
+    /// says it is, and a read that first unpacks a part checks it: a part
+    /// that will not unpack, or unpacks to another length, reads as zeroes
+    /// from then on. `why` names the part as the listing does, from the
+    /// reading that joined the stream, and by its index where that reading
+    /// cannot say.
+    pub fn unreadable(&mut self, space: u32, at: f64, len: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<UnreadableDto>>(Err(err));
+        }
+        reply(Ok(self.unreadable_in(space, at as u64, len as u64).map(unreadable_dto)))
+    }
+
+    /// The first stretch of bytes `at..at + len` of the tab over `space` that
+    /// a read gave zeroes for because they cannot be made, named as the
+    /// listing names the part where the reading that joined the stream can
+    /// say, and by its index where it cannot. See `unreadable`.
+    fn unreadable_in(&self, space: u32, at: u64, len: u64) -> Option<qubero_core::source::Unreadable> {
+        let sh = self.sheets.get(space as usize).filter(|_| space != 0)?;
+        if !sh.doc.may_be_unreadable() {
+            return None;
+        }
+        let named = self.core_space_of(space).and_then(|(home, sp)| self.sheets[home].eval.as_ref()?.unreadable(sp.id, at, len));
+        named.or_else(|| sh.doc.unreadable(at, len))
+    }
+
+    /// Every stretch of bytes `at..at + len` of the tab over `space` that
+    /// cannot be made, in order, each cut to that range.
+    fn unreadable_stretches(&self, space: u32, at: u64, len: u64) -> Vec<qubero_core::source::Unreadable> {
+        let end = at.saturating_add(len);
+        let mut found = Vec::new();
+        let mut from = at;
+        while from < end {
+            let Some(mut u) = self.unreadable_in(space, from, end - from) else { break };
+            let (start, stop) = (u.at.max(from), (u.at + u.len).min(end));
+            if stop <= start {
+                break;
+            }
+            (u.at, u.len) = (start, stop - start);
+            from = stop;
+            found.push(u);
+        }
+        found
+    }
+
+    /// How many reads of the tab over `space` have given zeroes for bytes that
+    /// cannot be made so far. See `refusing_unreadable`.
+    fn unreadable_reads(&self, space: u32) -> u64 {
+        match self.sheets.get(space as usize) {
+            Some(sh) if space != 0 => sh.doc.source().unreadable_reads(),
+            _ => 0,
+        }
+    }
+
+    /// The answer `call` gives about the tab over `space`, unless a read it
+    /// made reached bytes that cannot be made: a part of a joined stream that
+    /// will not unpack, which reads as zeroes. Then an error saying why
+    /// instead, with the part named as the listing names it, since what a
+    /// scan or a format's own reader made of those zeroes is not what the
+    /// stream holds. A scan kept from one call to the next is let go of, so
+    /// that the next call does not carry on from what the zeroes made.
+    ///
+    /// For every call that reads a tab's bytes and cannot mark the bytes it
+    /// could not read. The hex view's reads, the text view's lines and the
+    /// strings scan mark them instead. Costs nothing for the file and for any
+    /// tab that is not a joined stream read a part at a time.
+    fn refusing_unreadable(&mut self, space: u32, call: impl FnOnce(&mut Self) -> String) -> String {
+        self.refusing_unreadable_why(space, call).0
+    }
+
+    /// `refusing_unreadable`, saying as well why it refused, when it did.
+    fn refusing_unreadable_why(&mut self, space: u32, call: impl FnOnce(&mut Self) -> String) -> (String, Option<String>) {
+        // Opened again first, if it has to be, so that the count is taken of
+        // the stream the call reads and not of one it is about to replace.
+        self.open_again(space);
+        let before = self.unreadable_reads(space);
+        let answer = call(self);
+        if self.unreadable_reads(space) == before {
+            return (answer, None);
+        }
+        let Some(sh) = self.sheets.get(space as usize) else { return (answer, None) };
+        let named = self.core_space_of(space).and_then(|(home, sp)| self.sheets[home].eval.as_ref()?.last_unreadable(sp.id));
+        let Some(u) = named.or_else(|| sh.doc.source().last_unreadable()) else { return (answer, None) };
+        if let Some(sh) = self.sheets.get_mut(space as usize) {
+            sh.scan = None;
+            sh.focus = None;
+        }
+        (reply::<()>(Err(EvalError::Failed(u.why.clone()))), Some(u.why))
     }
 
     pub fn read_bits(&mut self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
@@ -3168,6 +3352,25 @@ impl Editor {
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
         let w = textview::window(&sh.doc, r, from as u64, want as usize);
+        // The bytes of a joined tab that cannot be made read as zeroes, and
+        // are marked on the lines they fall in so the view can draw them as
+        // what they are. Asked once for the whole window: there are none on
+        // any other document.
+        let span = w.lines.last().map_or(0, |l| l.at + l.len).saturating_sub(from as u64);
+        let unreadable = match w.missing.is_empty() {
+            true => self.unreadable_stretches(space, from as u64, span),
+            false => Vec::new(),
+        };
+        let marks = |at: u64, len: u64| -> Vec<UnreadableDto> {
+            unreadable
+                .iter()
+                .filter(|u| u.at < at + len && u.at + u.len > at)
+                .map(|u| {
+                    let (start, stop) = (u.at.max(at), (u.at + u.len).min(at + len));
+                    UnreadableDto { at: start as f64, len: (stop - start) as f64, why: u.why.clone() }
+                })
+                .collect()
+        };
         serde_json::to_string(&TextWindowDto {
             next: w.next as f64,
             missing: w.missing.iter().map(|m| m.chunk as f64).collect(),
@@ -3181,6 +3384,7 @@ impl Editor {
                     text: l.text.clone(),
                     escapes: l.escapes.iter().flat_map(|(a, n)| [*a, *n]).collect(),
                     lossy: l.lossy,
+                    unreadable: marks(l.at, l.len),
                 })
                 .collect(),
         })
@@ -3253,11 +3457,27 @@ impl Editor {
             utf16be: pick("utf16be"),
         };
         let mut s = stringscan::scan(&sh.doc, from as u64, want as usize, opts);
+        // Bytes of a joined tab that cannot be made read as zeroes. A string
+        // that touches them, its length prefix and terminator included, is
+        // made in part of those zeroes, so it is dropped, and the stretches
+        // are named for the view to say what it did not search.
+        let unreadable = match s.missing.is_empty() {
+            true => self.unreadable_stretches(space, from as u64, s.next.saturating_sub(from as u64)),
+            false => Vec::new(),
+        };
+        if !unreadable.is_empty() {
+            s.hits.retain(|h| {
+                let lo = h.prefix.iter().map(|p| p.at).fold(h.at, u64::min);
+                let hi = h.at + h.len + h.term.map_or(0, |t| t.bytes() as u64);
+                !unreadable.iter().any(|u| u.at < hi && u.at + u.len > lo)
+            });
+        }
         let (inside, busy) = self.strings_inside(space, &mut s);
         serde_json::to_string(&StringsScanDto {
             next: s.next as f64,
             missing: s.missing.iter().map(|m| m.chunk as f64).collect(),
             busy,
+            unreadable: unreadable.into_iter().map(unreadable_dto).collect(),
             hits: s
                 .hits
                 .iter()
@@ -3363,10 +3583,17 @@ impl Editor {
         if !missing.is_empty() {
             return String::new();
         }
+        // Bytes that cannot be made read as zeroes, which no reading of them
+        // is to be built from.
+        if let Some(u) = self.unreadable_in(space, at_byte as u64, want as u64) {
+            let dto = SelectionTextDto { readings: Vec::new(), refused: Vec::new(), read: want as f64, all: want as u64 >= len as u64, unreadable: Some(u.why) };
+            return serde_json::to_string(&dto).unwrap_or_default();
+        }
         let a = CodePage::by_name(page_a).unwrap_or(CodePage::Latin1);
         let b = CodePage::by_name(page_b).unwrap_or(CodePage::Cp437);
         let r = qubero_core::text::readings(&buf, named_encoding(first), a, b);
         serde_json::to_string(&SelectionTextDto {
+            unreadable: None,
             readings: r
                 .agreed
                 .iter()
@@ -3385,7 +3612,8 @@ impl Editor {
     /// The same bytes written as a string literal in one language: what to
     /// paste into a parser being written against the file. Empty while the
     /// bytes are still being fetched, and cut to the same length the readings
-    /// are, so the row says the same run the rows above it do.
+    /// are, so the row says the same run the rows above it do. Empty too when
+    /// some of the bytes cannot be made, which `selection_text` says why of.
     pub fn selection_literal(&mut self, space: u32, at_byte: f64, len: f64, lang: &str) -> String {
         self.open_again(space);
         use qubero_core::text::Lang;
@@ -3393,7 +3621,7 @@ impl Editor {
         let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
         let mut buf = vec![0u8; want];
         let missing = sh.doc.read_bytes(at_byte as u64, &mut buf);
-        if !missing.is_empty() {
+        if !missing.is_empty() || self.unreadable_in(space, at_byte as u64, want as u64).is_some() {
             return String::new();
         }
         qubero_core::text::literal(Lang::by_name(lang).unwrap_or(Lang::C), &buf)

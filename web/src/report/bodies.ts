@@ -15,6 +15,7 @@ import { byteRef, dumpRows, pointAt } from "./refs.ts";
 import type { ReportHost } from "./section.ts";
 import { stripIndex } from "./partrules.ts";
 import { bitsText, clip, counted, RV } from "./text.ts";
+import { byteHex } from "../unreadable.ts";
 
 /** Bytes shown inline in a row. */
 const INLINE_BYTES = 8;
@@ -27,7 +28,7 @@ export function firstBytes(doc: Doc, offsetBits: number, sizeBits: number, space
   if (space !== 0 || offsetBits % 8 !== 0 || sizeBits < 8) return "";
   const n = Math.min(INLINE_BYTES, Math.floor(sizeBits / 8));
   const r = doc.read(offsetBits / 8, n);
-  const hex = Array.from(r.bytes, (b) => (r.complete ? b.toString(16).padStart(2, "0") : "··")).join(" ");
+  const hex = Array.from(r.bytes, (_, i) => byteHex(r, offsetBits / 8, offsetBits / 8 + i)).join(" ");
   return sizeBits / 8 > n ? `${hex} …` : hex;
 }
 

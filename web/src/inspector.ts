@@ -49,6 +49,7 @@ import {
   LITERAL_LANGS,
 } from "./encodings.ts";
 import { rememberChoice, storedChoice } from "./stored.ts";
+import { reaches } from "./unreadable.ts";
 
 const AUTO_CHECK_BYTES = 1024 * 1024;
 
@@ -837,8 +838,11 @@ export class Inspector {
     // thousand bytes meaning to read them as one integer, so there is nothing
     // to explain.
     const v = bits <= SELECTION_LIMIT_BITS ? readBits(this.doc, ranges) : null;
-    const loading = bits <= SELECTION_LIMIT_BITS && v === null;
-    this.selStatus.textContent = loading ? LOADING : this.selStatus.textContent;
+    // A read that came back short for bytes that cannot be made is not still
+    // loading: the status says why, and no number is shown.
+    const lost = bits <= SELECTION_LIMIT_BITS && v === null ? unreadableWhy(this.doc, ranges) : null;
+    const loading = bits <= SELECTION_LIMIT_BITS && v === null && lost === null;
+    this.selStatus.textContent = lost !== null ? SEL_TEXT_UNREADABLE(lost) : loading ? LOADING : this.selStatus.textContent;
     // Reversing bytes only means anything when the selection is made of whole
     // bytes lying together, which is the only case a format would have stored
     // the other way round.
@@ -893,6 +897,24 @@ export class Inspector {
     const atByte = one.startBit / 8;
     const nBytes = bits / 8;
     const got = this.doc.selectionText(atByte, nBytes, this.textEncoding, this.pageA, this.pageB);
+    // Some of the bytes cannot be made, so no reading of them is shown. A
+    // selection short enough to be read as a number has the reason in its
+    // status line already, which is said once; a longer one has it here,
+    // under the heading the readings would have.
+    if (got?.unreadable !== undefined) {
+      this.refocus = null;
+      if (bits <= SELECTION_LIMIT_BITS) {
+        this.selText.hidden = true;
+        this.selText.replaceChildren();
+        return;
+      }
+      const note = document.createElement("div");
+      note.className = "insp-reading-miss";
+      note.textContent = SEL_TEXT_UNREADABLE(got.unreadable);
+      this.selText.replaceChildren(subhead(SEL_TEXT_TITLE), note);
+      this.selText.hidden = false;
+      return;
+    }
     if (got === null || (got.readings.length === 0 && got.refused.length === 0)) {
       this.refocus = null;
       this.selText.hidden = true;
@@ -1037,7 +1059,7 @@ export class Inspector {
     this.detail.replaceChildren(here);
     this.showFormula(this.offset, 8, true);
 
-    const { bytes, complete } = this.doc.readBits(this.offset, 64);
+    const { bytes, complete, unreadable } = this.doc.readBits(this.offset, 64);
     const avail = Math.max(0, Math.floor((this.doc.lengthBits - this.offset) / 8));
     const view = new DataView(bytes.buffer);
     for (const [lens, input] of this.inputs) {
@@ -1045,10 +1067,17 @@ export class Inspector {
       const fits = lens.size <= avail;
       input.disabled = !fits;
       input.classList.remove("invalid");
+      // Bytes that cannot be made read as zeroes, which no value is read from.
+      // Only the boxes whose bytes reach them say so.
+      const lost = reaches(unreadable, this.offset / 8, lens.size);
+      input.title = lost && unreadable != null ? unreadable.why : "";
       if (!fits) {
         input.value = "";
         input.placeholder = avail === 0 ? "end of file" : `needs ${lens.size} bytes, ${avail} left`;
-      } else if (!complete) {
+      } else if (lost) {
+        input.value = "";
+        input.placeholder = UNREADABLE_VALUE;
+      } else if (!complete && unreadable == null) {
         input.value = "";
         input.placeholder = "loading";
       } else {
@@ -3075,6 +3104,13 @@ const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
 const SEL_TITLE = "Selection";
 const SEL_TEXT_TITLE = "As text";
 const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} bytes`;
+/** In place of the readings when some of the selected bytes cannot be made.
+ *  `why` names the part: `blocks[2].compressed unpacks to 65280 bytes, not
+ *  the 65281 the file says`. */
+const SEL_TEXT_UNREADABLE = (why: string): string => `Selection includes unreadable bytes: ${why}`;
+/** In a value's box, and in the selection's status, when its bytes cannot be
+ *  made. The reason is on hover over the box. */
+const UNREADABLE_VALUE = "unreadable bytes";
 /** The UTF-8 row when the bytes are all ASCII too: one fact, said once. */
 const SEL_TEXT_UTF8_ASCII = "UTF-8 · ASCII";
 /** In the reading's place when the bytes do not fit the row's encoding. The
@@ -3257,6 +3293,17 @@ function lengthText(bits: number): string {
  * `reverseBytes` reads a single whole-byte run the other way round, for a
  * format that stored it little-endian.
  */
+/** Why the bits of `ranges` cannot be read, when some of their bytes cannot
+ *  be made: a part of a joined stream that will not unpack. Null when they
+ *  read, or are still loading. */
+function unreadableWhy(doc: Doc, ranges: readonly BitRange[]): string | null {
+  for (const r of ranges) {
+    const got = doc.readBits(r.startBit, r.endBit - r.startBit).unreadable;
+    if (got != null) return got.why;
+  }
+  return null;
+}
+
 function readBits(doc: Doc, ranges: readonly BitRange[], reverseBytes = false): bigint | null {
   let out = 0n;
   for (const r of ranges) {

@@ -623,11 +623,15 @@ fn a_joined_stream_whose_parts_come_to_more_than_the_store_opens() {
 /// that the stream opens read a part at a time. Each block's run is read
 /// through the store when the block is read, and none is copied, so the
 /// cap on what a joined stream copies, which these runs come to more than,
-/// does not refuse it. The walk that checks each block's length says how
-/// far it has got on its "pending" replies as on its "working" ones. Each
+/// does not refuse it. Opening it unpacks no block: it waits only for the
+/// blocks' headers and trailers, which say where each run is and what it
+/// unpacks to, so no "pending" reply says how far unpacking has got. Each
 /// read of the tab names the chunks of every block it reaches, and gives the
 /// blocks' bytes once they are fed, near the front, the middle and the end,
 /// and across many blocks at once.
+///
+/// Before, the walk that joined the stream unpacked every block to check its
+/// length, and said how far it had got on its "pending" replies.
 #[test]
 fn a_joined_stream_past_the_cap_reads_its_blocks_through_the_store() {
     let pieces: Vec<Vec<u8>> = (0..140).map(|i| lines(2_000 + i)).collect();
@@ -656,7 +660,7 @@ fn a_joined_stream_past_the_cap_reads_its_blocks_through_the_store() {
     });
     let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
     assert_eq!(ed.len_bytes(tab), joined.len() as f64);
-    assert!(said > 0 && silent == 0, "{said} waits said how far the walk had got, and {silent} after them did not");
+    assert_eq!((said, silent), (0, 0), "waits said how far unpacking had got, so a block was unpacked to open the stream");
     for at in [joined.len() / 2, 0, joined.len() - 100, joined.len() / 3] {
         assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == joined[at..at + 100], "100 bytes at {at} differ");
     }
@@ -666,6 +670,62 @@ fn a_joined_stream_past_the_cap_reads_its_blocks_through_the_store() {
     // A window of the file is 4 chunks, and the run a walk waits on may
     // straddle it.
     assert!(feeder.widest <= 6, "a reply named {} chunks", feeder.widest);
+}
+
+/// The same blocks, with block 70's trailer saying it unpacks to one byte
+/// more than it does. Before, the tab would not open. Now it opens, since
+/// opening it unpacks no block, and a read of the tab that reaches block 70
+/// answers with no chunk missing, the bytes of the blocks either side, and
+/// zeroes for block 70. `unreadable` names those bytes and says why, in the
+/// words the listing has for the block. A read that does not reach block 70
+/// has nothing unreadable.
+#[test]
+fn a_joined_stream_with_a_block_that_lies_about_its_length_says_which_bytes_will_not_read() {
+    let pieces: Vec<Vec<u8>> = (0..140).map(|i| lines(2_000 + i)).collect();
+    let mut file = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        let mut block = bgzf_block(piece);
+        if i == 70 {
+            let at = block.len() - 4;
+            block[at..].copy_from_slice(&(piece.len() as u32 + 1).to_le_bytes());
+        }
+        file.extend(block);
+    }
+    file.extend_from_slice(&BGZF_EOF);
+    let mut ed = unfed(&file, 16, "bgzf");
+    ed.set_stream_limits(Limits::default(), WHOLE_CAP);
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[1]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    let (start, n) = (pieces[..70].iter().map(Vec::len).sum::<usize>(), pieces[70].len());
+    let stream = [pieces[..70].concat(), vec![0; n + 1], pieces[71..].concat()].concat();
+    assert_eq!(ed.len_bytes(tab), stream.len() as f64);
+
+    let (at, len) = (start - 100, n + 201);
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, len) == stream[at..at + len], "the bytes around block 70 differ");
+    let said = parse(&ed.unreadable(tab, at as f64, len as f64));
+    assert_eq!(said["status"], "ok", "{said}");
+    assert_eq!((said["node"]["at"].as_f64(), said["node"]["len"].as_f64()), (Some(start as f64), Some(n as f64 + 1.0)), "{said}");
+    assert_eq!(said["node"]["why"], format!("blocks[70].compressed unpacks to {n} bytes, not the {} the file says", n + 1));
+
+    assert!(tab_bytes_fed(&mut ed, &file, tab, 0, 100) == stream[..100]);
+    assert!(parse(&ed.unreadable(tab, 0.0, 100.0))["node"].is_null());
+
+    // The lines hold no zero bytes, so a search for zeroes finds none: not
+    // the zeroes block 70 reads as. Forward from the front, and backward from
+    // the end.
+    for (backward, from) in [(false, 0.0), (true, stream.len() as f64)] {
+        let mut from = from;
+        let end = loop {
+            let step = feeder.ask(&mut ed, |ed| ed.search_step(tab, "hex", "00 00 00 00", false, backward, from));
+            assert_eq!(step["status"], "ok", "{step}");
+            match step["node"]["step"].as_str() {
+                Some("more") => from = step["node"]["resume"].as_f64().unwrap(),
+                _ => break step,
+            }
+        };
+        assert_eq!(end["node"]["step"], "end", "backward: {backward}: {end}");
+    }
 }
 
 /// Bits in the order deflate packs them, from the low bit of each byte up.

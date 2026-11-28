@@ -19,7 +19,7 @@
 // `valuetable.ts` say where the values go, and `hexchips.ts`, `valuecells.ts`
 // and `hexheadings.ts` write them into the document.
 
-import type { Doc, Span } from "./doc.ts";
+import type { Doc, Span, Unreadable } from "./doc.ts";
 import type { OutlineHeading, Viewport } from "./outline.ts";
 import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.ts";
 import { chipCursorBit, placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
@@ -118,6 +118,10 @@ const COPY_TOO_BIG = (bytes: number): string =>
   `Selection too large to copy: ${Math.round(bytes / 1024).toLocaleString()} KB, limit ${COPY_LIMIT_BYTES / 1024} KB.`;
 const COPY_PENDING = "Selection is still loading. Try again in a moment.";
 const COPY_FAILED = "Couldn't copy to the clipboard.";
+/** `why` is what the listing says of a part of a joined stream that will not
+ *  unpack: `blocks[50].compressed unpacks to 2098 bytes, not the 2099 the
+ *  file says`. */
+const COPY_UNREADABLE = (why: string): string => `Couldn't copy: the selection includes unreadable bytes (${why}).`;
 const COPY_DONE = (bytes: number, asText: boolean): string =>
   `Copied ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"} as ${asText ? "text" : "hex"}.`;
 
@@ -177,6 +181,10 @@ export type Frame = {
   readonly bytes: Uint8Array;
   /** False while some of those bytes are still on their way. */
   readonly complete: boolean;
+  /** Bytes on screen that cannot be made, drawn as `??` with `why` on hover:
+   *  a part of a joined stream that will not unpack. Null when there are
+   *  none. */
+  readonly unreadable: Unreadable | null;
   readonly binary: boolean;
   readonly fields: boolean;
   readonly showText: boolean;
@@ -1788,7 +1796,8 @@ export class HexView {
     const start = Math.floor(sel.startBit / 8);
     const n = Math.ceil(sel.endBit / 8) - start;
     if (n > COPY_LIMIT_BYTES) return this.say(COPY_TOO_BIG(n));
-    const { bytes, complete } = await this.doc.readLoaded(start, n);
+    const { bytes, complete, unreadable } = await this.doc.readLoaded(start, n);
+    if (unreadable) return this.say(COPY_UNREADABLE(unreadable.why));
     if (!complete) return this.say(COPY_PENDING);
     const asText = this.pane === "ascii";
     // The text column's own reading, byte for byte, so what is copied is what
@@ -1899,7 +1908,13 @@ export class HexView {
     const len = this.doc.lengthBytes;
     const start = this.topRow * bpr;
     const windowBytes = this.visibleRows * bpr;
-    const { bytes, complete } = this.doc.read(start, windowBytes);
+    const read = this.doc.read(start, windowBytes);
+    const { bytes } = read;
+    const unreadable = read.unreadable ?? null;
+    // A read with bytes that cannot be made is not complete, but none of its
+    // bytes are on their way either: those are drawn as `??`, and the rest
+    // as they are.
+    const complete = read.complete || unreadable !== null;
     const fields = this.showsFields;
     const templated = this.doc.template !== null;
     const { spans, more, trouble, byteSpan, band, byRow } =
@@ -1923,6 +1938,7 @@ export class HexView {
       windowBytes,
       bytes,
       complete,
+      unreadable,
       binary: this.mode === "binary",
       fields,
       showText: this.showsText,

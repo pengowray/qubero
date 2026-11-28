@@ -24,6 +24,12 @@ pub(crate) struct SelectionTextDto {
     /// Bytes actually read, which is short of the selection when it is long.
     pub(crate) read: f64,
     pub(crate) all: bool,
+    /// Why the selection cannot be read as text, when some of its bytes
+    /// cannot be made: a part of a joined stream that will not unpack. The
+    /// readings are then empty, since they would read the zeroes the read
+    /// gave for those bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) unreadable: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +70,11 @@ pub(crate) struct TextLineDto {
     /// Escape sequences as flat pairs of character index and length.
     pub(crate) escapes: Vec<u32>,
     pub(crate) lossy: bool,
+    /// The stretches of the line's bytes that cannot be made, which read as
+    /// zeroes and are drawn as such: a part of a joined stream that will not
+    /// unpack. In bytes of the document, cut to the line.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unreadable: Vec<UnreadableDto>,
 }
 
 #[derive(Serialize)]
@@ -74,6 +85,11 @@ pub(crate) struct StringsScanDto {
     /// True when the template ran out of time before it could say anything
     /// about the first string, so nothing came back and the caller asks again.
     pub(crate) busy: bool,
+    /// The stretches of the bytes scanned that cannot be made: a part of a
+    /// joined stream that will not unpack. No string is found in them, nor
+    /// one that runs into them, since they read as zeroes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) unreadable: Vec<UnreadableDto>,
 }
 
 /// The run a string lies inside, where the template reads it as numbers or

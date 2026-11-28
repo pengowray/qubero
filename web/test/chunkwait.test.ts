@@ -112,6 +112,20 @@ test("a range longer than the store is read in pieces and joined in order", asyn
   assert.deepEqual(asked, ["30+1000", "1030+1000", "2030+1000", "3030+1000", "4030+1000"]);
 });
 
+test("a piece with bytes that cannot be made stops the read there and names them", async () => {
+  const s = store(30);
+  const reads: [number, number][] = [];
+  // Bytes 2,400 to 2,600 are a part that will not unpack.
+  const bad = { at: 2_400, len: 200, why: "blocks[3].compressed could not be unpacked" };
+  const unreadable = (at: number, n: number) => (at < bad.at + bad.len && at + n > bad.at ? bad : null);
+  const got = await readInPieces({ at: 0, len: 5_000, read: fileRead(s, 100, reads), unreadable, load: s.load, wait: new ChunkWait(), pieceBytes: 1_000 });
+  assert.equal(got.complete, false);
+  assert.deepEqual(got.unreadable, bad);
+  // The pieces before it were read, and none after it.
+  assert.deepEqual(got.bytes.subarray(0, 2_000), expected(0, 2_000));
+  assert.ok(reads.every(([at]) => at <= 2_000));
+});
+
 test("a short last piece is read at its own length", async () => {
   const s = store(30);
   const reads: [number, number][] = [];

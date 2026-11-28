@@ -36,7 +36,7 @@ use crate::codec::lazy::{self, Decoded, Limits, ReadError, Seekable, Stepped};
 use crate::codec::inflate;
 use crate::codec::{Codec, Refusal, Step, StepKind, Trace};
 use crate::document::Document;
-use crate::source::{Missing, Source};
+use crate::source::{Missing, Source, Unreadable};
 use crate::template::Template;
 
 /// Which address space something is a bit of. 0 is the file.
@@ -419,7 +419,10 @@ pub enum SpaceSource {
 impl SpaceSource {
     /// Bytes `at..at + out.len()`. When they could not be read, `out` is
     /// left as zeroes, and the error says whether chunks of the file are
-    /// missing or the decoder refused.
+    /// missing or the decoder refused. A joined stream with a part that will
+    /// not unpack leaves zeroes only where that part is, and gives the bytes
+    /// of the other parts: [`Source::unreadable`] says which bytes are
+    /// zeroes and why.
     pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let read = match self {
             SpaceSource::Whole(bytes) => match bytes.get(at as usize..at as usize + out.len()) {
@@ -432,8 +435,10 @@ impl SpaceSource {
             SpaceSource::Lazy(index) => index.read(at, out),
             SpaceSource::Joined(joined) => joined.read(at, out),
         };
-        if read.is_err() {
-            out.fill(0);
+        match read {
+            Err(ReadError::Refused(_)) if matches!(self, SpaceSource::Joined(_)) => {}
+            Err(_) => out.fill(0),
+            Ok(()) => {}
         }
         read
     }
@@ -484,6 +489,37 @@ impl Source for SpaceSource {
             SpaceSource::Joined(joined) => joined.missing(offset, len),
         }
     }
+
+    /// A joined stream read a part at a time, whose parts are checked as
+    /// they are first read.
+    fn may_be_unreadable(&self) -> bool {
+        matches!(self, SpaceSource::Joined(_))
+    }
+
+    /// The first part of a joined stream that a read found would not
+    /// unpack, or unpacked to another length than the file says, among the
+    /// parts `offset..offset + len` covers. Named by its index, since a
+    /// stream knows nothing of the fields its parts were: the reading that
+    /// joined it names the part as the listing does
+    /// ([`Evaluator::unreadable`](super::Evaluator::unreadable)).
+    fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
+        let SpaceSource::Joined(joined) = self else { return None };
+        let (i, out, trouble) = joined.trouble_in(offset, len)?;
+        Some(super::stitch::unreadable_part(&super::stitch::unnamed_part(i), out, trouble))
+    }
+
+    fn unreadable_reads(&self) -> u64 {
+        match self {
+            SpaceSource::Joined(joined) => joined.refused_reads(),
+            SpaceSource::Whole(_) | SpaceSource::Lazy(_) => 0,
+        }
+    }
+
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        let SpaceSource::Joined(joined) = self else { return None };
+        let (i, out, trouble) = joined.last_refused()?;
+        Some(super::stitch::unreadable_part(&super::stitch::unnamed_part(i), out, trouble))
+    }
 }
 
 /// A stream joined from parts, too large to hold whole, read a part at a
@@ -507,6 +543,21 @@ pub struct Joined {
     /// The trace of the packed part asked about most recently, which is
     /// decoded again to make it.
     traced: std::sync::Mutex<Option<(usize, Arc<Trace>)>>,
+    /// The packed parts decoded whole that a read found will not unpack, or
+    /// unpack to another length than the file says, with why. Such a part is
+    /// checked when a read first unpacks it, not when the stream opens, and
+    /// kept here so that a read reaching it again fails the same way without
+    /// decoding it again, as `Stitch::troubles` keeps a part in trouble for
+    /// the listing. See "Faster opening of joined streams" in
+    /// `docs/DESIGN-lazy-compressed-input.md`.
+    troubles: std::sync::Mutex<FxHashMap<usize, super::stitch::PartTrouble>>,
+    /// How many times a read has given zeroes for a part that will not read,
+    /// and the latest such part: its index, its bytes, and why. What
+    /// [`Source::unreadable_reads`] and [`Source::last_unreadable`] answer,
+    /// so that code reading the stream through other code can tell whether
+    /// any of its reads reached such a part.
+    refused: std::sync::atomic::AtomicU64,
+    last_refused: std::sync::Mutex<Option<(usize, std::ops::Range<u64>, super::stitch::PartTrouble)>>,
 }
 
 /// Where one part of a [`Joined`] stream's bytes come from.
@@ -577,7 +628,61 @@ impl Joined {
             JoinedBytes::Stored(_) | JoinedBytes::Packed { .. } => None,
         });
         let limit = indexed.chain(handle_limit(&parts)).min();
-        Joined { parts, len, limit, cache: std::sync::Mutex::new(PartCache::new(cache)), traced: std::sync::Mutex::new(None) }
+        Joined {
+            parts,
+            len,
+            limit,
+            cache: std::sync::Mutex::new(PartCache::new(cache)),
+            traced: std::sync::Mutex::new(None),
+            troubles: Default::default(),
+            refused: Default::default(),
+            last_refused: Default::default(),
+        }
+    }
+
+    /// How many reads so far gave zeroes for a part that will not read.
+    pub(super) fn refused_reads(&self) -> u64 {
+        self.refused.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The part the latest of those reads reached: its index, its bytes, and
+    /// why.
+    pub(super) fn last_refused(&self) -> Option<(usize, std::ops::Range<u64>, super::stitch::PartTrouble)> {
+        lock(&self.last_refused).clone()
+    }
+
+    /// How many parts the stream is joined from.
+    pub(super) fn part_count(&self) -> usize {
+        self.parts.len()
+    }
+
+    /// The first part among those `at..at + len` covers that a read found
+    /// will not unpack, or unpacks to another length than the file says:
+    /// its index, the bytes of the stream it gives, and why. Decodes nothing:
+    /// a part is found out by the read that first unpacks it.
+    pub(super) fn trouble_in(&self, at: u64, len: u64) -> Option<(usize, std::ops::Range<u64>, super::stitch::PartTrouble)> {
+        let troubles = lock(&self.troubles);
+        if troubles.is_empty() {
+            return None;
+        }
+        let end = at.saturating_add(len).min(self.len);
+        let mut i = self.parts.partition_point(|p| p.0.end <= at);
+        while let Some((out, _)) = self.parts.get(i).filter(|p| p.0.start < end) {
+            if let Some(trouble) = troubles.get(&i) {
+                return Some((i, out.clone(), *trouble));
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Why packed part `i` cannot be read, when a read has found that.
+    fn trouble(&self, i: usize) -> Option<super::stitch::PartTrouble> {
+        let troubles = lock(&self.troubles);
+        if troubles.is_empty() {
+            return None;
+        }
+        troubles.get(&i).copied()
     }
 
     pub fn len(&self) -> u64 {
@@ -612,10 +717,16 @@ impl Joined {
     /// asked: one span of an index can need 16 MiB of the file, so a read
     /// names the chunks of at most one indexed part's span, as a read of a
     /// stream read through an index does.
+    ///
+    /// A part that will not unpack, or unpacks to another length than the
+    /// file says, reads as zeroes, and the read goes on to the parts after
+    /// it. The read then fails as refused, unless chunks are missing, which
+    /// it names first. [`Source::unreadable`] says which part it was and why.
     pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let end = at + out.len() as u64;
         let mut pos = at;
         let mut missing = Vec::new();
+        let mut refused = None;
         while pos < end {
             let i = self.part_at(pos).ok_or(Refusal::Failed)?;
             let range = self.parts[i].0.clone();
@@ -630,13 +741,25 @@ impl Joined {
                 match self.read_part(i, from, &mut out[to..to + take]) {
                     Ok(()) => {}
                     Err(ReadError::Missing(found)) => missing.extend(found),
-                    Err(refused) => return Err(refused),
+                    Err(ReadError::Refused(why)) => {
+                        out[to..to + take].fill(0);
+                        refused.get_or_insert(why);
+                        // A part read through its index that refuses a span
+                        // keeps no trouble, so the stretch read stands for it.
+                        let trouble = self.trouble(i).unwrap_or(super::stitch::PartTrouble::Refused(why));
+                        let stretch = match self.trouble(i) {
+                            Some(_) => range.clone(),
+                            None => pos..pos + take as u64,
+                        };
+                        *lock(&self.last_refused) = Some((i, stretch, trouble));
+                        self.refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
             pos += take as u64;
         }
         if missing.is_empty() {
-            return Ok(());
+            return refused.map_or(Ok(()), |why| Err(ReadError::Refused(why)));
         }
         missing.sort_unstable_by_key(|m| m.chunk);
         missing.dedup();
@@ -659,19 +782,40 @@ impl Joined {
     /// Everything packed part `i` unpacks to: from the cache, or read
     /// through `input` and decoded now, and kept in the cache. The run is
     /// read whole, in one read, and goes once it is decoded.
+    ///
+    /// This is where a part is checked. The stream was laid out from the
+    /// lengths the file gives for its parts, a BGZF block's trailer, without
+    /// unpacking any of them, so a part that will not unpack, or unpacks to
+    /// another length, is found here, by the first read that reaches it. It
+    /// is kept in `troubles`, and every read of it is refused, rather than
+    /// giving bytes that would be shifted against what the stream around it
+    /// says is where.
     fn unpacked(&self, i: usize, input: &lazy::RunInput, codec: Codec) -> Result<Arc<Vec<u8>>, ReadError> {
         let cached = lock(&self.cache).get(i);
         if let Some(bytes) = cached {
             return Ok(bytes);
         }
-        let run = whole_run(input)?;
-        let bytes = Arc::new(crate::codec::decode(codec, &run)?);
-        let out = &self.parts[i].0;
-        if bytes.len() as u64 != out.end - out.start {
-            return Err(Refusal::Failed.into());
+        if let Some(trouble) = self.trouble(i) {
+            return Err(trouble.refusal().into());
         }
-        lock(&self.cache).put(i, bytes.clone());
-        Ok(bytes)
+        let run = whole_run(input)?;
+        let out = &self.parts[i].0;
+        let claimed = out.end - out.start;
+        let found = match crate::codec::decode(codec, &run) {
+            Ok(bytes) if bytes.len() as u64 == claimed => Ok(Arc::new(bytes)),
+            Ok(bytes) => Err(super::stitch::PartTrouble::Length(bytes.len() as u64)),
+            Err(why) => Err(super::stitch::PartTrouble::Refused(why)),
+        };
+        match found {
+            Ok(bytes) => {
+                lock(&self.cache).put(i, bytes.clone());
+                Ok(bytes)
+            }
+            Err(trouble) => {
+                lock(&self.troubles).insert(i, trouble);
+                Err(trouble.refusal().into())
+            }
+        }
     }
 
     /// The chunks of the file a read of `len` bytes of part `i` from `from`
@@ -683,8 +827,10 @@ impl Joined {
             JoinedBytes::Stored(input) => input.missing(from as usize..(from + len) as usize),
             JoinedBytes::Indexed(index) => index.missing(from, len),
             JoinedBytes::Packed { input, .. } => {
-                let cached = lock(&self.cache).get(i).is_some();
-                match cached {
+                // A part in the cache needs nothing of the file, and nor does
+                // one known to be in trouble, which a read refuses unread.
+                let held = lock(&self.cache).get(i).is_some() || self.trouble(i).is_some();
+                match held {
                     true => Vec::new(),
                     false => input.missing(0..input.len() as usize),
                 }
@@ -741,15 +887,32 @@ impl Joined {
 
     /// The trace of packed part `i`, decoded again with its trace on from
     /// its run, read through `input`. Missing chunks as for
-    /// [`Joined::read`]; nothing when the decoder refuses the run.
+    /// [`Joined::read`]; nothing when the decoder refuses the run, or when
+    /// it unpacks to another length than the file says, whose steps would
+    /// name bytes the stream does not have where they say. Either is kept as
+    /// the part's trouble, as a read finding it keeps it.
     fn part_trace(&self, i: usize, input: &lazy::RunInput, codec: Codec) -> Result<Option<Arc<Trace>>, Vec<Missing>> {
         if let Some((held, t)) = lock(&self.traced).as_ref() {
             if *held == i {
                 return Ok(Some(t.clone()));
             }
         }
+        if self.trouble(i).is_some() {
+            return Ok(None);
+        }
         let run = whole_run(input)?;
-        let Ok((_, t)) = crate::codec::decode_traced(codec, &run) else { return Ok(None) };
+        let claimed = self.parts[i].0.end - self.parts[i].0.start;
+        let t = match crate::codec::decode_traced(codec, &run) {
+            Ok((bytes, t)) if bytes.len() as u64 == claimed => t,
+            Ok((bytes, _)) => {
+                lock(&self.troubles).insert(i, super::stitch::PartTrouble::Length(bytes.len() as u64));
+                return Ok(None);
+            }
+            Err(why) => {
+                lock(&self.troubles).insert(i, super::stitch::PartTrouble::Refused(why));
+                return Ok(None);
+            }
+        };
         let t = Arc::new(t);
         *lock(&self.traced) = Some((i, t.clone()));
         Ok(Some(t))

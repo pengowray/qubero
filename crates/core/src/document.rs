@@ -205,6 +205,22 @@ impl<S: Source> Document<S> {
         self.table.read_bits(&self.source, &self.add, at, n, out)
     }
 
+    /// Whether a read here can give zeroes for bytes its source could not
+    /// make: see [`Source::unreadable`].
+    pub fn may_be_unreadable(&self) -> bool {
+        self.source.may_be_unreadable()
+    }
+
+    /// The first stretch of document bits `at..at + n` that read as zeroes
+    /// because the source could not make them, as bits of the document, and
+    /// why. See [`Source::unreadable`].
+    pub fn unreadable_bits(&self, at: u64, n: u64) -> Option<(std::ops::Range<u64>, String)> {
+        if !self.source.may_be_unreadable() {
+            return None;
+        }
+        self.table.unreadable_bits(&self.source, at, n)
+    }
+
     /// Read bytes; the region past the end of the document is zero-filled.
     pub fn read_bytes(&self, at_byte: u64, out: &mut [u8]) -> Vec<Missing> {
         out.fill(0);
@@ -242,6 +258,28 @@ impl<S: Source> Source for Document<S> {
     fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
         let n = len.saturating_mul(8).min(self.len_bits().saturating_sub(offset.saturating_mul(8)));
         self.table.missing_bits(&self.source, offset * 8, n)
+    }
+
+    fn may_be_unreadable(&self) -> bool {
+        Document::may_be_unreadable(self)
+    }
+
+    /// What the source says of the bytes the document reads there now, as
+    /// bytes of the document.
+    fn unreadable(&self, offset: u64, len: u64) -> Option<crate::source::Unreadable> {
+        let n = len.saturating_mul(8).min(self.len_bits().saturating_sub(offset.saturating_mul(8)));
+        let (bits, why) = self.unreadable_bits(offset * 8, n)?;
+        Some(crate::source::Unreadable { at: bits.start / 8, len: bits.end.div_ceil(8) - bits.start / 8, why })
+    }
+
+    fn unreadable_reads(&self) -> u64 {
+        self.source.unreadable_reads()
+    }
+
+    /// What the source says, in the source's own offsets: a joined stream's
+    /// tab is never edited, so those are the document's too.
+    fn last_unreadable(&self) -> Option<crate::source::Unreadable> {
+        self.source.last_unreadable()
     }
 }
 

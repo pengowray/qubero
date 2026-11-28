@@ -14,6 +14,8 @@ import { tagged as el } from "./dom.ts";
 import { formatOffset } from "./doc.ts";
 import type { Doc } from "./doc.ts";
 import { REPORT } from "./strings.ts";
+import { hexMarked } from "./hexcell.ts";
+import { masked } from "./unreadable.ts";
 
 /** Bytes on one line. Sixteen is what every hex dump does, and the reason is
  *  still good: the low digit of the address is the column. */
@@ -79,7 +81,17 @@ export function byteDump(doc: Doc, at: number, len: number, name: string, scroll
       const line = el("div", "bd-line");
       line.style.top = `${i * LINE}px`;
       line.append(el("span", "bd-at", formatOffset(start * 8)));
-      const { bytes, complete } = doc.read(start, take);
+      const { bytes, complete, unreadable } = doc.read(start, take);
+      // Bytes that cannot be made are written as `??`, with the reason on
+      // hover, and the text column leaves them out.
+      if (unreadable) {
+        const run = bytes.subarray(0, take);
+        line.title = unreadable.why;
+        line.append(el("span", "bd-hex", hexMarked(run, start, unreadable)));
+        line.append(el("span", "bd-txt", text(masked(run, start, unreadable, 0x20))));
+        out.push(line);
+        continue;
+      }
       if (!complete) {
         // Not an answer, so nothing is drawn as one. `Doc` has gone for the
         // chunk and the redraw when it lands asks again.

@@ -56,6 +56,53 @@ pub trait Source {
         found.dedup();
         found
     }
+    /// Whether a read here can give zeroes for bytes that cannot be made,
+    /// with no chunk missing: see [`Source::unreadable`]. False unless the
+    /// source unpacks what it gives as it is read, so that a reader asks
+    /// [`Source::unreadable`] only of a source that can answer something.
+    fn may_be_unreadable(&self) -> bool {
+        false
+    }
+    /// The first stretch of `offset..offset + len` that a read gave zeroes
+    /// for because those bytes cannot be made, and why. A joined stream read
+    /// a part at a time checks each part when a read first unpacks it, and
+    /// a part that will not unpack, or unpacks to another length than the
+    /// file says, reads as zeroes: this is what says so. Asked after a read
+    /// that found no chunk missing, since the read is what finds a part out.
+    /// Nothing for bytes that read, and for every source that holds or
+    /// loads its bytes as they are.
+    fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
+        let _ = (offset, len);
+        None
+    }
+    /// How many reads so far have given zeroes for bytes that cannot be made
+    /// (see [`Source::unreadable`]). Code that reads through other code, a
+    /// scan or a format's own reader, takes the count before and compares it
+    /// after: a count that moved means some read it made reached such bytes,
+    /// and what it made of them is not to be shown. 0 for every source that
+    /// holds or loads its bytes as they are.
+    fn unreadable_reads(&self) -> u64 {
+        0
+    }
+    /// The bytes the latest of those reads reached, and why, in the source's
+    /// own offsets. Nothing when no read has reached any.
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        None
+    }
+}
+
+/// Bytes a source gave zeroes for because it could not make them: see
+/// [`Source::unreadable`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    /// Where the stretch starts, in the source's own bytes, and how long it
+    /// is. Part of it may be outside the read that was asked about.
+    pub at: u64,
+    pub len: u64,
+    /// Why, said after the part's name, as a read of the part in a listing
+    /// says it: `blocks[50].compressed unpacks to 2098 bytes, not the 2099
+    /// the file says`.
+    pub why: String,
 }
 
 /// A borrowed source is a source. This is what lets one file be read both as
@@ -78,6 +125,17 @@ impl<S: Source> Source for &S {
     fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
         (*self).missing(offset, len)
     }
+    fn may_be_unreadable(&self) -> bool {
+        (*self).may_be_unreadable()
+    }
+    fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
+        (*self).unreadable(offset, len)
+    }    fn unreadable_reads(&self) -> u64 {
+        (*self).unreadable_reads()
+    }
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        (*self).last_unreadable()
+    }
 }
 
 /// A source held behind an `Arc` is a source: what a handle from
@@ -98,6 +156,17 @@ impl<S: Source + ?Sized> Source for Arc<S> {
     }
     fn missing(&self, offset: u64, len: u64) -> Vec<Missing> {
         (**self).missing(offset, len)
+    }
+    fn may_be_unreadable(&self) -> bool {
+        (**self).may_be_unreadable()
+    }
+    fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
+        (**self).unreadable(offset, len)
+    }    fn unreadable_reads(&self) -> u64 {
+        (**self).unreadable_reads()
+    }
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        (**self).last_unreadable()
     }
 }
 
@@ -351,6 +420,24 @@ impl Source for ChunkStore {
             Some(source) => source.missing(offset, len),
             None => self.kept.missing(offset, len),
         }
+    }
+
+    /// What the source behind it says. A store fed from outside loads its
+    /// chunks as they are and can always give them once they are in.
+    fn may_be_unreadable(&self) -> bool {
+        self.behind.as_ref().is_some_and(|source| source.may_be_unreadable())
+    }
+
+    fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
+        self.behind.as_ref()?.unreadable(offset, len)
+    }
+
+    fn unreadable_reads(&self) -> u64 {
+        self.behind.as_ref().map_or(0, |source| source.unreadable_reads())
+    }
+
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        self.behind.as_ref()?.last_unreadable()
     }
 }
 

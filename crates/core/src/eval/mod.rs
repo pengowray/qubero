@@ -3061,8 +3061,16 @@ impl Evaluator {
         if says_only_bytes(inner) {
             let len = source.len_bytes();
             let mut head = vec![0u8; len.min(0x9000).min(source.resident_limit().unwrap_or(u64::MAX)) as usize];
-            if let Err(crate::codec::lazy::ReadError::Missing(missing)) = source.read(0, &mut head) {
-                return Err(EvalError::Pending(missing));
+            match source.read(0, &mut head) {
+                Err(crate::codec::lazy::ReadError::Missing(missing)) => return Err(EvalError::Pending(missing)),
+                // A part of a joined stream that will not unpack reads as
+                // zeroes, and zeroes are not what the stream holds: only
+                // the bytes before it are looked at.
+                Err(crate::codec::lazy::ReadError::Refused(_)) => {
+                    let readable = source.unreadable(0, head.len() as u64).map_or(0, |u| u.at);
+                    head.truncate(readable as usize);
+                }
+                Ok(()) => {}
             }
             if let Some(found) = crate::formats::sniff(&head, len) {
                 if let Some(t) = crate::formats::template(found) {

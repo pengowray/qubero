@@ -9,7 +9,9 @@
 //! The stream at `path` (`1` unless given, which is a BGZF file's joined
 //! stream) is opened, and then read from its first byte to its last in
 //! reads of 64 KiB, as a hex view scrolled from end to end reads it. The
-//! cap on a joined stream held whole is 64 MiB unless given, so a smaller
+//! open is timed whole and in two: the walk to the stream's parts, which
+//! reading the node at `path` makes, and the rest of opening it as a
+//! document. The cap on a joined stream held whole is 64 MiB unless given, so a smaller
 //! cap makes a smaller file's stream open a part at a time. Each try is a
 //! fresh reading over a fresh document, and the sources take turns. The
 //! fastest of `tries` (5 unless given) is printed for each source, with the
@@ -61,6 +63,7 @@ const CHUNK: u64 = 64 << 10;
 /// What one try came to.
 struct Try {
     open: Duration,
+    walk: Duration,
     read: Duration,
     held: usize,
     len: u64,
@@ -73,6 +76,8 @@ fn once<S: Source>(d: &Document<S>, template: &str, path: &[usize], whole_cap: u
     let started = Instant::now();
     let mut ev = Evaluator::new(formats::template(template).expect("a template"));
     ev.set_stream_limits(Limits::default(), whole_cap);
+    ev.node(d, path).expect("the stream's node");
+    let walk = started.elapsed();
     let Some(id) = ev.open_space(d, 0, path).expect("opens") else { return Err(format!("{:?}", ev.open_refusal(path))) };
     let open = started.elapsed();
     let held = NOW.load(Ordering::Relaxed).saturating_sub(before);
@@ -87,7 +92,7 @@ fn once<S: Source>(d: &Document<S>, template: &str, path: &[usize], whole_cap: u
         sum = sum.wrapping_add(buf[..n].iter().map(|&b| b as u64).sum::<u64>());
     }
     std::hint::black_box(sum);
-    Ok(Try { open, read: started.elapsed(), held, len })
+    Ok(Try { open, walk, read: started.elapsed(), held, len })
 }
 
 fn report(what: &str, tries: &[Result<Try, String>]) {
@@ -97,9 +102,18 @@ fn report(what: &str, tries: &[Result<Try, String>]) {
     };
     let ms = |t: Duration| t.as_secs_f64() * 1000.0;
     let open = tries.iter().map(|t| t.open).min().unwrap();
+    let walk = tries.iter().map(|t| t.walk).min().unwrap();
+    let rest = tries.iter().map(|t| t.open - t.walk).min().unwrap();
     let read = tries.iter().map(|t| t.read).min().unwrap();
     let held = tries.iter().map(|t| t.held).max().unwrap();
-    println!("{what}: {} bytes, open fastest {:.1} ms, read fastest {:.1} ms, held {held} bytes after opening", tries[0].len, ms(open), ms(read));
+    println!(
+        "{what}: {} bytes, open fastest {:.1} ms (walk to the parts {:.1} ms, the rest {:.1} ms), read fastest {:.1} ms, held {held} bytes after opening",
+        tries[0].len,
+        ms(open),
+        ms(walk),
+        ms(rest),
+        ms(read)
+    );
 }
 
 fn main() {

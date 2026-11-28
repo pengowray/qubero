@@ -137,6 +137,10 @@ export async function askUntilLoaded<T>(opts: {
  */
 export const PIECE_BYTES = 4 * 1024 * 1024;
 
+/** Bytes a read gave zeroes for because they cannot be made, and why: see
+ *  `Unreadable` in `doc.ts`, which this is the shape of. */
+export type UnreadableBytes = { readonly at: number; readonly len: number; readonly why: string };
+
 /**
  * The bytes in `[at, at + len)`, read `pieceBytes` at a time: each piece is
  * read, the chunks it names are loaded, and it is read again until it is
@@ -146,16 +150,19 @@ export const PIECE_BYTES = 4 * 1024 * 1024;
  * `complete` false. Rejects when `load` does.
  *
  * `read` fills `out` with the bytes from `at` and says which chunks of the
- * file it found missing.
+ * file it found missing. `unreadable`, when given, is asked of each piece
+ * once it has every chunk, and a piece with bytes that cannot be made stops
+ * the read there too, with `complete` false and those bytes named.
  */
 export async function readInPieces(opts: {
   readonly at: number;
   readonly len: number;
   readonly read: (at: number, out: Uint8Array) => readonly number[];
+  readonly unreadable?: (at: number, len: number) => UnreadableBytes | null;
   readonly load: (chunks: readonly number[]) => Promise<void>;
   readonly wait: ChunkWait;
   readonly pieceBytes?: number;
-}): Promise<{ readonly bytes: Uint8Array; readonly complete: boolean }> {
+}): Promise<{ readonly bytes: Uint8Array; readonly complete: boolean; readonly unreadable?: UnreadableBytes | null }> {
   const bytes = new Uint8Array(opts.len);
   const piece = opts.pieceBytes ?? PIECE_BYTES;
   for (let o = 0; o < opts.len; o += piece) {
@@ -166,6 +173,8 @@ export async function readInPieces(opts: {
       wait: opts.wait,
     });
     if (!got.complete) return { bytes, complete: false };
+    const unreadable = opts.unreadable?.(opts.at + o, out.length) ?? null;
+    if (unreadable !== null) return { bytes, complete: false, unreadable };
     opts.wait.gotFurther();
   }
   return { bytes, complete: true };

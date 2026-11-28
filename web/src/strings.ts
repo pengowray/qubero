@@ -2713,6 +2713,10 @@ export const REPORT = {
    *  the file needs more of itself in memory at once than the editor keeps.
    *  Pairs with `imageLoading`, which the card said before. */
   imageNotLoaded: "Couldn't load the image's bytes",
+  /** Some of the image's bytes cannot be made. `why` names the part:
+   *  `blocks[2].compressed unpacks to 65280 bytes, not the 65281 the file
+   *  says`. */
+  imageUnreadable: (why: string): string => `Image includes unreadable bytes: ${why}`,
   /** A file past the size the card is willing to hand the browser whole.
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
@@ -2991,6 +2995,11 @@ export const TEXTVIEW = {
    *  the reader looking up at the chooser. Takes the encoding the file was
    *  settled as, never the chooser's own label. */
   lineLossy: (encoding: string): string => `not ${encoding}`,
+  /** Bytes on this line cannot be made: a part of a joined stream that will
+   *  not unpack. They are drawn as `?`, and the reason, which names the part,
+   *  is on hover over them and over this mark. Not "unreadable bytes", which
+   *  beside `not UTF-8` reads as text the encoding cannot read. */
+  lineUnreadable: "unpacking failed",
   /** Beside the encoding, when nothing in the file said which it was. */
   guessed: "guessed",
   /** Typing a character the encoding has no room for. The encoding is named
@@ -3016,6 +3025,10 @@ export const TEXTVIEW = {
   encodingDos: "DOS",
   /** The clipboard would not take it. */
   copyFailed: "Couldn't copy to the clipboard.",
+  /** Some of the selection's bytes cannot be made. `why` is what the listing
+   *  says of the part: `blocks[2].compressed unpacks to 65280 bytes, not the
+   *  65281 the file says`. The same words the hex view's copy gives. */
+  copyUnreadable: (why: string): string => `Couldn't copy: the selection includes unreadable bytes (${why}).`,
   /** What the file was read as, beside the chooser. */
   readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
   /** Which line ending the file uses, beside the encoding. Counted over the
@@ -4153,6 +4166,11 @@ export const STRINGSVIEW = {
    *  scanned. Said outright, with the two things that would let it be. */
   statusCapped: (scanned: number, total: number): string =>
     `stopped at ${formatBytes(scanned)} of ${formatBytes(total)}, the most this view holds. To scan further, raise the minimum length or turn off an encoding.`,
+  /** After the progress: bytes of a joined stream that cannot be made, which
+   *  no string was looked for in. `why` is the first part's reason, which
+   *  names it: `blocks[2].compressed unpacks to 65280 bytes, not the 65281
+   *  the file says`. */
+  statusUnreadable: (bytes: number, why: string): string => `${formatBytes(bytes)} unreadable, not scanned: ${why}`,
   statusNoEncodings: "All three encodings are off. Turn one on above to scan for strings.",
   scanProgressLabel: (scanned: number, total: number): string =>
     `Scanned ${formatBytes(scanned)} of ${formatBytes(total)}`,

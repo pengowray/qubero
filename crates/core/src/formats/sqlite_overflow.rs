@@ -86,6 +86,11 @@ pub fn read<S: Source>(doc: &Document<S>, found: &Payload, encoding: i128) -> Ro
     let gathered = Gathered::new(doc.source(), found.extents.iter().copied());
     let mut bytes = vec![0u8; gathered.len_bytes() as usize];
     gathered.read_bytes(0, &mut bytes);
+    // A part of a joined stream that will not unpack reads as zeroes, and a
+    // row is not to be made of them.
+    if let Some(u) = gathered.unreadable(0, gathered.len_bytes()) {
+        return Row { problem: Some(format!("Row not assembled: one of its pages is unreadable ({}).", u.why)), ..Row::default() };
+    }
 
     let row = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(crate::template::Template::new(

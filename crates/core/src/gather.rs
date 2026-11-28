@@ -178,6 +178,42 @@ impl<S: Source> Source for Gathered<S> {
         self.inner.resident_limit()
     }
 
+    fn may_be_unreadable(&self) -> bool {
+        self.inner.may_be_unreadable()
+    }
+
+    /// What the source it gathers from says of the parts under these bytes,
+    /// asked part by part, as bytes of the gathered stream: the first
+    /// stretch it cannot make, cut to the part it was found through.
+    fn unreadable(&self, offset: u64, len: u64) -> Option<crate::source::Unreadable> {
+        if !self.inner.may_be_unreadable() {
+            return None;
+        }
+        let (mut at, end) = (offset, offset.saturating_add(len).min(self.len_bytes()));
+        while at < end {
+            let index = self.extent_at(at);
+            let extent = self.extents.get(index)?;
+            let within = at - self.starts[index];
+            let take = (extent.len - within).min(end - at);
+            if let Some(mut u) = self.inner.unreadable(extent.at + within, take) {
+                let from = u.at.max(extent.at) - extent.at;
+                let to = (u.at + u.len).min(extent.at + extent.len) - extent.at;
+                (u.at, u.len) = (self.starts[index] + from, to.saturating_sub(from));
+                return Some(u);
+            }
+            at += take;
+        }
+        None
+    }
+
+    fn unreadable_reads(&self) -> u64 {
+        self.inner.unreadable_reads()
+    }
+
+    fn last_unreadable(&self) -> Option<crate::source::Unreadable> {
+        self.inner.last_unreadable()
+    }
+
     /// The same parts gathered from a handle onto the source, when the
     /// source gives one. The handle alone would read the file, not the
     /// stream its parts make.

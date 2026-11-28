@@ -91,6 +91,18 @@ test("a byte shows its hex digits and its glyph, and an unprintable one is marke
   assert.deepEqual(classes(b.ascii), ["hv-np"]);
 });
 
+test("a byte that cannot be made shows as ?? and never as the zero the read gave", () => {
+  const d = cellDraw(cell({ byte: 0x00, unreadable: true }));
+  assert.equal(d.hexText, "??");
+  assert.equal(d.asciiText, " ");
+  assert.deepEqual(classes(d.hex), ["hv-unreadable"]);
+  assert.deepEqual(classes(d.ascii), []);
+  // In binary its bits are written by the row, and the cell is still marked.
+  const b = cellDraw(cell({ binary: true, unreadable: true }));
+  assert.equal(b.hexText, null);
+  assert.deepEqual(classes(b.hex), ["hv-unreadable"]);
+});
+
 test("bytes still on their way say so", () => {
   const d = cellDraw(cell({ complete: false }));
   assert.equal(d.hexText, "··");

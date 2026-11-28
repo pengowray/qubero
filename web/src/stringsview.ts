@@ -18,7 +18,7 @@
 // scroll like a list of twenty.
 
 import { tagged as el } from "./dom.ts";
-import type { CodecKind, Doc, StringEncoding, StringHit, StringScanOpts } from "./doc.ts";
+import type { CodecKind, Doc, StringEncoding, StringHit, StringScanOpts, Unreadable } from "./doc.ts";
 import { formatOffset } from "./format.ts";
 import { STRINGSVIEW as SV } from "./strings.ts";
 
@@ -89,6 +89,11 @@ export class StringsView {
   /** True when those strings are left out of the list. They are still
    *  counted, and the status line says how many. */
   private hideInside = false;
+
+  /** Stretches of the file scanned so far that cannot be made, which no
+   *  string was looked for in, by where each starts. Only a joined stream
+   *  with a part that will not unpack has any. */
+  private unreadable = new Map<number, Unreadable>();
 
   /** Where the next scan call carries on from. */
   private next = 0;
@@ -221,6 +226,7 @@ export class StringsView {
     this.hits = [];
     this.shown = null;
     this.inside = noneInside();
+    this.unreadable = new Map();
     this.next = 0;
     this.done = false;
     this.at = -1;
@@ -287,6 +293,7 @@ export class StringsView {
           break;
         }
         this.next = scan.next;
+        for (const u of scan.unreadable ?? []) this.unreadable.set(u.at, u);
         this.append(scan.hits);
         if (this.next >= this.doc.lengthBytes || this.hits.length >= MAX_HITS) this.done = true;
       } while (!this.done && performance.now() < until);
@@ -520,7 +527,12 @@ export class StringsView {
       : this.done
         ? SV.statusWhole
         : SV.statusScanning(scanned, total);
-    this.words.textContent = `${count} \u00b7 ${where}`;
+    // Bytes that cannot be made are not searched, which the line says after
+    // the progress, with the first reason: one bad part is the usual case.
+    const lost = [...this.unreadable.values()];
+    const first = lost[0];
+    const skipped = first === undefined ? "" : ` \u00b7 ${SV.statusUnreadable(lost.reduce((n, u) => n + u.len, 0), first.why)}`;
+    this.words.textContent = `${count} \u00b7 ${where}${skipped}`;
     // The bar is for a scan still moving. Once it has stopped, capped or not,
     // the words say where it stopped and a frozen bar only asks whether it is.
     this.progress.hidden = this.done;

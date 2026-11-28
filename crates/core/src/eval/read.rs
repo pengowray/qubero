@@ -128,6 +128,9 @@ impl Evaluator {
         }
         let missing = doc.read_bits(at, n, &mut buf);
         if missing.is_empty() {
+            if doc.may_be_unreadable() {
+                return read_or_unreadable(doc, at, n, buf);
+            }
             return Ok(buf);
         }
         // A read longer than the file's source keeps can never find all its
@@ -760,6 +763,22 @@ fn ebml_vint_value(bytes: &[u8], strip_marker: bool) -> u128 {
         value = (value << 8) | u128::from(b);
     }
     value
+}
+
+/// `buf`, the `n` bits a read of `doc` from bit `at` gave with no chunk
+/// missing, or the failure of that read where some of those bits are zeroes
+/// for bytes the document's source could not make: a part of a joined stream
+/// that will not unpack, or unpacks to another length than the file says,
+/// read by the reading of the stream's own tab. Said as a read of the part
+/// in the listing says it. Out of line and cold, for the same reason as
+/// [`too_much_at_once`].
+#[cold]
+#[inline(never)]
+fn read_or_unreadable<S: Source>(doc: &Document<S>, at: u64, n: u64, buf: Vec<u8>) -> R<Vec<u8>> {
+    match doc.unreadable_bits(at, n) {
+        Some((_, why)) => fail(why),
+        None => Ok(buf),
+    }
 }
 
 /// The failure of a read of the file that needs more of it at once than the

@@ -29,6 +29,37 @@ const DRAG_PX = 4;
  *  or about a clicked line: as long as the table view's. */
 const NOTICE_MS = 5000;
 
+/**
+ * The decoder kind a line of the text is about, as an index into `kindLines`,
+ * or -1. A kind's own line is that kind. A line inside a record or row, and the
+ * `}` that closes it, belong to the nearest kind line above that is indented
+ * less, or as much for a `}`. Lines outside a decoder section, and a
+ * section's own `decoder X {` and `}`, belong to none. Only indentation is
+ * read, so the record's own lines may change.
+ */
+export function kindOwnerAt(lines: readonly string[], decoders: readonly (readonly [number, number])[], kindLines: readonly KindLine[], line: number): number {
+  const section = decoders.find(([a, b]) => line > a && line < b);
+  if (section === undefined) return -1;
+  const at = new Map<number, number>();
+  kindLines.forEach((k, i) => {
+    if (!at.has(k.line)) at.set(k.line, i);
+  });
+  const own = at.get(line);
+  if (own !== undefined) return own;
+  const indent = (t: string): number => t.length - t.trimStart().length;
+  const text = lines[line] ?? "";
+  if (text.trim() === "") return -1;
+  const close = text.trimStart().startsWith("}");
+  const width = indent(text);
+  for (let j = line - 1; j > section[0]; j--) {
+    const k = at.get(j);
+    if (k === undefined) continue;
+    const w = indent(lines[j] ?? "");
+    if (w < width || (close && w === width)) return k;
+  }
+  return -1;
+}
+
 type Chunk = { readonly el: HTMLElement; readonly from: number; readonly to: number; filled: boolean };
 
 const idle: (fn: () => void) => void =
@@ -86,8 +117,27 @@ export class TemplatePanel {
   private noticeTimer = 0;
   /** What the message beside the Copy button is about, while it shows. */
   private noticeKind: "copy" | "miss" | null = null;
+  /** The decoder kind's line and description, laid over the bottom of the
+   *  text while a kind's line is marked or hovered. */
+  private readonly detail: HTMLElement;
+  private readonly detailLine: HTMLElement;
+  private readonly detailAbout: HTMLElement;
+  /** The kind line the strip shows, as an index into `kindLines`, or -1. */
+  private shown = -1;
+  /** The kind line under a mouse pointer, or -1 for none. */
+  private hovered = -1;
+  /** Empty space kept below the text, in pixels, so the last lines can be
+   *  scrolled above the strip. It only grows until the text is rebuilt:
+   *  shrinking it when the strip goes would pull the text down whenever the
+   *  view is scrolled to the end. */
+  private spare = 0;
 
-  constructor(private readonly doc: Doc) {
+  // A plain field, not a parameter property, so node's type stripping can
+  // load this file for the tests of `kindOwnerAt`.
+  private readonly doc: Doc;
+
+  constructor(doc: Doc) {
+    this.doc = doc;
     this.el = document.createElement("section");
     this.el.className = "templatepanel";
     this.el.setAttribute("aria-label", SIDEBAR.template);
@@ -97,7 +147,15 @@ export class TemplatePanel {
     this.body = document.createElement("div");
     this.body.className = "tp-text";
     this.scroller.append(this.body);
-    this.el.append(this.scroller);
+    this.detail = document.createElement("div");
+    this.detail.className = "tp-detail";
+    this.detail.hidden = true;
+    this.detailLine = document.createElement("div");
+    this.detailLine.className = "tp-detail-line";
+    this.detailAbout = document.createElement("p");
+    this.detailAbout.className = "tp-detail-about";
+    this.detail.append(this.detailLine, this.detailAbout);
+    this.el.append(this.scroller, this.detail);
     this.notice = document.createElement("span");
     this.notice.className = "tp-copied";
     this.notice.setAttribute("role", "status");
@@ -117,6 +175,17 @@ export class TemplatePanel {
       this.pressAt = { x: e.clientX, y: e.clientY };
     });
     this.scroller.addEventListener("click", (e) => this.clicked(e));
+    // Hover is a mouse's alone: a tap would leave its line shown after the
+    // finger lifts. The pointer on the strip itself keeps what it shows, so
+    // a strip that grows over the pointer does not hide and come back.
+    this.scroller.addEventListener("pointerover", (e) => {
+      if (e.pointerType !== "mouse") return;
+      const row = e.target instanceof Element ? e.target.closest(".tp-line") : null;
+      this.hover(row instanceof HTMLElement ? this.ownerOf(Number(row.dataset.line)) : -1);
+    });
+    this.el.addEventListener("pointerleave", (e) => {
+      if (e.pointerType === "mouse") this.hover(-1);
+    });
     doc.onChange(() => {
       // An edit can change which structure a node is (ELF's `class` decides
       // which ELFHeader is read), so the children are asked again.
@@ -125,6 +194,7 @@ export class TemplatePanel {
       if (this.visible && this.jumpOwed !== null) this.jump(this.jumpOwed);
     });
     new ResizeObserver(() => {
+      this.place();
       if (this.revealOwed && this.marked !== null && this.scroller.clientHeight > 0) this.reveal(this.marked);
     }).observe(this.scroller);
   }
@@ -132,7 +202,7 @@ export class TemplatePanel {
   /** The tab was shown or hidden. */
   setVisible(visible: boolean): void {
     this.visible = visible;
-    if (!visible) return;
+    if (!visible) return this.hover(-1);
     // Asked again each time, not only when the template's name changes: a
     // `.ksy` pasted again is a new template under the same name.
     this.stale = true;
@@ -171,6 +241,7 @@ export class TemplatePanel {
       this.stale = false;
       this.build(this.doc.templateText());
       this.kindLines = this.doc.templateKindLines();
+      this.showDetail();
     }
     this.follow();
   }
@@ -187,6 +258,10 @@ export class TemplatePanel {
     this.fieldAt = null;
     this.missed = null;
     this.jumpOwed = null;
+    this.hovered = -1;
+    this.spare = 0;
+    this.body.style.paddingBottom = "";
+    this.showDetail();
     this.copyButton.hidden = text === "";
     this.hush();
     this.scroller.scrollTop = 0;
@@ -336,6 +411,8 @@ export class TemplatePanel {
     }
     this.marked = line;
     this.note = note;
+    // Before the reveal, which leaves room for the strip's new height.
+    this.showDetail();
     if (line === null) return;
     const chunk = this.chunks[Math.floor(line / CHUNK)];
     if (chunk !== undefined) this.fill(chunk);
@@ -494,7 +571,9 @@ export class TemplatePanel {
     this.revealOwed = s.clientHeight === 0;
     if (this.revealOwed) return;
     const top = line * LINE;
-    if (top < s.scrollTop || top + LINE > s.scrollTop + s.clientHeight) s.scrollTop = Math.max(0, top - s.clientHeight / 3);
+    // The strip covers the bottom of the text, so the line must end above it.
+    const height = s.clientHeight - this.detailHeight();
+    if (top < s.scrollTop || top + LINE > s.scrollTop + height) s.scrollTop = Math.max(0, top - height / 3);
     if (this.charWidth === 0) {
       const probe = document.createElement("span");
       probe.textContent = "0".repeat(10);
@@ -507,5 +586,83 @@ export class TemplatePanel {
     const indent = (text.length - text.trimStart().length) * this.charWidth;
     const room = s.clientWidth - 12 * this.charWidth;
     if (indent < s.scrollLeft || indent > s.scrollLeft + room) s.scrollLeft = Math.max(0, indent - 2 * this.charWidth);
+  }
+
+  /** The kind `line` belongs to, as an index into `kindLines`, or -1. */
+  private ownerOf(line: number): number {
+    const index = this.index;
+    if (index === null || !Number.isInteger(line)) return -1;
+    return kindOwnerAt(index.lines, index.decoders, this.kindLines, line);
+  }
+
+  /** The kind line of the marked line, or -1 when no kind line is marked. */
+  private markedKind(): number {
+    if (this.marked === null) return -1;
+    return this.kindLines.findIndex((k) => k.line === this.marked);
+  }
+
+  private hover(kind: number): void {
+    if (kind === this.hovered) return;
+    // The kind line the strip is about gets the hover frame, also when the
+    // pointer is on one of its record's lines, so the strip names a line
+    // that is marked on screen.
+    const line = (k: number): HTMLElement | undefined => {
+      const at = this.kindLines[k]?.line;
+      return at === undefined ? undefined : this.lineEls[at];
+    };
+    line(this.hovered)?.classList.remove("is-hover");
+    line(kind)?.classList.add("is-hover");
+    this.hovered = kind;
+    this.showDetail();
+  }
+
+  /** Show the hovered kind's line and description, or else the marked one's,
+   *  or hide the strip. Hovering never scrolls the text. */
+  private showDetail(): void {
+    const kind = this.hovered >= 0 ? this.hovered : this.markedKind();
+    const k = this.kindLines[kind];
+    const text = k === undefined ? undefined : this.index?.lines[k.line];
+    if (k === undefined || text === undefined) {
+      this.shown = -1;
+      this.detail.hidden = true;
+      return;
+    }
+    if (kind === this.shown && !this.detail.hidden) return;
+    this.shown = kind;
+    // The line as the text writes it, without its indent, and without the
+    // `{` that opens a record or row, whose `}` the strip does not show.
+    const line = text.trim().replace(/\s*\{$/, "");
+    this.detailLine.replaceChildren(
+      ...tokenizeLine(line, "kind").map((seg) => {
+        if (seg.cls === "") return document.createTextNode(seg.text);
+        const span = document.createElement("span");
+        span.className = `tp-${seg.cls}`;
+        span.textContent = seg.text;
+        return span;
+      }),
+    );
+    const about = this.doc.traceKind(k.kind)?.about ?? "";
+    this.detailAbout.textContent = about;
+    this.detailAbout.hidden = about === "";
+    this.detail.hidden = false;
+    this.place();
+  }
+
+  /** Keep the strip off the scroller's scrollbars, and keep enough space
+   *  below the text to scroll its last line above the strip. */
+  private place(): void {
+    const s = this.scroller;
+    this.detail.style.bottom = `${s.offsetHeight - s.clientHeight}px`;
+    this.detail.style.right = `${s.offsetWidth - s.clientWidth}px`;
+    const need = this.detailHeight();
+    if (need > this.spare) {
+      this.spare = need;
+      this.body.style.paddingBottom = `${need}px`;
+    }
+  }
+
+  /** The strip's height in pixels, 0 while it is hidden. */
+  private detailHeight(): number {
+    return this.detail.hidden ? 0 : this.detail.offsetHeight;
   }
 }
