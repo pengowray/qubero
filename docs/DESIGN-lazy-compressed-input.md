@@ -2267,7 +2267,8 @@ code differs from "Joined streams":
   all at once, so each read of it would ask for the same chunks for ever.
 - **The walk.** The walk does not read a stored part that has a handle. It
   still reads and decodes each packed part decoded whole, to check its
-  length (see "Open questions"). After the decode it drops the copy of the
+  length (see "Open questions"; since "Faster opening of joined streams" it
+  no longer decodes them). After the decode it drops the copy of the
   part's run when a handle reaches the run, and keeps the copy otherwise.
   The walk now refuses as `too-large` a packed run decoded whole that is
   longer than `CAP_BYTES` (64 MiB), as `unpack_run` refuses one. Before part
@@ -2504,6 +2505,13 @@ refused. Nothing after it moves, since the stream was laid out from the
 lengths the file gives: a part of the wrong length never shifts the bytes
 after it, and its own bytes are never shown as bytes.
 
+One kind of part is still decoded before the stream opens: one the file
+says unpacks to nothing. It gives the stream no bytes, so no read lands on
+it, and a block whose trailer says 0 while it holds data would otherwise
+lose that data without a word. The walk decodes it and refuses the stream
+as failed when it unpacks to anything, as it refused every bad part before.
+A BGZF file's end block is such a part, 28 bytes, and normally the only one.
+
 How the reader is told, by each path that reads a tab's bytes:
 
 - `Joined::read` reads past a part in trouble. It fills that part's bytes
@@ -2557,9 +2565,11 @@ What did not change:
 - A packed part that no handle reaches is still copied by the walk, and the
   copy is not decoded. A part read through a handle is charged one element,
   as a stored part is, and `probe_parts` skips it, so the walk asks for no
-  chunk of it. In the browser the open waits only for the chunks that hold
-  the blocks' headers and trailers, and since the walk reads no run, no
-  "pending" reply says how far unpacking has got.
+  chunk of it, unless it is a part that unpacks to nothing, which the walk
+  reads. In the browser the open waits only for the chunks that hold the
+  blocks' headers and trailers, and the end block's run, which is in the
+  last chunk those reads loaded; no "pending" reply said how far unpacking
+  had got in the test that checks this.
 
 **Why this, and not the alternatives.**
 
@@ -2573,7 +2583,8 @@ What did not change:
   the check and the failure.
 - Check only the parts under a read. This is the one built: a read unpacks
   the part anyway, so the check costs one length comparison per part, and
-  nothing when the stream opens.
+  nothing when the stream opens but the decode of the parts that unpack to
+  nothing.
 - A faster inflater for the check, such as `miniz_oxide`, at about a fifth of
   the time. The bytes a reader sees would then come from one decoder and the
   check from another, which `codec::decode` exists to avoid, and the open
@@ -2637,11 +2648,14 @@ do".
 **Tests.**
 
 - `eval/tests/resident.rs`:
-  `opening_a_joined_stream_of_many_blocks_unpacks_none_of_them` counts
+  `opening_a_joined_stream_of_many_blocks_unpacks_only_the_end_block` counts
   decodes, through a counter in `codec::decode_traced` that every deflate
   decode passes, while a stream of 100 blocks opens from the store and from
-  copies: none, where the old walk made 101. A read of one block then makes
-  one, and a read of it again none.
+  copies: one, the end block's, where the old walk made 101. A read of one
+  block then makes one, and a read of it again none.
+  `a_bgzf_block_whose_trailer_says_it_unpacks_to_nothing_refuses_the_stream`
+  sets block 50's trailer to 0: the stream is refused as failed, and the
+  same file unspoiled opens.
   `a_bgzf_block_that_lies_about_its_length_or_is_damaged_fails_where_it_is_read`
   spoils block 50 of 100 with a trailer one byte long and, separately, with a
   deflate block type that does not exist. The stream opens; a read across
@@ -2795,8 +2809,10 @@ do".
   why, a tab's own reading fails with those words, and the hex view shows
   the bytes as `??` with the words on hover. A part of the wrong length never
   shifts the bytes after it, since the stream is laid out from the lengths
-  the file gives. A stream held whole still refuses a bad part when it
-  opens. See "Faster opening of joined streams".
+  the file gives. A part the file says unpacks to nothing, which no read
+  reaches, is still checked when the stream opens, and a stream held whole
+  still refuses a bad part when it opens. See "Faster opening of joined
+  streams".
 - Should gathering report a percentage, and with what string?
 
 ## What was checked

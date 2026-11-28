@@ -954,7 +954,10 @@ impl Evaluator {
     /// every part here was most of the time a large BAM took to open, a
     /// whole inflate of the stream before its tab could show a byte. See
     /// "Faster opening of joined streams" in
-    /// `docs/DESIGN-lazy-compressed-input.md`.
+    /// `docs/DESIGN-lazy-compressed-input.md`. The exception is a part the
+    /// file says unpacks to nothing, which no read reaches: that one is
+    /// decoded here, and refuses the stream as failed when it unpacks to
+    /// anything.
     fn join_part_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize, walk: &mut JoinWalk) -> R<Result<u64, Refusal>> {
         let part = &stitch.parts[i];
         let (space, at_bits, run_bits) = part_run(part);
@@ -985,10 +988,27 @@ impl Evaluator {
                         if run_bits / 8 > crate::codec::CAP_BYTES as u64 {
                             return Ok(Err(Refusal::TooLargeCopy));
                         }
+                        // A part the file says unpacks to nothing gives the
+                        // stream no bytes, so no read ever lands on it and
+                        // checks it. It is checked here, as every part was
+                        // before, and one that unpacks to something refuses
+                        // the stream, since those bytes would otherwise go
+                        // missing without a word. A BGZF file's end block is
+                        // one, 28 bytes.
+                        let empty = match part.len {
+                            0 => match self.gather_run(doc, space, at_bits, run_bits)? {
+                                Ok(run) => match crate::codec::decode(codec, &run) {
+                                    Ok(unpacked) if unpacked.is_empty() => Some(run),
+                                    _ => return Ok(Err(Refusal::Failed)),
+                                },
+                                Err(why) => return Ok(Err(why)),
+                            },
+                            _ => None,
+                        };
                         match self.joined_input(doc, part) {
                             // Nothing of it is read until the stream is.
                             Some(input) => (JoinedBytes::Packed { input, codec }, 1),
-                            None => match self.gather_run(doc, space, at_bits, run_bits)? {
+                            None => match empty.map_or_else(|| self.gather_run(doc, space, at_bits, run_bits), |run| Ok(Ok(run)))? {
                                 Ok(run) => (JoinedBytes::Packed { input: lazy::RunInput::held(Arc::new(run)), codec }, copy_cost(run_bits / 8)),
                                 Err(why) => return Ok(Err(why)),
                             },
@@ -1037,9 +1057,14 @@ impl Evaluator {
         let window = self.gather_window(doc);
         let mut reach = 0;
         let limits = self.spaces.lazy_limits();
-        let indexed = |p: &Part| matches!(p.source, PartSource::Packed { codec: Ok(codec), .. } if lazy::can_index(codec) && p.len > limits.whole as u64);
+        // A packed part read through its index, or one the file says unpacks
+        // to nothing, is read by the walk all the same.
+        let read_anyway = |p: &Part| match p.source {
+            PartSource::Packed { codec: Ok(codec), .. } => p.len == 0 || (lazy::can_index(codec) && p.len > limits.whole as u64),
+            PartSource::Packed { .. } | PartSource::Stored { .. } => false,
+        };
         for part in stitch.parts.iter().skip(from) {
-            if lazily && !indexed(part) && self.joined_input(doc, part).is_some() {
+            if lazily && !read_anyway(part) && self.joined_input(doc, part).is_some() {
                 continue;
             }
             let (space, at_bits, run_bits) = part_run(part);

@@ -1151,12 +1151,14 @@ fn joined_read_or_refused(joined: &crate::eval::Joined, d: &mut Document<ChunkSt
 
 /// Opening a joined stream of a hundred blocks as a document unpacks none
 /// of them, from the store or from copies: each block is as long as its
-/// trailer says, and is checked when a read first unpacks it. A read of one
-/// block then unpacks that block, and a read of it again unpacks nothing.
-/// Before, opening unpacked every block once to check its length, which is
-/// most of what a BAM of 300 MiB took to open.
+/// trailer says, and is checked when a read first unpacks it. Only the end
+/// block is unpacked, which says it unpacks to nothing, so that no read
+/// reaches it to check it. A read of one block then unpacks that block, and
+/// a read of it again unpacks nothing. Before, opening unpacked every block
+/// once to check its length, which is most of what a BAM of 300 MiB took to
+/// open.
 #[test]
-fn opening_a_joined_stream_of_many_blocks_unpacks_none_of_them() {
+fn opening_a_joined_stream_of_many_blocks_unpacks_only_the_end_block() {
     use crate::codec::decodes_on_this_thread;
     use crate::codec::lazy::Limits;
     let (pieces, bytes) = hundred_blocks();
@@ -1176,7 +1178,7 @@ fn opening_a_joined_stream_of_many_blocks_unpacks_none_of_them() {
             false => ev.open_space(&held, 0, &[1]),
         };
         let id = id.unwrap().unwrap_or_else(|| panic!("in the store: {in_store}: refused as {:?}", ev.open_refusal(&[1])));
-        assert_eq!(decodes_on_this_thread() - before, 0, "in the store: {in_store}");
+        assert_eq!(decodes_on_this_thread() - before, 1, "in the store: {in_store}");
         let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
         assert_eq!(joined.owned_bytes() > 0, !in_store);
         let at = pieces[..30].iter().map(Vec::len).sum::<usize>() + 10;
@@ -1186,6 +1188,31 @@ fn opening_a_joined_stream_of_many_blocks_unpacks_none_of_them() {
             joined.read(at as u64, &mut out).expect("reads");
             assert_eq!(out, text[at..at + 100]);
             assert_eq!(decodes_on_this_thread() - before, decoded, "in the store: {in_store}");
+        }
+    }
+}
+
+/// The same blocks, with block 50's trailer saying it unpacks to nothing. No
+/// read would ever reach a block that gives the stream no bytes, so its
+/// bytes would go missing without a word: opening the stream unpacks it, as
+/// every block was before, and refuses the stream as failed. The same file
+/// unspoiled opens: its end block unpacks to nothing, as its trailer says.
+#[test]
+fn a_bgzf_block_whose_trailer_says_it_unpacks_to_nothing_refuses_the_stream() {
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::bgzf_block;
+    let (pieces, bytes) = hundred_blocks();
+    let end = pieces[..=50].iter().map(|p| bgzf_block(p).len()).sum::<usize>();
+    let mut spoiled = bytes.clone();
+    spoiled[end - 4..end].copy_from_slice(&0u32.to_le_bytes());
+    for (file, opens) in [(&spoiled, false), (&bytes, true)] {
+        let mut d = stored(file, 16);
+        let mut ev = Evaluator::new(crate::formats::bgzf());
+        ev.set_stream_limits(Limits::default(), 16 << 10);
+        let id = fed(&mut d, file, |d| ev.open_space(d, 0, &[1])).unwrap();
+        assert_eq!(id.is_some(), opens, "refused as {:?}", ev.open_refusal(&[1]));
+        if !opens {
+            assert_eq!(ev.open_refusal(&[1]), Some(Refusal::Failed));
         }
     }
 }
@@ -1302,9 +1329,11 @@ fn a_tab_reading_its_own_fields_fails_where_a_member_will_not_unpack() {
 
 /// The same kind of blocks read as a .gz of many members, whose joined
 /// stream says only that it holds bytes, so opening it reads the stream's
-/// first 36 KiB to see what they are. The walk over the members' runs, more
-/// than the store keeps, has pushed those first chunks out of the store by
-/// then, so opening the stream waits for them. The next call opens the
+/// first 36 KiB to see what they are. The walk over the members' headers and
+/// trailers, spread over more than the store keeps, has pushed those first
+/// chunks out of the store by then, so opening the stream waits for them.
+/// (Before the members were checked when first read, the walk that joined
+/// them read every member's run as well.) The next call opens the
 /// stream the walk made. Joining it again, from the first member, would push
 /// the first chunks out again before they are read, and so on for ever.
 #[test]
