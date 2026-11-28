@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { masked, reaches, stretchAt, unreadableError } from "../src/unreadable.ts";
+import { byteHex, masked, reaches, settled, stretchAt, unreadableError } from "../src/unreadable.ts";
 import { hexMarked } from "../src/hexcell.ts";
 import { STRINGSVIEW, TEXTVIEW } from "../src/strings.ts";
 
@@ -34,6 +34,17 @@ test("the byte dump writes no byte of a stretch as the zero the read gave", () =
   assert.equal(hexMarked(bytes, 98, null), "41 42 00 00 43");
   assert.deepEqual([...masked(bytes, 98, { at: 100, len: 2 }, 0x20)], [0x41, 0x42, 0x20, 0x20, 0x43]);
   assert.equal(masked(bytes, 98, null, 0x20), bytes);
+});
+
+test("the report writes each byte as its digits, ?? where it cannot be made, and ·· while it loads", () => {
+  const bytes = new Uint8Array([0x41, 0, 0x42]);
+  const lost = { bytes, complete: false, unreadable: { at: 11, len: 1, why: bad.why } };
+  assert.deepEqual([10, 11, 12].map((at) => byteHex(lost, 10, at)), ["41", "??", "42"]);
+  assert.deepEqual([10, 11].map((at) => byteHex({ bytes, complete: false }, 10, at)), ["··", "··"]);
+  assert.equal(byteHex({ bytes, complete: true, unreadable: null }, 10, 12), "42");
+  // A read short only for bytes that cannot be made waits for nothing.
+  assert.equal(settled(lost), true);
+  assert.equal(settled({ complete: false }), false);
 });
 
 test("a read whose bytes cannot be made is opened as an error naming the part", () => {

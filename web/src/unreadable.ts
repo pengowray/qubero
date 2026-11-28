@@ -23,6 +23,22 @@ export function masked(bytes: Uint8Array, at: number, u: { readonly at: number; 
   return bytes.map((b, i) => (reaches(u, at + i, 1) ? fill : b));
 }
 
+/** How a view that writes bytes as hex writes byte `at` of `read`, a read
+ *  that started at byte `from`: its two digits, `??` inside a stretch that
+ *  cannot be made, or `··` while the read is still waiting for the file. The
+ *  bytes of a read with a stretch that cannot be made are real outside it. */
+export function byteHex(read: { readonly bytes: Uint8Array; readonly complete: boolean; readonly unreadable?: Unreadable | null }, from: number, at: number): string {
+  if (reaches(read.unreadable, at, 1)) return "??";
+  if (!read.complete && read.unreadable == null) return "··";
+  return (read.bytes[at - from] ?? 0).toString(16).padStart(2, "0");
+}
+
+/** Whether `read` is as read as it will get: complete, or short only for
+ *  bytes that cannot be made, which no wait brings. */
+export function settled(read: { readonly complete: boolean; readonly unreadable?: Unreadable | null }): boolean {
+  return read.complete || read.unreadable != null;
+}
+
 /** The error a view gives for a read whose bytes cannot be made, or null for
  *  one that read. `why` names the part: `blocks[2].compressed unpacks to
  *  65280 bytes, not the 65281 the file says`. */

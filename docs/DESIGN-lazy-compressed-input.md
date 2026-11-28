@@ -2513,22 +2513,29 @@ they unpack to another length, as every bad part did before:
   read lands on it, and a block whose trailer says 0 while it holds data
   would otherwise lose that data without a word. A BGZF file's end block is
   such a part, 28 bytes, and normally the only one.
-- A deflate, zlib or gzip part the file says unpacks to more than its run
-  could: 1,032 bytes for each byte of the run, a copy of 258 bytes in two
-  bits. A trailer claiming more is a lie the walk catches for one decode.
+- One the file says unpacks to more than it could. No part decoded whole
+  unpacks to more than 64 MiB (`CAP_BYTES`), whatever its codec, and a
+  deflate, zlib or gzip run to more than 1,032 bytes for each of its bytes,
+  a copy of 258 bytes in two bits. A claim past either is a lie the walk
+  catches for one decode.
 
-**How large a trailer's claim can make a stream.** A part claiming more than
-64 MiB (`Limits::whole`) is read through an index pass in the walk, as
-before this change, which finds its real length; so is one claiming the
-most a 32-bit ISIZE can say, past the 1 GiB (`LAZY_CAP_BYTES`) a part read
-through an index may be, and the stream is refused for it. Under 64 MiB, a
-claim past 1,032 times the run is decoded by the walk and refused. So a
-stream read a part at a time is never longer than its runs can fill, the
-same bound its real bytes have; no limit on a joined stream's total length
-was added or removed. No buffer is sized by a claim: a part is decoded into
-what it unpacks to, at most 64 MiB (`CAP_BYTES`), and compared with the
-claim after. The test is
-`a_bgzf_block_claiming_a_huge_size_refuses_the_stream_or_its_reads`.
+**How large a trailer's claim can make a stream.** A part of a codec with an
+index (deflate, zlib, gzip, zstd, xz) claiming more than 64 MiB
+(`Limits::whole`) is read through an index pass in the walk, as before this
+change, which finds its real length; so is one claiming the most a 32-bit
+ISIZE can say, past the 1 GiB (`LAZY_CAP_BYTES`) a part read through an
+index may be, and the stream is refused for it. A part of any other codec
+claiming more than 64 MiB, and a deflate part claiming more than 1,032
+times its run, is decoded by the walk and refused. So each part decoded
+whole adds at most 64 MiB to the stream, and a deflate part at most what its
+run can fill. A zstd or xz part claiming up to 64 MiB is not checked until
+it is read, so a stream of such parts can be laid out as long as 64 MiB a
+part. No limit on a joined stream's total length was added or removed. No
+buffer is sized by a claim: a part is decoded into what it unpacks to, at
+most 64 MiB, and compared with the claim after. The tests are
+`a_bgzf_block_claiming_a_huge_size_refuses_the_stream_or_its_reads` and
+`a_part_of_a_codec_with_no_index_claiming_more_than_a_part_can_be_refuses_the_stream`,
+which failed before the 64 MiB check: the stream opened 100 MiB long.
 
 How the reader is told, by each path that reads a tab's bytes:
 
@@ -2603,7 +2610,11 @@ How the reader is told, by each path that reads a tab's bytes:
     selection's text readings and its number;
   - the strings view adds `{size} not searched: {reason}` to its status line;
   - the report's byte dump and the listing's byte strips write the bytes as
-    `??` (`hexMarked`);
+    `??` (`hexMarked`), and so do the report's first bytes of a stretch, its
+    zoomable byte map and its hover dump (`byteHex`), which no longer wait
+    for those bytes as if they were loading;
+  - the document's own sniff of what template fits looks only at the bytes
+    before them, as the core's `template_for` does;
   - the minimap says the reason where its progress would be, and keeps the
     classes it found before the part; the report's ledger keeps those and
     counts the rest as unread;
@@ -2612,8 +2623,23 @@ How the reader is told, by each path that reads a tab's bytes:
     report's plain-text sniff, the JPEG cards and the outline's metadata
     read nothing from them.
 
-  Saving reads the file, and hashing reads the file's own blob, so neither
-  ever reads a tab. The arithmetic is in `web/src/unreadable.ts`.
+  The other callers of `read`, `readBits` and `readLoaded` (the listing's
+  value cells, the diagram pieces in `viz/`, the gap check, the stride
+  raster, the identify and signature sniffs, the dump scan) already draw or
+  decide nothing from a read that is not `complete`, which a read with
+  unreadable bytes is not. Saving reads the file, and hashing reads the
+  file's own blob, so neither ever reads a tab. The arithmetic is in
+  `web/src/unreadable.ts`.
+- The core's own readers that read a document directly, outside `read_in`,
+  were traced: the overview scan, the strings scan, the text window and
+  index, search, the HDF5, ROOT, ELF hardening, WebAssembly and NE readers
+  are reached only through the calls above. `sqlite_overflow::read`, which a
+  SQLite row spread over overflow pages is gathered by, now gives the row's
+  problem as `Row not assembled: {reason}.` instead of a row made of zeroes;
+  `Gathered` passes the new `Source` methods on, mapped through its extents.
+  `uf2::image` has no caller outside its tests. `textnum`'s `Window` and the
+  hex dump reader's `DumpSource` hold bytes of their own and wrap no source.
+  `save.rs` reads the file.
 
 What did not change:
 

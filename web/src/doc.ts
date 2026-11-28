@@ -2940,7 +2940,11 @@ export class Doc {
     const n = Math.min(this.editor.sniff_window(), this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
-    const head = this.read(0, n).bytes;
+    // Bytes that cannot be made read as zeroes, which say nothing of what the
+    // document is: only the bytes before them are looked at, as the core does
+    // when it recognises a stream.
+    const front = this.read(0, n);
+    const head = front.unreadable ? front.bytes.subarray(0, Math.max(0, front.unreadable.at)) : front.bytes;
     // An OME-Zarr store is a directory, so its identifying record is JSON
     // metadata rather than a byte signature.
     if (isOmeZarrMetadata(this.name, head)) return "omezarr";

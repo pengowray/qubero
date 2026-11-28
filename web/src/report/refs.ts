@@ -12,6 +12,7 @@ import type { Doc } from "../doc.ts";
 import { formatOffset, getAddressBase } from "../format.ts";
 import { bitsText, RV } from "./text.ts";
 import type { Target } from "./section.ts";
+import { byteHex, settled } from "../unreadable.ts";
 
 /** Mark an element as pointing at a place in the file. */
 export function pointAt<E extends Element>(e: E, t: Target, label?: string): E {
@@ -69,11 +70,11 @@ export function dumpRows(doc: Doc, startByte: number, endByte: number, rows: num
         text += " ";
       } else {
         const v = read.bytes[at - first] ?? 0;
-        cell.textContent = read.complete ? v.toString(16).padStart(2, "0") : "··";
+        cell.textContent = byteHex(read, first, at);
         const inside = at >= startByte && at < endByte;
         cell.className = inside ? "rv-dump-in" : "rv-dump-out";
         if (inside && v === 0) cell.classList.add("rv-dump-zero");
-        text += read.complete && v >= 0x20 && v < 0x7f ? String.fromCharCode(v) : "·";
+        text += settled(read) && byteHex(read, first, at) !== "??" && v >= 0x20 && v < 0x7f ? String.fromCharCode(v) : "·";
       }
       line.append(cell, i === 7 ? "  " : " ");
     }
@@ -91,7 +92,7 @@ export function dumpRows(doc: Doc, startByte: number, endByte: number, rows: num
     more.textContent = `… ${bitsText((endByte - Math.max(startByte, wanted)) * 8)} more`;
     pre.append(more);
   }
-  return { el: pre, complete: read.complete };
+  return { el: pre, complete: settled(read) };
 }
 
 /** What the hover over a reference says: the name, where, how much, and the

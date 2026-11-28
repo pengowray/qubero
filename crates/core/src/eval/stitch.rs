@@ -186,11 +186,13 @@ fn unpack_cost(len: u64) -> u64 {
 ///   no read lands on it, and a part whose trailer says 0 while it holds data
 ///   would lose that data without a word. A BGZF file's end block is one, 28
 ///   bytes.
-/// - One the file says unpacks to more than any run of its length could. A
-///   deflate run unpacks to at most 1,032 bytes for each of its bytes, a
-///   copy of 258 bytes in two bits. A part claiming more would make the
-///   stream longer than its runs can fill, and the walk catches that lie for
-///   the cost of one decode. Other codecs have no such bound here.
+/// - One the file says unpacks to more than it could. No part decoded whole
+///   unpacks to more than 64 MiB (`CAP_BYTES`), whatever its codec: a codec
+///   with an index reads a larger part through one, and one without refuses
+///   it. And a deflate run unpacks to at most 1,032 bytes for each of its
+///   bytes, a copy of 258 bytes in two bits. A part claiming more would make
+///   the stream longer than its runs can fill, and the walk catches that lie
+///   for the cost of one decode.
 ///
 /// Every other part decoded whole is checked by its first read.
 fn checked_when_joined(p: &Part, codec: Codec, run_bytes: u64) -> bool {
@@ -198,7 +200,7 @@ fn checked_when_joined(p: &Part, codec: Codec, run_bytes: u64) -> bool {
         Codec::Deflate | Codec::Zlib | Codec::Gzip => run_bytes.saturating_add(1).saturating_mul(1032),
         _ => u64::MAX,
     };
-    p.len == 0 || p.len > most
+    p.len == 0 || p.len > most.min(crate::codec::CAP_BYTES as u64)
 }
 
 /// Where part `p`'s run is: the space, the bit it starts at there, and how
@@ -2488,6 +2490,35 @@ mod tests {
         match e.read_in(&d, space, 0, 8) {
             Err(EvalError::Failed(why)) => assert_eq!(why, "member.run is too large to unpack (over 64 MiB unpacked)"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A part of a codec with no index, Snappy, whose member claims 100 MiB
+    /// while it holds three bytes. Opened as a document read a part at a
+    /// time, the walk decodes it, since no part decoded whole comes to more
+    /// than 64 MiB, and the stream is refused, rather than opening a tab
+    /// 100 MiB long. A claim of 3, the truth, opens.
+    #[test]
+    fn a_part_of_a_codec_with_no_index_claiming_more_than_a_part_can_be_refuses_the_stream() {
+        use crate::codec::{Codec, Refusal};
+        use crate::source::ArcSource;
+        for (claimed, opens) in [(100u32 << 20, false), (3, true)] {
+            let mut file = claimed.to_be_bytes().to_vec();
+            file.extend_from_slice(&[0x03, 0x08, b'a', b'b', b'c']);
+            let member = T::structure(
+                "Member",
+                vec![("claimed", T::u32(Big)), ("run", T::decoded(E::Remaining, Codec::Snappy, T::bytes(E::Remaining)))],
+            );
+            let joined = T::stitched(vec![Step::field("member"), Step::field("run")], Some(E::field("claimed")), None, T::bytes(E::Remaining));
+            let template = Template::new("snappy-part", T::structure("File", vec![("member", member), ("joined", joined)]));
+            let d = Document::new(ArcSource(std::sync::Arc::new(file)));
+            let mut e = Evaluator::new(template);
+            e.spaces.set_whole_cap(2);
+            let id = e.open_space(&d, 0, &[1]).unwrap();
+            assert_eq!(id.is_some(), opens, "a claim of {claimed}: refused as {:?}", e.open_refusal(&[1]));
+            if !opens {
+                assert_eq!(e.open_refusal(&[1]), Some(Refusal::Failed));
+            }
         }
     }
 

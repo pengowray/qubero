@@ -22,6 +22,7 @@ import { WAIT, type ReportCtx } from "./section.ts";
 import { hideTip, tipAt } from "./tip.ts";
 import { wheelZoom } from "./wheel.ts";
 import { bitsText, RV, shareOfFile } from "./text.ts";
+import { byteHex, settled } from "../unreadable.ts";
 
 export type MapPart = {
   readonly startBit: number;
@@ -242,13 +243,15 @@ export class ZoomMap {
     for (let o = a; o < b; o++) {
       const v = r.bytes[o - a] ?? 0;
       const x = X(o);
-      const cls = !r.complete ? -1 : classOf(v);
+      // A byte that cannot be made, or one still being read, has no class.
+      const hex = byteHex(r, a, o);
+      const cls = hex === "??" || hex === "··" ? -1 : classOf(v);
       out.push(svgEl("rect", { x: String(x), y: String(STRIP_Y), width: String(Math.max(1, ppb - 1)), height: String(BYTE_H), class: "rv-map-byte", fill: cls < 0 ? "none" : byteClassColor(cls) }));
       const t = svgEl("text", { x: String(x + ppb / 2), y: String(STRIP_Y + 14), class: "rv-map-hex", "text-anchor": "middle" });
-      t.textContent = r.complete ? v.toString(16).padStart(2, "0") : "··";
+      t.textContent = hex;
       out.push(t);
     }
-    return r.complete;
+    return settled(r);
   }
 
   /** The window read and classed per pixel column: a column is zero or text
