@@ -43,7 +43,7 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut at = 0usize;
     let declared = varint(data, &mut at)?;
     if declared > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     b.push(0, 0, StepKind::Header(StepField::UnpackedSize, declared.min(u32::MAX as u64) as u32));
     let mut out: Vec<u8> = Vec::with_capacity(declared as usize);
@@ -84,7 +84,7 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                     at += width;
                     let len = n.checked_add(1).ok_or(Refusal::Failed)?;
                     if len > CAP_BYTES as u64 {
-                        return Err(Refusal::TooLarge);
+                        return Err(Refusal::TooLargeOutput);
                     }
                     if !coarse {
                         b.push(start as u64 * 8, out.len() as u64, StepKind::Header(StepField::LengthExtra, len as u32));
@@ -95,7 +95,7 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                     return Err(Refusal::Failed);
                 }
                 if out.len() + len > CAP_BYTES {
-                    return Err(Refusal::TooLarge);
+                    return Err(Refusal::TooLargeOutput);
                 }
                 if !coarse {
                     b.push(at as u64 * 8, out.len() as u64, StepKind::Stored);
@@ -134,7 +134,7 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                     return Err(Refusal::Failed);
                 }
                 if out.len() + len as usize > CAP_BYTES {
-                    return Err(Refusal::TooLarge);
+                    return Err(Refusal::TooLargeOutput);
                 }
                 let from = out.len() - offset as usize;
                 let was = out.len();

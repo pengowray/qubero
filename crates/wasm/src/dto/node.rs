@@ -77,8 +77,10 @@ pub(crate) struct NodeDto {
     /// than the file has no place in the hex view, and its offset is drawn as
     /// an offset within its stream.
     pub(crate) space: f64,
-    /// For a compressed run that would not open: "too-large", "failed" or
-    /// "unaligned". Null for every other field.
+    /// For a compressed run that would not open, why not, as
+    /// `Refusal::as_str` words it: "too-large-copy", "failed", "unaligned"
+    /// and the rest, which `web/src/refusaltags.ts` lists. Null for every
+    /// other field.
     pub(crate) refused: Option<String>,
     /// True for a compressed run. One that opened can be opened as a document
     /// of its own, which is what the Open unpacked button does.

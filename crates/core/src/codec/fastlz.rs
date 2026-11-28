@@ -99,7 +99,7 @@ fn run(data: &[u8], level: Level) -> Result<(Vec<u8>, Trace), Refusal> {
                             break;
                         }
                         if len as usize > CAP_BYTES {
-                            return Err(Refusal::TooLarge);
+                            return Err(Refusal::TooLargeOutput);
                         }
                     },
                 }
@@ -131,7 +131,7 @@ fn run(data: &[u8], level: Level) -> Result<(Vec<u8>, Trace), Refusal> {
                 return Err(Refusal::Failed);
             }
             if out.len() + len as usize > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             let from = out.len() - dist as usize;
             let was = out.len();
@@ -152,7 +152,7 @@ fn run(data: &[u8], level: Level) -> Result<(Vec<u8>, Trace), Refusal> {
                 return Err(Refusal::Failed);
             }
             if out.len() + n > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             if !coarse {
                 b.push(at as u64 * 8, out.len() as u64, StepKind::Stored);

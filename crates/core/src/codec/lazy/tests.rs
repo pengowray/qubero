@@ -966,7 +966,7 @@ fn a_zstd_frame_past_the_span_limit_is_refused() {
     wide.extend_from_slice(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, (40 - 10) << 3]);
     wide.extend_from_slice(&(1u32 | 4 << 3).to_le_bytes()[..3]);
     wide.extend_from_slice(b"tiny");
-    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(wide), small()).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(wide), small()).err(), Some(Refusal::TooLargeWindow));
     let many = zstd_of(&data, 30_000, true);
     let limits = Limits { lazy: 200_000, ..small() };
     assert_eq!(decode_or_index_with(Codec::Zstd, Arc::new(many), limits).err(), Some(Refusal::TooLargeLazy));
@@ -2744,7 +2744,7 @@ fn a_pass_reads_in_windows_only_from_a_store_with_room_for_two() {
 /// a run of exactly that length is indexed from a store, and one a byte
 /// longer is refused as `TooLargeInput` when the pass is made, before any of
 /// it is read. A pass that reads a copy is held to `Limits::copy_input`
-/// instead, and says `TooLarge` past it, whatever `Limits::input` is; an xz
+/// instead, and says `TooLargeCopy` past it, whatever `Limits::input` is; an xz
 /// stream's layout always reads a copy. The default limits are 512 MiB and
 /// 64 MiB.
 #[test]
@@ -2768,14 +2768,14 @@ fn a_pass_is_held_to_the_limit_of_the_way_it_reads_its_run() {
 
         let copy = Arc::new(packed.clone());
         let short = Limits { copy_input: len - 1, ..limits };
-        assert_eq!(Indexing::from_copy(codec, copy.clone(), input.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
-        assert_eq!(Indexing::new(codec, copy.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
-        assert_eq!(decode_or_index_with(codec, copy.clone(), short).err(), Some(Refusal::TooLarge), "{codec:?}");
+        assert_eq!(Indexing::from_copy(codec, copy.clone(), input.clone(), short).err(), Some(Refusal::TooLargeCopy), "{codec:?}");
+        assert_eq!(Indexing::new(codec, copy.clone(), short).err(), Some(Refusal::TooLargeCopy), "{codec:?}");
+        assert_eq!(decode_or_index_with(codec, copy.clone(), short).err(), Some(Refusal::TooLargeCopy), "{codec:?}");
         assert!(Indexing::from_copy(codec, copy.clone(), input, past).is_ok(), "{codec:?}");
         assert!(matches!(decode_or_index_with(codec, copy, past), Ok(Decoded::Indexed(_))), "{codec:?}");
     }
     let xz = Arc::new(xz_pieces(&data, 60_000, Some(20_000)));
     let short = Limits { span: 1 << 20, copy_input: xz.len() - 1, input: 0, ..small() };
-    assert_eq!(decode_or_index_with(Codec::Xz, xz.clone(), short).err(), Some(Refusal::TooLarge));
+    assert_eq!(decode_or_index_with(Codec::Xz, xz.clone(), short).err(), Some(Refusal::TooLargeCopy));
     assert!(matches!(decode_or_index_with(Codec::Xz, xz, Limits { copy_input: usize::MAX, ..short }), Ok(Decoded::Indexed(_))));
 }

@@ -104,7 +104,7 @@ fn lzma1_over(
     mut b: TraceBuilder,
 ) -> Result<(Vec<u8>, Trace), Refusal> {
     if unpacked.is_some_and(|n| n > CAP_BYTES as u64) {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut out = Vec::new();
     stream(data, 0, data.len(), props, dict, unpacked.map(|n| n as usize), &mut out, &mut b)?;
@@ -376,7 +376,7 @@ impl Lzma2 {
             // decoder's state alone; a chunk that reset the dictionary has
             // already said the next packed one must carry its properties.
             if out.len() + h.unpacked > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             b.open_block(at as u64 * 8, out.len() as u64);
             b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, h.unpacked as u32));
@@ -397,7 +397,7 @@ impl Lzma2 {
             None => {}
         }
         if out.len() + h.unpacked > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let mut rc = Range::start(window.bytes(), window.start(), h.from, h.end)?;
 

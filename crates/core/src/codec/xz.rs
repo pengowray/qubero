@@ -136,7 +136,7 @@ pub fn stream(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             }
             // Past the cap is past the cap whichever decoder is asked, so
             // there is nothing to fall back to.
-            Err(Refusal::TooLarge) => return Err(Refusal::TooLarge),
+            Err(Refusal::TooLargeOutput) => return Err(Refusal::TooLargeOutput),
             Err(_) => {}
         }
     }
@@ -159,7 +159,7 @@ pub fn bytes(data: &[u8]) -> Result<Vec<u8>, Refusal> {
     if let Some(l) = layout(data).filter(|l| l.plain) {
         match unpack(data, &l, 0) {
             Ok((out, _)) => return Ok(out),
-            Err(Refusal::TooLarge) => return Err(Refusal::TooLarge),
+            Err(Refusal::TooLargeOutput) => return Err(Refusal::TooLargeOutput),
             Err(_) => {}
         }
     }
@@ -176,7 +176,7 @@ fn borrowed(data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let mut input = std::io::BufReader::new(data);
     let mut out = Vec::new();
     match lzma_rs::xz_decompress(&mut input, &mut out) {
-        Ok(()) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(()) if out.len() > CAP_BYTES => Err(Refusal::TooLargeOutput),
         Ok(()) => Ok(out),
         Err(_) => Err(Refusal::Failed),
     }
@@ -204,7 +204,7 @@ fn shape(plan: Option<&Layout>, len: usize, total_out: usize) -> Trace {
 /// come to what the records add up to.
 fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
     if l.total_out > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut b = TraceBuilder::default();
     // The stream header, which the next step's start gives the width of.

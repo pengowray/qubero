@@ -16,7 +16,7 @@ import { docPlaces } from "./tableplace.ts";
 import type { CodecKind, DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { tablePlan } from "./tableplan.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, refusedText, refusedTitle, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow, TABLE } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -1119,9 +1119,9 @@ export class Inspector {
     }
     // A compressed run nothing could open says so where its value would be.
     if (n.refused !== null) {
-      const why = el("span", "", DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER);
-      const limit = DECODED_REFUSED_TITLE[n.refused];
-      if (limit !== undefined) why.title = limit(formatLimit(RESIDENT_BYTES));
+      const why = el("span", "", refusedText(n.refused));
+      const limit = refusedTitle(n.refused, formatLimit(RESIDENT_BYTES));
+      if (limit !== undefined) why.title = limit;
       this.detail.append(" · ", why);
     }
     // Whether this field is one of a compressed block's codes decides three

@@ -32,7 +32,7 @@ pub(super) fn index_xz(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) ->
         return whole(Codec::Xz, &packed);
     };
     if !l.plain {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     if l.blocks.iter().any(|b| b.unpacked > limits.span as u64) {
         return Err(Refusal::TooLargeUnit(SpanUnit::XzBlock));

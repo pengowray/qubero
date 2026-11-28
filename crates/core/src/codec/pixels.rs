@@ -49,7 +49,7 @@ pub fn unfilter(data: &[u8], stride: u32, bpp: u8) -> Result<(Vec<u8>, Trace), R
     }
     let rows = data.len() / (stride + 1);
     if rows * stride > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut b = TraceBuilder::default();
     let mut out: Vec<u8> = Vec::with_capacity(rows * stride);
@@ -89,7 +89,7 @@ pub fn low_bits_argb(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     }
     let count = data.len() / 4;
     if count > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut b = TraceBuilder::default();
     let mut out: Vec<u8> = Vec::with_capacity(count);
@@ -127,7 +127,7 @@ pub fn low_bits_rgba11(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     }
     let count = data.len() / 4;
     if count * 11 / 8 > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut b = TraceBuilder::default();
     let mut out: Vec<u8> = Vec::with_capacity(count * 11 / 8);

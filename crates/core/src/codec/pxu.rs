@@ -152,7 +152,7 @@ pub fn pxu(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let count = (width as u64) * (height as u64);
     let bytes_out = count * width_bytes as u64;
     if bytes_out > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let bytes_out = bytes_out as usize;
 

@@ -54,7 +54,7 @@ pub fn brotli(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     // that does not.
     let mut reader = brotli_decompressor::Decompressor::new(data, 4096);
     match reader.by_ref().take(super::CAP_BYTES as u64 + 1).read_to_end(&mut out) {
-        Ok(_) if out.len() > super::CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(_) if out.len() > super::CAP_BYTES => Err(Refusal::TooLargeOutput),
         Ok(_) => {
             let n = out.len();
             Ok((out, whole(data.len(), n)))
@@ -68,8 +68,8 @@ pub fn brotli(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 ///
 /// The decoder keeps a frame's last window of output until the frame ends, and
 /// lets go of nothing before then, so the window is how much it may hold that
-/// nothing here has seen yet. A frame asking for more is refused as too large
-/// before any of it is decoded.
+/// nothing here has seen yet. A frame asking for more is refused, as
+/// [`Refusal::TooLargeWindow`], before any of it is decoded.
 const MAX_WINDOW: u64 = 128 << 20;
 
 /// A zstd run: the bytes, and a step per frame header and per block.
@@ -83,7 +83,7 @@ pub fn zstd(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::default();
     let end = zstd_walk(Window::whole(data), 0..data.len(), 0, cap, &mut b, &mut |bytes| {
         if out.len() + bytes.len() > cap as usize {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         out.extend_from_slice(bytes);
         Ok(())
@@ -172,8 +172,9 @@ pub(super) enum Walked {
 ///
 /// Bytes go to the sink as the decoder lets go of them, and every frame is
 /// announced before it is decoded, as a [`FrameAt`]. The skippable frames in
-/// front of a frame are counted as part of it. A frame that comes to more than `frame_cap`, or asks
-/// for a window larger than [`MAX_WINDOW`], is [`Refusal::TooLarge`]. A frame
+/// front of a frame are counted as part of it. A frame that comes to more
+/// than `frame_cap` is [`Refusal::TooLargeOutput`], one that asks for a
+/// window larger than [`MAX_WINDOW`] is [`Refusal::TooLargeWindow`], and one
 /// whose checksum does not match what it decoded is [`Refusal::Failed`].
 ///
 /// The decoder keeps the frame's window, the last bytes it may copy from, and
@@ -257,8 +258,8 @@ impl ZstdWalk {
     }
 
     /// Whether the walk was refused as too large because the frame it is in
-    /// came to more than its `frame_cap`, rather than because a frame asked
-    /// for a window larger than [`MAX_WINDOW`].
+    /// came to more than its `frame_cap`. The sink the frame's bytes go to
+    /// may say [`Refusal::TooLargeOutput`] for a cap of its own as well.
     pub(super) fn frame_too_large(&self) -> bool {
         self.frame.as_ref().is_some_and(|f| f.collected > self.frame_cap)
     }
@@ -393,7 +394,7 @@ impl ZstdWalk {
                 if let Some(bytes) = f.dec.collect().filter(|v| !v.is_empty()) {
                     f.collected += bytes.len() as u64;
                     if f.collected > self.frame_cap {
-                        return Err(Refusal::TooLarge);
+                        return Err(Refusal::TooLargeOutput);
                     }
                     sink(&bytes)?;
                 }
@@ -438,7 +439,7 @@ impl ZstdWalk {
         dec.init(&mut src).map_err(|_| Refusal::Failed)?;
         let window = window_size(frame, dec.content_size()).ok_or(Refusal::Failed)?;
         if window > MAX_WINDOW {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeWindow);
         }
         let read = dec.bytes_read_from_source() as usize;
         Ok(Frame { dec, at: self.at, read, collected: 0, next: Some(self.out), window, checksum })
@@ -550,6 +551,6 @@ mod tests {
     fn a_frame_asking_for_too_large_a_window_is_refused() {
         let mut huge = long_window_frame(b"tiny");
         huge[5] = (40 - 10) << 3;
-        assert_eq!(zstd(&huge).err(), Some(Refusal::TooLarge));
+        assert_eq!(zstd(&huge).err(), Some(Refusal::TooLargeWindow));
     }
 }

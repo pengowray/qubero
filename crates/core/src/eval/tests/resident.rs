@@ -317,7 +317,7 @@ fn a_joined_stream_whose_parts_add_up_to_more_than_the_store_opens() {
     let mut ev = Evaluator::new(paged(6));
     ev.spaces.set_whole_cap(5 * 1024);
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
-    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeCopy));
 }
 
 /// All of the joined stream `joined`, read in order `piece` bytes at a
@@ -928,7 +928,7 @@ fn three_passes_reading_windows_asked_for_by_turns_all_open() {
 /// `too-large-input` before anything is read: the store has nothing in it,
 /// and nothing is asked for. In a store with too little room for two
 /// windows, or in memory with no handle, the pass would read a copy, which
-/// is past the copy limit, so it is refused as `too-large`, again before
+/// is past the copy limit, so it is refused as `too-large-copy`, again before
 /// anything is read, whatever `Limits::input` is.
 #[test]
 fn a_run_is_held_to_the_limit_of_the_way_its_pass_reads_it() {
@@ -967,10 +967,10 @@ fn a_run_is_held_to_the_limit_of_the_way_its_pass_reads_it() {
     // Room for less than two windows of 8 KiB and the margin.
     let too_small = 2 * ((8 << 10) + 65_541) / CHUNK as usize - 4;
     let roomy = Limits { copy_input, input: 2 * len as u64, ..windowed_lazy() };
-    refused(&stored(&bytes, too_small), roomy, Refusal::TooLarge, "a copy, from a small store");
-    refused(&stored(&bytes, too_small), past_input, Refusal::TooLarge, "a copy past both limits");
+    refused(&stored(&bytes, too_small), roomy, Refusal::TooLargeCopy, "a copy, from a small store");
+    refused(&stored(&bytes, too_small), past_input, Refusal::TooLargeCopy, "a copy past both limits");
     let mut ev = reading(roomy);
-    assert_eq!(ev.node(&doc(&bytes), &[1]).unwrap().refused.as_deref(), Some("too-large"), "a copy, in memory");
+    assert_eq!(ev.node(&doc(&bytes), &[1]).unwrap().refused.as_deref(), Some("too-large-copy"), "a copy, in memory");
 }
 
 /// A .gz of one member, past the limit on a copy and several times longer
@@ -1031,7 +1031,7 @@ fn a_gzip_member_past_the_copy_limit_opens_as_a_joined_stream_through_its_handle
 
     let mut ev = reading(Limits { copy_input: 1 << 20, ..limits });
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None, "in memory");
-    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge), "in memory");
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeCopy), "in memory");
 }
 
 // ----- joined streams read through handles onto the store -----
@@ -1131,7 +1131,7 @@ fn a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles() {
     let mut ev = Evaluator::new(crate::formats::bgzf());
     ev.set_stream_limits(Limits::default(), whole_cap);
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
-    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeCopy));
 }
 
 /// The same kind of blocks read as a .gz of many members, whose joined
@@ -1224,5 +1224,5 @@ fn a_joined_stream_of_stored_pages_past_the_store_and_the_cap_opens_through_hand
     let mut ev = Evaluator::new(paged(pages));
     ev.set_stream_limits(Limits::default(), whole_cap);
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
-    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
+    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeCopy));
 }

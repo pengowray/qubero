@@ -7,7 +7,8 @@
 
 import type { CodecKind } from "../doc.ts";
 import { formatBytes, percentText } from "../format.ts";
-import { codecWords, DECODED_REFUSED, type CodecWords } from "../strings.ts";
+import { codecWords, DECODED_REFUSED, unknownRefusal, type CodecWords } from "../strings.ts";
+import { isRefusalTag } from "../refusaltags.ts";
 import type { ExtentCheck } from "./coredata.ts";
 import { durationText } from "../timetext.ts";
 
@@ -167,24 +168,42 @@ export const RV = {
   gapNonzero: (bytes: number): string => `${bytesText(bytes)} that no field describes`,
   gapZeros: (bytes: number): string => `${bytesText(bytes)} of zeros that no field describes`,
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
-  /** A finding's text for a stream left as bytes, by the core's refusal word.
-   *  `too-large-lazy` is a stream the core reads a piece at a time (deflate,
-   *  zlib, gzip, zstd or xz) that unpacks to more than 1 GiB,
-   *  `too-large-input` one that is over 512 MiB compressed, and
-   *  `too-large-zstd-frame` and `too-large-xz-block` one with a frame or
-   *  block that unpacks to more than 64 MiB. All read the same as
-   *  `too-large`. `too-much-at-once` is a stream with a part that a read
+  /** A finding's text for a stream left as bytes, by the core's refusal tag.
+   *  A stream too large says which size and which limit, in the words the
+   *  listing shows (`DECODED_REFUSED`): the size beside it on the finding is
+   *  its size in the file, and a reader can meet two limits for each size in
+   *  one report. `too-much-at-once` is a stream with a part that a read
    *  takes from the file whole and that is more than the editor keeps in
    *  memory at once, such as a zstd frame or an xz block over 16 MiB
-   *  compressed; it reads as `DECODED_REFUSED` words it. */
-  refused: (why: string): string =>
-    why === "too-large" || why === "too-large-lazy" || why === "too-large-input" || why === "too-large-zstd-frame" || why === "too-large-xz-block"
-      ? "Too large to unpack here"
-      : why === "too-much-at-once"
-        ? "Too large for the editor to keep in memory at once, so it was not unpacked"
-        : why === "unaligned"
-          ? "Does not start on a byte boundary, so it was not unpacked"
-          : "Did not unpack",
+   *  compressed. A tag this build does not know says "Did not unpack". */
+  refused: (why: string): string => {
+    if (!isRefusalTag(why)) return "Did not unpack";
+    switch (why) {
+      case "too-large-copy":
+      case "too-large-output":
+      case "too-large-lazy":
+      case "too-large-input":
+      case "too-large-zstd-frame":
+      case "too-large-xz-block":
+        return sentenceCase(DECODED_REFUSED[why]);
+      case "too-large-zstd-window":
+        return "Did not unpack: zstd window over 128 MiB";
+      case "too-much-at-once":
+        return "Too large for the editor to keep in memory at once, so it was not unpacked";
+      case "unaligned":
+        return "Does not start on a byte boundary, so it was not unpacked";
+      case "failed":
+      case "settings":
+      case "progressive":
+      case "arithmetic":
+      case "lossless":
+      case "hierarchical":
+      case "12-bit":
+        return "Did not unpack";
+      default:
+        return unknownRefusal(why);
+    }
+  },
   stored: "Stored",
 
   // Text inside a list of numbers. "List of numbers" throughout, for what
@@ -442,7 +461,7 @@ export const RV = {
    *  for its codec: `could not unscramble this stream`. No button follows:
    *  opening the stream in a tab would fail the same way. */
   streamFailedNote: (w: CodecWords, codec: string, refused: string | null): string => {
-    const why = refused === "failed" ? `the ${codec} decoder returned an error` : refused === null ? undefined : DECODED_REFUSED[refused];
+    const why = refused === "failed" ? `the ${codec} decoder returned an error` : refused !== null && isRefusalTag(refused) ? DECODED_REFUSED[refused] : undefined;
     return why === undefined ? `The report could not ${w.read} this stream.` : `The report could not ${w.read} this stream: ${why}.`;
   },
   moreStreams: (n: number): string => `${counted(n, "more stream")} not shown.`,
@@ -577,28 +596,81 @@ export const RV = {
   pngStripCaption: "Each mark is one scanline, lettered by its filter. Hover a mark for its row and size, and click it to show it in the listing.",
   pngStripCut: (shown: number, total: number): string => `Only the first ${shown.toLocaleString()} of ${counted(total, "scanline")} are shown.`,
   pngScanlinesUnread: "The scanlines could not be read",
-  /** Why the IDAT data did not inflate, by the core's refusal word. A zlib
-   *  stream is `too-large` when the compressed stream itself is past 64 MiB,
-   *  and `too-large-lazy` when it inflates to more than 1 GiB. A stream that
+  /** Why the IDAT data did not inflate, by the core's refusal tag. The zlib
+   *  stream is joined from the IDAT chunks, so its compressed bytes are read
+   *  into memory whole and it is `too-large-copy` past 64 MiB of them, and
+   *  `too-large-lazy` when it inflates to more than 1 GiB. A stream that
    *  inflates to between 64 MiB and 1 GiB is inflated a piece at a time. It
    *  is `too-much-at-once` when the IDAT chunks it is joined from take up
    *  more of the file than the editor keeps in memory, `resident`
-   *  (`Doc.residentBytes`, as `formatLimit` writes it). */
-  pngNotInflated: (why: string, resident: string): string =>
-    why === "too-large"
-      ? "The zlib stream takes up over 64 MiB in the file, and this view does not inflate a stream that large."
-      : why === "too-large-lazy"
-        ? "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB."
-        : why === "too-much-at-once"
-          ? `The zlib stream takes up over ${resident} in the file, and the editor keeps at most ${resident} of the file in memory at once, so this view cannot inflate the stream.`
-          : "The image data did not inflate: the zlib stream is damaged or cut short.",
-  /** Why the inflated bytes were not unfiltered, by the core's refusal word. */
-  pngNotUnfiltered: (why: string): string =>
-    why === "settings"
-      ? "The image header gives a bit depth and colour type that the PNG specification does not allow together, so the scanlines were not unfiltered."
-      : why === "too-large"
-        ? "The unfiltered picture would be larger than 64 MiB, which is more than this view unpacks."
-        : "The inflated bytes do not fit the image header: there are more or fewer of them than its size and bit depth need, or a filter byte is not one of the five filters.",
+   *  (`Doc.residentBytes`, as `formatLimit` writes it). The other
+   *  refusals of a size are limits a zlib stream never meets; they, and a
+   *  tag this build does not know, say what a damaged stream says. */
+  pngNotInflated: (why: string, resident: string): string => {
+    const damaged = "The image data did not inflate: the zlib stream is damaged or cut short.";
+    if (!isRefusalTag(why)) return damaged;
+    const tooLarge = (size: string): string => `The zlib stream takes up over ${size} in the file, and this view does not inflate a stream that large.`;
+    switch (why) {
+      case "too-large-copy":
+        return tooLarge("64 MiB");
+      case "too-large-input":
+        return tooLarge("512 MiB");
+      case "too-large-lazy":
+        return "The zlib stream inflates to over 1 GiB, and this view stops inflating at 1 GiB.";
+      case "too-much-at-once":
+        return `The zlib stream takes up over ${resident} in the file, and the editor keeps at most ${resident} of the file in memory at once, so this view cannot inflate the stream.`;
+      case "too-large-output":
+      case "too-large-zstd-frame":
+      case "too-large-xz-block":
+      case "too-large-zstd-window":
+      case "failed":
+      case "settings":
+      case "unaligned":
+      case "progressive":
+      case "arithmetic":
+      case "lossless":
+      case "hierarchical":
+      case "12-bit":
+        return damaged;
+      default:
+        return unknownRefusal(why);
+    }
+  },
+  /** Why the inflated bytes were not unfiltered, by the core's refusal tag.
+   *  `too-large-copy` is inflated bytes past 64 MiB, which are read into
+   *  memory whole to be unfiltered, and `too-large-output` a picture the
+   *  image header says is larger than 64 MiB unfiltered, whatever the
+   *  inflated bytes come to. The rest, and a tag this build does not know,
+   *  say the bytes do not fit the header. */
+  pngNotUnfiltered: (why: string): string => {
+    const misfit =
+      "The inflated bytes do not fit the image header: there are more or fewer of them than its size and bit depth need, or a filter byte is not one of the five filters.";
+    if (!isRefusalTag(why)) return misfit;
+    switch (why) {
+      case "settings":
+        return "The image header gives a bit depth and colour type that the PNG specification does not allow together, so the scanlines were not unfiltered.";
+      case "too-large-copy":
+        return "The image data inflated to over 64 MiB, and this view does not unfilter scanlines from data that large.";
+      case "too-large-output":
+        return "The unfiltered picture would be larger than 64 MiB, which is more than this view unpacks.";
+      case "too-large-lazy":
+      case "too-large-input":
+      case "too-large-zstd-frame":
+      case "too-large-xz-block":
+      case "too-large-zstd-window":
+      case "too-much-at-once":
+      case "failed":
+      case "unaligned":
+      case "progressive":
+      case "arithmetic":
+      case "lossless":
+      case "hierarchical":
+      case "12-bit":
+        return misfit;
+      default:
+        return unknownRefusal(why);
+    }
+  },
 
   // ----- 11. terms -----
   termsHeading: (n: number): string => `What the template says about ${counted(n, "field")}`,
