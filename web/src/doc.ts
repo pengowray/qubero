@@ -5,6 +5,7 @@ import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "
 import { byteDigits, formatBytes, formatOffset } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
+import type { KindLine } from "./templateindex.ts";
 import type { Hardening, Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatLimit, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
@@ -3007,6 +3008,16 @@ export class Doc {
    */
   templateText(): string {
     return this.editor.template_text();
+  }
+
+  /** Which line of `templateText` each decoder kind is on. Empty when no
+   *  template is selected or it decodes nothing whose nodes have kinds. */
+  templateKindLines(): KindLine[] {
+    try {
+      return JSON.parse(this.editor.template_kind_lines()) as KindLine[];
+    } catch {
+      return [];
+    }
   }
 
   /**

@@ -12,7 +12,7 @@
 import type { Doc, TemplateNode, TemplateReply } from "./doc.ts";
 import { copyIcon } from "./icons.ts";
 import { SIDEBAR } from "./strings.ts";
-import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type Kid, type TemplateIndex } from "./templateindex.ts";
+import { findLineAt, indexTemplate, kindLineAt, readAs, tokenizeLine, type ChainNode, type Kid, type KindLine, type TemplateIndex } from "./templateindex.ts";
 import { fieldLines, jumpTarget, missReason, type JumpNode, type JumpTree } from "./templatejump.ts";
 
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
@@ -46,6 +46,8 @@ export class TemplatePanel {
   private readonly body: HTMLElement;
   private text: string | null = null;
   private index: TemplateIndex | null = null;
+  /** The line of each decoder kind in the text. */
+  private kindLines: readonly KindLine[] = [];
   private chunks: Chunk[] = [];
   private lineEls: (HTMLElement | undefined)[] = [];
   /** Bumped on every rebuild, so idle work for an old text stops. */
@@ -166,6 +168,7 @@ export class TemplatePanel {
     if (this.stale) {
       this.stale = false;
       this.build(this.doc.templateText());
+      this.kindLines = this.doc.templateKindLines();
     }
     this.follow();
   }
@@ -272,6 +275,7 @@ export class TemplatePanel {
       path = found.node;
     }
     const chain: ChainNode[] = [];
+    const traceKinds: (string | undefined)[] = [];
     for (let d = 0; d <= path.length; d++) {
       const r = this.doc.templateNode(path.slice(0, d));
       if (r.status === "pending" || r.status === "working") {
@@ -280,7 +284,12 @@ export class TemplatePanel {
       }
       if (r.status !== "ok") break;
       chain.push({ name: r.node.name, type: r.node.type, list: r.node.list });
+      traceKinds.push(r.node.trace_kind);
     }
+    // A node a decoder laid down is marked on its kind's line in the
+    // decoder section, which the template's own fields never reach.
+    const kindLine = kindLineAt(this.kindLines, traceKinds);
+    if (kindLine !== null) return this.mark(kindLine);
     const p = path;
     let loading = false;
     const kidsAt = (depth: number): readonly Kid[] | null => {
