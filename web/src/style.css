@@ -1424,20 +1424,22 @@ button.welcome-crystal {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 40%, transparent);
 }
 /* A click that found no such field in the file: the line's fill flashes once
-   as the note appears, so the click visibly did something. Kept to a grey
-   that fades, and with reduced motion a steady grey until the note goes. */
+   as the message beside the Copy button appears, so the click visibly did
+   something, then stays a light grey until the message goes, since the
+   message does not name the line it is about. With reduced motion, only the
+   light grey. */
 .tp-line.is-missed {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
   animation: tp-missed 0.8s ease-out;
 }
 @keyframes tp-missed {
   from {
-    background: color-mix(in srgb, var(--fg) 14%, transparent);
+    background: color-mix(in srgb, var(--fg) 16%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .tp-line.is-missed {
     animation: none;
-    background: color-mix(in srgb, var(--fg) 7%, transparent);
   }
 }
 /* The line that declares the field at the cursor: the selection's own fill,
@@ -1464,14 +1466,6 @@ button.welcome-crystal {
   font-family: var(--sans);
   color: color-mix(in srgb, var(--muted) 60%, var(--fg));
 }
-/* Why a clicked line did not move the cursor goes in the same way, after the
-   field's name and type (`noteColumn` in templatepanel.ts): in the line it
-   covers nothing, it stays near the field's name even on a long line, and the
-   name stays in line with its neighbours. Its right margin keeps it apart
-   from the notation that follows. */
-.tp-miss::after {
-  margin-right: 1ch;
-}
 /* The Copy button sits at the right of the sidebar's bar while this tab is
    showing. 24px rather than the inspector's 22px, the smallest target the
    UI checks allow, since here it is the bar's only control of its kind. */
@@ -1484,7 +1478,7 @@ button.welcome-crystal {
 .panel-right.is-collapsed .panel-tools {
   display: none;
 }
-.tp-copy {
+.insp-act.tp-copy {
   width: 24px;
   height: 24px;
 }
@@ -1492,22 +1486,31 @@ button.welcome-crystal {
   display: none;
 }
 .tp-tools {
-  position: relative;
   display: flex;
   align-items: center;
 }
 /* Whether the copy worked, said beside the button that was pressed, as the
-   inspector says it beside its own Copy buttons. Laid over the bar to the
-   button's left, so the tabs do not move when it comes and goes; the bar's
-   own fill hides a tab it reaches. */
+   inspector says it beside its own Copy buttons; and in the same place why a
+   clicked line did not move the cursor. Laid over the bar to the button's
+   left, so neither the tabs nor the template text move when it comes and
+   goes; the bar's own fill hides a tab it reaches. The longest message
+   (about 410px) wraps to two lines in the bar's height at the sidebar's
+   narrowest, 308px; clicks pass through it to the tabs underneath. */
+.panel-right .panel-bar {
+  position: relative;
+}
 .tp-copied {
   position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 0;
+  bottom: 0;
+  right: 30px; /* the Copy button's 24px and the bar's 6px right padding */
+  display: flex;
+  align-items: center;
   padding: 0 6px;
-  white-space: nowrap;
   font-size: 12px;
+  line-height: 15px;
+  overflow: hidden;
+  pointer-events: none;
   color: var(--muted);
   background: var(--panel);
 }

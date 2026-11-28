@@ -5085,26 +5085,26 @@ export const SIDEBAR = {
    *  when the field was read through a `same as ..., but big-endian` line and
    *  its numbers are in the other byte order from the one the line writes. */
   readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
-  /** On a field's line in the Template tab, after the field's name and type,
-   *  when a click on it found no such field in this file: its switch arm is
-   *  not the one taken, its list is empty, or it is optional and absent. */
-  notInFile: "not in this file",
+  /** Beside the Template tab's copy button, while the line just clicked is
+   *  marked, when the click found no such field in this file: its switch arm
+   *  is not the one taken, its list is empty, or it is optional and absent. */
+  notInFile: "Not in this file",
   /** The same, when the field is in a switch arm the file does not take and
-   *  the switch is read once: `not in this file: cputype is 0x1000007`. The
+   *  the switch is read once: `Not in this file: cputype is 0x1000007`. The
    *  field the switch reads and its value are written as the template writes
    *  them, so the reader can find them on the lines above. */
-  notInFileIs: (on: string, value: string): string => `not in this file: ${on} is ${value}`,
+  notInFileIs: (on: string, value: string): string => `Not in this file: ${on} is ${value}`,
   /** The same, when the switch is read more than once (inside a list) and no
-   *  read takes the arm: `not in this file: command is never 1`. `keys` are the
+   *  read takes the arm: `Not in this file: command is never 1`. `keys` are the
    *  arm's keys as written, at most three. */
   notInFileNone: (on: string, keys: readonly string[]): string =>
-    `not in this file: ${on} is never ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
+    `Not in this file: ${on} is never ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
    *  named because the clicked field may be a list itself, and "elements"
    *  alone would read as its own. */
   notInFirst: (n: number, list: string): string =>
-    list === "" ? `not found in the first ${n.toLocaleString()} fields` : `not found in the first ${n.toLocaleString()} elements of ${list}`,
+    list === "" ? `Not found in the first ${n.toLocaleString()} fields` : `Not found in the first ${n.toLocaleString()} elements of ${list}`,
   /** The Template tab's copy button, as its tooltip and accessible name. */
   copyTemplate: "Copy the template text",
   /** Beside the Template tab's copy button, after the template text was put

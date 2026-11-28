@@ -18,8 +18,6 @@ import { fieldLines, jumpTarget, missReason, type JumpNode, type JumpTree } from
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
  *  empty chunks are sized from it before any line is drawn. */
 const LINE = 18;
-/** Space kept between a revealed note and the edge of the text, in pixels. */
-const NOTE_PAD = 8;
 /** Lines per chunk. */
 const CHUNK = 400;
 /** Chunks drawn at once when the text arrives; the rest wait for idle time. */
@@ -27,7 +25,8 @@ const FIRST_CHUNKS = 3;
 /** Pointer travel, in pixels, past which a press and release on a line is a
  *  drag to select text rather than a click. */
 const DRAG_PX = 4;
-/** How long the Copy button's message stays up: as long as the table view's. */
+/** How long a message beside the Copy button stays up, whether about a copy
+ *  or about a clicked line: as long as the table view's. */
 const NOTICE_MS = 5000;
 
 type Chunk = { readonly el: HTMLElement; readonly from: number; readonly to: number; filled: boolean };
@@ -73,7 +72,8 @@ export class TemplatePanel {
   private builtKnown = false;
   /** Per line, the first line of the field statement it is part of, or -1. */
   private fieldAt: Int32Array | null = null;
-  /** The note on a clicked line saying why the cursor did not move. */
+  /** A clicked line that found no field, marked while the message beside the
+   *  Copy button says why. */
   private missed: HTMLElement | null = null;
   /** A clicked line whose search waits on part of the tree not read yet. It
    *  is searched again when the tree changes. */
@@ -82,6 +82,8 @@ export class TemplatePanel {
   private readonly copyButton: HTMLButtonElement;
   private readonly notice: HTMLElement;
   private noticeTimer = 0;
+  /** What the message beside the Copy button is about, while it shows. */
+  private noticeKind: "copy" | "miss" | null = null;
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -183,7 +185,7 @@ export class TemplatePanel {
     this.missed = null;
     this.jumpOwed = null;
     this.copyButton.hidden = text === "";
-    this.notice.hidden = true;
+    this.hush();
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     if (text === "") {
@@ -416,40 +418,27 @@ export class TemplatePanel {
     };
   }
 
-  /** Say on `line`, straight after the field's name and type, why clicking
-   *  it did not move the cursor, and flash the line's fill. Drawn from
-   *  `data-note` like the byte order note, so a selection leaves it out. */
+  /** Say beside the Copy button why clicking `line` did not move the cursor,
+   *  and mark the line until the message goes. The message is in the bar, not
+   *  on the line: an indented line's end is often past the sidebar's right
+   *  edge, and scrolling the text sideways to show it hid the field's name. */
   private miss(line: number, why: string): void {
     const row = this.lineEls[line];
-    if (row === undefined) return;
-    const note = document.createElement("span");
-    note.className = "tp-note tp-miss";
-    note.dataset.note = why;
-    insertAt(row, noteColumn(this.index?.lines[line] ?? "", this.index?.decls[line]), note);
-    this.missed = note;
-    // On an indented line the note can start past the sidebar's right edge,
-    // and the value it names is at its end. The text is scrolled sideways
-    // just far enough to show the whole note, keeping its start in view when
-    // the note is wider than the sidebar.
-    const s = this.scroller;
-    const n = note.getBoundingClientRect();
-    const left = s.getBoundingClientRect().left + s.clientLeft;
-    const over = n.right + NOTE_PAD - (left + s.clientWidth);
-    if (over > 0) s.scrollLeft += Math.min(over, n.left - left - NOTE_PAD);
-    // Restarts the flash when the same line is clicked again.
-    row.classList.remove("is-missed");
-    void row.offsetWidth;
-    row.classList.add("is-missed");
+    if (row !== undefined) {
+      // Restarts the flash when the same line is clicked again.
+      row.classList.remove("is-missed");
+      void row.offsetWidth;
+      row.classList.add("is-missed");
+      this.missed = row;
+    }
+    this.say(why, "miss");
   }
 
   private unmiss(): void {
     this.jumpOwed = null;
-    if (this.missed === null) return;
-    const row = this.missed.closest(".tp-line");
-    this.missed.remove();
+    this.missed?.classList.remove("is-missed");
     this.missed = null;
-    row?.classList.remove("is-missed");
-    row?.normalize();
+    if (this.noticeKind === "miss") this.hush();
   }
 
   /** Put the whole template text on the clipboard, as the core wrote it. */
@@ -460,19 +449,34 @@ export class TemplatePanel {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      return this.say(SIDEBAR.copyFailed);
+      return this.say(SIDEBAR.copyFailed, "copy");
     }
-    this.say(SIDEBAR.copied(this.index?.lines.length ?? 0));
+    this.say(SIDEBAR.copied(this.index?.lines.length ?? 0), "copy");
   }
 
-  /** A message beside the Copy button about its press, which goes away on its own. */
-  private say(text: string): void {
-    this.notice.textContent = text;
-    this.notice.hidden = false;
+  /** A message beside the Copy button, about a copy or a clicked line, which
+   *  goes away on its own. A newer message replaces the one showing. */
+  private say(text: string, kind: "copy" | "miss"): void {
+    const n = this.notice;
+    n.textContent = text;
+    n.style.left = "";
+    n.hidden = false;
+    this.noticeKind = kind;
+    // A message that reaches into the bar's tabs covers all of them, so no
+    // tab shows cut off beside it. The fold arrow left of them stays.
+    const bar = this.tools.closest(".panel-bar");
+    const tabs = bar?.querySelector(".panel-tabs");
+    if (bar && tabs && n.getBoundingClientRect().left < tabs.getBoundingClientRect().right) {
+      n.style.left = `${tabs.getBoundingClientRect().left - bar.getBoundingClientRect().left}px`;
+    }
     clearTimeout(this.noticeTimer);
-    this.noticeTimer = window.setTimeout(() => {
-      this.notice.hidden = true;
-    }, NOTICE_MS);
+    this.noticeTimer = window.setTimeout(() => (kind === "miss" ? this.unmiss() : this.hush()), NOTICE_MS);
+  }
+
+  private hush(): void {
+    clearTimeout(this.noticeTimer);
+    this.notice.hidden = true;
+    this.noticeKind = null;
   }
 
   /** Scroll the marked line into view, leaving the view alone if it already is. */
@@ -495,42 +499,4 @@ export class TemplatePanel {
     const room = s.clientWidth - 12 * this.charWidth;
     if (indent < s.scrollLeft || indent > s.scrollLeft + room) s.scrollLeft = Math.max(0, indent - 2 * this.charWidth);
   }
-}
-
-/** Where on a field's line the note on a click that found nothing goes: after
- *  the field's name and type. For a field that opens a structure, the type is
- *  the structure's name, `decls` on the line, and the note goes before the
- *  structure's options in brackets. Otherwise it goes before an `enum Name {`
- *  or `flags Name {` that lists the values, or before a final `{`. */
-export function noteColumn(text: string, decls: readonly (readonly [number, number])[] = []): number {
-  const decl = decls.at(-1);
-  if (decl !== undefined) return decl[1];
-  const named = /\s(?:enum|flags)\s+[A-Za-z_]\w*\s*\{/.exec(text);
-  if (named !== null) return named.index;
-  const end = text.trimEnd();
-  const brace = /\s*\{$/.exec(end);
-  return brace !== null ? brace.index : end.length;
-}
-
-/** Put `el` into a drawn row at character `col` of the row's text, outside
- *  any coloured run that ends there. */
-function insertAt(row: HTMLElement, col: number, el: HTMLElement): void {
-  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-  let seen = 0;
-  for (let t = walker.nextNode() as Text | null; t !== null; t = walker.nextNode() as Text | null) {
-    const end = seen + t.data.length;
-    if (col < end) {
-      t.splitText(col - seen).before(el);
-      return;
-    }
-    if (col === end) {
-      let n: Node = t;
-      while (n.parentNode !== null && n.parentNode !== row) n = n.parentNode;
-      if (n.parentNode === row) (n as ChildNode).after(el);
-      else row.append(el);
-      return;
-    }
-    seen = end;
-  }
-  row.append(el);
 }
