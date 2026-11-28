@@ -523,21 +523,21 @@ function fits(index: TemplateIndex, blocks: readonly Block[], children: readonly
 }
 
 /** A number as a key or a value writes it: `12`, `-3`, `0xffe2`. */
-function numberOf(s: string): bigint | null {
+export function numberOf(s: string): bigint | null {
   const t = s.trim();
   return /^-?\d+$/.test(t) || /^0x[0-9a-f]+$/i.test(t) ? BigInt(t) : null;
 }
 
 /** Text without the quotes around it, when it has them. Spaces inside the
  *  quotes are kept: `'XYZ '` is four characters. */
-function unquote(t: string): string {
+export function unquote(t: string): string {
   if (t.length < 2 || (t[0] !== '"' && t[0] !== "'") || t.at(-1) !== t[0]) return t;
   return t.slice(1, -1).replace(/\\(.)/g, "$1");
 }
 
 /** An arm's first line or, for an arm written as `same as case N`, the first
  *  line of arm N. */
-function armTarget(index: TemplateIndex, line: number): number {
+export function armTarget(index: TemplateIndex, line: number): number {
   for (let hop = 0; hop < 8; hop++) {
     const same = index.sameAs.find((s) => s.line === line && s.target !== null);
     if (same?.target == null) return line;
@@ -548,7 +548,7 @@ function armTarget(index: TemplateIndex, line: number): number {
 
 /** The number a quoted key of one to eight characters is as bytes, read
  *  big-endian and little-endian: `'curv'` is 0x63757276 or 0x76727563. */
-function keyNumbers(s: string): bigint[] {
+export function keyNumbers(s: string): bigint[] {
   if (s.length < 1 || s.length > 8 || [...s].some((c) => c.charCodeAt(0) > 0xff)) return [];
   let be = 0n;
   let le = 0n;
@@ -573,7 +573,7 @@ function keyNumbers(s: string): bigint[] {
  * could not be compared, since a value shown as text may be cut short or
  * escaped.
  */
-function takenArm(index: TemplateIndex, choice: Choice, kid: Kid): number | null {
+export function takenArm(index: TemplateIndex, choice: Choice, kid: Kid): number | null {
   const texts = [kid.value, kid.edit].filter((t): t is string => t !== undefined);
   // An enumeration's label may be a number of its own (`{1 = 16}` shows
   // `16 (0x1)`), so the bracketed number, when there is one, is the only one.

@@ -13,11 +13,13 @@ import type { Doc, TemplateNode, TemplateReply } from "./doc.ts";
 import { copyIcon } from "./icons.ts";
 import { SIDEBAR } from "./strings.ts";
 import { findLineAt, indexTemplate, readAs, tokenizeLine, type ChainNode, type Kid, type TemplateIndex } from "./templateindex.ts";
-import { fieldLines, jumpTarget, type JumpNode, type JumpTree } from "./templatejump.ts";
+import { fieldLines, jumpTarget, missReason, type JumpNode, type JumpTree } from "./templatejump.ts";
 
 /** One line's height in pixels. Must match `--tp-line` in style.css: the
  *  empty chunks are sized from it before any line is drawn. */
 const LINE = 18;
+/** Space kept between a revealed note and the edge of the text, in pixels. */
+const NOTE_PAD = 8;
 /** Lines per chunk. */
 const CHUNK = 400;
 /** Chunks drawn at once when the text arrives; the rest wait for idle time. */
@@ -393,13 +395,15 @@ export class TemplatePanel {
       this.jumpOwed = line;
       return;
     }
-    this.miss(line, result.kind === "absent" ? SIDEBAR.notInFile : SIDEBAR.notInFirst(result.tried, result.list));
+    if (result.kind === "gaveUp") return this.miss(line, SIDEBAR.notInFirst(result.tried, result.list));
+    const why = missReason(index, line, this.tree());
+    this.miss(line, why === null ? SIDEBAR.notInFile : why.kind === "is" ? SIDEBAR.notInFileIs(why.on, why.value) : SIDEBAR.notInFileNone(why.on, why.keys));
   }
 
   /** The file's tree as `jumpTarget` reads it. */
   private tree(): JumpTree {
     const doc = this.doc;
-    const one = (n: TemplateNode): JumpNode => ({ name: n.name, type: n.type, list: n.list, childCount: n.child_count, absent: n.absent });
+    const one = (n: TemplateNode): JumpNode => ({ name: n.name, type: n.type, list: n.list, childCount: n.child_count, absent: n.absent, value: n.value, edit: n.edit_text });
     const settle = <T, U>(r: TemplateReply<T>, f: (v: T) => U): U | null | "pending" =>
       r.status === "ok" ? f(r.node) : r.status === "error" ? null : "pending";
     return {
@@ -423,6 +427,15 @@ export class TemplatePanel {
     note.dataset.note = why;
     insertAt(row, noteColumn(this.index?.lines[line] ?? "", this.index?.decls[line]), note);
     this.missed = note;
+    // On an indented line the note can start past the sidebar's right edge,
+    // and the value it names is at its end. The text is scrolled sideways
+    // just far enough to show the whole note, keeping its start in view when
+    // the note is wider than the sidebar.
+    const s = this.scroller;
+    const n = note.getBoundingClientRect();
+    const left = s.getBoundingClientRect().left + s.clientLeft;
+    const over = n.right + NOTE_PAD - (left + s.clientWidth);
+    if (over > 0) s.scrollLeft += Math.min(over, n.left - left - NOTE_PAD);
     // Restarts the flash when the same line is clicked again.
     row.classList.remove("is-missed");
     void row.offsetWidth;

@@ -74,8 +74,8 @@ export function positionValue(node: { readonly locates?: boolean; readonly kind:
   // An enum is a number with names for some of its values: an HDF5 address
   // names only the value that means "undefined". A value with a name keeps
   // the name, so only one that is shown as its bare digits is rewritten.
-  // The core writes a value that has no name as `75668 (unknown)`.
-  const named = node.kind === "enum" && node.value !== undefined && node.value !== node.edit_text && node.value !== `${node.edit_text} (unknown)`;
+  // The core writes a value that has no name as `75668 (unrecognised)`.
+  const named = node.kind === "enum" && node.value !== undefined && node.value !== node.edit_text && node.value !== `${node.edit_text} (unrecognised)`;
   if ((node.kind !== "uint" && node.kind !== "int" && node.kind !== "enum") || named) return null;
   const digits = node.edit_text;
   if (!/^\d+$/.test(digits)) return null;
