@@ -1569,3 +1569,31 @@ fn open_unpacked_on_an_xz_stream_longer_than_the_store_lays_it_out_a_few_headers
         }
     }
 }
+
+/// An xz stream of 66 MiB of noise in blocks of 1 MiB, under the default
+/// limits: past the 64 MiB a stream is held whole under, and past the
+/// 64 MiB an xz stream could be packed before part 8. It is laid out from a
+/// store of 4 MiB, its blocks are read through the store, and its tab reads
+/// the right bytes. Run on purpose, as the tests before it are:
+/// `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+#[test]
+#[ignore]
+fn an_xz_stream_past_64_mib_packed_opens_end_to_end() {
+    let content = noise(66 << 20);
+    let file = xz_of_stored(&content, 1 << 20);
+    assert!(file.len() > 66 << 20);
+    // The template places its fields the same way in a stream of any size.
+    let decoded = xz_decoded(&xz_of_stored(b"a stream of one block", 1 << 20));
+    let mut ed = unfed(&file, 64, "xz");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &decoded));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), content.len() as f64);
+    assert!(feeder.times.len() < file.len().div_ceil(CHUNK) / 4, "{} chunks were read to open the stream", feeder.times.len());
+    for at in [content.len() / 2, 0, content.len() - 100, content.len() / 3] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "100 bytes at {at} differ");
+    }
+    let at = (5 << 20) - 1000;
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, 1 << 20) == content[at..at + (1 << 20)], "1 MiB at {at} differ");
+    assert!(feeder.most_times() <= 2, "{:?}", feeder.times);
+}

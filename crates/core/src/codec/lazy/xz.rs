@@ -178,9 +178,9 @@ impl XzPass {
         XzPass { reads, input, limits, phase: Phase::Start, furthest: 0 }
     }
 
-    /// How far the pass has got: the bits of the stream up to the last block
-    /// header read, or copied, and all of them once it is over. Nothing is
-    /// unpacked, so no output.
+    /// How far the pass has got: the bits of the stream up to the start of
+    /// the furthest block header read, or the bits copied, and all of them
+    /// once it is over. Nothing is unpacked, so no output.
     pub(super) fn progress(&self) -> Progress {
         Progress { read_bits: self.furthest, run_bits: self.input.len() * 8, unpacked: 0 }
     }
@@ -206,7 +206,13 @@ impl XzPass {
         let stepped = self.step_on();
         let at = match &self.phase {
             Phase::Start | Phase::Index { .. } => 0,
-            Phase::Headers(h) => h.blocks.last().map_or(0, |b| b.at as u64 * 8),
+            // The headers of the step's batch read so far count, so that a
+            // step that waits again having read some of them has got
+            // further.
+            Phase::Headers(h) => {
+                let read = h.batch.iter().filter(|(_, got)| got.is_some()).map(|(r, _)| r.at);
+                h.blocks.last().map(|b| b.at).into_iter().chain(read).max().map_or(0, |at| at as u64 * 8)
+            }
             Phase::Copy { bytes } => bytes.len() as u64 * 8,
             Phase::Over => self.input.len() * 8,
         };

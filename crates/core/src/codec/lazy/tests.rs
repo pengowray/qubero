@@ -2995,3 +2995,44 @@ fn a_damaged_xz_index_or_footer_is_read_from_a_store_as_from_memory() {
     let (fed, _) = xz_from_a_store(&packed, Limits { unit_input: 16, copy_input: packed.len() - 1, ..limits }, 64);
     assert_eq!(fed.got.err(), Some(Refusal::TooLargeCopy));
 }
+
+/// While a step waits for some of its block headers, the headers it has
+/// read already count in its progress, so that a caller that takes moved
+/// progress as the pass getting further, as the web's wait for Open
+/// unpacked does, sees it get further. Here every chunk of the file is
+/// loaded but the one that holds the header of a block halfway along.
+#[test]
+fn an_xz_pass_waiting_for_some_headers_counts_the_ones_it_read() {
+    let data = mixed(200_000, 431);
+    let packed = xz_of(&data, 4_000);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file.clone(), 1024);
+    let held_back = ((run_at + l.blocks[l.blocks.len() / 2].at) / 1024) as u64;
+    let ends = [run_at / 1024, (run_at + l.index_at) / 1024];
+    assert!(held_back > ends[0] as u64 && held_back < ends[1] as u64, "the held-back chunk holds the stream's header or index");
+    let rest: Vec<crate::source::Missing> = lossy.chunks(0..file.len()).into_iter().filter(|m| m.chunk != held_back).collect();
+    lossy.feed(&rest);
+    let input = RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64);
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let mut pass = Indexing::through(Codec::Xz, input, limits).expect("starts");
+    let missing = loop {
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Working => {}
+            Stepped::NeedsInput(m) => break m,
+            Stepped::Done(_) => panic!("laid out with a chunk missing"),
+        }
+    };
+    assert_eq!(missing, vec![crate::source::Missing { chunk: held_back }]);
+    let last = l.blocks.iter().rev().find(|b| ((run_at + b.at) / 1024) as u64 != held_back).expect("a header in another chunk");
+    assert_eq!(pass.progress().read_bits, last.at as u64 * 8, "the headers read while the step waits");
+    lossy.feed(&missing);
+    let ours = loop {
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Done(Decoded::Indexed(s)) => break s,
+            Stepped::Working => {}
+            _ => panic!("not laid out"),
+        }
+    };
+    assert!(ours.xz_layout() == Some(&l));
+}
