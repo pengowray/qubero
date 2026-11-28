@@ -1687,9 +1687,9 @@ impl super::Evaluator {
     /// cap, which lets the pass skip the part that might have been a run held
     /// whole: see [`lazy::Indexing::known_large`].
     ///
-    /// Deflate, zlib, gzip and zstd are indexed a step at a time. An xz run is
-    /// decoded or laid out in one go, with nothing charged, as
-    /// [`lazy::decode_or_index`] does it: see [`lazy::can_step`].
+    /// Deflate, zlib, gzip and zstd are indexed a step at a time, and an xz
+    /// stream is laid out a step at a time from its index and its block
+    /// headers: see [`lazy::can_step`].
     ///
     /// Takes the evaluator shared, since a read of a stitched stream reaches
     /// here, and reads do.
@@ -1706,12 +1706,14 @@ impl super::Evaluator {
 
     /// The pass behind [`Self::index_run`], for a run with no refusal kept.
     ///
-    /// A deflate, zlib, gzip or zstd pass reads its run through a handle onto
-    /// the source the run is in, a window at a time, when a handle reaches
-    /// the run and the source keeps enough for a window
-    /// ([`lazy::reads_in_windows`]). It holds no copy of the run, and starts
-    /// at once: a step whose window is missing chunks hands back `Pending`
-    /// with them, and the pass waits in its place in `Unfinished`.
+    /// A pass reads its run through a handle onto the source the run is in, a
+    /// window at a time, when a handle reaches the run and the source keeps
+    /// enough for a window ([`lazy::reads_in_windows`]). It holds no copy of
+    /// the run, and starts at once: a step whose window is missing chunks
+    /// hands back `Pending` with them, and the pass waits in its place in
+    /// `Unfinished`. An xz pass reads only the stream's ends, its index and
+    /// its block headers, unless the stream is to be decoded whole, when it
+    /// copies the stream a window at a time.
     ///
     /// Any other pass reads a copy of the run. A run that needs more of the
     /// file than one window ([`Self::gathers`]) is read a window at a time
@@ -1765,11 +1767,6 @@ impl super::Evaluator {
                 Err(why) => return Ok(Err(why)),
             },
         };
-        if !lazy::can_step(codec) {
-            #[cfg(test)]
-            self.spaces.passes.set(self.spaces.passes.get() + 1);
-            return Ok(lazy::decode_or_index_through(codec, packed, input, limits));
-        }
         self.start_pass(key, codec, lazy::Indexing::from_copy(codec, packed, input, limits), known_large)
     }
 

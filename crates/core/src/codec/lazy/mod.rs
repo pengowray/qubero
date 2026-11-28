@@ -31,7 +31,9 @@
 //! can be as large as the output.
 //!
 //! The pass over a deflate or a zstd run can be done a step at a time,
-//! carrying on from where the step before stopped: see [`Indexing`].
+//! carrying on from where the step before stopped: see [`Indexing`]. So can
+//! the pass that lays out an xz stream, which reads its index and its block
+//! headers a few at a time.
 //!
 //! Deflate's pass also records where each deflate block starts, in the run
 //! and in the output. That is enough to list the blocks, and to trace any one
@@ -60,7 +62,7 @@ mod zstd;
 use deflate::DeflatePass;
 pub use input::{refused_as_none, ReadError, RunInput};
 pub use seekable::Seekable;
-use xz::index_xz;
+use xz::XzPass;
 use zstd::ZstdPass;
 
 /// The most a run read a piece at a time may come to. Past this it is refused
@@ -119,7 +121,9 @@ pub const SPAN_INPUT: usize = 16 << 20;
 /// margin beyond that ([`DEFLATE_MARGIN`] or [`ZSTD_MARGIN`]), and stops
 /// before the window runs out. As many bytes as a step's share of output
 /// has, so that a run whose output is at least as large as the run still
-/// ends each step at its share of output.
+/// ends each step at its share of output. A step of the pass that lays out
+/// an xz stream reads a piece this long of the stream's index, with no
+/// margin, or the headers of up to 64 blocks.
 ///
 /// [`DEFLATE_MARGIN`]: crate::codec::inflate::DEFLATE_MARGIN
 /// [`ZSTD_MARGIN`]: crate::codec::frames::ZSTD_MARGIN
@@ -244,10 +248,14 @@ impl Default for Limits {
 impl Limits {
     /// The most of the run one step of the pass over a run packed with
     /// `codec` reads at once: [`Limits::step_input`] and the decoder's
-    /// margin past where the step may stop.
+    /// margin past where the step may stop. An xz step decodes nothing, so
+    /// it has no margin: it reads `step_input` bytes of the stream's index,
+    /// or up to 64 block headers, the last ending no further from the first
+    /// than half of what the source keeps.
     fn step_window(&self, codec: Codec) -> usize {
         let margin = match codec {
             Codec::Zstd => crate::codec::frames::ZSTD_MARGIN,
+            Codec::Xz => 0,
             _ => crate::codec::inflate::DEFLATE_MARGIN,
         };
         self.step_input.max(1).saturating_add(margin)
@@ -284,11 +292,11 @@ pub fn can_index(codec: Codec) -> bool {
 }
 
 /// Whether the pass that indexes a run packed with `codec` can be done a step
-/// at a time, by an [`Indexing`]: deflate, zlib, gzip and zstd. An xz stream
-/// is laid out from its own index without decoding any of it, by
-/// [`decode_or_index`].
+/// at a time, by an [`Indexing`]: deflate, zlib, gzip, zstd and xz, every
+/// codec [`can_index`] says yes to. An xz stream is laid out from its own
+/// index without decoding any of it, a few block headers a step.
 pub fn can_step(codec: Codec) -> bool {
-    wrapper(codec).is_some() || codec == Codec::Zstd
+    wrapper(codec).is_some() || matches!(codec, Codec::Zstd | Codec::Xz)
 }
 
 fn wrapper(codec: Codec) -> Option<Wrapper> {
@@ -315,8 +323,9 @@ pub enum Decoded {
 /// gives it, and one that passes the cap carries on from its last checkpoint
 /// with the trace off and the output dropped as soon as nothing can copy from
 /// it. The pass is an [`Indexing`] stepped to the end in
-/// one go. An xz stream is laid out from its own index, without a
-/// pass. Every other codec is decoded whole or refused, as it always was.
+/// one go. An xz stream is laid out from its own index, without decoding
+/// any of it, in one step from the copy. Every other codec is decoded whole
+/// or refused, as it always was.
 pub fn decode_or_index(codec: Codec, packed: Arc<Vec<u8>>) -> Result<Decoded, Refusal> {
     decode_or_index_with(codec, packed, Limits::default())
 }
@@ -335,28 +344,23 @@ pub fn decode_or_index_with(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) 
 /// An index over a handle onto the file holds no copy of the run once the
 /// pass is over: `packed` goes with the pass. See
 /// `docs/DESIGN-lazy-compressed-input.md`, "Where a `RunInput` comes from".
-/// The evaluator steps the pass over a deflate, zlib, gzip or zstd run
-/// itself, reading it through `input` with no copy when it can
-/// ([`reads_in_windows`]); it calls this for xz, whose layout still reads a
-/// copy of the whole stream.
+/// The evaluator steps the pass itself, reading the run through `input` with
+/// no copy when it can ([`reads_in_windows`]).
 pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
     if let Some(why) = too_long_to_index(packed.len() as u64, false, &limits) {
         return Err(why);
     }
-    match codec {
-        _ if can_step(codec) => {
-            let mut pass = Indexing::from_copy(codec, packed, input, limits)?;
-            loop {
-                match pass.step(u64::MAX, u64::MAX)? {
-                    Stepped::Done(decoded) => return Ok(decoded),
-                    Stepped::Working => {}
-                    // A copy in memory never finds a chunk missing.
-                    Stepped::NeedsInput(_) => return Err(Refusal::Failed),
-                }
-            }
+    if !can_step(codec) {
+        return whole(codec, &packed);
+    }
+    let mut pass = Indexing::from_copy(codec, packed, input, limits)?;
+    loop {
+        match pass.step(u64::MAX, u64::MAX)? {
+            Stepped::Done(decoded) => return Ok(decoded),
+            Stepped::Working => {}
+            // A copy in memory never finds a chunk missing.
+            Stepped::NeedsInput(_) => return Err(Refusal::Failed),
         }
-        Codec::Xz => index_xz(packed, input, limits),
-        _ => whole(codec, &packed),
     }
 }
 
@@ -372,12 +376,14 @@ pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInp
 /// zstd step between two zstd blocks, two frames or two skippable frames.
 /// The bits are what bound a step over blocks or frames that make no output,
 /// such as deflate's empty blocks, ten bits each. See [`DeflatePass`] and
-/// [`ZstdPass`].
+/// [`ZstdPass`]. An xz step decodes nothing: it reads a piece of the
+/// stream's index or a few of its block headers. See [`XzPass`].
 pub struct Indexing(Pass);
 
 enum Pass {
     Deflate(DeflatePass),
     Zstd(ZstdPass),
+    Xz(XzPass),
 }
 
 /// What one [`Indexing::step`] came to.
@@ -401,7 +407,7 @@ pub struct Progress {
 
 impl Indexing {
     /// Start indexing `packed`, a run held in memory. `codec` is one
-    /// [`can_step`] says yes to; any other, xz included, is refused as
+    /// [`can_step`] says yes to; any other is refused as
     /// [`Refusal::Failed`]. Nothing is decoded until the first step.
     pub fn new(codec: Codec, packed: Arc<Vec<u8>>, limits: Limits) -> Result<Indexing, Refusal> {
         Indexing::through(codec, RunInput::held(packed), limits)
@@ -444,6 +450,7 @@ impl Indexing {
         }
         Ok(Indexing(match codec {
             Codec::Zstd => Pass::Zstd(ZstdPass::new(reads, input, limits)),
+            Codec::Xz => Pass::Xz(XzPass::new(reads, input, limits)),
             _ => Pass::Deflate(DeflatePass::new(codec, reads, input, limits)?),
         }))
     }
@@ -456,10 +463,14 @@ impl Indexing {
     /// index the pass would have made. A run that turns out to fit under the
     /// cap after all comes back indexed too, and a caller that knew its
     /// length finds it is not the one it was told.
+    ///
+    /// An xz pass is the same pass whatever the caller knows: whether a
+    /// stream is held whole is decided by what its index says it comes to.
     pub fn known_large(self) -> Indexing {
         Indexing(match self.0 {
             Pass::Deflate(p) => Pass::Deflate(p.known_large()),
             Pass::Zstd(p) => Pass::Zstd(p.known_large()),
+            Pass::Xz(p) => Pass::Xz(p),
         })
     }
 
@@ -470,6 +481,7 @@ impl Indexing {
         match &self.0 {
             Pass::Deflate(p) => p.progress(),
             Pass::Zstd(p) => p.progress(),
+            Pass::Xz(p) => p.progress(),
         }
     }
 
@@ -480,21 +492,26 @@ impl Indexing {
     /// [`Limits::step_input`] past where it started, before its window of
     /// the run runs out; or does nothing and answers
     /// [`Stepped::NeedsInput`] with the chunks its window is missing.
+    ///
+    /// An xz step reads one piece of the stream's layout whatever it is
+    /// offered, since it decodes nothing: see [`XzPass`].
     pub fn step(&mut self, out_bytes: u64, in_bits: u64) -> Result<Stepped, Refusal> {
         match &mut self.0 {
             Pass::Deflate(p) => p.step(out_bytes, in_bits),
             Pass::Zstd(p) => p.step(out_bytes, in_bits),
+            Pass::Xz(p) => p.step(),
         }
     }
 
     /// How many bytes of the run the pass holds between steps, for tests:
     /// its window and, for deflate, its trailer and the copy of the header
-    /// of the block it stopped in.
+    /// of the block it stopped in. For xz, the index or the copy.
     #[cfg(test)]
     fn holds(&self) -> usize {
         match &self.0 {
             Pass::Deflate(p) => p.holds(),
             Pass::Zstd(p) => p.holds(),
+            Pass::Xz(p) => p.holds(),
         }
     }
 
@@ -503,7 +520,7 @@ impl Indexing {
     fn deflate(&self) -> &DeflatePass {
         match &self.0 {
             Pass::Deflate(p) => p,
-            Pass::Zstd(_) => panic!("a zstd pass"),
+            Pass::Zstd(_) | Pass::Xz(_) => panic!("not a deflate pass"),
         }
     }
 }
