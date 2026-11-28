@@ -2546,10 +2546,13 @@ through a `RunInput`":
   cap is now refused as `too-large-output` once its block headers are read,
   as it is under 64 MiB packed; one that is to be decoded whole is refused
   as `too-large-copy` once its index is read.
-- **Progress.** `Progress::read_bits` is where the last block header read
-  starts, or how much of the stream is copied, and never goes back: a
-  stream whose headers were read and that is then copied whole keeps the
-  furthest bit reached until the copy passes it. Nothing is unpacked, so
+- **Progress.** `Progress::read_bits` is where the furthest block header
+  read starts, those of a step that waits for the rest of its headers
+  included, or how much of the stream is copied, and never goes back. So
+  each round that reads more headers is progress to `waitToOpen`, which
+  takes a chunk asked for again with no progress as a wait that will not
+  end. A stream whose headers were read and that is then copied whole
+  keeps the furthest bit reached until the copy passes it. Nothing is unpacked, so
   `unpacked` is 0 until the pass ends. An xz step decodes nothing, so it
   takes no share of output or input from `Indexing::step`'s arguments, and
   `known_large` changes nothing for xz.
@@ -2647,8 +2650,24 @@ through a `RunInput`":
   whole under the default cap, it asks for every chunk. Either way no chunk
   is asked for more than twice, no reply names more than 10 chunks, the
   status says how far unpacking has got and that never goes back, and the
-  tab reads the stream's bytes. The real `xz-T0-blocks.xz` in the sample
-  collection reads as before (`lazy_frames_real`).
+  tab reads the stream's bytes.
+  `an_xz_stream_past_64_mib_packed_opens_end_to_end`, marked `#[ignore]`,
+  opens 66 MiB of noise in xz blocks of 1 MiB under the default limits,
+  from a store of 4 MiB, and its tab reads the right bytes. In
+  `codec/lazy/tests.rs`, a step that waits for one block header's chunk
+  counts the headers it has read in its progress. The real
+  `xz-T0-blocks.xz` in the sample collection reads as before, and laid out
+  through an `ArcSource` in steps of 64 KiB it comes to the index the copy
+  comes to (`lazy_frames_real`).
+- **Checked by hand.** `base64-120M-blocks.xz`, 93,460,168 bytes of `xz -T4
+  --block-size=8MiB -6` over base64 lines of random bytes, 15 blocks and
+  121,578,948 bytes unpacked, opens through the wasm `Editor` with the
+  browser's store of 512 chunks of 64 KiB, and five reads of its tab agree
+  with `xz -dc`. Opening it took 8 "pending" replies, which asked for 113
+  of the file's 1,427 chunks, each once: the stream's header, its footer
+  and index, its 15 block headers, and the first block's data, about
+  6 MB, which the reading decodes to see what the stream holds. The
+  widest reply, that block's data, named 97 chunks.
 - **Tests changed on purpose.**
   `a_pass_reads_in_windows_only_from_a_store_with_room_for_two` asserted
   that an xz pass never reads in windows; it now checks xz's window of
@@ -2680,6 +2699,14 @@ through a `RunInput`":
   a hostile stream of 64 MiB could list millions of blocks as well. A limit on the number of blocks, such as
   `Limits::block_marks` (65,536, 2 MiB of list), would bound it; `xz -T0
   --block-size=16KiB` on 1 GiB writes that many.
+- **An xz stream inside a stream read through an index.** A tab's reading
+  reads an xz stream in the tab through `SpaceSource::Lazy`, whose reads
+  decode the outer stream's spans. One step's block headers lie within
+  half of the tab's resident limit (the span cache, 16 MiB) of each other,
+  so they can fall in several of the outer stream's spans, and one answer
+  can name the chunks of more than one span. Headers read are kept and
+  count as progress, so the pass gets further each round, but no test
+  covers it.
 - **The status bar while an xz stream is laid out.** `UNPACKED.unpacking`
   says "{size} unpacked so far", and an xz layout unpacks nothing, so it
   says 0 B until the tab opens, for the few rounds the block headers take.
