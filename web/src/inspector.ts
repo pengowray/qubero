@@ -897,10 +897,17 @@ export class Inspector {
     const atByte = one.startBit / 8;
     const nBytes = bits / 8;
     const got = this.doc.selectionText(atByte, nBytes, this.textEncoding, this.pageA, this.pageB);
-    // Some of the bytes cannot be made, so no reading of them is shown: the
-    // reason, under the same heading the readings would have.
+    // Some of the bytes cannot be made, so no reading of them is shown. A
+    // selection short enough to be read as a number has the reason in its
+    // status line already, which is said once; a longer one has it here,
+    // under the heading the readings would have.
     if (got?.unreadable !== undefined) {
       this.refocus = null;
+      if (bits <= SELECTION_LIMIT_BITS) {
+        this.selText.hidden = true;
+        this.selText.replaceChildren();
+        return;
+      }
       const note = document.createElement("div");
       note.className = "insp-reading-miss";
       note.textContent = SEL_TEXT_UNREADABLE(got.unreadable);

@@ -371,7 +371,7 @@ export class MinimapPanel {
     while (r.status === "ok" && !r.node.done && performance.now() - start < 10) {
       r = this.doc.overviewStep(MAP_BUCKETS);
     }
-    if (r.status === "error" && this.state !== null) {
+    if (r.status === "error") {
       this.refused = r.message;
       this.render();
       return;
@@ -416,6 +416,15 @@ export class MinimapPanel {
 
   private render(): void {
     const s = this.state;
+    // A scan refused before its first step answered has no map to draw, only
+    // the reason, where the legend would be.
+    if (s === null && this.refused !== null) {
+      const p = document.createElement("span");
+      p.className = "ov-progress";
+      p.textContent = this.refused;
+      this.legend.replaceChildren(p);
+      return;
+    }
     if (s === null) return;
     // What one cell stands for belongs on the map, not in the rail's list of
     // facts about the file: it is a fact about the drawing, and read among
