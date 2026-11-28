@@ -723,6 +723,29 @@ pub fn kinds(codec: Codec) -> &'static [KindEntry] {
     Family::of(codec).map_or(&[], Family::kinds)
 }
 
+/// Whether a node in `parent` can hold more than one child in `child`, in
+/// `family`. A table's rows say which children a row can have, and this says
+/// how many: a deflate block has one `bfinal` and any number of code lengths.
+/// `tests/trace_kinds_real.rs` checks every answer of `false` against the
+/// samples.
+pub fn repeats(family: Family, parent: Role, child: Role) -> bool {
+    match (parent, child) {
+        // RAR 5 can define several filters in front of a block's first code.
+        (Role::Blocks, _) | (Role::Block, Role::Unit | Role::Field(StepField::FilterDef)) => true,
+        (_, Role::CodeLengthCodeLength | Role::CodeLength | Role::DistanceCodeLength | Role::RepeatLength | Role::ZeroLengths) => true,
+        (Role::Unit, Role::Ac | Role::Zrl) => true,
+        (Role::Codes, Role::EndOfBlock | Role::Unnamed) => false,
+        // One stored block, or one uncompressed LZMA2 chunk, is one run of
+        // bytes; LZ4, Snappy and FastLZ copy a run between every two matches.
+        (Role::Codes, Role::Stored) => !matches!(family, Family::Deflate | Family::Lzma),
+        // `compress` pads every time the code width grows; the others pad
+        // once, after their last code.
+        (Role::Codes, Role::Field(StepField::Padding)) => family == Family::Compress,
+        (Role::Codes, _) => true,
+        _ => false,
+    }
+}
+
 /// The kind of one node a trace laid down: which family's table, and which
 /// row of it. Two bytes, copied rather than allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

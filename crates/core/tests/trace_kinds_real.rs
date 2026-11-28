@@ -281,6 +281,20 @@ fn walk_blocks(
 ) {
     let Ok(n) = ev.node(doc, path) else { return };
     let Ok(kids) = ev.children(doc, path, 0, n.child_count) else { return };
+    // A row holds one child of a kind `repeats` says does not repeat there.
+    if let (Some(f), Some(parent)) = (family, n.trace_kind) {
+        let mut counts: std::collections::BTreeMap<&'static str, (Role, usize)> = Default::default();
+        for k in &kids {
+            if let Some(t) = k.trace_kind {
+                counts.entry(t.as_str()).or_insert((t.role(), 0)).1 += 1;
+            }
+        }
+        for (kind, (role, count)) in counts {
+            if count > 1 && !qubero_core::codec::tracekind::repeats(f, parent.role(), role) {
+                seen.failures.push(format!("{file} {path:?} {}: {count} of {kind}, which `repeats` says comes once", parent.as_str()));
+            }
+        }
+    }
     for (i, k) in kids.iter().enumerate() {
         if *budget == 0 {
             return;

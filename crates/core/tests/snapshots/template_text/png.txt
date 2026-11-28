@@ -3384,3 +3384,95 @@ type tiff.Jpeg = JPEG {
   icc_profile: stitched(from segments[].body.contents.data.piece) optional(when 0 < remaining)
       icc.Profile
 }
+
+decoder deflate {
+  blocks: traced blocks {
+    block: repeat(any number) traced block {
+      bfinal: width(fixed) computed enum DeflateFinal {
+        0 = more blocks follow, 1 = the last block
+      }
+      btype: width(fixed) computed enum DeflateBlockType {
+        0 = stored, 1 = fixed Huffman, 2 = dynamic Huffman, 3 = reserved
+      }
+      hlit: computed
+      hdist: computed
+      hclen: computed
+      code_length_code_length: repeat(any number) computed
+      code_length: repeat(any number) computed
+      distance_code_length: repeat(any number) computed
+      code_length_repeat: repeat(any number) computed
+      code_length_zeros: repeat(any number) computed
+      padding: computed
+      stored_len: computed
+      stored_nlen: computed
+      codes: traced symbols {
+        stored_data: Symbol {
+          kind: computed 3 enum SymbolKind {
+            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+            6 = padding, 7 = base64 group, 8 = ignored
+          }
+          length: computed
+        }
+        literal: repeat(any number) codebits Huffman code (fixed or table)
+        match: repeat(any number) codebits length and distance codes (encoded)
+        end_of_block: codebits Huffman code (fixed or table)
+        unnamed_codes: Symbol {
+          kind: computed 4 enum SymbolKind {
+            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+            6 = padding, 7 = base64 group, 8 = ignored
+          }
+          length: computed
+        }
+      }
+    }
+  }
+}
+
+decoder jpegscan for jpeg baseline {
+  mcus: traced blocks {
+    mcu: repeat(any number) traced block {
+      unit: repeat(any number) traced unit {
+        dc: codebits Huffman code (table) or codebits Huffman code and value bits (encoded)
+        ac: repeat(any number) codebits Huffman code and value bits (encoded)
+        zrl: repeat(any number) codebits Huffman code (table)
+        eob: codebits Huffman code (table)
+        unnamed_codes: Symbol {
+          kind: computed 4 enum SymbolKind {
+            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+            6 = padding, 7 = base64 group, 8 = ignored
+          }
+          length: computed
+        }
+      }
+      padding: Symbol {
+        kind: computed 6 enum SymbolKind {
+          0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+          6 = padding, 7 = base64 group, 8 = ignored
+        }
+      }
+      restart: width(fixed) computed enum RestartMarker {
+        0 = RST0, 1 = RST1, 2 = RST2, 3 = RST3, 4 = RST4, 5 = RST5, 6 = RST6, 7 = RST7
+      }
+      trailing: Symbol {
+        kind: computed 4 enum SymbolKind {
+          0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+          6 = padding, 7 = base64 group, 8 = ignored
+        }
+        length: computed
+      }
+    }
+  }
+}
+
+decoder png for png scanlines {
+  scanlines: traced blocks {
+    scanline: repeat(any number) traced block {
+      pass: width(nothing) computed
+      row: width(nothing) computed
+      filter: width(fixed) computed enum PngFilter {
+        0 = none, 1 = sub, 2 = up, 3 = average, 4 = paeth
+      }
+      filtered_row: bytes
+    }
+  }
+}
