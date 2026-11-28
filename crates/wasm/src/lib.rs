@@ -3406,6 +3406,20 @@ pub fn glyph_column(name: &str) -> String {
     qubero_core::hexdump::glyphs::Glyphs::by_name(name).map(|g| g.column()).unwrap_or_default()
 }
 
+/// The kinds of node a codec family's trace lays down, and what each kind
+/// is, as a JSON array of `TraceFamilyDto`. `family` is the word a kind
+/// starts with, such as `deflate` for `deflate.literal`; an empty string asks
+/// for every family, and a name no family has gets an empty array.
+#[wasm_bindgen]
+pub fn trace_kinds(family: &str) -> String {
+    use qubero_core::codec::tracekind::Family;
+    let families: Vec<TraceFamilyDto> = match family {
+        "" => Family::ALL.iter().map(|&f| trace_family_dto(f)).collect(),
+        name => Family::named(name).map(trace_family_dto).into_iter().collect(),
+    };
+    serde_json::to_string(&families).unwrap_or_else(|_| "[]".into())
+}
+
 /// Text typed into the text view, as the bytes it is in the file's encoding.
 ///
 /// The answer is a refusal or a run of bytes, never both and never a guess: an

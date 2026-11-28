@@ -12,6 +12,7 @@ mod spaces;
 mod spans;
 mod templates;
 mod text;
+mod tracekinds;
 
 pub(crate) use contents::*;
 pub(crate) use explain::*;
@@ -24,3 +25,4 @@ pub(crate) use spaces::*;
 pub(crate) use spans::*;
 pub(crate) use templates::*;
 pub(crate) use text::*;
+pub(crate) use tracekinds::*;
