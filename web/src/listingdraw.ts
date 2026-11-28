@@ -32,7 +32,7 @@ import { rowGlyphsFor } from "./viz/rowglyphs.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, refusedText, refusedTitle, REPORT, UNPACKED, TABLE } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -326,7 +326,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // samples are for and `3 fields` is only how they are kept.
   const said =
     n.refused !== null
-      ? (DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER)
+      ? refusedText(n.refused)
       : n.colour !== undefined
         ? n.colour
         : says(n)
@@ -337,8 +337,8 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   const value = el("span", "rp-value", said);
   // The limit a reason leaves out, such as how much of the file the editor
   // keeps in memory, on hover.
-  const limit = n.refused === null ? undefined : DECODED_REFUSED_TITLE[n.refused];
-  if (limit !== undefined) value.title = limit(formatLimit(RESIDENT_BYTES));
+  const limit = n.refused === null ? undefined : refusedTitle(n.refused, formatLimit(RESIDENT_BYTES));
+  if (limit !== undefined) value.title = limit;
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
   // square says what it is. Only where the template called the field or the
   // structure a colour, so nothing guesses at text that happens to look like

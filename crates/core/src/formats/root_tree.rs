@@ -785,7 +785,12 @@ fn unpack(data: &[u8], want: usize) -> Result<Vec<u8>, String> {
                 return Err(format!("a block compressed with {}, not read here", String::from_utf8_lossy(other)))
             }
         };
-        let piece = codec::decode(codec, block).map_err(|why| format!("a block failed to unpack: {}", why.as_str()))?;
+        // Said in words: the tag is what the interface looks words up by,
+        // and this message is shown as it is.
+        let piece = codec::decode(codec, block).map_err(|why| match why.after_name() {
+            Some(said) => format!("a block {said}"),
+            None => "a block failed to unpack".to_string(),
+        })?;
         out.extend_from_slice(&piece);
         at += 9 + packed;
     }

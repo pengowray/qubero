@@ -6,6 +6,7 @@ import { ADDRESS_MARK, byteDigits, formatBytes, formatOffset, getAddressBase } f
 // clause tables below are keyed by the words the core sends in `Shape`.
 import type { CodecKind, FieldTime, Shape, StringInsideKind } from "./doc.ts";
 import type { TablePlace } from "./tableplace.ts";
+import { isRefusalTag, type RefusalTag } from "./refusaltags.ts";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -204,23 +205,48 @@ export function isCodecKind(s: string): s is CodecKind {
  *  reports. */
 export const DECODED_INSIDE = "in the unpacked stream";
 
-/** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
-export const DECODED_REFUSED: Readonly<Record<string, string>> = {
-  "too-large": "too large to unpack (over 64 MiB)",
+/**
+ * Why a compressed run was left as bytes, keyed by the core's refusal tag
+ * (`TemplateNode.refused`), with a line for every tag in `REFUSAL_TAGS`, so
+ * a tag the core adds fails `tsc` here until it has words. Look a tag from
+ * the core up with `refusedText`, which takes any string.
+ *
+ * Every size says which size it is, packed or unpacked: a reader can meet
+ * 64 MiB and 512 MiB packed, and 64 MiB and 1 GiB unpacked, in one file.
+ * "Packed" is the size before unpacking, and not "compressed", since a
+ * stored ZIP entry, a base64 run and a PNG's inflated scanlines are held to
+ * 64 MiB as well. The hover, `DECODED_REFUSED_TITLE`, says which streams
+ * have which limit. The core's `Refusal::message` has the same words.
+ */
+export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
+  /** A run whose bytes are read into memory whole, past 64 MiB
+   *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip and
+   *  zstd, whatever kind it is, and any run in a joined stream or in edited
+   *  bytes. */
+  "too-large-copy": "too large to unpack (over 64 MiB packed)",
+  /** A run unpacked whole that comes to more than 64 MiB: every codec but
+   *  deflate, zlib, gzip, zstd and xz, and an xz stream with a BCJ or delta
+   *  filter. */
+  "too-large-output": "too large to unpack (over 64 MiB unpacked)",
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
-  "too-large-lazy": "too large to unpack (over 1 GiB)",
+  "too-large-lazy": "too large to unpack (over 1 GiB unpacked)",
   /** A deflate, zlib, gzip or zstd run read a piece at a time whose
    *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
    *  most such a run may take up. The limit is on the compressed size, not on
    *  what it unpacks to. Also said after a part's name, as "is …". */
-  "too-large-input": "too large to unpack (over 512 MiB compressed)",
+  "too-large-input": "too large to unpack (over 512 MiB packed)",
   /** A zstd run, or an xz stream, read a piece at a time: each frame or
    *  block of it is unpacked whole, and one of them unpacks to more than
    *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
    *  write, is refused this way once it is past 64 MiB. */
-  "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB)",
-  "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB)",
+  "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB unpacked)",
+  "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB unpacked)",
+  /** A zstd frame whose header asks for a window over 128 MiB, which
+   *  `zstd --long=28` and higher may write. It is refused before any of it
+   *  is unpacked, so nothing says how large it is, and the words name no
+   *  size of the stream. */
+  "too-large-zstd-window": "zstd with a window over 128 MiB, not unpacked",
   /** A run read from the file in one piece, which takes up more of it than
    *  the editor keeps in memory at once (`RESIDENT_BYTES` in `doc.ts`), so
    *  waiting for it would wait for ever. The limit is in the hover,
@@ -247,12 +273,51 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
 /** The same, for a run whose reason is one this build does not know. */
 export const DECODED_REFUSED_OTHER = "not unpacked";
 
+/** The words for a refusal tag the core sent, from `DECODED_REFUSED`, or
+ *  `DECODED_REFUSED_OTHER` for a tag this build does not know. */
+export function refusedText(refused: string): string {
+  return isRefusalTag(refused) ? DECODED_REFUSED[refused] : DECODED_REFUSED_OTHER;
+}
+
+/** The `default` of a `switch` with a `case` for every refusal tag. `tsc`
+ *  fails on the call while a tag has no `case`, since only then is
+ *  `refused` something other than `never`. Each such `switch` checks the
+ *  tag with `isRefusalTag` first, so this is never reached. */
+export function unknownRefusal(refused: never): never {
+  throw new Error(`no words for the refusal ${String(refused)}`);
+}
+
+/** The hover on both packed-size reasons, so that a reader who meets
+ *  64 MiB on one stream and 512 MiB on another reads the same rule from
+ *  either. A deflate stream inside an unpacked stream is held to 512 MiB as
+ *  well, so edited bytes and joined streams are the only exceptions. */
+const PACKED_LIMITS =
+  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip or zstd stream that has no edited bytes and is not inside a joined stream.";
+/** The same for both unpacked-size reasons, 64 MiB and 1 GiB. A deflate,
+ *  zlib, gzip or zstd stream whose packed bytes are a copy, in edited bytes
+ *  or inside a joined stream, is still unpacked a piece at a time from that
+ *  copy, so it has no exceptions here. */
+const UNPACKED_LIMITS =
+  "The editor unpacks streams to at most 64 MiB. The limit is 1 GiB for a deflate, zlib, gzip or zstd stream, and for an xz stream without a BCJ or delta filter.";
+
 /** The hover on a `DECODED_REFUSED` reason, for the reasons whose words leave
  *  out a limit the reader may want. `resident` is how much of the file the
  *  editor keeps in memory, as `formatLimit` writes it: `32 MiB`. */
-export const DECODED_REFUSED_TITLE: Readonly<Record<string, (resident: string) => string>> = {
+export const DECODED_REFUSED_TITLE: Readonly<Partial<Record<RefusalTag, (resident: string) => string>>> = {
+  "too-large-copy": (): string => PACKED_LIMITS,
+  "too-large-input": (): string => PACKED_LIMITS,
+  "too-large-output": (): string => UNPACKED_LIMITS,
+  "too-large-lazy": (): string => UNPACKED_LIMITS,
+  /** `can write`: zstd makes the window smaller for a small input, so not
+   *  every file made with `--long=28` has one this large. */
+  "too-large-zstd-window": (): string => "The editor unpacks zstd frames with a window of up to 128 MiB. zstd --long=28 and higher can write frames with a larger window.",
   "too-much-at-once": (resident: string): string => `The editor keeps at most ${resident} of the file in memory.`,
 };
+
+/** The hover for a refusal tag the core sent, if its reason has one. */
+export function refusedTitle(refused: string, resident: string): string | undefined {
+  return isRefusalTag(refused) ? DECODED_REFUSED_TITLE[refused]?.(resident) : undefined;
+}
 
 /**
  * What the `+` in front of a decoded field's address is counted from, carried
@@ -659,8 +724,9 @@ export const JOINED = {
   open: "Open joined stream",
   /**
    * In the status bar, when Open joined stream was pressed and the core
-   * refused because the stream's parts take up more than 64 MiB of the file:
-   * the tab keeps a copy of every part as the file has it, packed or not.
+   * refused because the stream's parts take up more than 64 MiB of the file
+   * (`too-large-copy`): the tab keeps a copy of every part that it cannot
+   * read from the file, packed or not.
    * The stream still reads a part at a time where it is declared, so this is
    * not a reason on its node the way `DECODED_REFUSED` is. `tab` is the title
    * the tab would have had, as in `failed`.
@@ -711,10 +777,14 @@ export const JOINED = {
    */
   failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
   /** Which of the above a refusal of Open joined stream is, by the core's
-   *  refusal word. */
+   *  refusal tag. A part the core decodes whole that unpacks to too much, or
+   *  that it will not unpack for any other reason, refuses the stream as
+   *  `failed`, so `too-large-output` and `too-large-zstd-window` say what
+   *  `failed` says. So does a tag this build does not know. */
   refused: (refused: string, tab: string): string => {
+    if (!isRefusalTag(refused)) return JOINED.failed(tab);
     switch (refused) {
-      case "too-large":
+      case "too-large-copy":
         return JOINED.tooLarge(tab);
       case "too-large-lazy":
         return JOINED.partTooLarge(tab);
@@ -726,8 +796,19 @@ export const JOINED = {
         return JOINED.partXzBlockTooLarge(tab);
       case "too-much-at-once":
         return JOINED.partTooMuchAtOnce(tab);
-      default:
+      case "too-large-output":
+      case "too-large-zstd-window":
+      case "failed":
+      case "settings":
+      case "unaligned":
+      case "progressive":
+      case "arithmetic":
+      case "lossless":
+      case "hierarchical":
+      case "12-bit":
         return JOINED.failed(tab);
+      default:
+        return unknownRefusal(refused);
     }
   },
   /** Names the tab a joined stream opens in. The same shape as
@@ -5085,26 +5166,26 @@ export const SIDEBAR = {
    *  when the field was read through a `same as ..., but big-endian` line and
    *  its numbers are in the other byte order from the one the line writes. */
   readAs: (order: "big" | "little"): string => `read as ${order}-endian`,
-  /** On a field's line in the Template tab, after the field's name and type,
-   *  when a click on it found no such field in this file: its switch arm is
-   *  not the one taken, its list is empty, or it is optional and absent. */
-  notInFile: "not in this file",
+  /** Beside the Template tab's copy button, while the line just clicked is
+   *  marked, when the click found no such field in this file: its switch arm
+   *  is not the one taken, its list is empty, or it is optional and absent. */
+  notInFile: "Not in this file",
   /** The same, when the field is in a switch arm the file does not take and
-   *  the switch is read once: `not in this file: cputype is 0x1000007`. The
+   *  the switch is read once: `Not in this file: cputype is 0x1000007`. The
    *  field the switch reads and its value are written as the template writes
    *  them, so the reader can find them on the lines above. */
-  notInFileIs: (on: string, value: string): string => `not in this file: ${on} is ${value}`,
+  notInFileIs: (on: string, value: string): string => `Not in this file: ${on} is ${value}`,
   /** The same, when the switch is read more than once (inside a list) and no
-   *  read takes the arm: `not in this file: command is never 1`. `keys` are the
+   *  read takes the arm: `Not in this file: command is never 1`. `keys` are the
    *  arm's keys as written, at most three. */
   notInFileNone: (on: string, keys: readonly string[]): string =>
-    `not in this file: ${on} is never ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
+    `Not in this file: ${on} is never ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
    *  named because the clicked field may be a list itself, and "elements"
    *  alone would read as its own. */
   notInFirst: (n: number, list: string): string =>
-    list === "" ? `not found in the first ${n.toLocaleString()} fields` : `not found in the first ${n.toLocaleString()} elements of ${list}`,
+    list === "" ? `Not found in the first ${n.toLocaleString()} fields` : `Not found in the first ${n.toLocaleString()} elements of ${list}`,
   /** The Template tab's copy button, as its tooltip and accessible name. */
   copyTemplate: "Copy the template text",
   /** Beside the Template tab's copy button, after the template text was put

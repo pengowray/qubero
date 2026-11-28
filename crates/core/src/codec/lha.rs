@@ -397,7 +397,7 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
             let sym = lit.decode(&mut bits)?;
             if (sym as usize) < 256 {
                 if out.len() >= CAP_BYTES {
-                    return Err(Refusal::TooLarge);
+                    return Err(Refusal::TooLargeOutput);
                 }
                 out.push(sym as u8);
                 if !coarse {
@@ -425,7 +425,7 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
                 return Err(Refusal::Failed);
             }
             if out.len() + len as usize > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             if !coarse {
                 b.push(at, out.len() as u64, StepKind::Match { len, dist });

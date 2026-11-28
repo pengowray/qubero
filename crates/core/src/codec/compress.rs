@@ -228,7 +228,7 @@ fn read(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
         };
         let len = repeat.map_or(1, |(_, len)| len);
         if out.len() + len as usize > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let wrote = out.len() as u32;
         match repeat {

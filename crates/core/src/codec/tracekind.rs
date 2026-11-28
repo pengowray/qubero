@@ -638,18 +638,18 @@ const RAR5: &[KindEntry] = &[
             R::Codes,
         ],
     ),
-    k(R::Field(F::BlockHeader), "rar5.block_header", "The block's flags, checksum and size.", &[NUMBER]),
-    k(R::CodeLengthCodeLength, "rar5.code_length_code_length", "4 bits: one code length of the table the other tables are coded with.", &[NUMBER]),
-    k(R::CodeLength, "rar5.code_length", "One literal/length symbol's code length.", &[NUMBER]),
-    k(R::DistanceCodeLength, "rar5.distance_code_length", "One distance, alignment or length symbol's code length.", &[NUMBER]),
-    k(R::RepeatLength, "rar5.code_length_repeat", "Code 16 or 17 and its count: the previous code length, repeated.", &[NUMBER]),
-    k(R::ZeroLengths, "rar5.code_length_zeros", "Code 18 or 19 and its count, or in the first table a 15 and a count nibble: a run of zero lengths.", &[NUMBER]),
-    r(R::Codes, "rar5.codes", "A block's codes.", CODES, &[R::Literal, R::Match, R::Field(F::FilterDef), R::Field(F::Padding), R::Unnamed]),
+    k(R::Field(F::BlockHeader), "rar5.block_header", "Flags byte, checksum byte and block size: 1 to 3 bytes, little-endian, count in flags bits 3 to 5.", &[NUMBER]),
+    k(R::CodeLengthCodeLength, "rar5.code_length_code_length", "One of the 20 code-length table code lengths: 4 bits, or 8 bits for a 15 (15 then 0).", &[NUMBER]),
+    k(R::CodeLength, "rar5.code_length", "One of the 306 code lengths of the literal/length table, 0 to 15.", &[NUMBER]),
+    k(R::DistanceCodeLength, "rar5.distance_code_length", "One code length of the distance (64 codes), low-distance (16 codes) or code 258 to 261 length (44 codes) table.", &[NUMBER]),
+    k(R::RepeatLength, "rar5.code_length_repeat", "Code 16 + 3 bits (3 to 10 times) or 17 + 7 bits (11 to 138 times): repeat the previous code length.", &[NUMBER]),
+    k(R::ZeroLengths, "rar5.code_length_zeros", "A run of zero code lengths: code 18 + 3 bits (3 to 10), 19 + 7 bits (11 to 138), or nibbles 15, n (n + 2 zeros).", &[NUMBER]),
+    r(R::Codes, "rar5.codes", "The block's codes after its tables, each starting with a literal/length table code.", CODES, &[R::Literal, R::Match, R::Field(F::FilterDef), R::Field(F::Padding), R::Unnamed]),
     k(R::Literal, "rar5.literal", "A code below 256: one byte of output.", &[HUFFMAN_TABLE]),
-    k(R::Match, "rar5.match", "A length code and a distance code, each with its extra bits, or a repeat of a recent distance: a copy of earlier output.", &[LENGTH_AND_DISTANCE]),
-    k(R::Field(F::FilterDef), "rar5.filter", "Code 256 and its fields: a filter to run over a range of the output.", NUMBER_OR_RECORD),
-    k(R::Field(F::Padding), "rar5.padding", "The bits after a block's last code, up to where its header said it ends.", &[PADDING_RECORD]),
-    k(R::Unnamed, "rar5.unnamed_codes", "The rest of a block's codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
+    k(R::Match, "rar5.match", "Code 262 to 305 + length bits + distance code and bits; 257 repeats the last match; 258 to 261 reuse 1 of the last 4 distances.", &[LENGTH_AND_DISTANCE]),
+    k(R::Field(F::FilterDef), "rar5.filter", "Code 256: output start and length (each 2 bits + 1 to 4 bytes), 3-bit type, and Delta's 5-bit channel count.", NUMBER_OR_RECORD),
+    k(R::Field(F::Padding), "rar5.padding", "Bits after a block's last code up to the end its header gives, or bytes after the last block.", &[PADDING_RECORD]),
+    k(R::Unnamed, "rar5.unnamed_codes", "All of a block's codes once the trace reaches its step limit, or a code 257 with no earlier match.", &[UNNAMED_RECORD]),
 ];
 
 /// LZMA, read by `codec::lzma`: one block for an LZMA1 stream, one per chunk
@@ -697,13 +697,13 @@ const LOW_BITS: &[KindEntry] = &[
 
 /// NASA CDF's Huffman and adaptive Huffman coding, read by `codec::cdfhuff`.
 const CDF_HUFFMAN: &[KindEntry] = &[
-    r(R::Blocks, "cdfhuffman.blocks", "The coded run as one block.", BLOCKS, &[R::Block]),
-    r(R::Block, "cdfhuffman.block", "The byte counts the tree is built from, if any, then the codes.", BLOCK, &[R::Field(F::FrequencyTable), R::Codes]),
-    k(R::Field(F::FrequencyTable), "cdfhuffman.frequency_table", "The runs of byte counts the Huffman tree is built from.", &[NUMBER]),
+    r(R::Blocks, "cdfhuffman.blocks", "The whole compressed stream as one block; CDF's Huffman coding has no blocks of its own.", BLOCKS, &[R::Block]),
+    r(R::Block, "cdfhuffman.block", "For Huffman (type 2), the counts the tree is built from and then the codes; for adaptive Huffman (type 3), only the codes.", BLOCK, &[R::Field(F::FrequencyTable), R::Codes]),
+    k(R::Field(F::FrequencyTable), "cdfhuffman.frequency_table", "Counts: runs of a first byte value, a last byte value and a 1-byte count per value from first to last, ended by a first value of 0.", &[NUMBER]),
     r(R::Codes, "cdfhuffman.codes", "The block's codes.", CODES, &[R::Literal, R::EndOfBlock, R::Field(F::Padding), R::Unnamed]),
-    k(R::Literal, "cdfhuffman.literal", "A Huffman code: one byte of output.", &[HUFFMAN_TABLE]),
-    k(R::EndOfBlock, "cdfhuffman.end_of_stream", "The code that ends the stream.", &[HUFFMAN_TABLE]),
-    k(R::Field(F::Padding), "cdfhuffman.padding", "The bits after the end code, to the end of the run.", &[PADDING_RECORD]),
+    k(R::Literal, "cdfhuffman.literal", "A Huffman code for one byte; in adaptive Huffman, a new byte is the ESCAPE code (symbol 257) and then the byte in 8 bits.", &[HUFFMAN_TABLE]),
+    k(R::EndOfBlock, "cdfhuffman.end_of_stream", "END_OF_STREAM: the code for symbol 256, which ends the compressed data.", &[HUFFMAN_TABLE]),
+    k(R::Field(F::Padding), "cdfhuffman.padding", "The zero bits that fill out the byte holding END_OF_STREAM, and any bytes after that byte to the end of the compressed data.", &[PADDING_RECORD]),
     k(R::Unnamed, "cdfhuffman.unnamed_codes", "The rest of the codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
@@ -711,10 +711,10 @@ const CDF_HUFFMAN: &[KindEntry] = &[
 const PICO8: &[KindEntry] = &[
     r(R::Blocks, "pico8.blocks", "The compressed code as one block.", BLOCKS, &[R::Block]),
     r(R::Block, "pico8.block", "The compressed code's literals and matches.", BLOCK, &[R::Codes]),
-    r(R::Codes, "pico8.codes", "The block's literals and matches.", CODES, &[R::Literal, R::Match, R::EndOfBlock]),
-    k(R::Literal, "pico8.literal", "One character of the code.", &[LITERAL_RECORD]),
-    k(R::Match, "pico8.match", "A copy of earlier output.", &[MATCH_RECORD]),
-    k(R::EndOfBlock, "pico8.end", "The end of the code: a zero byte after a pxa raw run, or two zero bytes in the old format.", &[END_RECORD]),
+    r(R::Codes, "pico8.codes", "The block's literals, back-references and end markers.", CODES, &[R::Literal, R::Match, R::EndOfBlock]),
+    k(R::Literal, "pico8.literal", "One byte of the code: in pxa, a move-to-front table index or a raw run byte; in the old format, a table index 0x01 to 0x3B, or 0x00 and the byte.", &[LITERAL_RECORD]),
+    k(R::Match, "pico8.match", "A back-reference: an offset and a length, a copy of earlier output; in the old format, 2 bytes, the first 0x3C or above.", &[MATCH_RECORD]),
+    k(R::EndOfBlock, "pico8.end", "In pxa, the zero byte that ends a raw run, after which decoding continues; in the old format, the two zero bytes that end the code.", &[END_RECORD]),
 ];
 
 /// Every kind a codec's nodes can be. Empty for a codec whose nodes have no

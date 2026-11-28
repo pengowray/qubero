@@ -294,9 +294,12 @@ export type TemplateNode = {
    *  else is the bytes a compressed stream came to, and the offset is counted
    *  from the front of those rather than from the front of the file. */
   readonly space: number;
-  /** For a compressed run that would not open, why not, as a key of
-   *  `DECODED_REFUSED`: `too-large`, `too-much-at-once`, `failed` and the
-   *  rest. Null for every other field. */
+  /** For a compressed run that would not open, why not, as one of the
+   *  core's refusal tags (`REFUSAL_TAGS` in `refusaltags.ts`, the keys of
+   *  `DECODED_REFUSED`): `too-large-copy`, `too-much-at-once`, `failed` and
+   *  the rest. Kept a string, since a `src/pkg` built from another core may
+   *  send a tag this build does not know: `isRefusalTag` narrows it, and
+   *  `refusedText` gives its words. Null for every other field. */
   readonly refused: string | null;
   /** True for a compressed run. One that opened can be opened as a document of
    *  its own; one that did not says why in `refused` instead. */

@@ -125,7 +125,7 @@ test("the open button and its refusals say joined, not unpacked", () => {
 
 test("a refusal of a joined stream is said by the core's word for it", () => {
   const tab = JOINED.tabTitle("stream", "range.bam");
-  assert.equal(JOINED.refused("too-large", tab), JOINED.tooLarge(tab));
+  assert.equal(JOINED.refused("too-large-copy", tab), JOINED.tooLarge(tab));
   assert.equal(JOINED.refused("too-large-lazy", tab), JOINED.partTooLarge(tab));
   assert.equal(JOINED.refused("too-large-input", tab), JOINED.partTooLargeInput(tab));
   assert.equal(JOINED.refused("too-large-zstd-frame", tab), JOINED.partZstdFrameTooLarge(tab));
@@ -144,8 +144,11 @@ test("a refusal of a joined stream is said by the core's word for it", () => {
     UNPACKED.tooMuchAtOnce(tab, "32 MiB"),
     "Couldn't open stream joined from range.bam: it needs more than 32 MiB of the file in memory at once, and the editor keeps at most 32 MiB.",
   );
-  // Any other word is said as a part that will not read, as before.
+  // Any other word is said as a part that will not read, as before, and so
+  // is one this build does not know.
   assert.equal(JOINED.refused("unaligned", tab), JOINED.failed(tab));
+  assert.equal(JOINED.refused("too-large-output", tab), JOINED.failed(tab));
+  assert.equal(JOINED.refused("new-reason", tab), JOINED.failed(tab));
 });
 
 /** A node with only what the offer reads set. */

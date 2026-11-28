@@ -981,21 +981,22 @@ for ever, since both joins start again from the first part on every
 
 | Limit | Value | Status |
 |---|---|---|
-| `LAZY_CAP_BYTES` | 1 GiB of output | Stays. The zip-bomb guard. |
-| `CAP_BYTES`, as the output of a run held whole | 64 MiB | Stays. |
+| `LAZY_CAP_BYTES` | 1 GiB of output | Stays. The zip-bomb guard. Refused past it as `TooLargeLazy` (`too-large-lazy`). |
+| `CAP_BYTES`, as the output of a run held whole | 64 MiB | Stays. Refused past it as `TooLargeOutput` (`too-large-output`). |
 | `CAP_BYTES`, as the compressed size of a run that can be indexed | 64 MiB | Since part 7c, replaced by `Limits::input`, 512 MiB, for a pass that reads its run through a handle a window at a time. A pass that reads a copy of its run keeps 64 MiB, as `Limits::copy_input`: an xz run, a run no handle reaches, and a run in a source with too little room for two windows. |
-| `CAP_BYTES`, as the input and output of a codec that cannot be indexed | 64 MiB | Stays. The input is gathered a window at a time (part 2). |
+| `CAP_BYTES`, as the input and output of a codec that cannot be indexed | 64 MiB | Stays. The input is gathered a window at a time (part 2). Refused past it as `TooLargeCopy` (`too-large-copy`) for the input and `TooLargeOutput` for the output. |
 | `inflate_len`'s output cap | 64 MiB | Stays. |
-| `Limits::span` | 64 MiB of output per zstd frame or xz block | Stays. |
+| `Limits::span` | 64 MiB of output per zstd frame or xz block | Stays. Refused past it as `TooLargeUnit` (`too-large-zstd-frame`, `too-large-xz-block`). |
+| `MAX_WINDOW` in `codec/frames.rs` | a zstd window of 128 MiB | Stays. A frame asking for more is refused as `TooLargeWindow` (`too-large-zstd-window`) before any of it is decoded, so nothing says how large it is. |
 | `INDEXED_RUN_BYTES` | 64 MiB of what indexes hold | Stays at 64 MiB. Since part 7c it weighs each index by what it holds for as long as it is kept (`Seekable::kept_bytes`): its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB), its block starts (at most 1 MiB) and an xz stream's list of blocks, about 9.1 MiB at most, and the copy of its run when it holds one. The caches inside each index are bounded as before, and not weighed. |
 | `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Since part 10 it counts only what the joined stream copies: a stored part or a packed part's run that no handle reaches (in a `MemSource`, a stitched space or an edited stretch), a packed run decoded whole that is too long to read from the store in one read (next row), and the run of a packed part read through an index that holds a copy. A part read through a handle counts nothing. Since part 7c a packed part read through an index over a handle counted nothing. |
 | A packed part's run read through a handle, for a part decoded whole (new) | the gather window (1 MiB in the browser), and an eighth of what the source keeps | Part 10 (`Evaluator::joined_input`). Each decode reads the whole run in one read. A longer run is copied, and counts against `whole_cap`. No limit when the source answers any read whole. A BGZF block is under 64 KiB. |
 | One read of a joined stream read a part at a time (new) | Half of what the source keeps, less two of those runs, over `expand` | Part 10 (`Joined::resident_limit`), when a part is read through a handle onto a source with a resident limit. `expand` is the most bytes of run a packed part read through a handle takes per byte it unpacks to, and at least 1. For a BAM in the browser it is 16 MiB less two blocks. The least of that and the span cache of each part read through an index. |
 | `Limits::input` (new) | 512 MiB of compressed input | Built in part 7c. A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB; a run of exactly 512 MiB is allowed. A longer run read through a handle is refused as `Refusal::TooLargeInput` (`too-large-input`) before anything is read, since the size of the field holding the run is known. |
-| `Limits::copy_input` (new) | 64 MiB (`CAP_BYTES`) of compressed input | Part 7c. The most a run may take up when its pass reads a copy of it. A longer one is refused as `TooLarge` before anything is read. A field of `Limits` so that a test can show a run past it opening through a handle. |
+| `Limits::copy_input` (new) | 64 MiB (`CAP_BYTES`) of compressed input | Part 7c. The most a run may take up when its pass reads a copy of it. A longer one is refused as `TooLargeCopy` (`too-large-copy`) before anything is read. A field of `Limits` so that a test can show a run past it opening through a handle. |
 | `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned, to at most 8 MiB. |
-| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). A frame, block or stretch over it is refused as `TooLarge`. |
-| `Limits::span_input` (new) | 16 MiB of compressed input | The most one read of a zstd or xz span may gather at once. A span over it is refused when read, as `TooLarge`. Deflate spans never reach it (8.5 MiB at most). |
+| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). Since part 6, a frame, block or stretch over it is refused as `TooMuchAtOnce` (`too-much-at-once`), and only when the source has a resident limit. |
+| `Limits::span_input` (new) | 16 MiB of compressed input | The most one read of a zstd or xz span may gather at once. Since part 6, a span over it is refused when read, as `TooMuchAtOnce`, and only when the source has a resident limit. Deflate spans never reach it (8.5 MiB at most). |
 | `STEP_INPUT` (new) | 256 KiB of compressed input | How far past its start a step may stop; its window reaches `DEFLATE_MARGIN` further. Beside `INDEX_STEP_BYTES`, 256 KiB of output. |
 | `DEFLATE_MARGIN`, and the zstd margin (new) | 65,541 bytes; 128 KiB + 25 bytes | How far past where a step stops its window has to reach. |
 | `MAX_HEAD_BYTES` (new) | 287 bytes | A deflate block header and its tables, from the header's first byte. |
@@ -1014,6 +1015,26 @@ frame or block of more than 16 MiB compressed. `xz -T0 -6` writes blocks of
 A larger value leaves less of the 32 MiB store for everything else a span
 read competes with. Lifting it needs a span decode that keeps its decoder
 between reads; see "Still to do".
+
+### Refusal tags
+
+Each limit above that refuses a run has a `Refusal` of its own, and the web
+looks its words up by the refusal's tag (`Refusal::as_str`). The tags are listed once, in
+`codec.rs`: a `refusal_tags!` list makes both `Refusal::as_str` and
+`Refusal::ALL`, so a refusal added to the enum without a tag does not
+compile. `web/src/refusaltags.ts` is generated from `Refusal::ALL`, and the
+core test `refusal_tags_ts_matches_the_enum` fails while the checked-in file
+differs, naming the command that writes it:
+
+    UPDATE=1 cargo test -p qubero-core --lib refusal_tags
+
+On the web side `DECODED_REFUSED` is a `Record<RefusalTag, string>`, and
+`JOINED.refused`, `RV.refused`, `RV.pngNotInflated` and
+`RV.pngNotUnfiltered` are a `switch` over every tag that ends in
+`unknownRefusal`, so `tsc` fails on a tag with no words. The wasm still sends
+a plain string, since a `src/pkg` built from another core may send a tag
+this build does not know: `isRefusalTag` narrows it, and `refusedText` and
+`refusedTitle` give the words and the hover.
 
 ## The browser
 
@@ -2510,8 +2531,26 @@ code differs from "Joined streams":
   limit is 512 MiB, and the output limits are 64 MiB for a run held whole and
   1 GiB for an indexed run. One phrase cannot say all three. Part 7c gave
   the 512 MiB limit a refusal of its own, `too-large-input`; `too-large`
-  still says both a copy past 64 MiB compressed and a run held whole past
+  still said both a copy past 64 MiB compressed and a run held whole past
   64 MiB of output.
+  **Answered: split, in three.** `TooLargeCopy` (`too-large-copy`) is a
+  compressed run past 64 MiB read from a copy held whole, which is every
+  run that is not read through a handle, and a joined stream whose copies
+  of its parts pass `whole_cap`. `TooLargeOutput` (`too-large-output`) is a
+  run decoded whole that comes to more than 64 MiB, or that its stream or
+  container says will. `TooLargeWindow` (`too-large-zstd-window`) is a zstd
+  frame asking for a window over 128 MiB, which `TooLarge` said before
+  although nothing says how large such a frame is. Every size in the words
+  now says which size it is: "too large to unpack (over 64 MiB packed)",
+  "(over 512 MiB packed)", "(over 64 MiB unpacked)" and "(over 1 GiB
+  unpacked)". "Packed", the size before unpacking, rather than
+  "compressed": a stored ZIP entry, a base64 run and a PNG's inflated
+  scanlines are refused past 64 MiB too, and one word for both packed
+  limits reads as one size with two limits. The hover on the two packed
+  reasons is the same text, saying which streams may be 512 MiB packed, and
+  the hover on the two unpacked reasons does the same for 1 GiB, so a
+  reader who meets both limits in one file reads the same rule on either
+  row. See "Refusal tags" under "Limits".
 - Is the length check in `join_lazily` worth a walk across goes, or should a
   part of the wrong length show as a failed read when it is read?
   **Answered in part 10: the check stays.** Over handles it costs time and

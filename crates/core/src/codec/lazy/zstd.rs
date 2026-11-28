@@ -31,10 +31,10 @@ use crate::codec::{Codec, Refusal, SpanUnit, StepField, StepKind, Trace, TraceBu
 /// [`Refusal::TooLargeUnit`] however many frames there are, since a span is
 /// decoded whole and a frame cannot be entered anywhere but at its start. A
 /// frame whose header asks for a window over 128 MiB is refused before it is
-/// decoded, as [`Refusal::TooLarge`], the refusal the whole decoder gives it,
-/// since nothing says yet how large the frame is. A file of one frame is the
-/// usual case: `zstd` writes one frame whatever `-T` and `-B` say, and only
-/// `pzstd`, or files joined end to end, have several.
+/// decoded, as [`Refusal::TooLargeWindow`], the refusal the whole decoder
+/// gives it, since nothing says yet how large the frame is. A file of one
+/// frame is the usual case: `zstd` writes one frame whatever `-T` and `-B`
+/// say, and only `pzstd`, or files joined end to end, have several.
 ///
 /// A checkpoint is due at a frame by the output, or by the input up to where
 /// the frame starts itself, past the skippable frames in front of it. A frame
@@ -229,7 +229,7 @@ impl ZstdPass {
                     &mut |bytes| {
                         if out.len() + bytes.len() > limits.whole {
                             over = true;
-                            return Err(Refusal::TooLarge);
+                            return Err(Refusal::TooLargeOutput);
                         }
                         out.extend_from_slice(bytes);
                         Ok(())
@@ -245,7 +245,7 @@ impl ZstdPass {
                         Ok(Went::Needs(range))
                     }
                     Ok(Walked::Ended(end)) => Ok(Went::Stepped(Stepped::Done(Decoded::Whole(out, frames::zstd_done(trace, run_len, end))))),
-                    Err(Refusal::TooLarge) if over => {
+                    Err(Refusal::TooLargeOutput) if over => {
                         drop((out, trace));
                         if largest > limits.span as u64 {
                             return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame));
@@ -262,7 +262,7 @@ impl ZstdPass {
                     }
                     // A frame past the walk's cap, which is at least the span
                     // limit.
-                    Err(Refusal::TooLarge) if walk.frame_too_large() => Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
+                    Err(Refusal::TooLargeOutput) if walk.frame_too_large() => Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
                     Err(other) => Err(other),
                 }
             }
@@ -276,7 +276,7 @@ impl ZstdPass {
                 });
                 let walked = match walked {
                     // A frame past the walk's cap, which is the span limit.
-                    Err(Refusal::TooLarge) if walk.frame_too_large() => return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
+                    Err(Refusal::TooLargeOutput) if walk.frame_too_large() => return Err(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)),
                     w => w?,
                 };
                 match walked {

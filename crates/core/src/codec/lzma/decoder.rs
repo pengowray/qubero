@@ -443,7 +443,7 @@ pub(super) fn run(
             b.push(coarse.in_bits, coarse.out_bytes, StepKind::Opaque);
         }
         if out.len() >= CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
 
         let sym_in = rc.bit_pos();
@@ -540,7 +540,7 @@ pub(super) fn run(
             return Err(Refusal::Failed);
         }
         if out.len() + len as usize > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         copy(out, dict_start, dist, len as usize)?;
         if !coarse.on {

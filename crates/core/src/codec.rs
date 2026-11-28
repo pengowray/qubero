@@ -485,8 +485,25 @@ impl CodecKind {
 /// what happened and the interface says it in words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The run, or what it would come to, is past [`CAP_BYTES`].
-    TooLarge,
+    /// The compressed run is past [`CAP_BYTES`], the most of a run that is
+    /// read from a copy of it held whole. Every decoder holds its run whole
+    /// but [`lazy`]'s index pass, and that pass too reads a copy of an xz
+    /// run, of a run no handle reaches (in a stitched space or an edited
+    /// stretch), and of a run in a source with too little room for two
+    /// windows: see [`lazy::Limits::copy_input`]. A joined stream whose
+    /// copies of its parts would come to more than its cap is refused this
+    /// way as well. Said before the run is decoded, since the field's size
+    /// says it.
+    TooLargeCopy,
+    /// What a run decoded whole comes to is past the cap it was decoded
+    /// under, [`CAP_BYTES`] for every decoder that holds its output whole.
+    /// Said once the output passes the cap, or before anything is decoded
+    /// where the stream or its container states its unpacked size.
+    ///
+    /// Inside [`lazy`] it is also how a sink says the output went past the
+    /// cap of the phase it is in, which the pass then turns into a change of
+    /// phase or into [`Refusal::TooLargeLazy`].
+    TooLargeOutput,
     /// What the run would come to is past [`lazy::LAZY_CAP_BYTES`], the
     /// limit for a run read a piece at a time, which is larger than
     /// [`CAP_BYTES`]. Only a codec [`lazy`] can index says this.
@@ -496,7 +513,7 @@ pub enum Refusal {
     /// handle onto its source: a trace counts the bits of its steps from the
     /// run's front in 32 bits. Said before any of the run is read, since the
     /// field's size says it. A pass that reads a copy of its run says
-    /// [`Refusal::TooLarge`] past [`CAP_BYTES`] instead.
+    /// [`Refusal::TooLargeCopy`] past [`CAP_BYTES`] instead.
     TooLargeInput,
     /// One zstd frame or one xz block of the run comes to more than
     /// [`lazy::Limits::span`], 64 MiB. A run of several frames or blocks is
@@ -506,9 +523,16 @@ pub enum Refusal {
     /// plain `zstd` and `xz` write, is refused this way.
     ///
     /// Said only by [`lazy`]'s index pass. The decoders that hold a run whole
-    /// say [`Refusal::TooLarge`] for the same frame, since there the whole
-    /// run is past the cap.
+    /// say [`Refusal::TooLargeOutput`] for the same frame, since there the
+    /// whole run is past the cap.
     TooLargeUnit(SpanUnit),
+    /// A zstd frame whose header asks for a window of more than 128 MiB,
+    /// which is what `zstd --long=28` and higher may write. The decoder keeps
+    /// a frame's last window of output until the frame ends, so the frame is
+    /// refused before any of it is decoded, and nothing says how large the
+    /// frame or the run would have come to. See `MAX_WINDOW` in
+    /// [`frames`].
+    TooLargeWindow,
     /// The run has to be read in one call, and it takes up more of the file
     /// than the file's source keeps at once (see
     /// [`Source::resident_limit`](crate::source::Source::resident_limit)): in
@@ -581,46 +605,96 @@ impl Unsupported {
     }
 }
 
-impl Refusal {
-    /// The word the interface looks the message up by.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Refusal::TooLarge => "too-large",
-            Refusal::TooLargeLazy => "too-large-lazy",
-            Refusal::TooLargeInput => "too-large-input",
-            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
-            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
-            Refusal::TooMuchAtOnce => "too-much-at-once",
-            Refusal::Failed => "failed",
-            Refusal::Settings => "settings",
-            Refusal::Unaligned => "unaligned",
-            Refusal::Unsupported(Unsupported::Progressive) => "progressive",
-            Refusal::Unsupported(Unsupported::Arithmetic) => "arithmetic",
-            Refusal::Unsupported(Unsupported::Lossless) => "lossless",
-            Refusal::Unsupported(Unsupported::Hierarchical) => "hierarchical",
-            Refusal::Unsupported(Unsupported::Precision12) => "12-bit",
-        }
-    }
+/// Each refusal with its tag, the word the interface looks its message up
+/// by. [`Refusal::as_str`] and [`Refusal::ALL`] are both made from the one
+/// list below, so they cannot disagree: `as_str` is a `match` over its
+/// lines, with no catch-all, and does not compile while a refusal has no
+/// line. A refusal that carries a value has a line for each value.
+macro_rules! refusal_tags {
+    ($($v:ident $(($u:ident :: $w:ident))? => $tag:literal,)*) => {
+        impl Refusal {
+            /// Every refusal, in the order of the list, a refusal that
+            /// carries a value once for each value. `web/src/refusaltags.ts`
+            /// is generated from this: see the test
+            /// `refusal_tags_ts_matches_the_enum`.
+            pub const ALL: &'static [Refusal] = &[$(Refusal::$v $(($u::$w))?),*];
 
+            /// The word the interface looks the message up by.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Refusal::$v $(($u::$w))? => $tag,)*
+                }
+            }
+        }
+    };
+}
+
+refusal_tags! {
+    TooLargeCopy => "too-large-copy",
+    TooLargeOutput => "too-large-output",
+    TooLargeLazy => "too-large-lazy",
+    TooLargeInput => "too-large-input",
+    TooLargeUnit(SpanUnit::ZstdFrame) => "too-large-zstd-frame",
+    TooLargeUnit(SpanUnit::XzBlock) => "too-large-xz-block",
+    TooLargeWindow => "too-large-zstd-window",
+    TooMuchAtOnce => "too-much-at-once",
+    Failed => "failed",
+    Settings => "settings",
+    Unaligned => "unaligned",
+    Unsupported(Unsupported::Progressive) => "progressive",
+    Unsupported(Unsupported::Arithmetic) => "arithmetic",
+    Unsupported(Unsupported::Lossless) => "lossless",
+    Unsupported(Unsupported::Hierarchical) => "hierarchical",
+    Unsupported(Unsupported::Precision12) => "12-bit",
+}
+
+impl Refusal {
     /// Why the run was left as bytes, in lower-case words that finish a
     /// sentence, for the few places in the core that write a refusal out
     /// rather than handing the interface [`Refusal::as_str`]. The same words
     /// as `DECODED_REFUSED` in the web's `strings.ts`, apart from the JPEG
     /// kinds, which say "which Qubero doesn't decode": see
     /// [`Unsupported::message`].
+    ///
+    /// Each size says which size it is, packed or unpacked, since a reader
+    /// can meet two limits for each in one file: 64 MiB and 512 MiB packed,
+    /// 64 MiB and 1 GiB unpacked. "Packed", the size before unpacking, and
+    /// not "compressed": a stored ZIP entry, a base64 run and a PNG's
+    /// inflated scanlines are refused past 64 MiB as well. The interface's
+    /// hover on these words says which streams have which limit.
     pub fn message(self) -> &'static str {
         match self {
-            Refusal::TooLarge => "too large to unpack (over 64 MiB)",
-            Refusal::TooLargeLazy => "too large to unpack (over 1 GiB)",
-            Refusal::TooLargeInput => "too large to unpack (over 512 MiB compressed)",
-            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB)",
-            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB)",
+            Refusal::TooLargeCopy => "too large to unpack (over 64 MiB packed)",
+            Refusal::TooLargeOutput => "too large to unpack (over 64 MiB unpacked)",
+            Refusal::TooLargeLazy => "too large to unpack (over 1 GiB unpacked)",
+            Refusal::TooLargeInput => "too large to unpack (over 512 MiB packed)",
+            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB unpacked)",
+            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB unpacked)",
+            Refusal::TooLargeWindow => "zstd with a window over 128 MiB, not unpacked",
             Refusal::TooMuchAtOnce => "too large for the editor to keep in memory at once",
             Refusal::Failed => "unpacking failed",
             Refusal::Unaligned => "not on a byte boundary",
             Refusal::Settings => "the file doesn't say how this was packed",
             Refusal::Unsupported(u) => u.message(),
         }
+    }
+
+    /// Why the run was left as bytes, said after the name of what was
+    /// refused, for a refusal over a size: `blocks[0].compressed is too large
+    /// to unpack (over 1 GiB unpacked)`, or `the data it covers has a zstd
+    /// frame that is too large to unpack (over 64 MiB unpacked)`. None for
+    /// every other refusal, whose words do not read after a name, and which
+    /// each place that says it words for itself.
+    pub fn after_name(self) -> Option<String> {
+        Some(match self {
+            Refusal::TooLargeCopy | Refusal::TooLargeOutput | Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooMuchAtOnce => {
+                format!("is {}", self.message())
+            }
+            Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB unpacked)".into(),
+            Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB unpacked)".into(),
+            Refusal::TooLargeWindow => "has a zstd frame that the editor doesn't unpack (window over 128 MiB)".into(),
+            Refusal::Failed | Refusal::Settings | Refusal::Unaligned | Refusal::Unsupported(_) => return None,
+        })
     }
 }
 
@@ -1705,7 +1779,7 @@ const FIELDS: [StepField; 30] = [
 /// it is one step over the whole stream.
 pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeCopy);
     }
     let (out, trace) = match codec {
         Codec::CfbWorkbook => {
@@ -1757,7 +1831,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::JpegBaseline => return Err(Refusal::Settings),
     };
     if out.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     Ok((out, trace))
 }
@@ -1774,13 +1848,15 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
 pub fn decode_traced_with(codec: Codec, data: &[u8], settings: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     match codec {
         Codec::JpegBaseline => {
+            // Both are copies held whole: the scan, and the segments before
+            // it that hold its tables.
             if data.len() > CAP_BYTES || settings.len() > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeCopy);
             }
             let header = jpeg::Header::read(settings)?;
             let (out, trace) = jpeg::scan(data, &header)?;
             if out.len() > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             Ok((out, trace))
         }
@@ -1800,7 +1876,7 @@ pub fn decode_traced_with(codec: Codec, data: &[u8], settings: &[u8]) -> Result<
 /// wherever the first stream stopped. See [`inflate::inflate_len`].
 pub fn stream_len(codec: Codec, data: &[u8]) -> Result<u64, Refusal> {
     if data.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeCopy);
     }
     match codec {
         Codec::Deflate => inflate::inflate_len(data),
@@ -1811,7 +1887,7 @@ pub fn stream_len(codec: Codec, data: &[u8]) -> Result<u64, Refusal> {
 /// Open a compressed run. `data` is the whole of it.
 pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     if data.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeCopy);
     }
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
@@ -1861,7 +1937,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         Codec::JpegBaseline => return Err(Refusal::Settings),
     };
     if out.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     Ok(out)
 }
@@ -1943,4 +2019,61 @@ mod tests {
         }
     }
 
+    /// Every refusal has a tag of its own and words of its own, so the
+    /// interface can tell any two apart.
+    #[test]
+    fn each_refusal_has_its_own_tag_and_words() {
+        let tags: std::collections::HashSet<&str> = Refusal::ALL.iter().map(|r| r.as_str()).collect();
+        let words: std::collections::HashSet<&str> = Refusal::ALL.iter().map(|r| r.message()).collect();
+        assert_eq!(tags.len(), Refusal::ALL.len());
+        assert_eq!(words.len(), Refusal::ALL.len());
+        for r in Refusal::ALL {
+            assert!(r.as_str().bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "{r:?}");
+        }
+    }
+
+    /// Where the web's copy of [`Refusal::ALL`] is kept.
+    const REFUSAL_TAGS_TS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/src/refusaltags.ts");
+
+    /// What `web/src/refusaltags.ts` holds: the tag of every refusal in
+    /// [`Refusal::ALL`], in order.
+    fn refusal_tags_ts() -> String {
+        let mut ts = String::from(
+            "// Generated from `Refusal::ALL` in crates/core/src/codec.rs. Do not edit by hand.\n\
+             // Regenerate with: UPDATE=1 cargo test -p qubero-core --lib refusal_tags\n\
+             \n\
+             /** Every reason the core gives for leaving a compressed run as bytes, as\n \
+             *  `TemplateNode.refused` and `Doc.openSpace` carry it. */\n\
+             export const REFUSAL_TAGS = [\n",
+        );
+        for r in Refusal::ALL {
+            ts += &format!("  \"{}\",\n", r.as_str());
+        }
+        ts += "] as const;\n\
+               \n\
+               export type RefusalTag = (typeof REFUSAL_TAGS)[number];\n\
+               \n\
+               /** Whether a word the core sent is a refusal this build knows. */\n\
+               export function isRefusalTag(s: string): s is RefusalTag {\n  \
+               return (REFUSAL_TAGS as readonly string[]).includes(s);\n\
+               }\n";
+        ts
+    }
+
+    /// The web's list of refusal tags is the one [`Refusal::ALL`] gives, so
+    /// that `tsc` fails where the web has no words for a refusal added here.
+    /// Run with `UPDATE=1` to write the file instead of comparing it.
+    #[test]
+    fn refusal_tags_ts_matches_the_enum() {
+        let want = refusal_tags_ts();
+        if std::env::var_os("UPDATE").is_some() {
+            std::fs::write(REFUSAL_TAGS_TS, &want).expect("web/src/refusaltags.ts can be written");
+            return;
+        }
+        let have = std::fs::read_to_string(REFUSAL_TAGS_TS).unwrap_or_default().replace("\r\n", "\n");
+        assert!(
+            have == want,
+            "web/src/refusaltags.ts does not list the tags of Refusal::ALL. Regenerate it with:\n    UPDATE=1 cargo test -p qubero-core --lib refusal_tags"
+        );
+    }
 }

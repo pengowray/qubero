@@ -636,7 +636,7 @@ impl Sink for VecSink<'_> {
     #[inline]
     fn literal(&mut self, byte: u8) -> Result<(), Refusal> {
         if self.out.len() >= self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.out.push(byte);
         Ok(())
@@ -648,7 +648,7 @@ impl Sink for VecSink<'_> {
             return Err(Refusal::Failed);
         }
         if self.out.len() + len as usize > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let from = self.out.len() - dist as usize;
         // A match may read what it is writing: `dist` of 1 fills with one
@@ -662,7 +662,7 @@ impl Sink for VecSink<'_> {
 
     fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
         if self.out.len() + bytes.len() > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.out.extend_from_slice(bytes);
         Ok(())
@@ -693,7 +693,7 @@ impl Sink for CountSink {
     #[inline]
     fn literal(&mut self, _: u8) -> Result<(), Refusal> {
         if self.len >= self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.len += 1;
         Ok(())
@@ -705,7 +705,7 @@ impl Sink for CountSink {
             return Err(Refusal::Failed);
         }
         if self.len + u64::from(len) > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.len += u64::from(len);
         Ok(())
@@ -713,7 +713,7 @@ impl Sink for CountSink {
 
     fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
         if self.len + bytes.len() as u64 > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.len += bytes.len() as u64;
         Ok(())
@@ -842,7 +842,7 @@ fn reader(w: Window<'_>, end: u64) -> LowBits<'_> {
 /// The bytes go into a sink the caller owns rather than one made here, so that
 /// a caller reading a stream which stops early keeps what came out before it
 /// stopped. The sink is also what refuses a run that comes to too much, as
-/// [`Refusal::TooLarge`].
+/// [`Refusal::TooLargeOutput`].
 ///
 /// `from` starts the decode part-way through instead of at `start`. Inside a
 /// Huffman-coded block, the block's header and tables are read again from
@@ -1564,7 +1564,7 @@ mod tests {
                 if cap == CAP_BYTES as u64 {
                     assert_eq!(one.map(|m| match m { Measured::Ends(n) => n, Measured::Working => u64::MAX }), inflate_len(run), "run {i}");
                 } else if i < 4 {
-                    assert_eq!(one, Err(Refusal::TooLarge), "run {i}, a third of the output");
+                    assert_eq!(one, Err(Refusal::TooLargeOutput), "run {i}, a third of the output");
                 }
                 for bits in [1u64, 97, 4_000, 1 << 20] {
                     let mut walk = Measuring::new(cap);

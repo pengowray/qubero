@@ -59,7 +59,7 @@ fn stream_size(entry: &[u8], version: u16) -> R<usize> {
     };
     let n = low | high << 32;
     if n > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     Ok(n as usize)
 }
@@ -98,7 +98,7 @@ pub fn is_xls(b: &[u8]) -> bool {
 
 pub fn workbook(b: &[u8]) -> R<Vec<u8>> {
     if b.len() > CAP_BYTES {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeCopy);
     }
     if !b.starts_with(MAGIC) || u16_at(b, 28)? != 0xfffe || u16_at(b, 32)? != 6 {
         return Err(Refusal::Failed);
@@ -341,6 +341,6 @@ pub(crate) mod tests {
         assert!(workbook(&b[..b.len() - 200]).is_err());
         let mut b = fixture(&[2; 193], true, false);
         put(&mut b, 1024 + 128 + 120, CAP_BYTES as u32 + 1);
-        assert_eq!(workbook(&b), Err(Refusal::TooLarge));
+        assert_eq!(workbook(&b), Err(Refusal::TooLargeOutput));
     }
 }

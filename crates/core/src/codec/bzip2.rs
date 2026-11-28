@@ -35,7 +35,7 @@ pub fn stream(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     // that does not.
     let mut out = Vec::new();
     match reader.by_ref().take(CAP_BYTES as u64 + 1).read_to_end(&mut out) {
-        Ok(_) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(_) if out.len() > CAP_BYTES => Err(Refusal::TooLargeOutput),
         Ok(_) => {
             let n = out.len();
             Ok((out, frames::whole(data.len(), n)))

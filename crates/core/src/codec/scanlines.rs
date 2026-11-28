@@ -201,7 +201,7 @@ pub fn adam7_pass(x: u64, y: u64) -> u8 {
 /// has no pass step.
 pub fn unfilter_image(data: &[u8], g: &Geometry) -> Result<(Vec<u8>, Trace), Refusal> {
     if g.unfiltered_len() > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     if g.filtered_len() != Some(data.len() as u64) {
         return Err(Refusal::Failed);

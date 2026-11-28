@@ -793,18 +793,21 @@ fn too_large(len: u64) -> String {
 
 /// Why a stream a check is over would not unpack. The reasons are the decoders'
 /// own; nothing is added to them here beyond saying what was being attempted.
+/// A refusal over a size says which size, in the words a compressed run's own
+/// row has: see [`Refusal::after_name`]. One over a zstd frame or an xz
+/// block says the data is in it, since the data does not have a frame.
 fn refused(why: Refusal) -> String {
-    match why {
-        Refusal::Unsupported(u) => format!("Can't check this: the data it covers is {}.", u.message()),
-        _ => format!("Can't check this: the data it covers {}.", match why {
-            Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooLargeUnit(_) => "unpacks to more than the limit",
-            Refusal::TooLargeInput => "is too large to unpack (over 512 MiB compressed)",
-            Refusal::TooMuchAtOnce => "is too large for the editor to keep in memory at once",
-            Refusal::Unaligned => "doesn't start on a byte",
-            Refusal::Settings => "doesn't say how it was packed",
-            _ => "wouldn't unpack",
-        }),
-    }
+    let what = match why {
+        Refusal::Unsupported(u) => format!("is {}", u.message()),
+        Refusal::TooLargeUnit(crate::codec::SpanUnit::ZstdFrame) => "is in a zstd frame that is too large to unpack (over 64 MiB unpacked)".into(),
+        Refusal::TooLargeUnit(crate::codec::SpanUnit::XzBlock) => "is in an xz block that is too large to unpack (over 64 MiB unpacked)".into(),
+        Refusal::TooLargeWindow => "is in a zstd frame that the editor doesn't unpack (window over 128 MiB)".into(),
+        Refusal::Unaligned => "doesn't start on a byte".into(),
+        Refusal::Settings => "doesn't say how it was packed".into(),
+        Refusal::Failed => "wouldn't unpack".into(),
+        size => size.after_name().unwrap_or_else(|| "wouldn't unpack".into()),
+    };
+    format!("Can't check this: the data it covers {what}.")
 }
 
 #[cfg(test)]

@@ -269,12 +269,12 @@ pub fn reads_in_windows(codec: Codec, input: &RunInput, limits: &Limits) -> bool
 /// before any of it is read: past [`Limits::input`] for a pass that reads it
 /// through a handle (`through_handle`), as [`Refusal::TooLargeInput`], and
 /// past [`Limits::copy_input`] for a pass that reads a copy of it, as
-/// [`Refusal::TooLarge`]. Each pass is held to the one limit of the way it
+/// [`Refusal::TooLargeCopy`]. Each pass is held to the one limit of the way it
 /// reads, so a copy never shows the handle's refusal.
 pub fn too_long_to_index(len: u64, through_handle: bool, limits: &Limits) -> Option<Refusal> {
     match through_handle {
         true => (len > limits.input).then_some(Refusal::TooLargeInput),
-        false => (len > limits.copy_input as u64).then_some(Refusal::TooLarge),
+        false => (len > limits.copy_input as u64).then_some(Refusal::TooLargeCopy),
     }
 }
 

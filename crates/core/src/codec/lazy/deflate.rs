@@ -320,7 +320,7 @@ impl DeflatePass {
                         }
                         Ok(Stepped::Done(Decoded::Whole(out, trace.done())))
                     }
-                    Err(Refusal::TooLarge) => {
+                    Err(Refusal::TooLargeOutput) => {
                         self.phase = self.past_the_cap(sink);
                         Ok(Stepped::Working)
                     }
@@ -344,7 +344,7 @@ impl DeflatePass {
                     }
                     Ok(Ended::Stream(blocks_end)) => self.finish(sink, blocks_end).map(Stepped::Done),
                     Ok(Ended::Coarse(_)) => Err(Refusal::Failed),
-                    Err(Refusal::TooLarge) => Err(Refusal::TooLargeLazy),
+                    Err(Refusal::TooLargeOutput) => Err(Refusal::TooLargeLazy),
                     Err(other) => Err(other),
                 }
             }
@@ -590,7 +590,7 @@ impl Sink for WindowSink {
     #[inline]
     fn literal(&mut self, byte: u8) -> Result<(), Refusal> {
         if self.len() >= self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.hist.push(byte);
         self.slid();
@@ -603,7 +603,7 @@ impl Sink for WindowSink {
             return Err(Refusal::Failed);
         }
         if self.len() + len as u64 > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let from = self.hist.len() - dist as usize;
         for k in 0..len as usize {
@@ -616,7 +616,7 @@ impl Sink for WindowSink {
 
     fn stored(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
         if self.len() + bytes.len() as u64 > self.cap {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         self.hist.extend_from_slice(bytes);
         self.slid();

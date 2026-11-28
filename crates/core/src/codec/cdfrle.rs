@@ -40,7 +40,7 @@ pub fn stream(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
         let Some(&count) = data.get(at + 1) else { return Err(Refusal::Failed) };
         let run = count as usize + 1;
         if out.len() + run > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         out.resize(out.len() + run, 0);
         at += 2;
