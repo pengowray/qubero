@@ -2452,13 +2452,18 @@ struct Fed {
 }
 
 /// Step `pass` to its end, feeding `store` the chunks of `file` each step
-/// names. A chunk asked for more than twice is the wait that never ends.
+/// names. A chunk asked for more than twice is the wait that never ends, and
+/// so is a pass whose progress goes back.
 fn fed_pass(mut pass: Indexing, store: &mut crate::source::ChunkStore, file: &[u8], out_bytes: u64, in_bits: u64) -> Fed {
     let mut times = std::collections::BTreeMap::<u64, usize>::new();
     let (mut waits, mut most_held) = (Vec::new(), 0);
+    let mut was = pass.progress();
     for _ in 0..1_000_000 {
         let stepped = pass.step(out_bytes, in_bits);
         most_held = most_held.max(pass.holds());
+        let now = pass.progress();
+        assert!(now.read_bits >= was.read_bits && now.read_bits <= now.run_bits && now.unpacked >= was.unpacked, "{was:?} then {now:?}");
+        was = now;
         match stepped {
             Ok(Stepped::Working) => {}
             Ok(Stepped::NeedsInput(missing)) => {
@@ -2725,36 +2730,40 @@ fn a_long_gzip_header_is_read_from_a_store_with_room_for_it() {
 /// A pass reads its run a window at a time from a source that answers any
 /// read whole, or from one that keeps at least twice what a step reads at
 /// once; any other pass reads a copy of the run. In the browser the store
-/// keeps 32 MiB, and a step reads at most about 384 KiB. An xz stream's
-/// layout reads a copy whatever the source.
+/// keeps 32 MiB, and a step reads at most about 384 KiB. A step of an xz
+/// stream's layout decodes nothing, so it needs no margin past its piece.
 #[test]
 fn a_pass_reads_in_windows_only_from_a_store_with_room_for_two() {
     let limits = Limits::default();
     let packed = vec![0u8; 1000];
-    for (codec, window) in [(Codec::Gzip, STEP_INPUT + inflate::DEFLATE_MARGIN), (Codec::Zstd, STEP_INPUT + crate::codec::frames::ZSTD_MARGIN)] {
+    let windows = [
+        (Codec::Gzip, STEP_INPUT + inflate::DEFLATE_MARGIN),
+        (Codec::Zstd, STEP_INPUT + crate::codec::frames::ZSTD_MARGIN),
+        (Codec::Xz, STEP_INPUT),
+    ];
+    for (codec, window) in windows {
         assert_eq!(window_of(codec, &limits), window);
         assert!(reads_in_windows(codec, &RunInput::held(Arc::new(packed.clone())), &limits), "{codec:?} from memory");
         assert!(reads_in_windows(codec, &from_a_store(&packed, 2 * window as u64), &limits), "{codec:?}");
         assert!(!reads_in_windows(codec, &from_a_store(&packed, 2 * window as u64 - 1), &limits), "{codec:?}");
     }
-    assert!(!reads_in_windows(Codec::Xz, &RunInput::held(Arc::new(packed)), &limits));
 }
 
 /// A pass that reads its run through a handle is held to `Limits::input`:
 /// a run of exactly that length is indexed from a store, and one a byte
 /// longer is refused as `TooLargeInput` when the pass is made, before any of
 /// it is read. A pass that reads a copy is held to `Limits::copy_input`
-/// instead, and says `TooLargeCopy` past it, whatever `Limits::input` is; an xz
-/// stream's layout always reads a copy. The default limits are 512 MiB and
-/// 64 MiB.
+/// instead, and says `TooLargeCopy` past it, whatever `Limits::input` is. The
+/// default limits are 512 MiB and 64 MiB.
 #[test]
 fn a_pass_is_held_to_the_limit_of_the_way_it_reads_its_run() {
     assert_eq!((Limits::default().input, Limits::default().copy_input), (512 << 20, 64 << 20));
     let data = mixed(300_000, 307);
-    let limits = in_windows();
-    for codec in [Codec::Zlib, Codec::Zstd] {
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    for codec in [Codec::Zlib, Codec::Zstd, Codec::Xz] {
         let packed = match codec {
             Codec::Zstd => zstd_of(&data, 30_000, true),
+            Codec::Xz => xz_pieces(&data, 60_000, Some(20_000)),
             _ => miniz_oxide::deflate::compress_to_vec_zlib(&data, 6),
         };
         let len = packed.len();
@@ -2774,8 +2783,344 @@ fn a_pass_is_held_to_the_limit_of_the_way_it_reads_its_run() {
         assert!(Indexing::from_copy(codec, copy.clone(), input, past).is_ok(), "{codec:?}");
         assert!(matches!(decode_or_index_with(codec, copy, past), Ok(Decoded::Indexed(_))), "{codec:?}");
     }
-    let xz = Arc::new(xz_pieces(&data, 60_000, Some(20_000)));
-    let short = Limits { span: 1 << 20, copy_input: xz.len() - 1, input: 0, ..small() };
-    assert_eq!(decode_or_index_with(Codec::Xz, xz.clone(), short).err(), Some(Refusal::TooLargeCopy));
-    assert!(matches!(decode_or_index_with(Codec::Xz, xz, Limits { copy_input: usize::MAX, ..short }), Ok(Decoded::Indexed(_))));
+}
+
+// ----- xz's layout read a piece at a time -----
+//
+// The pass over an xz stream decodes nothing: it reads the stream's ends,
+// its index and its block headers through the stream's input, a few at a
+// time, from the same kind of store as the passes above.
+
+/// The chunks of 1 KiB that lie wholly inside the LZMA2 data of a block of
+/// the xz stream `packed`, at byte `run_at` of a file: chunks that laying
+/// the stream out has no reason to read.
+fn inside_lzma2(packed: &[u8], run_at: usize) -> Vec<std::ops::Range<u64>> {
+    let l = crate::codec::xz::layout(packed).expect("lays out");
+    l.blocks.iter().map(|b| ((run_at + b.lzma2().start).div_ceil(1024) as u64)..((run_at + b.lzma2().end) / 1024) as u64).collect()
+}
+
+/// The pass over the xz stream `packed` read from a store of `capacity`
+/// chunks of 1 KiB, fed the chunks each step names, and the chunks of the
+/// file that lie inside the stream's blocks' data.
+fn xz_from_a_store(packed: &[u8], limits: Limits, capacity: usize) -> (Fed, Vec<std::ops::Range<u64>>) {
+    let (file, mut store, input) = in_a_chunk_store(packed, capacity);
+    let fed = fed_pass(Indexing::through(Codec::Xz, input, limits).expect("starts"), &mut store, &file, 256 << 10, (256 << 10) * 8);
+    let inside = crate::codec::xz::layout(packed).map_or_else(Vec::new, |_| inside_lzma2(packed, in_a_file(packed).1));
+    (fed, inside)
+}
+
+/// An xz stream of blocks of `block` bytes each, each the LZMA2 of its data,
+/// with the check `check_type` names and block headers that carry no sizes.
+fn xz_checked(data: &[u8], block: usize, check_type: u8) -> Vec<u8> {
+    use crate::codec::xz::tests::{pack, wrap_checked};
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.chunks(block).map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.to_vec())).collect();
+    wrap_checked(&blocks, false, check_type)
+}
+
+/// An xz stream several times longer than the store is laid out from the
+/// store a piece at a time, fed only the chunks each step names, and comes to
+/// the index a copy of the whole stream in memory comes to: the same blocks,
+/// field by field, as `xz::layout` places them, the same checkpoints,
+/// members, spans and span traces. No step names a chunk that lies wholly
+/// inside a block's LZMA2 data, none names more chunks than half the store
+/// and its ends hold, none is asked for more than twice, and the pass holds
+/// no more of the stream than its index and one piece. Under a larger cap
+/// the stream is copied a piece at a time and comes back whole, with the
+/// bytes and trace the copy in memory gives. Streams of one block, of more
+/// blocks than one step reads the headers of, of blocks of many LZMA2
+/// chunks, and of blocks with a CRC64, a SHA-256 and no check, from a store
+/// with room for two pieces and from one with room for many headers at once.
+#[test]
+fn an_xz_pass_reads_its_stream_from_a_store_a_piece_at_a_time() {
+    let data = mixed(1_200_000, 401);
+    let limits = Limits { span: 2 << 20, ..in_windows() };
+    let window = window_of(Codec::Xz, &limits);
+    let streams = [
+        ("one block", xz_of(&data, data.len())),
+        ("300 blocks", xz_of(&data, 4_000)),
+        ("blocks of many chunks", xz_pieces(&data, 60_000, Some(20_000))),
+        ("CRC64", xz_checked(&data, 20_000, 4)),
+        ("SHA-256", xz_checked(&data, 30_000, 10)),
+        ("no check", xz_checked(&data, 40_000, 0)),
+    ];
+    for (what, packed) in &streams {
+        let blocks = crate::codec::xz::layout(packed).expect("lays out").blocks.len();
+        for capacity in [(2 * window).div_ceil(1024) + 4, 200] {
+            assert!(packed.len() > capacity * 1024, "{what}: {} bytes is too short for a store of {capacity} KiB", packed.len());
+            for whole_cap in [limits.whole, 2 << 20] {
+                let limits = Limits { whole: whole_cap, ..limits };
+                let at = format!("{what}, a store of {capacity} chunks, cap {whole_cap}");
+                let (fed, inside) = xz_from_a_store(packed, limits, capacity);
+                for named in &fed.waits {
+                    assert!(named.len() <= capacity / 2 + 3, "{at}: a step named {} chunks", named.len());
+                }
+                let index_len = packed.len() - crate::codec::xz::layout(packed).unwrap().index_at;
+                match (decode_or_index_with(Codec::Xz, Arc::new(packed.clone()), limits).expect("from memory"), fed.got.expect("from the store")) {
+                    (Decoded::Indexed(whole), Decoded::Indexed(mut ours)) => {
+                        for named in fed.waits.iter().flatten() {
+                            assert!(inside.iter().all(|r| !r.contains(named)), "{at}: chunk {named} is inside a block's data");
+                        }
+                        assert!(fed.most_held <= index_len + window, "{at}: the pass held {} bytes of the stream", fed.most_held);
+                        assert_eq!(ours.input().owned_bytes(), 0, "{at}: the index holds a copy");
+                        assert!(ours.xz_layout() == whole.xz_layout(), "{at}: the layouts differ");
+                        assert!(ours.xz_layout() == crate::codec::xz::layout(packed).as_ref(), "{at}: not the layout of the whole stream");
+                        assert_eq!(ours.members(), whole.members(), "{at}");
+                        assert_eq!(ours.kept_bytes(), whole.kept_bytes(), "{at}");
+                        same_index(&mut ours, &whole, packed, &at);
+                        reads_back(&ours, &data, 409);
+                        if capacity == 200 && what.starts_with("300") {
+                            // The ends and the index in one round, and then
+                            // the headers 64 at a time, as many as lie within
+                            // half the store of the first.
+                            let rounds = blocks.div_ceil(64) + packed.len().div_ceil(capacity * 512) + 1;
+                            assert!(fed.waits.len() <= rounds, "{at}: {} waits for {blocks} blocks", fed.waits.len());
+                        }
+                    }
+                    (Decoded::Whole(bytes, trace), Decoded::Whole(ours, t)) => {
+                        assert!(ours == bytes && bytes == data, "{at}: the bytes differ");
+                        assert!(shape(&t) == shape(&trace), "{at}: the traces differ");
+                    }
+                    _ => panic!("{at}: from memory and from the store disagree about holding it whole"),
+                }
+            }
+        }
+    }
+}
+
+/// The header of a block whose chain is `filter` and then LZMA2, twelve
+/// bytes long, as the header `wrap` writes for a block of LZMA2 alone when it
+/// writes no sizes: delta (3) with a distance of one, or x86 (4).
+fn filtered_header(filter: u8) -> [u8; 12] {
+    let mut h = match filter {
+        0x03 => [0x02, 0x01, 0x03, 0x01, 0x00, 0x21, 0x01, 22, 0, 0, 0, 0],
+        _ => [0x02, 0x01, filter, 0x00, 0x21, 0x01, 22, 0, 0, 0, 0, 0],
+    };
+    let sum = crc32(&h[..8]);
+    h[8..].copy_from_slice(&sum.to_le_bytes());
+    h
+}
+
+/// What a pass came to, as a test compares two of them: the refusal, the
+/// layout of an index, or the bytes of a run held whole.
+fn outcome(got: Result<Decoded, Refusal>) -> Result<Result<Option<crate::codec::xz::Layout>, Vec<u8>>, Refusal> {
+    got.map(|d| match d {
+        Decoded::Indexed(s) => Ok(s.xz_layout().cloned()),
+        Decoded::Whole(bytes, _) => Err(bytes),
+    })
+}
+
+/// An xz stream laid out from a store is refused for what a copy of it in
+/// memory is refused for, with the same refusal: a block with a delta or an
+/// x86 filter in its chain past the cap, among plain ones, and the same
+/// stream decoded whole under it; one block past the span limit; a stream
+/// past the limit on a run read a piece at a time; and, read from a store, a
+/// block too long to read at once. The streams `liblzma` wrote with a delta
+/// or x86 filter, a hundred bytes each, give the same answers when their
+/// pieces are a few bytes. A stream under the cap past the limit on a copy
+/// is refused as too large, since it is decoded whole from a copy, while one
+/// past the cap reads no more than its layout and opens.
+#[test]
+fn an_xz_pass_from_a_store_is_refused_as_a_copy_is() {
+    use crate::codec::xz::tests::{pack, wrap};
+    let data = mixed(600_000, 419);
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let capacity = (2 * window_of(Codec::Xz, &limits)).div_ceil(1024) + 4;
+    let same = |packed: &[u8], limits: Limits, want: Option<Refusal>, at: &str| {
+        let (fed, _) = xz_from_a_store(packed, limits, capacity);
+        let ours = outcome(fed.got);
+        assert!(ours == outcome(decode_or_index_with(Codec::Xz, Arc::new(packed.to_vec()), limits)), "{at}: from the store and from memory differ");
+        if let Some(why) = want {
+            assert_eq!(ours.err(), Some(why), "{at}");
+        }
+    };
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.chunks(20_000).map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.to_vec())).collect();
+    let plain = wrap(&blocks, false);
+    let l = crate::codec::xz::layout(&plain).expect("lays out");
+    for filter in [0x03, 0x04] {
+        let mut filtered = plain.clone();
+        let at = l.blocks[17].at;
+        filtered[at..at + 12].copy_from_slice(&filtered_header(filter));
+        assert!(!crate::codec::xz::layout(&filtered).expect("lays out").plain);
+        same(&filtered, limits, Some(Refusal::TooLargeOutput), &format!("filter {filter} past the cap"));
+        same(&filtered, Limits { whole: 1 << 20, ..limits }, Some(Refusal::Failed), &format!("filter {filter} under the cap"));
+    }
+    same(&xz_of(&data, data.len()), Limits { span: 64 << 10, ..limits }, Some(Refusal::TooLargeUnit(crate::codec::SpanUnit::XzBlock)), "one block");
+    same(&plain, Limits { lazy: 500_000, ..limits }, Some(Refusal::TooLargeLazy), "past the lazy cap");
+    let (fed, _) = xz_from_a_store(&plain, Limits { unit_input: 1_000, ..limits }, capacity);
+    assert_eq!(fed.got.err(), Some(Refusal::TooMuchAtOnce), "a block too long to read at once");
+    for (name, stream) in [("delta", crate::codec::xz::tests::DELTA_LZMA2), ("x86", crate::codec::xz::tests::X86_AT_4096)] {
+        let tiny = Limits { step_input: 16, ..limits };
+        same(stream, Limits { whole: 1, ..tiny }, Some(Refusal::TooLargeOutput), &format!("{name} past the cap"));
+        same(stream, tiny, Some(Refusal::Failed), &format!("{name} under the cap"));
+    }
+    let short = Limits { whole: 1 << 20, copy_input: plain.len() - 1, ..limits };
+    let (fed, _) = xz_from_a_store(&plain, short, capacity);
+    assert_eq!(fed.got.err(), Some(Refusal::TooLargeCopy), "under the cap, past the limit on a copy");
+    let (fed, _) = xz_from_a_store(&plain, Limits { copy_input: plain.len() - 1, ..limits }, capacity);
+    assert!(matches!(fed.got, Ok(Decoded::Indexed(_))), "past the cap, past the limit on a copy");
+}
+
+/// A stream with a byte of its header, its index or its footer changed, read
+/// from a store a few bytes a piece, comes to what the same stream in memory
+/// comes to, at every byte: the same refusal, or the same index, or the same
+/// bytes decoded whole. A damaged index or footer is a stream nothing lays
+/// out, and goes to the decoder of whole streams either way.
+///
+/// Past the limit on a copy, which a copy in memory never is, the decoder of
+/// whole streams cannot have it. Then a stream that lays out comes to what it
+/// does in memory, one whose index says it fits under the cap is too large
+/// to copy, and one that does not lay out is refused as failed, as the
+/// decoder of whole streams refuses a stream it cannot read, and not as too
+/// large.
+#[test]
+fn a_damaged_xz_index_or_footer_is_read_from_a_store_as_from_memory() {
+    let data = mixed(24_000, 421);
+    let packed = xz_of(&data, 1_000);
+    let limits = Limits { whole: 1, span: 1 << 20, step_input: 512, ..small() };
+    let short = Limits { copy_input: packed.len() - 1, ..limits };
+    let index_at = crate::codec::xz::layout(&packed).expect("lays out").index_at;
+    let places = (0..12).chain(index_at..packed.len());
+    let mut kinds = std::collections::BTreeSet::new();
+    let mut failed = 0;
+    for at in places {
+        for xor in [0x01u8, 0x80] {
+            let mut bad = packed.clone();
+            bad[at] ^= xor;
+            let (fed, _) = xz_from_a_store(&bad, limits, 64);
+            let ours = outcome(fed.got);
+            let in_memory = outcome(decode_or_index_with(Codec::Xz, Arc::new(bad.clone()), limits));
+            assert!(ours == in_memory, "byte {at} ^ {xor:#x}");
+            kinds.insert(match &ours {
+                Ok(Ok(_)) => "indexed".to_string(),
+                Ok(Err(_)) => "whole".to_string(),
+                Err(why) => why.as_str().to_string(),
+            });
+            let (fed, _) = xz_from_a_store(&bad, short, 64);
+            let want = match crate::codec::xz::layout(&bad) {
+                None => Err(Refusal::Failed),
+                Some(l) if l.total_out <= limits.whole as u64 => Err(Refusal::TooLargeCopy),
+                Some(_) => in_memory,
+            };
+            failed += usize::from(want == Err(Refusal::Failed));
+            assert!(outcome(fed.got) == want, "byte {at} ^ {xor:#x}, past the limit on a copy");
+        }
+    }
+    assert!(kinds.len() >= 2, "every change came to {kinds:?}");
+    assert!(failed > 10, "{failed} changes left a stream nothing lays out");
+}
+
+/// A stream past the limit on a copy whose index is damaged, or one of whose
+/// block headers is, is refused as failed when it is read from a store, and
+/// not as too large to copy: its size is not why it is not read. The block
+/// header here says it is 1,024 bytes long, more than its block. A stream
+/// that is not damaged but is read only by the decoder of whole streams,
+/// with stream padding after its footer or joined end to end from two
+/// streams, is still too large to copy.
+#[test]
+fn a_damaged_xz_stream_past_the_copy_limit_is_refused_as_failed() {
+    use crate::codec::xz::tests::{pack, wrap};
+    let data = mixed(120_000, 433);
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.chunks(500).map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.to_vec())).collect();
+    let packed = wrap(&blocks, false);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let capacity = (2 * window_of(Codec::Xz, &limits)).div_ceil(1024) + 4;
+    let refused = |stream: &[u8]| {
+        let short = Limits { copy_input: stream.len() - 1, ..limits };
+        xz_from_a_store(stream, short, capacity).0.got.err()
+    };
+    assert!(matches!(xz_from_a_store(&packed, Limits { copy_input: packed.len() - 1, ..limits }, capacity).0.got, Ok(Decoded::Indexed(_))));
+
+    // The first record's block made four bytes longer: every block after it
+    // is placed four bytes late, and the last runs into the index.
+    let mut index = packed.clone();
+    let records = l.index_at + 1 + crate::codec::xz::tests::vli_of(l.blocks.len() as u64).len();
+    assert!(index[records] & 0x7f < 0x7c, "the low seven bits of the first record's size have room for 4");
+    index[records] += 4;
+    assert!(crate::codec::xz::layout(&index).is_none());
+    assert_eq!(refused(&index), Some(Refusal::Failed), "a damaged index");
+
+    let mut header = packed.clone();
+    let at = l.blocks[60].at;
+    assert!(l.block_len(60) < 1024);
+    header[at] = 0xff;
+    assert!(crate::codec::xz::layout(&header).is_none());
+    assert_eq!(refused(&header), Some(Refusal::Failed), "a damaged block header");
+
+    let padded = [&packed[..], &[0u8; 8]].concat();
+    assert_eq!(refused(&padded), Some(Refusal::TooLargeCopy), "stream padding");
+    let joined = [xz_of(&data[..5_000], 1_000), packed.clone()].concat();
+    assert_eq!(refused(&joined), Some(Refusal::TooLargeCopy), "two streams joined end to end");
+    // The same streams in memory are read by the decoder of whole streams.
+    for (stream, what) in [(&index, "a damaged index"), (&header, "a damaged block header")] {
+        assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(stream.clone()), limits).err(), Some(Refusal::Failed), "{what}, in memory");
+    }
+}
+
+/// An xz stream whose index lists more blocks than `Limits::block_marks` is
+/// refused as having too many blocks, from a store and from memory, before
+/// any block header is read, and whether or not it fits under the cap. The
+/// index is read only as far as its records can reach. At the limit, the
+/// stream is indexed.
+#[test]
+fn an_xz_stream_of_more_blocks_than_the_limit_is_refused() {
+    let data = mixed(300_000, 439);
+    let packed = xz_of(&data, 1_000);
+    let blocks = crate::codec::xz::layout(&packed).expect("lays out").blocks.len();
+    let limits = Limits { span: 1 << 20, block_marks: blocks - 1, ..in_windows() };
+    let capacity = (2 * window_of(Codec::Xz, &limits)).div_ceil(1024) + 4;
+    for whole_cap in [limits.whole, 1 << 20] {
+        let limits = Limits { whole: whole_cap, ..limits };
+        let (fed, inside) = xz_from_a_store(&packed, limits, capacity);
+        assert_eq!(fed.got.err(), Some(Refusal::TooManyXzBlocks), "cap {whole_cap}");
+        for named in fed.waits.iter().flatten() {
+            assert!(inside.iter().all(|r| !r.contains(named)), "cap {whole_cap}: chunk {named} is inside a block's data");
+        }
+        assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(packed.clone()), limits).err(), Some(Refusal::TooManyXzBlocks), "cap {whole_cap}, in memory");
+    }
+    let at_the_limit = Limits { block_marks: blocks, ..limits };
+    assert!(matches!(xz_from_a_store(&packed, at_the_limit, capacity).0.got, Ok(Decoded::Indexed(_))));
+    assert!(matches!(decode_or_index_with(Codec::Xz, Arc::new(packed), at_the_limit), Ok(Decoded::Indexed(_))));
+    assert_eq!(Limits::default().block_marks, 65_536);
+}
+
+/// While a step waits for some of its block headers, the headers it has
+/// read already count in its progress, so that a caller that takes moved
+/// progress as the pass getting further, as the web's wait for Open
+/// unpacked does, sees it get further. Here every chunk of the file is
+/// loaded but the one that holds the header of a block halfway along.
+#[test]
+fn an_xz_pass_waiting_for_some_headers_counts_the_ones_it_read() {
+    let data = mixed(200_000, 431);
+    let packed = xz_of(&data, 4_000);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let (file, run_at) = in_a_file(&packed);
+    let lossy = Lossy::new(file.clone(), 1024);
+    let held_back = ((run_at + l.blocks[l.blocks.len() / 2].at) / 1024) as u64;
+    let ends = [run_at / 1024, (run_at + l.index_at) / 1024];
+    assert!(held_back > ends[0] as u64 && held_back < ends[1] as u64, "the held-back chunk holds the stream's header or index");
+    let rest: Vec<crate::source::Missing> = lossy.chunks(0..file.len()).into_iter().filter(|m| m.chunk != held_back).collect();
+    lossy.feed(&rest);
+    let input = RunInput::new(lossy.clone(), run_at as u64, packed.len() as u64);
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let mut pass = Indexing::through(Codec::Xz, input, limits).expect("starts");
+    let missing = loop {
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Working => {}
+            Stepped::NeedsInput(m) => break m,
+            Stepped::Done(_) => panic!("laid out with a chunk missing"),
+        }
+    };
+    assert_eq!(missing, vec![crate::source::Missing { chunk: held_back }]);
+    let last = l.blocks.iter().rev().find(|b| ((run_at + b.at) / 1024) as u64 != held_back).expect("a header in another chunk");
+    assert_eq!(pass.progress().read_bits, last.at as u64 * 8, "the headers read while the step waits");
+    lossy.feed(&missing);
+    let ours = loop {
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Done(Decoded::Indexed(s)) => break s,
+            Stepped::Working => {}
+            _ => panic!("not laid out"),
+        }
+    };
+    assert!(ours.xz_layout() == Some(&l));
 }

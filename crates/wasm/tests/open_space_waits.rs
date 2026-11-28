@@ -1500,3 +1500,160 @@ fn a_joined_stream_past_64_mib_compressed_opens_end_to_end() {
     assert!(tab_bytes_fed(&mut ed, &file, tab, at, 1 << 20) == content[at..at + (1 << 20)], "1 MiB at {at} differ");
     assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
 }
+
+// ----- an xz stream laid out a few block headers at a time -----
+
+/// xz's variable-length integer: seven bits a byte, least significant first.
+fn xz_vli(mut v: u64, out: &mut Vec<u8>) {
+    while v >= 0x80 {
+        out.push((v & 0x7f) as u8 | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+/// An xz stream of `content` in blocks of `block` bytes, with a CRC32 after
+/// each block. Each block's LZMA2 is stored chunks of up to 64 KiB, which
+/// take up as much as their bytes do and cost nothing to write, so the
+/// stream is as long as `content` and a block's data is one read of a few
+/// chunks of the file. Written by hand, since nothing the wasm crate's
+/// tests use packs xz.
+fn xz_of_stored(content: &[u8], block: usize) -> Vec<u8> {
+    let flags = [0x00, 0x01];
+    let mut v = b"\xfd7zXZ\x00".to_vec();
+    v.extend_from_slice(&flags);
+    v.extend(crc32(&flags).to_le_bytes());
+    let mut records = Vec::new();
+    for piece in content.chunks(block) {
+        // The header: its length in fours less one, no flags, one LZMA2
+        // filter with a dictionary of 8 MiB, padding, and its CRC32.
+        let mut header = vec![0x02, 0x00, 0x21, 0x01, 22, 0, 0, 0];
+        header.extend(crc32(&header).to_le_bytes());
+        let mut lzma2 = Vec::new();
+        for (i, chunk) in piece.chunks(1 << 16).enumerate() {
+            lzma2.push(if i == 0 { 0x01 } else { 0x02 });
+            lzma2.extend(((chunk.len() - 1) as u16).to_be_bytes());
+            lzma2.extend_from_slice(chunk);
+        }
+        lzma2.push(0x00);
+        v.extend_from_slice(&header);
+        v.extend_from_slice(&lzma2);
+        while v.len() % 4 != 0 {
+            v.push(0);
+        }
+        v.extend(crc32(piece).to_le_bytes());
+        xz_vli((header.len() + lzma2.len() + 4) as u64, &mut records);
+        xz_vli(piece.len() as u64, &mut records);
+    }
+    let index_at = v.len();
+    v.push(0x00);
+    xz_vli(content.len().div_ceil(block) as u64, &mut v);
+    v.extend_from_slice(&records);
+    while (v.len() - index_at) % 4 != 0 {
+        v.push(0);
+    }
+    let sum = crc32(&v[index_at..]);
+    v.extend(sum.to_le_bytes());
+    let mut footer = (((v.len() - index_at) / 4 - 1) as u32).to_le_bytes().to_vec();
+    footer.extend_from_slice(&flags);
+    v.extend(crc32(&footer).to_le_bytes());
+    v.extend_from_slice(&footer);
+    v.extend_from_slice(b"YZ");
+    v
+}
+
+/// Where the stream is in an xz file: the one child of the template's
+/// `decoded`, which costs no bytes where it stands. Found by an editor that
+/// holds all of `file`, so that the editor under test is asked for nothing
+/// else first.
+fn xz_decoded(file: &[u8]) -> Vec<u32> {
+    let mut ed = fed(file, "xz");
+    let reply = parse(&ed.template_children(0, &[], 0.0, 1e9));
+    let found = reply["node"].as_array().unwrap_or_else(|| panic!("{reply}")).clone();
+    let decoded = found.iter().find(|c| c["name"] == "decoded").unwrap_or_else(|| panic!("no decoded among {:?}", names(&reply["node"])));
+    let mut path: Vec<u32> = decoded["path"].as_array().unwrap().iter().map(|i| i.as_u64().unwrap() as u32).collect();
+    path.push(0);
+    path
+}
+
+/// Open unpacked on an xz stream several times longer than the chunk store.
+/// The stream used to be read into a copy before anything was laid out, and
+/// a stream past 64 MiB was refused. Now a stream past the cap is laid out
+/// through the store, from its ends, its index and its block headers, and
+/// the tab then reads each block through the store as it reaches it:
+/// opening it asks for a small share of the file's chunks, none more than
+/// twice, and while the pass waits the editor says how far it has got, which
+/// never goes back. Under a cap the stream fits under, the stream is copied a
+/// piece at a time for the decoder of whole streams, and every chunk of the
+/// file is asked for once. Both tabs read the stream's bytes.
+#[test]
+fn open_unpacked_on_an_xz_stream_longer_than_the_store_lays_it_out_a_few_headers_at_a_time() {
+    let text = lines(220_000);
+    let file = xz_of_stored(&text, 256 << 10);
+    let store = 16;
+    assert!(file.len() > 3 * store * CHUNK, "{} bytes is too few for a store of {store} chunks", file.len());
+    let decoded = xz_decoded(&file);
+    let indexed = Limits { whole: 256 << 10, spacing: 256 << 10, in_spacing: 256 << 10, ..Limits::default() };
+    for (limits, laid_out) in [(Some(indexed), true), (None, false)] {
+        let mut ed = unfed(&file, store as u32, "xz");
+        if let Some(limits) = limits {
+            ed.set_stream_limits(limits, codec::CAP_BYTES);
+        }
+        let mut feeder = Feeder::new(&file);
+        let (mut said, mut was) = (0, 0);
+        let reply = feeder.ask(&mut ed, |ed| {
+            let reply = ed.open_space(0, &decoded);
+            if parse(&reply)["status"] == "pending" {
+                let progress = parse(&ed.unpacking(0))["node"].clone();
+                if !progress.is_null() {
+                    said += 1;
+                    let now = read_bits(&progress);
+                    assert!(now >= was, "unpacking went back from {was} to {now}");
+                    was = now;
+                }
+            }
+            reply
+        });
+        let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+        assert_eq!(ed.len_bytes(tab), text.len() as f64);
+        assert!(said > 0, "laid out {laid_out}: no wait said how far unpacking had got");
+        assert!(feeder.most_times() <= 2, "laid out {laid_out}: {:?}", feeder.times);
+        assert!(feeder.widest <= store / 2 + 2, "laid out {laid_out}: a reply named {} chunks", feeder.widest);
+        let chunks = file.len().div_ceil(CHUNK);
+        match laid_out {
+            true => assert!(feeder.times.len() < chunks / 2, "{} of {chunks} chunks were read to open the stream", feeder.times.len()),
+            false => assert_eq!(feeder.times.len(), chunks, "every chunk of the file, for the copy"),
+        }
+        for at in [0, text.len() / 3, text.len() - 100] {
+            assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == text[at..at + 100], "laid out {laid_out}: 100 bytes at {at} differ");
+        }
+    }
+}
+
+/// An xz stream of 66 MiB of noise in blocks of 1 MiB, under the default
+/// limits: past the 64 MiB a stream is held whole under, and past the
+/// 64 MiB an xz stream could be packed before part 8. It is laid out from a
+/// store of 4 MiB, its blocks are read through the store, and its tab reads
+/// the right bytes. Run on purpose, as the tests before it are:
+/// `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+#[test]
+#[ignore]
+fn an_xz_stream_past_64_mib_packed_opens_end_to_end() {
+    let content = noise(66 << 20);
+    let file = xz_of_stored(&content, 1 << 20);
+    assert!(file.len() > 66 << 20);
+    // The template places its fields the same way in a stream of any size.
+    let decoded = xz_decoded(&xz_of_stored(b"a stream of one block", 1 << 20));
+    let mut ed = unfed(&file, 64, "xz");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &decoded));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), content.len() as f64);
+    assert!(feeder.times.len() < file.len().div_ceil(CHUNK) / 4, "{} chunks were read to open the stream", feeder.times.len());
+    for at in [content.len() / 2, 0, content.len() - 100, content.len() / 3] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "100 bytes at {at} differ");
+    }
+    let at = (5 << 20) - 1000;
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, 1 << 20) == content[at..at + (1 << 20)], "1 MiB at {at} differ");
+    assert!(feeder.most_times() <= 2, "{:?}", feeder.times);
+}

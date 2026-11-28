@@ -220,9 +220,10 @@ export const DECODED_INSIDE = "in the unpacked stream";
  */
 export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
   /** A run whose bytes are read into memory whole, past 64 MiB
-   *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip and
-   *  zstd, whatever kind it is, and any run in a joined stream or in edited
-   *  bytes. */
+   *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip, zstd
+   *  and xz, whatever kind it is; an xz stream that comes to 64 MiB or less
+   *  unpacked, or whose index is damaged, since it is decoded whole; and any
+   *  run in a joined stream or in edited bytes. */
   "too-large-copy": "too large to unpack (over 64 MiB packed)",
   /** A run unpacked whole that comes to more than 64 MiB: every codec but
    *  deflate, zlib, gzip, zstd and xz, and an xz stream with a BCJ or delta
@@ -231,7 +232,7 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB unpacked)",
-  /** A deflate, zlib, gzip or zstd run read a piece at a time whose
+  /** A deflate, zlib, gzip, zstd or xz run read a piece at a time whose
    *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
    *  most such a run may take up. The limit is on the compressed size, not on
    *  what it unpacks to. Also said after a part's name, as "is …". */
@@ -242,6 +243,12 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
    *  write, is refused this way once it is past 64 MiB. */
   "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB unpacked)",
   "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB unpacked)",
+  /** An xz stream whose index lists more than 65,536 blocks
+   *  (`Limits::block_marks` in the core), whatever it unpacks to: an index
+   *  keeps an entry for every block. The count is the reason, not the size
+   *  and not damage. `xz -T0` writes a block for every 24 MiB of output, so
+   *  only a tiny `--block-size` or a hostile file gets here. */
+  "too-many-xz-blocks": "too many xz blocks to unpack (over 65,536 blocks)",
   /** A zstd frame whose header asks for a window over 128 MiB, which
    *  `zstd --long=28` and higher may write. It is refused before any of it
    *  is unpacked, so nothing says how large it is, and the words name no
@@ -292,7 +299,7 @@ export function unknownRefusal(refused: never): never {
  *  either. A deflate stream inside an unpacked stream is held to 512 MiB as
  *  well, so edited bytes and joined streams are the only exceptions. */
 const PACKED_LIMITS =
-  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip or zstd stream that has no edited bytes and is not inside a joined stream.";
+  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip, zstd or xz stream that has no edited bytes and is not inside a joined stream.";
 /** The same for both unpacked-size reasons, 64 MiB and 1 GiB. A deflate,
  *  zlib, gzip or zstd stream whose packed bytes are a copy, in edited bytes
  *  or inside a joined stream, is still unpacked a piece at a time from that
@@ -758,6 +765,9 @@ export const JOINED = {
    */
   partZstdFrameTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has a zstd frame that unpacks to over 64 MiB.`,
   partXzBlockTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has an xz block that unpacks to over 64 MiB.`,
+  /** The same, when one part is an xz stream whose index lists more than
+   *  65,536 blocks (`too-many-xz-blocks`). */
+  partXzTooManyBlocks: (tab: string): string => `Couldn't open ${tab}: one of its parts has over 65,536 xz blocks.`,
   /**
    * In the status bar, when Open joined stream was pressed and the core
    * refused because one compressed part needs more of the file at once than
@@ -794,6 +804,8 @@ export const JOINED = {
         return JOINED.partZstdFrameTooLarge(tab);
       case "too-large-xz-block":
         return JOINED.partXzBlockTooLarge(tab);
+      case "too-many-xz-blocks":
+        return JOINED.partXzTooManyBlocks(tab);
       case "too-much-at-once":
         return JOINED.partTooMuchAtOnce(tab);
       case "too-large-output":
@@ -840,11 +852,19 @@ export const UNPACKED = {
    *  enough to take several goes, until the tab opens. `percent` is how much
    *  of the compressed data has been read and `size` what it has unpacked to
    *  so far; the final size is not known until the end. Only deflate, zlib,
-   *  gzip and zstd streams unpack in goes (`codec/lazy/`; an xz stream is
-   *  decoded or laid out in a single go), so these words are always the
-   *  ones for compression. */
-  unpacking: (field: string, percent: string, size: string): string =>
-    `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
+   *  gzip, zstd and xz streams unpack in goes (`codec/lazy/`), so these
+   *  words are always the ones for compression. An xz stream is not
+   *  unpacked a go at a time, though: one past 64 MiB unpacked is laid out
+   *  from its index and block headers, and one that fits is copied a piece
+   *  at a time and then unpacked in a single go. So for xz nothing is
+   *  unpacked while `percent` moves, and a stream that fits reaches 100%
+   *  before it is unpacked. `size` is left out while nothing has been
+   *  unpacked, rather than saying "0 B unpacked so far" for the whole of an
+   *  xz stream's wait. */
+  unpacking: (field: string, percent: string, size: string | null): string =>
+    size === null
+      ? `Unpacking ${field}… ${percent} through the compressed data. A new tab opens when unpacking finishes.`
+      : `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   /** In the status bar after Open unpacked, or Open joined stream, was
    *  pressed on a stream whose bytes have not been read from the file yet.
    *  They are read and the tab opens without a second press; a large stream

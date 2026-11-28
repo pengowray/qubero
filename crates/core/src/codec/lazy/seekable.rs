@@ -706,6 +706,16 @@ impl Seekable {
         (windows + heads + blocks + layout) as u64
     }
 
+    /// An xz stream's blocks, as its layout placed them, for tests. Nothing
+    /// for deflate and zstd.
+    #[cfg(test)]
+    pub(super) fn xz_layout(&self) -> Option<&xz::Layout> {
+        match &self.kind {
+            Kind::Xz(l) => Some(l),
+            Kind::Deflate(_) | Kind::Zstd => None,
+        }
+    }
+
     /// Where each checkpoint is, as the bit of the run and the byte of the
     /// output, for tests.
     #[cfg(test)]

@@ -185,6 +185,7 @@ export const RV = {
       case "too-large-input":
       case "too-large-zstd-frame":
       case "too-large-xz-block":
+      case "too-many-xz-blocks":
         return sentenceCase(DECODED_REFUSED[why]);
       case "too-large-zstd-window":
         return "Did not unpack: zstd window over 128 MiB";
@@ -622,6 +623,7 @@ export const RV = {
       case "too-large-output":
       case "too-large-zstd-frame":
       case "too-large-xz-block":
+      case "too-many-xz-blocks":
       case "too-large-zstd-window":
       case "failed":
       case "settings":
@@ -657,6 +659,7 @@ export const RV = {
       case "too-large-input":
       case "too-large-zstd-frame":
       case "too-large-xz-block":
+      case "too-many-xz-blocks":
       case "too-large-zstd-window":
       case "too-much-at-once":
       case "failed":

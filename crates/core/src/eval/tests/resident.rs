@@ -919,6 +919,79 @@ fn three_passes_reading_windows_asked_for_by_turns_all_open() {
     }
 }
 
+/// An xz stream past the cap and several times longer than the store is laid
+/// out by a pass that reads it through a handle onto the store: its ends,
+/// its index and its block headers, a few at a time. It opens in goes with
+/// no refusal kept. After each wait the evaluator says how far the pass has
+/// got, and that never goes back. The pass starts once, its index holds no
+/// copy of the stream, and it is the index the stream in memory comes to.
+/// Under a cap the stream fits under, the pass copies the stream a piece at
+/// a time and it opens held whole. Each wait names at most half the store's
+/// chunks.
+#[test]
+fn an_xz_stream_longer_than_the_store_opens_in_goes() {
+    use crate::codec::lazy::{decode_or_index_with, Decoded, Limits};
+    let content = noise(600 << 10);
+    let packed = crate::codec::lazy::tests::xz_of(&content, 16 << 10);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    let capacity = 160;
+    assert!(bytes.len() > 3 * capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
+    for limits in [windowed_lazy(), Limits { whole: 1 << 20, ..windowed_lazy() }] {
+        let indexed = limits.whole < content.len();
+        let mut d = stored(&bytes, capacity);
+        let mut ev = Evaluator::new(one_run(packed.len(), Codec::Xz));
+        ev.spaces.set_lazy_limits(limits);
+        ev.set_slice(Some(600));
+        let mut times: BTreeMap<u64, usize> = BTreeMap::new();
+        let (mut waits, mut was) = (0, 0);
+        loop {
+            ev.begin_slice();
+            match ev.node(&d, &[1, 0]) {
+                Ok(_) => break,
+                Err(EvalError::Pending(missing)) => {
+                    waits += 1;
+                    assert!(missing.len() <= capacity / 2 + 2, "indexed {indexed}: a wait named {} chunks", missing.len());
+                    let p = ev.unpacking().expect("a pass waiting for bytes says how far it has got");
+                    assert_eq!((p.run_space, p.run_offset_bits, p.run_bits), (0, 16, packed.len() as u64 * 8));
+                    assert!(p.read_bits >= was, "indexed {indexed}: the pass went back from {was} to {}", p.read_bits);
+                    was = p.read_bits;
+                    for m in missing {
+                        let n = times.entry(m.chunk).or_default();
+                        *n += 1;
+                        assert!(*n <= 2, "indexed {indexed}: chunk {} asked for {n} times", m.chunk);
+                        feed(&mut d, &bytes, m.chunk);
+                    }
+                }
+                Err(EvalError::Busy { .. }) => {}
+                Err(e) => panic!("{e:?}"),
+            }
+            assert_eq!(ev.spaces.refusals(), 0, "a stream waiting for bytes was refused");
+            assert!(waits < 1000, "no end to the waits");
+        }
+        assert_eq!(ev.spaces.passes.get(), 1, "indexed {indexed}: the pass started more than once");
+        if !indexed {
+            assert!(unpacked(&ev, &[1]) == content, "the stream held whole differs");
+            continue;
+        }
+        let Some(Opened::Space(id)) = ev.spaces.get(&[1]) else { panic!("the stream did not open") };
+        let index = ev.spaces.lazy(id).expect("read through an index").clone();
+        assert_eq!(index.input().owned_bytes(), 0, "the index holds a copy of the stream");
+        let Ok(Decoded::Indexed(whole)) = decode_or_index_with(Codec::Xz, std::sync::Arc::new(packed.clone()), limits) else { panic!("indexed") };
+        assert_eq!((index.spans(), index.len(), index.members(), index.kept_bytes()), (whole.spans(), whole.len(), whole.members(), whole.kept_bytes()));
+        for k in 0..index.spans() {
+            assert_eq!(index.span_bytes(k), whole.span_bytes(k), "span {k}");
+        }
+        // The ends, the index and the block headers, and none of the data
+        // between the headers: a small share of the stream's chunks.
+        assert!(times.len() < bytes.len() / CHUNK as usize / 4, "{} of the file's chunks were read to lay the stream out", times.len());
+        for at in [10, content.len() / 3, content.len() - 100] {
+            let got = fed(&mut d, &bytes, |d| ev.read_in(d, id, at as u64 * 8, 800)).unwrap();
+            assert!(got == content[at..at + 100], "100 bytes at {at} differ");
+        }
+    }
+}
+
 // ----- the two limits on how long a compressed run may be -----
 
 /// A zlib run past the limit on a copy, and several times longer than the

@@ -118,6 +118,44 @@ fn an_xz_t0_file_reads_back_a_block_at_a_time() {
     reads_back(Codec::Xz, &packed, &whole, &trace);
 }
 
+/// The same file laid out by the pass in steps, read through a handle as the
+/// evaluator reads a run of the file, with steps of 64 KiB, so that the
+/// stream is longer than one step: its header and footer, its index and its
+/// six block headers are each read in a step of their own. It comes to the
+/// index the copy in memory comes to, and reads back.
+#[test]
+fn an_xz_t0_file_laid_out_a_step_at_a_time_is_the_file_laid_out_from_a_copy() {
+    use qubero_core::codec::lazy::{Indexing, RunInput, Stepped};
+    let Some(packed) = sample("xz-T0-blocks.xz") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let limits = Limits { step_input: 64 << 10, ..small() };
+    let source = Arc::new(qubero_core::source::ArcSource(Arc::new(packed.clone())));
+    let mut pass = Indexing::through(Codec::Xz, RunInput::new(source, 0, packed.len() as u64), limits).expect("starts");
+    let mut steps = 0;
+    let ours = loop {
+        steps += 1;
+        match pass.step(u64::MAX, u64::MAX).expect("steps") {
+            Stepped::Done(Decoded::Indexed(s)) => break s,
+            Stepped::Working => {}
+            Stepped::Done(Decoded::Whole(..)) => panic!("came back whole"),
+            Stepped::NeedsInput(m) => panic!("a handle onto memory missing {m:?}"),
+        }
+    };
+    assert!(steps >= 4, "{steps} steps");
+    assert_eq!(ours.input().owned_bytes(), 0, "the index holds a copy");
+    let Ok(Decoded::Indexed(whole)) = decode_or_index_with(Codec::Xz, Arc::new(packed.clone()), limits) else { panic!("indexed from a copy") };
+    assert_eq!((ours.len(), ours.spans(), ours.members(), ours.kept_bytes()), (whole.len(), whole.spans(), whole.members(), whole.kept_bytes()));
+    for k in 0..ours.spans() {
+        assert_eq!(ours.span_bytes(k), whole.span_bytes(k), "span {k}");
+    }
+    let (text, _) = decode_traced(Codec::Xz, &packed).expect("decodes whole");
+    let mut all = vec![0u8; text.len()];
+    ours.read(0, &mut all).expect("reads");
+    assert!(all == text, "the stream read back differs");
+}
+
 /// `zstd -T0 -B` writes one frame, which no span can hold under these limits,
 /// so it is refused as a frame too large. Decoded whole it is the same text the
 /// other two files hold, which puts our zstd reading of both files beside

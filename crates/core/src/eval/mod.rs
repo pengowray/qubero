@@ -143,7 +143,10 @@ pub type R<T> = Result<T, EvalError>;
 /// How far the pass unpacking a deflate, zlib, gzip or zstd stream has got,
 /// for a stream large enough that the pass takes more than one go. The pass reads
 /// the compressed run once from front to back, so `read_bits` of `run_bits`
-/// is how much of it is done.
+/// is how much of it is done. The pass that lays out an xz stream reads its
+/// footer and index first and then its block headers from front to back:
+/// `read_bits` is where the last block header it read starts, and nothing is
+/// unpacked.
 ///
 /// The walk that finds where a gzip member's deflate stream ends is reported
 /// the same way while it is under way. Its `run_bits` are the bytes it

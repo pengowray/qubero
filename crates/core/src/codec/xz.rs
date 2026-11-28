@@ -48,12 +48,16 @@ use crate::codec::{frames, lzma, Refusal, StepField, StepKind, Trace, TraceBuild
 /// What a stream starts with, and how long its header is: the magic, two
 /// bytes of flags, and a CRC32 of the flags.
 const MAGIC: &[u8] = b"\xfd7zXZ\x00";
-const HEADER: usize = 12;
+pub(super) const HEADER: usize = 12;
 
 /// The last twelve bytes: a CRC32, the size of the index, the flags again,
 /// and these two.
-const FOOTER: usize = 12;
+pub(super) const FOOTER: usize = 12;
 const FOOTER_MAGIC: &[u8] = b"YZ";
+
+/// The longest a block header can be: its first byte gives its length in
+/// units of four, less one.
+pub(super) const MAX_BLOCK_HEADER: usize = 1024;
 
 /// The filter that is a compressor. Everything else the format names is a
 /// transform in front of it. See `formats::xz`, which lists them all.
@@ -66,7 +70,7 @@ const LZMA2: u64 = 0x21;
 const MAX_DICT_CODE: u8 = 40;
 
 /// Where one block is and what the file says about it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BlockAt {
     /// Its first byte, which is the first byte of its header.
     pub(super) at: usize,
@@ -90,14 +94,14 @@ impl BlockAt {
 
 /// A stream laid out from its index: every block placed, and the two numbers
 /// the blocks are measured against.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Layout {
     /// How many bytes the integrity check after every block takes, which the
     /// stream header's check type says and every block obeys.
-    check: usize,
+    pub(super) check: usize,
     pub(super) blocks: Vec<BlockAt>,
     /// Where the index starts, which is where the last block stops.
-    index_at: usize,
+    pub(super) index_at: usize,
     /// What the index says the whole stream unpacks to.
     pub(super) total_out: u64,
     /// Whether every block's chain is one LZMA2 filter. All of them or none of
@@ -335,77 +339,231 @@ fn block_trace(l: &Layout, len: usize, total_out: usize) -> Option<Trace> {
 /// them has a footer in the middle that this does not go looking for; such a
 /// file lays out as nothing at all and is opened by the crate, which is what
 /// happened to it before this module read any block itself.
+///
+/// Made of the pieces a stream too large to hold whole is laid out with a
+/// step at a time, from only the bytes each piece needs: [`ends`] from the
+/// stream's first and last twelve bytes, [`Records`] from the index, and
+/// [`block_at`] from each block's header. See [`crate::codec::lazy`].
 pub(super) fn layout(data: &[u8]) -> Option<Layout> {
-    if data.len() < HEADER + FOOTER || !data.starts_with(MAGIC) {
+    if data.len() < HEADER + FOOTER {
+        return None;
+    }
+    let ends = ends(&data[..HEADER], &data[data.len() - FOOTER..], data.len())?;
+    let index = &data[ends.index_at..ends.footer];
+    let mut records = Records::new(index, index.len(), ends.index_at)?;
+    let mut blocks = Vec::new();
+    let mut plain = true;
+    while let Some(r) = records.next(index) {
+        let (blk, p) = block_at(&r, &data[r.header_bytes()], ends.check)?;
+        plain &= p;
+        blocks.push(blk);
+    }
+    records.filled().then(|| Layout { check: ends.check, blocks, index_at: ends.index_at, total_out: records.total_out(), plain })
+}
+
+/// What a stream's header and footer say: how long each block's check is,
+/// and where the index is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Ends {
+    pub(super) check: usize,
+    /// Where the index starts, which is where the last block stops.
+    pub(super) index_at: usize,
+    /// Where the footer starts, which is where the index stops.
+    pub(super) footer: usize,
+}
+
+impl Ends {
+    /// How many bytes the index takes.
+    pub(super) fn index_len(&self) -> usize {
+        self.footer - self.index_at
+    }
+}
+
+/// The ends of a stream of `len` bytes, read from its first twelve bytes,
+/// `head`, and its last twelve, `foot`. Nothing for a stream this does not
+/// lay out.
+pub(super) fn ends(head: &[u8], foot: &[u8], len: usize) -> Option<Ends> {
+    if len < HEADER + FOOTER || head.len() < HEADER || foot.len() < FOOTER || !head.starts_with(MAGIC) {
         return None;
     }
     // The stream flags: a byte nobody has assigned, then four more bits of the
     // same and the check type. A stream setting any of them was written to a
     // version of the format this does not know, so the blocks under it are not
     // read on the strength of a chain that may not mean what it says.
-    if data[6] != 0 || data[7] & 0xf0 != 0 {
+    if head[6] != 0 || head[7] & 0xf0 != 0 {
         return None;
     }
-    let check = check_size(data[7] & 0x0f);
+    let check = check_size(head[7] & 0x0f);
 
-    let footer = data.len() - FOOTER;
-    if &data[data.len() - 2..] != FOOTER_MAGIC {
+    let footer = len - FOOTER;
+    if &foot[FOOTER - 2..FOOTER] != FOOTER_MAGIC {
         return None;
     }
     // The backward size: how long the index is, in units of four bytes and
     // written one short. The one measurement no field in front of it gives.
-    let backward = u32::from_le_bytes(data.get(footer + 4..footer + 8)?.try_into().ok()?);
+    let backward = u32::from_le_bytes(foot.get(4..8)?.try_into().ok()?);
     let index_len = (backward as usize).checked_add(1)?.checked_mul(4)?;
     let index_at = footer.checked_sub(index_len)?;
     if index_at < HEADER {
         return None;
     }
+    Some(Ends { check, index_at, footer })
+}
 
-    let index = &data[index_at..footer];
-    let mut i = 0usize;
-    if *index.first()? != 0x00 {
-        return None;
-    }
-    i += 1;
-    let count = vli(index, &mut i)?;
-    // A record is two bytes at the very least, so a count larger than the
-    // index could hold is not a count.
-    if count > index.len() as u64 {
-        return None;
-    }
+/// Whether the last bytes of a run, `foot`, end in stream padding: four zero
+/// bytes, which the format allows after a stream's footer, in multiples of
+/// four. [`layout`] reads a single stream that ends at its footer, so a
+/// padded stream is read by the decoder of whole streams.
+pub(super) fn padded(foot: &[u8]) -> bool {
+    foot.len() >= 4 && foot[foot.len() - 4..].iter().all(|&b| b == 0)
+}
 
-    let mut blocks = Vec::new();
-    let mut at = HEADER;
-    let mut total_out = 0u64;
-    let mut plain = true;
-    for _ in 0..count {
-        // The block without its padding: header, data and check.
-        let unpadded = vli(index, &mut i)? as usize;
-        let unpacked = vli(index, &mut i)?;
-        if unpadded == 0 || at.checked_add(unpadded)? > index_at {
+/// Whether `bytes` start the way a stream starts. A run of several streams
+/// joined end to end ends with the last stream's footer and index, whose
+/// blocks start after that stream's own header and not after the run's
+/// first twelve bytes, so [`layout`] does not lay it out, and the decoder of
+/// whole streams reads it.
+pub(super) fn starts_stream(bytes: &[u8]) -> bool {
+    bytes.starts_with(MAGIC)
+}
+
+/// One record of a stream's index: where its block starts, which the records
+/// before it give, and the two sizes the record says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Record {
+    pub(super) at: usize,
+    /// The block without its padding: header, data and check.
+    pub(super) unpadded: usize,
+    pub(super) unpacked: u64,
+}
+
+impl Record {
+    /// The bytes of the stream that hold the block's header: its first
+    /// [`MAX_BLOCK_HEADER`] bytes, or all of the block when it is shorter.
+    /// [`block_at`] reads them.
+    pub(super) fn header_bytes(&self) -> std::ops::Range<usize> {
+        self.at..self.at + self.unpadded.min(MAX_BLOCK_HEADER)
+    }
+}
+
+/// The records of an index, read one at a time from the index's bytes, and
+/// where they have placed the blocks so far. Each record is checked as it is
+/// read: a block that runs into the index, or a record that does not parse,
+/// ends the records there, and [`Records::filled`] says no.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Records {
+    /// The byte of the index the next record starts at.
+    i: usize,
+    /// How many records the index says it has, and how many are still to
+    /// read.
+    count: u64,
+    left: u64,
+    /// Where the next block starts.
+    at: usize,
+    index_at: usize,
+    total_out: u64,
+    broken: bool,
+}
+
+/// The most bytes one record of an index takes: two variable-length
+/// integers of at most nine bytes each.
+pub(super) const MAX_RECORD: usize = 18;
+
+impl Records {
+    /// The records of `index`, the first bytes of a stream's index of
+    /// `index_len` bytes, which starts at byte `index_at` of the stream.
+    /// `index` has to hold the count, and every record [`Records::next`]
+    /// reads: [`Records::bytes_needed`] says how many bytes that is. Nothing
+    /// for an index that does not start the way an index does.
+    pub(super) fn new(index: &[u8], index_len: usize, index_at: usize) -> Option<Records> {
+        if *index.first()? != 0x00 {
             return None;
         }
-        let header = (usize::from(*data.get(at)?) + 1) * 4;
-        let packed = unpadded.checked_sub(header)?.checked_sub(check)?;
-        // A block with no data in it is not a block. Even an empty file packs
-        // to an LZMA2 stream of one byte.
-        if packed == 0 {
+        let mut i = 1usize;
+        let count = vli(index, &mut i)?;
+        // A record is two bytes at the very least, so a count larger than the
+        // index could hold is not a count.
+        if count > index_len as u64 {
             return None;
         }
-        plain &= plain_lzma2(data, at, header, packed, unpacked);
-        blocks.push(BlockAt { at, header, packed, unpacked });
-        total_out = total_out.checked_add(unpacked)?;
-        at += unpadded.next_multiple_of(4);
+        Some(Records { i, count, left: count, at: HEADER, index_at, total_out: 0, broken: false })
     }
-    // The blocks have to fill the space between the header and the index
-    // exactly. Anything else means the index is describing a different file
-    // from the one in front of it. No blocks at all is a stream of nothing,
-    // which is what packing an empty file writes and is laid out like any
-    // other: an index saying zero, and zero bytes of output to agree with it.
-    if at != index_at {
+
+    /// How many records the index says it has.
+    pub(super) fn count(&self) -> u64 {
+        self.count
+    }
+
+    /// How many bytes from the index's first byte its records can take at
+    /// most, which is all of them [`Records::next`] ever reads: the bytes
+    /// after them are the index's padding and its CRC32, which nothing here
+    /// reads.
+    pub(super) fn bytes_needed(&self) -> usize {
+        usize::try_from(self.count).unwrap_or(usize::MAX).saturating_mul(MAX_RECORD).saturating_add(self.i)
+    }
+
+    /// Where the blocks the records place end, once every record has been
+    /// read and none was refused: where the index starts, for a stream the
+    /// records fill. Nothing while there are records left, or once one did
+    /// not hold together.
+    pub(super) fn end(&self) -> Option<usize> {
+        (self.left == 0 && !self.broken).then_some(self.at)
+    }
+
+    /// The next record of `index`, the bytes these records were made from.
+    /// Nothing once they are all read, or once one does not hold together.
+    pub(super) fn next(&mut self, index: &[u8]) -> Option<Record> {
+        if self.left == 0 || self.broken {
+            return None;
+        }
+        self.left -= 1;
+        let record = self.read(index);
+        self.broken = record.is_none();
+        record
+    }
+
+    fn read(&mut self, index: &[u8]) -> Option<Record> {
+        let unpadded = vli(index, &mut self.i)? as usize;
+        let unpacked = vli(index, &mut self.i)?;
+        if unpadded == 0 || self.at.checked_add(unpadded)? > self.index_at {
+            return None;
+        }
+        self.total_out = self.total_out.checked_add(unpacked)?;
+        let record = Record { at: self.at, unpadded, unpacked };
+        self.at += unpadded.next_multiple_of(4);
+        Some(record)
+    }
+
+    /// Whether every record has been read and the blocks they place fill
+    /// the space between the stream header and the index exactly. Anything
+    /// else means the index is describing a different file from the one in
+    /// front of it. No blocks at all is a stream of nothing, which is what
+    /// packing an empty file writes and is laid out like any other: an index
+    /// saying zero, and zero bytes of output to agree with it.
+    pub(super) fn filled(&self) -> bool {
+        self.left == 0 && !self.broken && self.at == self.index_at
+    }
+
+    /// What the records read so far say their blocks come to.
+    pub(super) fn total_out(&self) -> u64 {
+        self.total_out
+    }
+}
+
+/// The block record `r` places, read from `head`, the stream's bytes
+/// [`Record::header_bytes`] names, and whether its chain is one LZMA2 filter
+/// and nothing else. `check` is how long each block's check is. Nothing for
+/// a block this does not lay out.
+pub(super) fn block_at(r: &Record, head: &[u8], check: usize) -> Option<(BlockAt, bool)> {
+    let header = (usize::from(*head.first()?) + 1) * 4;
+    let packed = r.unpadded.checked_sub(header)?.checked_sub(check)?;
+    // A block with no data in it is not a block. Even an empty file packs
+    // to an LZMA2 stream of one byte.
+    if packed == 0 {
         return None;
     }
-    Some(Layout { check, blocks, index_at, total_out, plain })
+    let plain = head.get(..header).is_some_and(|h| plain_lzma2(h, packed, r.unpacked));
+    Some((BlockAt { at: r.at, header, packed, unpacked: r.unpacked }, plain))
 }
 
 /// How many bytes the check after every block takes, from the four bits that
@@ -434,10 +592,12 @@ fn check_size(id: u8) -> usize {
 /// wrote agreeing with the index, and zeroes in what is left. Anything else,
 /// including a header this cannot walk to the end of, is somebody else's to
 /// read.
-fn plain_lzma2(data: &[u8], at: usize, header: usize, packed: usize, unpacked: u64) -> bool {
+///
+/// `header` is the header's bytes, as long as its first byte says.
+fn plain_lzma2(header: &[u8], packed: usize, unpacked: u64) -> bool {
     // Everything in the header but its own CRC32, which is the template's to
     // check and is not read here.
-    let Some(body) = data.get(at..at + header).and_then(|h| h.get(..header.checked_sub(4)?)) else {
+    let Some(body) = header.len().checked_sub(4).map(|n| &header[..n]) else {
         return false;
     };
     let Some(&flags) = body.get(1) else { return false };
