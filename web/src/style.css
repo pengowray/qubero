@@ -727,6 +727,13 @@ button.welcome-crystal {
 .hv-pending {
   color: var(--muted);
 }
+/* A byte that cannot be made, drawn as `??`: a part of a joined stream that
+   will not unpack. Muted like a byte on its way, which the `??` tells apart
+   from the `··` of one. The reason is on hover, which the help cursor says. */
+.hv-unreadable {
+  color: var(--muted);
+  cursor: help;
+}
 /* Meaning is a restrained text colour and hairline. It does not fill the byte
    cell, leaving fills available for selection and active-field state. */
 .hv-tint {

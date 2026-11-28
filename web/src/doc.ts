@@ -2516,9 +2516,26 @@ export function bytesSource(bytes: Uint8Array, name: string): ByteSource {
 
 export type ReadResult = {
   readonly bytes: Uint8Array;
-  /** True when every byte came from loaded data. False means a reload will follow. */
+  /** True when every byte came from loaded data and could be read. False
+   *  means a reload will follow, unless `unreadable` names bytes that will
+   *  never read. */
   readonly complete: boolean;
+  /** The first stretch of bytes the read gave zeroes for because they cannot
+   *  be made, or null or absent when there is none. */
+  readonly unreadable?: Unreadable | null;
 };
+
+/**
+ * Bytes of a tab that read as zeroes because they cannot be made, and why.
+ * Only a tab over a stream joined from several runs, too large to hold whole,
+ * has any. It opens without unpacking its parts, each as long as the file says
+ * it is, and the first read of a part checks it: a part that will not unpack,
+ * or unpacks to another length, reads as zeroes from then on, and these are
+ * its bytes. `at` and `len` cover the whole part, which may reach past the
+ * read. `why` is what the listing says of the part: `blocks[50].compressed
+ * unpacks to 2098 bytes, not the 2099 the file says`.
+ */
+export type Unreadable = { readonly at: number; readonly len: number; readonly why: string };
 
 /**
  * The editor's own code could not be fetched.
@@ -2666,8 +2683,11 @@ export class Doc {
    *
    * A stream that would not open comes back as the core's word for why. For a
    * compressed run that word is already on the node, so the caller need not
-   * say it again; a stream joined from several runs is found to be too long,
-   * or to have a part that will not read, only here, when it is joined whole.
+   * say it again; a stream joined from several runs is found to be too long
+   * only here. One held whole is also refused here for a part that will not
+   * unpack. One read a part at a time opens without unpacking its parts, and
+   * a part that will not unpack is found by the first read of its bytes: see
+   * `ReadResult.unreadable`.
    *
    * A large deflate stream is unpacked over several calls, a go at a time, so
    * that the page keeps drawing. Until it is done this comes back as how far
@@ -3700,12 +3720,14 @@ export class Doc {
     return r;
   }
 
-  /** Synchronous read. Missing chunks are zero and fetched in the background. */
+  /** Synchronous read. Missing chunks are zero and fetched in the background.
+   *  Bytes that cannot be made are zero too, and named in `unreadable`. */
   read(at: number, len: number): ReadResult {
     const bytes = new Uint8Array(len);
     const missing = this.editor.read_bytes(this.space, at, bytes);
     this.fetchChunks(missing);
-    return { bytes, complete: missing.length === 0 };
+    const unreadable = missing.length === 0 ? this.unreadableIn(at, len) : null;
+    return { bytes, complete: missing.length === 0 && unreadable === null, unreadable };
   }
 
   /** Synchronous read of `nBits` starting at any bit, packed MSB first. */
@@ -3713,7 +3735,19 @@ export class Doc {
     const bytes = new Uint8Array(Math.ceil(nBits / 8));
     const missing = this.editor.read_bits(this.space, atBit, nBits, bytes);
     this.fetchChunks(missing);
-    return { bytes, complete: missing.length === 0 };
+    const first = Math.floor(atBit / 8);
+    const unreadable = missing.length === 0 ? this.unreadableIn(first, Math.ceil((atBit + nBits) / 8) - first) : null;
+    return { bytes, complete: missing.length === 0 && unreadable === null, unreadable };
+  }
+
+  /** The bytes of `[at, at + len)` that a read just gave zeroes for because
+   *  they cannot be made. Asked only of a joined stream's tab, the one kind
+   *  of document that can have any, and only after a read that found no
+   *  chunk missing. */
+  private unreadableIn(at: number, len: number): Unreadable | null {
+    if (!this.joined || this.space === 0 || len <= 0) return null;
+    const r = JSON.parse(this.editor.unreadable(this.space, at, len)) as RawReply<Unreadable | null>;
+    return r.status === "ok" ? r.node : null;
   }
 
   /**
@@ -3992,7 +4026,9 @@ export class Doc {
   /**
    * The bytes in `[at, at + len)` once their chunks of the file have loaded,
    * and whether they all did. `complete` is false when the wait gave up: a
-   * piece needed more of the file at once than the store keeps.
+   * piece needed more of the file at once than the store keeps. It is false
+   * too when some of the bytes cannot be made, which `unreadable` names: a
+   * part of a joined stream that will not unpack.
    *
    * Read a piece at a time (`readInPieces`, with pieces of `PIECE_BYTES`),
    * since a long range may never be in the store all at once: on a tab, a
@@ -4006,6 +4042,7 @@ export class Doc {
       at,
       len,
       read: (from, out) => Array.from(this.editor.read_bytes(this.space, from, out)),
+      unreadable: (from, n) => this.unreadableIn(from, n),
       load: (chunks) => this.fileChunks(chunks),
       wait: this.chunkWait(),
     });

@@ -33,7 +33,7 @@ import { chipsHead, NO_TEMPLATE } from "./strings.ts";
 import { getAddressBase } from "./format.ts";
 import type { ChipMeasure } from "./chipfit.ts";
 import { pinnedNoteKey, planRowChips, rowNoteKey, valsBeforeChips, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
-import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
+import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, UNREADABLE_BITS, type Run } from "./hexcell.ts";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl, type ChipPick } from "./hexchips.ts";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.ts";
@@ -135,6 +135,9 @@ type RowParts = {
   /** The same for the row's table of values, kept apart from the chips so
    *  that a value changing does not rewrite the chips beside it. */
   valsKey: string;
+  /** True when some cell of the row was last drawn as a byte that cannot be
+   *  made, with the reason on hover, so the next draw clears it. */
+  tips: boolean;
 };
 
 /** What the side column came out at, once there is a row to read it off. */
@@ -644,11 +647,16 @@ export class HexRows {
         h.style.backgroundImage = "";
         h.textContent = blankHex;
         h.removeAttribute("data-off");
+        if (h.title !== "") h.title = "";
         a.className = "";
         a.textContent = " ";
         a.removeAttribute("data-off");
+        if (a.title !== "") a.title = "";
       }
     }
+    // The cells may have moved between lines, so the next draw writes every
+    // cell's reason on hover again, or clears it.
+    parts.tips = true;
   }
 
   ensure(want: number, shrink = true): void {
@@ -717,13 +725,16 @@ export class HexRows {
         layoutKey: "",
         noteKey: "",
         valsKey: "",
+        tips: false,
       });
     }
   }
 
-  /** The eight bits of one byte, split into spans only where that is needed. */
-  private fillBits(f: Frame, cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[], sel: Run | null): void {
-    const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
+  /** The eight bits of one byte, split into spans only where that is needed.
+   *  `byte` is null for a byte on its way, and "unreadable" for one that
+   *  cannot be made. */
+  private fillBits(f: Frame, cell: HTMLElement, byte: number | null | "unreadable", off: number, hl: readonly Run[], sel: Run | null): void {
+    const text = byte === "unreadable" ? UNREADABLE_BITS : byte === null ? "········" : byte.toString(2).padStart(8, "0");
     if (byte === null) cell.classList.add("hv-pending");
     const onCursor = off === f.cursor;
     const whole = covers(hl, 0, 8);
@@ -871,10 +882,23 @@ export class HexRows {
    *  in. */
   private drawCells(parts: RowParts, rowStart: number, moved: boolean, f: Frame): void {
     const { bpr, len, start, binary, complete, bytes, fields, selection, windowBytes, spans, byteSpan, band } = f;
+    // Bytes that cannot be made say why on hover. Only a row that has some,
+    // or had some last time, touches the cells' titles, so every other row
+    // draws as it did.
+    const u = f.unreadable;
+    const touches = u !== null && u.at < rowStart + bpr && u.at + u.len > rowStart;
+    const tips = touches || parts.tips;
+    parts.tips = touches;
     for (let i = 0; i < bpr; i++) {
       const off = rowStart + i;
       const h = parts.hexCells[i] as HTMLElement;
       const a = parts.textCells[i] as HTMLElement;
+      const unreadable = touches && u !== null && off >= u.at && off < u.at + u.len;
+      if (tips) {
+        const why = unreadable && u !== null ? u.why : "";
+        if (h.title !== why) h.title = why;
+        if (a.title !== why) a.title = why;
+      }
       // What each cell is, gathered as strings by `cellDraw` and written
       // only where it is not what the cell already says. Most of a redraw
       // changes nothing — a cursor key moves a mark two cells — and a class
@@ -901,6 +925,7 @@ export class HexRows {
         len,
         binary,
         complete,
+        unreadable,
         byte: bytes[off - start] ?? 0,
         span: s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8), band: band[si] === 1 },
         hl,
@@ -918,7 +943,7 @@ export class HexRows {
       // The bits inside a cell carry their own marks, so in binary the cell
       // has only what `fillBits` puts on it.
       if (h.className !== draw.hex) h.className = draw.hex;
-      if (binary && off < len) this.fillBits(f, h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
+      if (binary && off < len) this.fillBits(f, h, unreadable ? "unreadable" : complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
       if (a.className !== draw.ascii) a.className = draw.ascii;
     }
   }

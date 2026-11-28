@@ -170,6 +170,9 @@ export type CellInput = {
   readonly binary: boolean;
   /** False while the bytes are still on their way. */
   readonly complete: boolean;
+  /** True for a byte that cannot be made: a part of a joined stream that
+   *  will not unpack, which the read gave a zero for. Absent is false. */
+  readonly unreadable?: boolean;
   /** The byte itself, when it has arrived. */
   readonly byte: number;
   readonly span: CellSpan | null;
@@ -211,6 +214,11 @@ export type CellDraw = {
  */
 export type GlyphSet = readonly string[];
 
+/** What a bytes cell writes for a byte that cannot be read, in hex and in
+ *  binary. Hex digits are never `?`, so it cannot be taken for a value. */
+export const UNREADABLE_HEX = "??";
+export const UNREADABLE_BITS = "????????";
+
 /** What a cell writes for a byte its set has no character for. A full stop
  *  raised off the baseline, so a row of them does not read as sentences. */
 export const STAND_IN = "·";
@@ -245,7 +253,14 @@ export function cellDraw(c: CellInput): CellDraw {
   let bits = "";
   let text = binary ? "        " : "  ";
   let asciiText: string;
-  if (off < len) {
+  if (off < len && c.unreadable === true) {
+    // `??`, the way hex editors show a byte they could not read: never the
+    // zero the read put there, which would say the byte is a zero. Not the
+    // `··` of a byte on its way, since this one is not coming.
+    asciiText = " ";
+    hc += " hv-unreadable";
+    if (!binary) text = UNREADABLE_HEX;
+  } else if (off < len) {
     const b = c.byte;
     // A byte the set has no character for is marked as well as stood in for:
     // the stand-in is a character the set could itself contain, and a reader
