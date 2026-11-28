@@ -3107,10 +3107,10 @@ const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} byt
 /** In place of the readings when some of the selected bytes cannot be made.
  *  `why` names the part: `blocks[2].compressed unpacks to 65280 bytes, not
  *  the 65281 the file says`. */
-const SEL_TEXT_UNREADABLE = (why: string): string => `Can't read these bytes: ${why}`;
+const SEL_TEXT_UNREADABLE = (why: string): string => `Selection includes unreadable bytes: ${why}`;
 /** In a value's box, and in the selection's status, when its bytes cannot be
  *  made. The reason is on hover over the box. */
-const UNREADABLE_VALUE = "can't read";
+const UNREADABLE_VALUE = "unreadable bytes";
 /** The UTF-8 row when the bytes are all ASCII too: one fact, said once. */
 const SEL_TEXT_UTF8_ASCII = "UTF-8 · ASCII";
 /** In the reading's place when the bytes do not fit the row's encoding. The

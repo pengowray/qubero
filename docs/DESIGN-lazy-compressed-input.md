@@ -2613,14 +2613,17 @@ How the reader is told, by each path that reads a tab's bytes:
   with unreadable bytes and names them. Every caller that would read a value
   from the bytes refuses, and every one that draws them marks them:
   - the hex view draws them as `??`, muted, with the reason on hover, and a
-    copy that reaches them says `Couldn't copy: {reason}.`;
+    copy that reaches them says `Couldn't copy: the selection includes
+    unreadable bytes ({reason}).`;
   - the text view draws each character over them as `?`, muted, with the
-    reason on hover and an `unreadable bytes` mark at the line's end, and a
+    reason on hover and an `unpacking failed` mark at the line's end, and a
     copy says the same as the hex view's;
-  - the inspector writes `can't read` in a value's box, with the reason on
-    hover, and `Can't read these bytes: {reason}` in place of the
+  - the inspector writes `unreadable bytes` in a value's box, with the
+    reason on hover, and `Selection includes unreadable bytes: {reason}` in
+    place of the
     selection's text readings and its number;
-  - the strings view adds `{size} not searched: {reason}` to its status line;
+  - the strings view adds `{size} unreadable, not scanned: {reason}` to its
+    status line;
   - the report's byte dump and the listing's byte strips write the bytes as
     `??` (`hexMarked`), and so do the report's first bytes of a stretch, its
     zoomable byte map and its hover dump (`byteHex`), which no longer wait
@@ -2630,8 +2633,9 @@ How the reader is told, by each path that reads a tab's bytes:
   - the minimap says the reason where its progress would be, and keeps the
     classes it found before the part; the report's ledger keeps those and
     counts the rest as unread;
-  - an image card says `Can't read the image's bytes: {reason}`, opening a
-    run as a file fails with `Can't read these bytes: {reason}`, and the
+  - an image card says `Image includes unreadable bytes: {reason}`, opening
+    a run as a file fails with `Couldn't open these bytes: some are
+    unreadable ({reason}).`, and the
     report's plain-text sniff, the JPEG cards and the outline's metadata
     read nothing from them.
 
@@ -2647,7 +2651,8 @@ How the reader is told, by each path that reads a tab's bytes:
   index, search, the HDF5, ROOT, ELF hardening, WebAssembly and NE readers
   are reached only through the calls above. `sqlite_overflow::read`, which a
   SQLite row spread over overflow pages is gathered by, now gives the row's
-  problem as `Row not assembled: {reason}.` instead of a row made of zeroes;
+  problem as `Row not assembled: one of its pages is unreadable
+  ({reason}).` instead of a row made of zeroes;
   `Gathered` passes the new `Source` methods on, mapped through its extents.
   `uf2::image` has no caller outside its tests. `textnum`'s `Window` and the
   hex dump reader's `DumpSource` hold bytes of their own and wrap no source.
@@ -2732,9 +2737,9 @@ as it did in the file's own tab before. The hex view shows the block's bytes
 as `??`, or `????????` in binary, with the same words on hover, and the
 bytes either side as they are: in the browser, the last `??` is at
 `0x2fd00` and the next block's bytes start at `0x2fd01`, where its trailer
-says. A copy of a selection that reaches the block says
-`Couldn't copy: blocks[3000].compressed could not be unpacked.` A search
-steps past it. Before, the tab would not open, and Open unpacked said it
+says. A copy of a selection that reaches the block says `Couldn't copy: the
+selection includes unreadable bytes (blocks[3000].compressed could not be
+unpacked).` A search steps past it. Before, the tab would not open, and Open unpacked said it
 was refused as failed.
 
 **What still reads the zeroes.** A part read through its index that later
@@ -3066,13 +3071,14 @@ through a `RunInput`":
 - **The browser tests of the text view** (`web/test/textview.browser.mjs`)
   were not extended. In the browser pane, on the BAM of 300 MiB with block
   2's trailer one byte long, the text view's muted `?` with the reason on
-  hover and its `unreadable bytes` marks, the inspector's `can't read` boxes
+  hover and its `unpacking failed` marks, the inspector's `unreadable bytes` boxes
   for the 8-byte values that reach the block, the selection's reason, and
-  the strings view's `63.8 KiB not searched: …` were seen. The minimap's
+  the strings view's `63.8 KiB not searched: …` were seen, before the
+  strings were reworded after a cold read. The minimap's
   reason was not: the pane was hidden, and the minimap draws on a frame.
 - **The reason is on hover**, over the `??` cells, the `?` characters and the
-  `can't read` boxes, which a touch screen never shows. The text view's
-  `unreadable bytes` mark and the inspector's selection line say that the
+  `unreadable bytes` boxes, which a touch screen never shows. The text
+  view's `unpacking failed` mark and the inspector's selection line say that the
   bytes cannot be read without a hover; only the reason itself needs one.
 - **The CRC-32 of a part when it is first read.** A part that inflates to
   the length its trailer says with the wrong bytes reads as those bytes.

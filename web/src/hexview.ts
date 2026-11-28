@@ -121,7 +121,7 @@ const COPY_FAILED = "Couldn't copy to the clipboard.";
 /** `why` is what the listing says of a part of a joined stream that will not
  *  unpack: `blocks[50].compressed unpacks to 2098 bytes, not the 2099 the
  *  file says`. */
-const COPY_UNREADABLE = (why: string): string => `Couldn't copy: ${why}.`;
+const COPY_UNREADABLE = (why: string): string => `Couldn't copy: the selection includes unreadable bytes (${why}).`;
 const COPY_DONE = (bytes: number, asText: boolean): string =>
   `Copied ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"} as ${asText ? "text" : "hex"}.`;
 

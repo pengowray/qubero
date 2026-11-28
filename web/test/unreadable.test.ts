@@ -50,11 +50,11 @@ test("the report writes each byte as its digits, ?? where it cannot be made, and
 test("a read whose bytes cannot be made is opened as an error naming the part", () => {
   assert.equal(unreadableError({ unreadable: null }), null);
   assert.equal(unreadableError({}), null);
-  assert.equal(unreadableError({ unreadable: bad })?.message, `Can't read these bytes: ${bad.why}`);
+  assert.equal(unreadableError({ unreadable: bad })?.message, `Couldn't open these bytes: some are unreadable (${bad.why}).`);
 });
 
 test("the strings view and the text view say what they did with the bytes", () => {
-  assert.equal(STRINGSVIEW.statusUnreadable(65_281, bad.why), `63.8 KiB not searched: ${bad.why}`);
-  assert.equal(TEXTVIEW.lineUnreadable, "unreadable bytes");
-  assert.equal(TEXTVIEW.copyUnreadable(bad.why), `Couldn't copy: ${bad.why}.`);
+  assert.equal(STRINGSVIEW.statusUnreadable(65_281, bad.why), `63.8 KiB unreadable, not scanned: ${bad.why}`);
+  assert.equal(TEXTVIEW.lineUnreadable, "unpacking failed");
+  assert.equal(TEXTVIEW.copyUnreadable(bad.why), `Couldn't copy: the selection includes unreadable bytes (${bad.why}).`);
 });

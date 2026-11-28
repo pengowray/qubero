@@ -39,9 +39,10 @@ export function settled(read: { readonly complete: boolean; readonly unreadable?
   return read.complete || read.unreadable != null;
 }
 
-/** The error a view gives for a read whose bytes cannot be made, or null for
- *  one that read. `why` names the part: `blocks[2].compressed unpacks to
- *  65280 bytes, not the 65281 the file says`. */
+/** The error opening a run as a file of its own gives for a read whose bytes
+ *  cannot be made, or null for one that read. `why` names the part:
+ *  `blocks[2].compressed unpacks to 65280 bytes, not the 65281 the file
+ *  says`. */
 export function unreadableError(read: { readonly unreadable?: Unreadable | null }): Error | null {
-  return read.unreadable == null ? null : new Error(`Can't read these bytes: ${read.unreadable.why}`);
+  return read.unreadable == null ? null : new Error(`Couldn't open these bytes: some are unreadable (${read.unreadable.why}).`);
 }

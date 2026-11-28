@@ -89,7 +89,7 @@ pub fn read<S: Source>(doc: &Document<S>, found: &Payload, encoding: i128) -> Ro
     // A part of a joined stream that will not unpack reads as zeroes, and a
     // row is not to be made of them.
     if let Some(u) = gathered.unreadable(0, gathered.len_bytes()) {
-        return Row { problem: Some(format!("Row not assembled: {}.", u.why)), ..Row::default() };
+        return Row { problem: Some(format!("Row not assembled: one of its pages is unreadable ({}).", u.why)), ..Row::default() };
     }
 
     let row = Document::new(MemSource(bytes));
