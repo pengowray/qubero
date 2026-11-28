@@ -3943,6 +3943,37 @@ line, which names the other byte order. The marked line then carries a note
 straight after the number type: `magic: u32be read as little-endian`. The note
 is drawn from a `data-note` attribute, so a selection does not copy it.
 
+After the named types, the text has one `decoder` section for each decoder
+family that some `decoded(...)` in the template reaches, printed once however
+many fields use it. A section lists the kinds of node that family's trace lays
+down (`codec::tracekind`), as rows over the kinds their children can be:
+
+```text
+decoder deflate {
+  blocks: traced blocks {
+    block: repeat(any number) traced block {
+      bfinal: width(fixed) computed enum DeflateFinal {
+        0 = more blocks follow, 1 = the last block
+      }
+      ...
+      codes: traced symbols {
+        literal: repeat(any number) codebits Huffman code (fixed or table)
+```
+
+A field's `decoded(deflate)` is matched to `decoder deflate` by that word. A
+family reached through other codec words names them after `for`:
+`decoder lzma for xz` in ZIP, `decoder jpegscan for jpeg baseline`. A kind with
+more than one form writes them joined by `or`, and forms that differ only in
+how their width was settled share one type: `(fixed or table)`. The kinds'
+descriptions are not in the text; the `trace_kinds` wasm export has them.
+
+The core says which line each kind is on (`template_text::kind_lines`, the
+wasm `template_kind_lines`), so the web does not parse the sections. With the
+cursor on a decoded node, the Template tab marks its kind's line, under the
+row of its parent's kind when the kind is listed under two rows. The web's
+index of the text leaves the sections out, so a decoder line is never taken
+for a field: it cannot be clicked.
+
 Snapshots of the text for several formats are in
 `crates/core/tests/snapshots/template_text/`; regenerate them with
 `UPDATE_SNAPSHOTS=1 cargo test -p qubero-core --test template_text`.
