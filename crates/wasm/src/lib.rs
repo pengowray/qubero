@@ -3019,6 +3019,29 @@ impl Editor {
         sh.doc.read_bytes(at as u64, out).into_iter().map(|m| m.chunk as f64).collect()
     }
 
+    /// Which of the bytes `at..at + len` of the tab over `space` a read gave
+    /// zeroes for because they cannot be made, and why:
+    /// {status:"ok",node:{at,len,why}}, or a null node when they all read.
+    /// Asked after `read_bytes` or `read_bits` answered with no chunk
+    /// missing.
+    ///
+    /// Only a stream joined from parts and read a part at a time has such
+    /// bytes. It opens without unpacking its parts, each as long as the file
+    /// says it is, and a read that first unpacks a part checks it: a part
+    /// that will not unpack, or unpacks to another length, reads as zeroes
+    /// from then on. `why` names the part as the listing does, from the
+    /// reading that joined the stream, and by its index where that reading
+    /// cannot say.
+    pub fn unreadable(&mut self, space: u32, at: f64, len: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<UnreadableDto>>(Err(err));
+        }
+        let (at, len) = (at as u64, len as u64);
+        let named = self.core_space_of(space).and_then(|(home, sp)| self.sheets[home].eval.as_ref()?.unreadable(sp.id, at, len));
+        let found = named.or_else(|| self.at(space).doc.unreadable(at, len));
+        reply(Ok(found.map(|u| UnreadableDto { at: u.at as f64, len: u.len as f64, why: u.why })))
+    }
+
     pub fn read_bits(&mut self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
         if let Err(waits) = self.ensure_open(space) {
             return chunks_of(waits);

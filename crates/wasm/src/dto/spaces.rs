@@ -29,6 +29,21 @@ pub(crate) struct SpaceDto {
     pub(crate) stored: bool,
 }
 
+/// Bytes of a tab that read as zeroes because they cannot be made, and why.
+/// See `Editor::unreadable`.
+#[derive(Serialize)]
+pub(crate) struct UnreadableDto {
+    /// Where the stretch starts in the tab and how long it is. It is a whole
+    /// part of a joined stream, so it may start before the read that was
+    /// asked about and end after it.
+    pub(crate) at: f64,
+    pub(crate) len: f64,
+    /// What a read of the part says in the listing, with the part named the
+    /// way the listing names it: `blocks[50].compressed unpacks to 2098
+    /// bytes, not the 2099 the file says`.
+    pub(crate) why: String,
+}
+
 /// One step of a decoder, as the cursor link shows it.
 #[derive(Serialize)]
 pub(crate) struct MapStepDto {
