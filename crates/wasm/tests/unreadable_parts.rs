@@ -218,6 +218,9 @@ fn the_overview_of_a_stream_with_bytes_that_will_not_read_is_refused_with_the_re
         }
     }
     assert_eq!(why.as_deref(), Some(s.why.as_str()));
+    // Every later step is refused at once, rather than scanning from the
+    // front to the same block again.
+    assert_eq!(refused(&s.ed.overview_step(s.tab, 64)), s.why);
     // A focus on the bad block is refused, and one on the first block reads.
     let focus = s.ed.overview_focus_step(s.tab, s.bad.start as f64, s.bad.end as f64, 16);
     assert_eq!(refused(&focus), s.why);

@@ -82,6 +82,11 @@ struct Sheet {
     /// away on any edit: the classes describe bytes that may no longer be
     /// there.
     scan: Option<overview::Scan>,
+    /// Why that scan was refused, when it reached bytes that cannot be made:
+    /// a part of a joined stream that will not unpack. Every later step is
+    /// refused the same way, rather than scanning the file again from the
+    /// front to the same bytes. Thrown away with the scan on any edit.
+    scan_refused: Option<String>,
     /// The same over the one block a reader has picked out, at whatever
     /// resolution that block's own size allows.
     focus: Option<overview::Scan>,
@@ -164,6 +169,7 @@ impl Sheet {
             ne: None,
             template: String::new(),
             scan: None,
+            scan_refused: None,
             focus: None,
             kinds: None,
             census: None,
@@ -928,6 +934,7 @@ impl Editor {
         sh.bpf_complete = false;
         sh.ne = None;
         sh.scan = None;
+        sh.scan_refused = None;
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
@@ -947,6 +954,7 @@ impl Editor {
         sh.bpf_complete = false;
         sh.ne = None;
         sh.scan = None;
+        sh.scan_refused = None;
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
@@ -958,7 +966,15 @@ impl Editor {
     /// `node` carrying everything found so far, so the host can draw a partial
     /// map while the rest is read. `done` on the node says when to stop asking.
     pub fn overview_step(&mut self, space: u32, buckets: u32) -> String {
-        self.refusing_unreadable(space, |ed| ed.overview_step_read(space, buckets))
+        let refused = self.sheets.get(space as usize).filter(|_| space != 0).and_then(|sh| sh.scan_refused.clone());
+        if let Some(why) = refused {
+            return reply::<()>(Err(EvalError::Failed(why)));
+        }
+        let (answer, why) = self.refusing_unreadable_why(space, |ed| ed.overview_step_read(space, buckets));
+        if let (Some(why), Some(sh)) = (why, self.sheets.get_mut(space as usize)) {
+            sh.scan_refused = Some(why);
+        }
+        answer
     }
 
     fn overview_step_read(&mut self, space: u32, buckets: u32) -> String {
@@ -3164,22 +3180,27 @@ impl Editor {
     /// strings scan mark them instead. Costs nothing for the file and for any
     /// tab that is not a joined stream read a part at a time.
     fn refusing_unreadable(&mut self, space: u32, call: impl FnOnce(&mut Self) -> String) -> String {
+        self.refusing_unreadable_why(space, call).0
+    }
+
+    /// `refusing_unreadable`, saying as well why it refused, when it did.
+    fn refusing_unreadable_why(&mut self, space: u32, call: impl FnOnce(&mut Self) -> String) -> (String, Option<String>) {
         // Opened again first, if it has to be, so that the count is taken of
         // the stream the call reads and not of one it is about to replace.
         self.open_again(space);
         let before = self.unreadable_reads(space);
         let answer = call(self);
         if self.unreadable_reads(space) == before {
-            return answer;
+            return (answer, None);
         }
-        let Some(sh) = self.sheets.get(space as usize) else { return answer };
+        let Some(sh) = self.sheets.get(space as usize) else { return (answer, None) };
         let named = self.core_space_of(space).and_then(|(home, sp)| self.sheets[home].eval.as_ref()?.last_unreadable(sp.id));
-        let Some(u) = named.or_else(|| sh.doc.source().last_unreadable()) else { return answer };
+        let Some(u) = named.or_else(|| sh.doc.source().last_unreadable()) else { return (answer, None) };
         if let Some(sh) = self.sheets.get_mut(space as usize) {
             sh.scan = None;
             sh.focus = None;
         }
-        reply::<()>(Err(EvalError::Failed(u.why)))
+        (reply::<()>(Err(EvalError::Failed(u.why.clone()))), Some(u.why))
     }
 
     pub fn read_bits(&mut self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
