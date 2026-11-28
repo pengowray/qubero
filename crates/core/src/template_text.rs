@@ -344,7 +344,8 @@ use crate::template::*;
 const WIDTH: usize = 96;
 
 /// The whole template as text: the root, then every named type in alphabetical
-/// order. Two renders of one template are the same string.
+/// order, then a section for each decoder family the template reaches, in
+/// alphabetical order. Two renders of one template are the same string.
 pub fn render(t: &Template) -> String {
     render_parts(t).0
 }
