@@ -48,6 +48,26 @@ test("two sections are both left out, and a type's span stops before them", () =
   assert.ok(idx.blocks.length > 0 && idx.blocks.every((b) => b.end < deflate));
 });
 
+test("the enum block above the sections is left out too, and is not a section", () => {
+  for (const text of [GZIP, ZIP]) {
+    const idx = indexTemplate(text);
+    const open = lineOf(text, "enum SymbolKind {");
+    const close = lineOf(text, "}", open);
+    const first = idx.decoders[0]?.[0] ?? -1;
+    assert.ok(open > 0 && close > open && first > close, `${open} ${close} ${first}`);
+    assert.ok(idx.decoders.every(([a]) => a > close));
+    assert.ok(idx.blocks.every((b) => b.end < open), JSON.stringify(idx.blocks.map((b) => [b.name, b.end])));
+    for (const [, [, z]] of idx.typeSpans) assert.ok(z < open);
+    assert.ok([...idx.stmtEnd.keys()].every((l) => l < open));
+    for (let i = open; i <= close; i++) assert.notEqual(idx.kinds[i], "kind");
+    assert.equal(idx.byName.get("SymbolKind"), undefined);
+    // A record's kind names its case and the enum, and is still a kind's line.
+    const stored = lineOf(text, "kind: computed 3 (stored) enum SymbolKind");
+    assert.ok(stored > first);
+    assert.equal(idx.kinds[stored], "kind");
+  }
+});
+
 const LINES: KindLine[] = [
   { kind: "lz4.blocks", parent: "", line: 10 },
   { kind: "lz4.block", parent: "lz4.blocks", line: 11 },

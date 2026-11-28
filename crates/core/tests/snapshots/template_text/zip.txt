@@ -240,6 +240,11 @@ root ZIP {
   }
 }
 
+enum SymbolKind {
+  0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel, 6 = padding,
+  7 = base64 group, 8 = ignored
+}
+
 decoder deflate {
   blocks: traced blocks {
     block: repeat(any number) traced block {
@@ -262,20 +267,14 @@ decoder deflate {
       stored_nlen: computed
       codes: traced symbols {
         stored_data: Symbol {
-          kind: computed 3 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 3 (stored) enum SymbolKind
           length: computed
         }
         literal: repeat(any number) codebits Huffman code (fixed or table)
         match: repeat(any number) codebits length and distance codes (encoded)
         end_of_block: codebits Huffman code (fixed or table)
         unnamed_codes: Symbol {
-          kind: computed 4 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 4 (not named) enum SymbolKind
           length: computed
         }
       }
@@ -291,38 +290,23 @@ decoder lzma for xz {
       range_init: computed
       codes: traced symbols {
         literal: repeat(any number) Symbol {
-          kind: computed 0 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 0 (literal) enum SymbolKind
           value: computed
         }
         match: repeat(any number) Symbol {
-          kind: computed 1 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 1 (match) enum SymbolKind
           length: computed
           distance: computed
         }
         end_marker: Symbol {
-          kind: computed 2 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 2 (end of block) enum SymbolKind
         }
         stored_data: Symbol {
-          kind: computed 3 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 3 (stored) enum SymbolKind
           length: computed
         }
         unnamed_codes: Symbol {
-          kind: computed 4 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 4 (not named) enum SymbolKind
           length: computed
         }
       }

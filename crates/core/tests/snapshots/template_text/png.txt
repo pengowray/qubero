@@ -3385,6 +3385,11 @@ type tiff.Jpeg = JPEG {
       icc.Profile
 }
 
+enum SymbolKind {
+  0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel, 6 = padding,
+  7 = base64 group, 8 = ignored
+}
+
 decoder deflate {
   blocks: traced blocks {
     block: repeat(any number) traced block {
@@ -3407,20 +3412,14 @@ decoder deflate {
       stored_nlen: computed
       codes: traced symbols {
         stored_data: Symbol {
-          kind: computed 3 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 3 (stored) enum SymbolKind
           length: computed
         }
         literal: repeat(any number) codebits Huffman code (fixed or table)
         match: repeat(any number) codebits length and distance codes (encoded)
         end_of_block: codebits Huffman code (fixed or table)
         unnamed_codes: Symbol {
-          kind: computed 4 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 4 (not named) enum SymbolKind
           length: computed
         }
       }
@@ -3437,27 +3436,18 @@ decoder jpegscan for jpeg baseline {
         zrl: repeat(any number) codebits Huffman code (table)
         eob: codebits Huffman code (table)
         unnamed_codes: Symbol {
-          kind: computed 4 enum SymbolKind {
-            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-            6 = padding, 7 = base64 group, 8 = ignored
-          }
+          kind: computed 4 (not named) enum SymbolKind
           length: computed
         }
       }
       padding: Symbol {
-        kind: computed 6 enum SymbolKind {
-          0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-          6 = padding, 7 = base64 group, 8 = ignored
-        }
+        kind: computed 6 (padding) enum SymbolKind
       }
       restart: width(fixed) computed enum RestartMarker {
         0 = RST0, 1 = RST1, 2 = RST2, 3 = RST3, 4 = RST4, 5 = RST5, 6 = RST6, 7 = RST7
       }
       trailing: Symbol {
-        kind: computed 4 enum SymbolKind {
-          0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
-          6 = padding, 7 = base64 group, 8 = ignored
-        }
+        kind: computed 4 (not named) enum SymbolKind
         length: computed
       }
     }
