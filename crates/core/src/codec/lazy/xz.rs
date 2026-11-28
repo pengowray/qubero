@@ -28,14 +28,31 @@ use crate::codec::{xz, Codec, Refusal, SpanUnit, StepField, StepKind, Trace, Tra
 /// index is found only when a read reaches the block, and that read is
 /// refused. See [`Prefix`].
 ///
+/// A stream whose index lists more than [`Limits::block_marks`] blocks is
+/// refused as [`Refusal::TooManyXzBlocks`], whatever it unpacks to, before
+/// any of its blocks are placed.
+///
 /// `packed` is the whole stream, held in memory. [`XzPass`] lays out a
 /// stream it reads through a handle, a step at a time, and comes to the same
 /// index.
 pub(super) fn index_xz(packed: Arc<Vec<u8>>, input: RunInput, limits: Limits) -> Result<Decoded, Refusal> {
+    if count_of(&packed).is_some_and(|n| n > limits.block_marks as u64) {
+        return Err(Refusal::TooManyXzBlocks);
+    }
     match xz::layout(&packed).filter(|l| l.total_out > limits.whole as u64) {
         Some(l) => laid_out(l, &input, limits),
         None => whole(Codec::Xz, &packed),
     }
+}
+
+/// How many blocks the index of `data`, a whole stream, says the stream has,
+/// when its header, its footer and the start of its index hold together.
+fn count_of(data: &[u8]) -> Option<u64> {
+    if data.len() < xz::HEADER + xz::FOOTER {
+        return None;
+    }
+    let ends = xz::ends(&data[..xz::HEADER], &data[data.len() - xz::FOOTER..], data.len())?;
+    xz::Records::new(&data[ends.index_at..ends.footer], ends.index_len(), ends.index_at).map(|r| r.count())
 }
 
 /// The index of a stream laid out as `l`, past the cap, which the index reads
@@ -102,12 +119,14 @@ const COPY_STEPS: usize = 4;
 /// 2. The index, whose length the footer gives, `step_input` bytes a step,
 ///    and none of the stream before it: in the browser the index is nearly
 ///    always in the footer's chunk of the file, which the first step loaded.
-///    An index longer than [`Limits::unit_input`] is treated as one
-///    [`xz::layout`] cannot read, since the blocks it lists are held for as
-///    long as the index is kept: 16 MiB of index lists at most 8 Mi blocks.
-///    A stream whose index says it unpacks to the cap or less, or whose index
-///    or footer does not hold together, goes to the decoder of whole streams
-///    without its block headers being read, as it would over a copy.
+///    Once the index's count of blocks is read, only as much of the index as
+///    that many records can take is read, and an index that lists more than
+///    [`Limits::block_marks`] blocks is refused as
+///    [`Refusal::TooManyXzBlocks`], since the blocks it lists are held for as
+///    long as the index is kept. A stream whose index says it unpacks to the
+///    cap or less, or whose index or footer does not hold together, goes to
+///    the decoder of whole streams without its block headers being read, as
+///    it would over a copy.
 /// 3. The block headers, up to [`HEADERS_PER_STEP`] a step, each read where
 ///    the index puts it, and the missing chunks of all of them named in one
 ///    answer. The last header of a step ends no more than
@@ -121,8 +140,11 @@ const COPY_STEPS: usize = 4;
 ///
 /// A stream that goes to the decoder of whole streams is copied, a piece of
 /// up to [`COPY_STEPS`] times `step_input` a step, and decoded once the copy
-/// is complete. That copy is held to [`Limits::copy_input`], and a longer
-/// stream is refused as [`Refusal::TooLargeCopy`].
+/// is complete. That copy is held to [`Limits::copy_input`]. A longer stream
+/// is refused for what sent it there (see [`Whole`]): as
+/// [`Refusal::TooLargeCopy`] when its size is the reason, and as
+/// [`Refusal::Failed`] when part of its layout does not hold together, as
+/// the decoder of whole streams refuses a damaged stream.
 ///
 /// A pass over a copy in memory, and one over a stream no longer than one
 /// step's piece, lays the stream out in one step from the whole stream, as
@@ -146,6 +168,11 @@ enum Phase {
     /// The stream's ends are read, and its index is being read: `bytes` of it
     /// from its first byte on.
     Index { ends: xz::Ends, bytes: Vec<u8> },
+    /// The index's records all read, and the blocks they place end before
+    /// the index, as the last of several streams joined end to end would:
+    /// whether a stream header is at byte `at`, where that last stream would
+    /// start.
+    Joined { at: usize },
     /// The index is read and holds together, and its blocks come to more than
     /// the cap: the block headers are being read.
     Headers(Box<Headers>),
@@ -154,6 +181,21 @@ enum Phase {
     Copy { bytes: Vec<u8> },
     /// Finished, or refused.
     Over,
+}
+
+/// Why a stream goes to the decoder of whole streams, which is what a stream
+/// too long to copy is refused for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Whole {
+    /// Its size: it unpacks to the cap or less, or it is in a form that only
+    /// the decoder of whole streams reads, with stream padding after its
+    /// footer or joined end to end from several streams. Past the limit on
+    /// a copy it is refused as [`Refusal::TooLargeCopy`].
+    BySize,
+    /// Its header, footer, index or a block header does not hold together.
+    /// Past the limit on a copy it is refused as [`Refusal::Failed`], what
+    /// the decoder of whole streams says of a stream it cannot read.
+    Damaged,
 }
 
 /// The block headers of an [`XzPass`] read so far.
@@ -192,7 +234,7 @@ impl XzPass {
         match &self.phase {
             Phase::Index { bytes, .. } | Phase::Copy { bytes } => bytes.len(),
             Phase::Headers(h) => h.index.len(),
-            Phase::Start | Phase::Over => 0,
+            Phase::Start | Phase::Joined { .. } | Phase::Over => 0,
         }
     }
 
@@ -205,7 +247,7 @@ impl XzPass {
     pub(super) fn step(&mut self) -> Result<Stepped, Refusal> {
         let stepped = self.step_on();
         let at = match &self.phase {
-            Phase::Start | Phase::Index { .. } => 0,
+            Phase::Start | Phase::Index { .. } | Phase::Joined { .. } => 0,
             // The headers of the step's batch read so far count, so that a
             // step that waits again having read some of them has got
             // further.
@@ -224,6 +266,7 @@ impl XzPass {
         match std::mem::replace(&mut self.phase, Phase::Over) {
             Phase::Start => self.start(),
             Phase::Index { ends, bytes } => self.index(ends, bytes),
+            Phase::Joined { at } => self.joined(at),
             Phase::Headers(h) => self.headers(h),
             Phase::Copy { bytes } => self.copy(bytes),
             Phase::Over => Err(Refusal::Failed),
@@ -253,42 +296,83 @@ impl XzPass {
             Err(missing) => return self.wait(Phase::Start, missing),
         };
         match xz::ends(&head.bytes, &foot.bytes, len) {
-            Some(ends) if ends.index_len() <= self.limits.unit_input => {
+            Some(ends) => {
                 self.phase = Phase::Index { ends, bytes: Vec::new() };
                 Ok(Stepped::Working)
             }
-            _ => self.to_copy(),
+            // Stream padding after the footer is a stream as the format
+            // allows it; anything else at the end is not a footer.
+            None if xz::padded(&foot.bytes) => self.to_copy(Whole::BySize),
+            None => self.to_copy(Whole::Damaged),
         }
     }
 
-    /// The next piece of the index, and the index read once it is all there.
+    /// The next piece of the index, and the index read once it is all there:
+    /// until its count of blocks is read, as far as the footer, and after
+    /// that only as far as that many records can take.
     fn index(&mut self, ends: xz::Ends, mut bytes: Vec<u8>) -> Result<Stepped, Refusal> {
+        let wanted = |bytes: &[u8]| match xz::Records::new(bytes, ends.index_len(), ends.index_at) {
+            Some(r) => ends.index_len().min(r.bytes_needed()),
+            None => ends.index_len(),
+        };
         let from = ends.index_at + bytes.len();
-        let to = ends.footer.min(from.saturating_add(self.limits.step_input.max(1)));
+        // At least one record's worth, so that the first piece holds the count.
+        let piece = self.limits.step_input.max(xz::MAX_RECORD);
+        let to = (ends.index_at + wanted(&bytes)).min(from.saturating_add(piece));
         match self.reads.copy(from..to) {
             Ok(c) => bytes.extend_from_slice(&c.bytes),
             Err(missing) => return self.wait(Phase::Index { ends, bytes }, missing),
         }
-        if bytes.len() < ends.index_len() {
+        let Some(records) = xz::Records::new(&bytes, ends.index_len(), ends.index_at) else {
+            return self.to_copy(Whole::Damaged);
+        };
+        if records.count() > self.limits.block_marks as u64 {
+            return Err(Refusal::TooManyXzBlocks);
+        }
+        let want = wanted(&bytes);
+        if bytes.len() < want {
             self.phase = Phase::Index { ends, bytes };
             return Ok(Stepped::Working);
         }
-        self.read_index(ends, bytes)
+        bytes.truncate(want);
+        self.read_index(ends, bytes, records)
     }
 
-    /// The index, all of it: its records checked from first to last, and the
-    /// block headers read next when they hold together and come to more than
-    /// the cap. Any other stream is decoded whole, as over a copy.
-    fn read_index(&mut self, ends: xz::Ends, index: Vec<u8>) -> Result<Stepped, Refusal> {
-        let Some(records) = xz::Records::new(&index, ends.index_at) else { return self.to_copy() };
+    /// The index's records, `records` read from `index`, checked from first
+    /// to last, and the block headers read next when they hold together and
+    /// come to more than the cap. Any other stream is decoded whole, as over
+    /// a copy.
+    fn read_index(&mut self, ends: xz::Ends, index: Vec<u8>, records: xz::Records) -> Result<Stepped, Refusal> {
         let mut all = records;
         while all.next(&index).is_some() {}
-        if !all.filled() || all.total_out() <= self.limits.whole as u64 {
-            return self.to_copy();
+        if !all.filled() {
+            // Blocks that end short of the index may be the last of several
+            // streams joined end to end, whose own header comes before them.
+            return match all.end().and_then(|end| ends.index_at.checked_sub(end)).filter(|&at| at > 0) {
+                Some(at) => {
+                    self.phase = Phase::Joined { at };
+                    Ok(Stepped::Working)
+                }
+                None => self.to_copy(Whole::Damaged),
+            };
+        }
+        if all.total_out() <= self.limits.whole as u64 {
+            return self.to_copy(Whole::BySize);
         }
         let headers = Headers { ends, index, records, total_out: all.total_out(), blocks: Vec::new(), plain: true, batch: Vec::new() };
         self.phase = Phase::Headers(Box::new(headers));
         Ok(Stepped::Working)
+    }
+
+    /// Whether the last of several streams joined end to end starts at byte
+    /// `at`, which the decoder of whole streams reads, or the index is
+    /// damaged.
+    fn joined(&mut self, at: usize) -> Result<Stepped, Refusal> {
+        match self.reads.copy(at..at + xz::HEADER) {
+            Ok(c) if xz::starts_stream(&c.bytes) => self.to_copy(Whole::BySize),
+            Ok(_) => self.to_copy(Whole::Damaged),
+            Err(missing) => self.wait(Phase::Joined { at }, missing),
+        }
     }
 
     /// The next block headers, or the stream laid out once they are all read.
@@ -317,7 +401,7 @@ impl XzPass {
                 // would not lay out either.
                 Ok(head) => match xz::block_at(r, &head, h.ends.check) {
                     Some(blk) => *got = Some(blk),
-                    None => return self.to_copy(),
+                    None => return self.to_copy(Whole::Damaged),
                 },
                 Err(m) => missing.extend(m),
             }
@@ -349,11 +433,15 @@ impl XzPass {
     }
 
     /// Copy the stream whole, for the decoder of whole streams: a stream this
-    /// does not lay out, or one that comes to no more than the cap.
-    fn to_copy(&mut self) -> Result<Stepped, Refusal> {
+    /// does not lay out, or one that comes to no more than the cap. A stream
+    /// too long to copy is refused for `why`.
+    fn to_copy(&mut self, why: Whole) -> Result<Stepped, Refusal> {
         let len = self.reads.len();
         if len > self.limits.copy_input as u64 {
-            return Err(Refusal::TooLargeCopy);
+            return Err(match why {
+                Whole::BySize => Refusal::TooLargeCopy,
+                Whole::Damaged => Refusal::Failed,
+            });
         }
         self.phase = Phase::Copy { bytes: Vec::with_capacity(len as usize) };
         Ok(Stepped::Working)

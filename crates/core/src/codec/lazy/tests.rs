@@ -2964,36 +2964,124 @@ fn an_xz_pass_from_a_store_is_refused_as_a_copy_is() {
 /// from a store a few bytes a piece, comes to what the same stream in memory
 /// comes to, at every byte: the same refusal, or the same index, or the same
 /// bytes decoded whole. A damaged index or footer is a stream nothing lays
-/// out, and goes to the decoder of whole streams either way. So does one
-/// whose index is longer than one read of it may be, from the store only.
+/// out, and goes to the decoder of whole streams either way.
+///
+/// Past the limit on a copy, which a copy in memory never is, the decoder of
+/// whole streams cannot have it. Then a stream that lays out comes to what it
+/// does in memory, one whose index says it fits under the cap is too large
+/// to copy, and one that does not lay out is refused as failed, as the
+/// decoder of whole streams refuses a stream it cannot read, and not as too
+/// large.
 #[test]
 fn a_damaged_xz_index_or_footer_is_read_from_a_store_as_from_memory() {
     let data = mixed(24_000, 421);
     let packed = xz_of(&data, 1_000);
     let limits = Limits { whole: 1, span: 1 << 20, step_input: 512, ..small() };
+    let short = Limits { copy_input: packed.len() - 1, ..limits };
     let index_at = crate::codec::xz::layout(&packed).expect("lays out").index_at;
     let places = (0..12).chain(index_at..packed.len());
     let mut kinds = std::collections::BTreeSet::new();
+    let mut failed = 0;
     for at in places {
         for xor in [0x01u8, 0x80] {
             let mut bad = packed.clone();
             bad[at] ^= xor;
             let (fed, _) = xz_from_a_store(&bad, limits, 64);
             let ours = outcome(fed.got);
-            assert!(ours == outcome(decode_or_index_with(Codec::Xz, Arc::new(bad.clone()), limits)), "byte {at} ^ {xor:#x}");
+            let in_memory = outcome(decode_or_index_with(Codec::Xz, Arc::new(bad.clone()), limits));
+            assert!(ours == in_memory, "byte {at} ^ {xor:#x}");
             kinds.insert(match &ours {
                 Ok(Ok(_)) => "indexed".to_string(),
                 Ok(Err(_)) => "whole".to_string(),
                 Err(why) => why.as_str().to_string(),
             });
+            let (fed, _) = xz_from_a_store(&bad, short, 64);
+            let want = match crate::codec::xz::layout(&bad) {
+                None => Err(Refusal::Failed),
+                Some(l) if l.total_out <= limits.whole as u64 => Err(Refusal::TooLargeCopy),
+                Some(_) => in_memory,
+            };
+            failed += usize::from(want == Err(Refusal::Failed));
+            assert!(outcome(fed.got) == want, "byte {at} ^ {xor:#x}, past the limit on a copy");
         }
     }
     assert!(kinds.len() >= 2, "every change came to {kinds:?}");
-    let (fed, _) = xz_from_a_store(&packed, Limits { unit_input: 16, ..limits }, 64);
-    let Ok(Decoded::Whole(bytes, _)) = fed.got else { panic!("an index past the limit was laid out") };
-    assert!(bytes == data);
-    let (fed, _) = xz_from_a_store(&packed, Limits { unit_input: 16, copy_input: packed.len() - 1, ..limits }, 64);
-    assert_eq!(fed.got.err(), Some(Refusal::TooLargeCopy));
+    assert!(failed > 10, "{failed} changes left a stream nothing lays out");
+}
+
+/// A stream past the limit on a copy whose index is damaged, or one of whose
+/// block headers is, is refused as failed when it is read from a store, and
+/// not as too large to copy: its size is not why it is not read. The block
+/// header here says it is 1,024 bytes long, more than its block. A stream
+/// that is not damaged but is read only by the decoder of whole streams,
+/// with stream padding after its footer or joined end to end from two
+/// streams, is still too large to copy.
+#[test]
+fn a_damaged_xz_stream_past_the_copy_limit_is_refused_as_failed() {
+    use crate::codec::xz::tests::{pack, wrap};
+    let data = mixed(120_000, 433);
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> = data.chunks(500).map(|c| (pack(c, 3, 0, 2, 1 << 16, None), c.to_vec())).collect();
+    let packed = wrap(&blocks, false);
+    let l = crate::codec::xz::layout(&packed).expect("lays out");
+    let limits = Limits { span: 1 << 20, ..in_windows() };
+    let capacity = (2 * window_of(Codec::Xz, &limits)).div_ceil(1024) + 4;
+    let refused = |stream: &[u8]| {
+        let short = Limits { copy_input: stream.len() - 1, ..limits };
+        xz_from_a_store(stream, short, capacity).0.got.err()
+    };
+    assert!(matches!(xz_from_a_store(&packed, Limits { copy_input: packed.len() - 1, ..limits }, capacity).0.got, Ok(Decoded::Indexed(_))));
+
+    // The first record's block made four bytes longer: every block after it
+    // is placed four bytes late, and the last runs into the index.
+    let mut index = packed.clone();
+    let records = l.index_at + 1 + crate::codec::xz::tests::vli_of(l.blocks.len() as u64).len();
+    assert!(index[records] & 0x7f < 0x7c, "the low seven bits of the first record's size have room for 4");
+    index[records] += 4;
+    assert!(crate::codec::xz::layout(&index).is_none());
+    assert_eq!(refused(&index), Some(Refusal::Failed), "a damaged index");
+
+    let mut header = packed.clone();
+    let at = l.blocks[60].at;
+    assert!(l.block_len(60) < 1024);
+    header[at] = 0xff;
+    assert!(crate::codec::xz::layout(&header).is_none());
+    assert_eq!(refused(&header), Some(Refusal::Failed), "a damaged block header");
+
+    let padded = [&packed[..], &[0u8; 8]].concat();
+    assert_eq!(refused(&padded), Some(Refusal::TooLargeCopy), "stream padding");
+    let joined = [xz_of(&data[..5_000], 1_000), packed.clone()].concat();
+    assert_eq!(refused(&joined), Some(Refusal::TooLargeCopy), "two streams joined end to end");
+    // The same streams in memory are read by the decoder of whole streams.
+    for (stream, what) in [(&index, "a damaged index"), (&header, "a damaged block header")] {
+        assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(stream.clone()), limits).err(), Some(Refusal::Failed), "{what}, in memory");
+    }
+}
+
+/// An xz stream whose index lists more blocks than `Limits::block_marks` is
+/// refused as having too many blocks, from a store and from memory, before
+/// any block header is read, and whether or not it fits under the cap. The
+/// index is read only as far as its records can reach. At the limit, the
+/// stream is indexed.
+#[test]
+fn an_xz_stream_of_more_blocks_than_the_limit_is_refused() {
+    let data = mixed(300_000, 439);
+    let packed = xz_of(&data, 1_000);
+    let blocks = crate::codec::xz::layout(&packed).expect("lays out").blocks.len();
+    let limits = Limits { span: 1 << 20, block_marks: blocks - 1, ..in_windows() };
+    let capacity = (2 * window_of(Codec::Xz, &limits)).div_ceil(1024) + 4;
+    for whole_cap in [limits.whole, 1 << 20] {
+        let limits = Limits { whole: whole_cap, ..limits };
+        let (fed, inside) = xz_from_a_store(&packed, limits, capacity);
+        assert_eq!(fed.got.err(), Some(Refusal::TooManyXzBlocks), "cap {whole_cap}");
+        for named in fed.waits.iter().flatten() {
+            assert!(inside.iter().all(|r| !r.contains(named)), "cap {whole_cap}: chunk {named} is inside a block's data");
+        }
+        assert_eq!(decode_or_index_with(Codec::Xz, Arc::new(packed.clone()), limits).err(), Some(Refusal::TooManyXzBlocks), "cap {whole_cap}, in memory");
+    }
+    let at_the_limit = Limits { block_marks: blocks, ..limits };
+    assert!(matches!(xz_from_a_store(&packed, at_the_limit, capacity).0.got, Ok(Decoded::Indexed(_))));
+    assert!(matches!(decode_or_index_with(Codec::Xz, Arc::new(packed), at_the_limit), Ok(Decoded::Indexed(_))));
+    assert_eq!(Limits::default().block_marks, 65_536);
 }
 
 /// While a step waits for some of its block headers, the headers it has

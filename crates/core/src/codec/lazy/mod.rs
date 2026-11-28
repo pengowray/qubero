@@ -189,7 +189,10 @@ pub struct Limits {
     /// How many steps the trace of a run held whole may hold before it names
     /// blocks rather than codes: [`crate::codec::MAX_STEPS`].
     pub whole_steps: usize,
-    /// [`MAX_BLOCK_MARKS`].
+    /// [`MAX_BLOCK_MARKS`]. Also the most blocks an xz stream's index may
+    /// list for the stream to be read through it, since an index keeps an
+    /// entry for every block: past it the stream is refused as
+    /// [`Refusal::TooManyXzBlocks`]. 65,536 blocks are 2 MiB of entries.
     pub block_marks: usize,
     /// The most one zstd frame or one xz block may come to, since it is
     /// decoded from its start: [`CAP_BYTES`]. A limit of its own and not

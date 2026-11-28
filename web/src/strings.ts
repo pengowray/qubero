@@ -243,6 +243,12 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
    *  write, is refused this way once it is past 64 MiB. */
   "too-large-zstd-frame": "a zstd frame is too large to unpack (over 64 MiB unpacked)",
   "too-large-xz-block": "an xz block is too large to unpack (over 64 MiB unpacked)",
+  /** An xz stream whose index lists more than 65,536 blocks
+   *  (`Limits::block_marks` in the core), whatever it unpacks to: an index
+   *  keeps an entry for every block. The count is the reason, not the size
+   *  and not damage. `xz -T0` writes a block for every 24 MiB of output, so
+   *  only a tiny `--block-size` or a hostile file gets here. */
+  "too-many-xz-blocks": "too many xz blocks to unpack (over 65,536 blocks)",
   /** A zstd frame whose header asks for a window over 128 MiB, which
    *  `zstd --long=28` and higher may write. It is refused before any of it
    *  is unpacked, so nothing says how large it is, and the words name no
@@ -759,6 +765,9 @@ export const JOINED = {
    */
   partZstdFrameTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has a zstd frame that unpacks to over 64 MiB.`,
   partXzBlockTooLarge: (tab: string): string => `Couldn't open ${tab}: one of its parts has an xz block that unpacks to over 64 MiB.`,
+  /** The same, when one part is an xz stream whose index lists more than
+   *  65,536 blocks (`too-many-xz-blocks`). */
+  partXzTooManyBlocks: (tab: string): string => `Couldn't open ${tab}: one of its parts has over 65,536 xz blocks.`,
   /**
    * In the status bar, when Open joined stream was pressed and the core
    * refused because one compressed part needs more of the file at once than
@@ -795,6 +804,8 @@ export const JOINED = {
         return JOINED.partZstdFrameTooLarge(tab);
       case "too-large-xz-block":
         return JOINED.partXzBlockTooLarge(tab);
+      case "too-many-xz-blocks":
+        return JOINED.partXzTooManyBlocks(tab);
       case "too-much-at-once":
         return JOINED.partTooMuchAtOnce(tab);
       case "too-large-output":

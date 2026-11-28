@@ -350,7 +350,7 @@ pub(super) fn layout(data: &[u8]) -> Option<Layout> {
     }
     let ends = ends(&data[..HEADER], &data[data.len() - FOOTER..], data.len())?;
     let index = &data[ends.index_at..ends.footer];
-    let mut records = Records::new(index, ends.index_at)?;
+    let mut records = Records::new(index, index.len(), ends.index_at)?;
     let mut blocks = Vec::new();
     let mut plain = true;
     while let Some(r) = records.next(index) {
@@ -410,6 +410,23 @@ pub(super) fn ends(head: &[u8], foot: &[u8], len: usize) -> Option<Ends> {
     Some(Ends { check, index_at, footer })
 }
 
+/// Whether the last bytes of a run, `foot`, end in stream padding: four zero
+/// bytes, which the format allows after a stream's footer, in multiples of
+/// four. [`layout`] reads a single stream that ends at its footer, so a
+/// padded stream is read by the decoder of whole streams.
+pub(super) fn padded(foot: &[u8]) -> bool {
+    foot.len() >= 4 && foot[foot.len() - 4..].iter().all(|&b| b == 0)
+}
+
+/// Whether `bytes` start the way a stream starts. A run of several streams
+/// joined end to end ends with the last stream's footer and index, whose
+/// blocks start after that stream's own header and not after the run's
+/// first twelve bytes, so [`layout`] does not lay it out, and the decoder of
+/// whole streams reads it.
+pub(super) fn starts_stream(bytes: &[u8]) -> bool {
+    bytes.starts_with(MAGIC)
+}
+
 /// One record of a stream's index: where its block starts, which the records
 /// before it give, and the two sizes the record says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,7 +454,9 @@ impl Record {
 pub(super) struct Records {
     /// The byte of the index the next record starts at.
     i: usize,
-    /// How many records are still to read.
+    /// How many records the index says it has, and how many are still to
+    /// read.
+    count: u64,
     left: u64,
     /// Where the next block starts.
     at: usize,
@@ -446,11 +465,17 @@ pub(super) struct Records {
     broken: bool,
 }
 
+/// The most bytes one record of an index takes: two variable-length
+/// integers of at most nine bytes each.
+pub(super) const MAX_RECORD: usize = 18;
+
 impl Records {
-    /// The records of `index`, a stream's index, which starts at byte
-    /// `index_at` of the stream. Nothing for an index that does not start the
-    /// way an index does.
-    pub(super) fn new(index: &[u8], index_at: usize) -> Option<Records> {
+    /// The records of `index`, the first bytes of a stream's index of
+    /// `index_len` bytes, which starts at byte `index_at` of the stream.
+    /// `index` has to hold the count, and every record [`Records::next`]
+    /// reads: [`Records::bytes_needed`] says how many bytes that is. Nothing
+    /// for an index that does not start the way an index does.
+    pub(super) fn new(index: &[u8], index_len: usize, index_at: usize) -> Option<Records> {
         if *index.first()? != 0x00 {
             return None;
         }
@@ -458,10 +483,31 @@ impl Records {
         let count = vli(index, &mut i)?;
         // A record is two bytes at the very least, so a count larger than the
         // index could hold is not a count.
-        if count > index.len() as u64 {
+        if count > index_len as u64 {
             return None;
         }
-        Some(Records { i, left: count, at: HEADER, index_at, total_out: 0, broken: false })
+        Some(Records { i, count, left: count, at: HEADER, index_at, total_out: 0, broken: false })
+    }
+
+    /// How many records the index says it has.
+    pub(super) fn count(&self) -> u64 {
+        self.count
+    }
+
+    /// How many bytes from the index's first byte its records can take at
+    /// most, which is all of them [`Records::next`] ever reads: the bytes
+    /// after them are the index's padding and its CRC32, which nothing here
+    /// reads.
+    pub(super) fn bytes_needed(&self) -> usize {
+        usize::try_from(self.count).unwrap_or(usize::MAX).saturating_mul(MAX_RECORD).saturating_add(self.i)
+    }
+
+    /// Where the blocks the records place end, once every record has been
+    /// read and none was refused: where the index starts, for a stream the
+    /// records fill. Nothing while there are records left, or once one did
+    /// not hold together.
+    pub(super) fn end(&self) -> Option<usize> {
+        (self.left == 0 && !self.broken).then_some(self.at)
     }
 
     /// The next record of `index`, the bytes these records were made from.
