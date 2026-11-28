@@ -2505,12 +2505,30 @@ refused. Nothing after it moves, since the stream was laid out from the
 lengths the file gives: a part of the wrong length never shifts the bytes
 after it, and its own bytes are never shown as bytes.
 
-One kind of part is still decoded before the stream opens: one the file
-says unpacks to nothing. It gives the stream no bytes, so no read lands on
-it, and a block whose trailer says 0 while it holds data would otherwise
-lose that data without a word. The walk decodes it and refuses the stream
-as failed when it unpacks to anything, as it refused every bad part before.
-A BGZF file's end block is such a part, 28 bytes, and normally the only one.
+Two kinds of part are still decoded before the stream opens
+(`checked_when_joined` in `stitch.rs`), and refuse the stream as failed when
+they unpack to another length, as every bad part did before:
+
+- One the file says unpacks to nothing. It gives the stream no bytes, so no
+  read lands on it, and a block whose trailer says 0 while it holds data
+  would otherwise lose that data without a word. A BGZF file's end block is
+  such a part, 28 bytes, and normally the only one.
+- A deflate, zlib or gzip part the file says unpacks to more than its run
+  could: 1,032 bytes for each byte of the run, a copy of 258 bytes in two
+  bits. A trailer claiming more is a lie the walk catches for one decode.
+
+**How large a trailer's claim can make a stream.** A part claiming more than
+64 MiB (`Limits::whole`) is read through an index pass in the walk, as
+before this change, which finds its real length; so is one claiming the
+most a 32-bit ISIZE can say, past the 1 GiB (`LAZY_CAP_BYTES`) a part read
+through an index may be, and the stream is refused for it. Under 64 MiB, a
+claim past 1,032 times the run is decoded by the walk and refused. So a
+stream read a part at a time is never longer than its runs can fill, the
+same bound its real bytes have; no limit on a joined stream's total length
+was added or removed. No buffer is sized by a claim: a part is decoded into
+what it unpacks to, at most 64 MiB (`CAP_BYTES`), and compared with the
+claim after. The test is
+`a_bgzf_block_claiming_a_huge_size_refuses_the_stream_or_its_reads`.
 
 How the reader is told, by each path that reads a tab's bytes:
 
@@ -2543,15 +2561,59 @@ How the reader is told, by each path that reads a tab's bytes:
   `part_label` already had.
 - `Joined::map_out` and `map_in` give no step for a byte of a part in
   trouble, and the trace they make of a part checks its length too.
+- `Joined` counts the reads that reached a part in trouble and keeps the
+  latest such part. `Source::unreadable_reads` and `last_unreadable` give
+  them, passed on by the same wrappers, and `Evaluator::last_unreadable`
+  names the part. Code that reads a tab through other code, a scan or a
+  format's own reader, takes the count before and compares it after.
 - The wasm has `Editor::unreadable(space, at, len)`, which answers
-  `{status:"ok",node:{at,len,why}}` or a null node. `search_step` steps past a
-  match on unreadable bytes. `read_bytes` and `read_bits` are unchanged.
+  `{status:"ok",node:{at,len,why}}` or a null node. `read_bytes` and
+  `read_bits` are unchanged; the web asks `unreadable` after them.
+- Every other wasm call that reads a tab's bytes outside the template's own
+  reading marks them or refuses with the reason (`refusing_unreadable`,
+  which compares the count). These refuse: `overview_step` (and every later
+  step, kept in `scan_refused`, rather than scanning again from the front to
+  the same part), `overview_focus_step`, `holds_hdf5`, `contents`, `btree`,
+  `elf_contents`, `root_contents`, `iso_volume`, `iso_directory`,
+  `hardening`, `jpeg_scan` and `jpeg_block`. `spans` drops the instruction
+  names it read from such bytes and gives the rows as the template reads
+  them. `text_window` gives each line the unreadable stretches it holds,
+  with the reason. `strings_scan` drops every string that touches them,
+  length prefix and terminator included, and names them. `selection_text`
+  gives the reason instead of readings, and `selection_literal` nothing.
+  `search_step` steps past a match on them. `text_index` and `text_back` are
+  unchanged: they scan the same zeroes the text window does, so line starts
+  agree, and none moves, since the part is as long as its trailer says.
+  `head`, which the text readings sniff the encoding from, reads the file
+  and never a tab. Calls that read through the template's own reading
+  (`template_*`, `spans`, `run_cells`, the walks behind the report and the
+  census) fail field by field through `read_in`, as a listing does.
 - The web's `Doc.read` and `readBits` ask `unreadable` after a read of a
   joined tab that found no chunk missing, and give `unreadable` in the
   `ReadResult`, with `complete` false. `readLoaded` stops at the first piece
-  with unreadable bytes and names them. The hex view draws those bytes as
-  `??`, muted, with the reason on hover, and a copy that reaches them says
-  `Couldn't copy: {reason}.`
+  with unreadable bytes and names them. Every caller that would read a value
+  from the bytes refuses, and every one that draws them marks them:
+  - the hex view draws them as `??`, muted, with the reason on hover, and a
+    copy that reaches them says `Couldn't copy: {reason}.`;
+  - the text view draws each character over them as `?`, muted, with the
+    reason on hover and an `unreadable bytes` mark at the line's end, and a
+    copy says the same as the hex view's;
+  - the inspector writes `can't read` in a value's box, with the reason on
+    hover, and `Can't read these bytes: {reason}` in place of the
+    selection's text readings and its number;
+  - the strings view adds `{size} not searched: {reason}` to its status line;
+  - the report's byte dump and the listing's byte strips write the bytes as
+    `??` (`hexMarked`);
+  - the minimap says the reason where its progress would be, and keeps the
+    classes it found before the part; the report's ledger keeps those and
+    counts the rest as unread;
+  - an image card says `Can't read the image's bytes: {reason}`, opening a
+    run as a file fails with `Can't read these bytes: {reason}`, and the
+    report's plain-text sniff, the JPEG cards and the outline's metadata
+    read nothing from them.
+
+  Saving reads the file, and hashing reads the file's own blob, so neither
+  ever reads a tab. The arithmetic is in `web/src/unreadable.ts`.
 
 What did not change:
 
@@ -2637,13 +2699,14 @@ says. A copy of a selection that reaches the block says
 steps past it. Before, the tab would not open, and Open unpacked said it
 was refused as failed.
 
-**What still reads the zeroes.** The text view (`text_window`, `text_index`
-and `text_back` in the wasm) and the inspector's reading of a selection as
-text read a tab's document through `Source::read_bytes` and show the zeroes
-as text, and so does any other wasm call that reads a tab's bytes without
-asking `unreadable`: the strings scan, the byte census and the disassembly.
-A .vcf.gz is read in the text view, so that one matters most. See "Still to
-do".
+**What still reads the zeroes.** A part read through its index that later
+refuses a span: the read is refused and counted, but no trouble is kept, so
+`unreadable` names nothing and the hex view shows zeroes there, as it did
+for a stream read through an index before this change. The calls guarded by
+`refusing_unreadable` refuse it all the same, since they go by the count.
+`filetype.ts`'s search for PyBasic's module name reads the front of any
+document and finds nothing in zeroes. The hex view's byte under the cursor,
+read to type over, is read on a tab that cannot be typed in.
 
 **Tests.**
 
@@ -2685,6 +2748,24 @@ do".
 - `web/test/hexcell.test.ts` draws an unreadable byte as `??` in hex, and
   `web/test/chunkwait.test.ts` has `readInPieces` stop at a piece with
   unreadable bytes and name them.
+- `crates/wasm/tests/unreadable_parts.rs`, on a BGZF file of three blocks of
+  text whose middle block's trailer is one byte long: the hex view's reads
+  and `unreadable`; the text view's marks, every byte of the block marked
+  once, and `text_index` and `text_back` agreeing with the lines through
+  the block; the strings scan finding no string that touches the block and
+  naming it; the selection's text and literal; the overview refused with
+  the reason, at once on every later step, and the focus refused over the
+  block and read over the first; and the format readers giving nothing for
+  a stream that is none of their formats. An ISO 9660 image in gzip members
+  of two sectors, whose tenth member is one byte long, with `iso_volume` and
+  `iso_directory` refused where they reach it and a directory in the whole
+  members read.
+- `eval/tests/resident.rs`:
+  `a_bgzf_block_claiming_a_huge_size_refuses_the_stream_or_its_reads`, and
+  the spoiled-block test now checks the count of refused reads and
+  `Evaluator::last_unreadable`.
+- `web/test/unreadable.test.ts`: `reaches`, `stretchAt`, `masked`,
+  `unreadableError`, `hexMarked`, and the new words.
 
 ## Still to do
 
@@ -2696,12 +2777,17 @@ do".
   the tab opens. A BAI, CSI or GZI index beside the file names where the
   blocks are, and could stand in for reading them. Not measured in the
   browser after this change.
-- **The text view and the other readers of a joined tab.** The text view,
-  the inspector's text of a selection, the strings scan, the byte census and
-  the disassembly read a joined tab's bytes without asking `unreadable`, so a
-  part that will not unpack shows there as zeroes. Each could ask, as
-  `search_step` does, and mark or skip those bytes. The text view needs a
-  way to show a line it cannot read, which it has none of yet.
+- **The format readers over a joined tab, tested for real.** The HDF5, ELF,
+  ROOT, hardening and JPEG calls refuse through the shared count, and the
+  test checks them only on a stream of text, which none of them reads far.
+  An HDF5 file or an ELF inside a .gz of many members, with a bad member
+  where the reader reaches, would test each one's own reads.
+- **A part read through its index that refuses a span** keeps no trouble,
+  so `unreadable` cannot name it, and the hex view shows zeroes there. It
+  could keep the refused span as a trouble of its own, by range rather than
+  by part.
+- **The browser tests of the text view** (`web/test/textview.browser.mjs`)
+  were not extended; the marks were checked by hand in the browser pane.
 - **The CRC-32 of a part when it is first read.** A part that inflates to
   the length its trailer says with the wrong bytes reads as those bytes.
   `Ty::Stitched` could name each part's checksum field beside `part_len`, a
