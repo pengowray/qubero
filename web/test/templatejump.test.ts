@@ -8,9 +8,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { indexTemplate } from "../src/templateindex.ts";
-import { fieldLines, jumpTarget, routesTo, type JumpNode, type JumpTree } from "../src/templatejump.ts";
+import { fieldLines, jumpTarget, missReason, routesTo, type JumpNode, type JumpTree } from "../src/templatejump.ts";
 
-type Fake = { name: string; type: string; list?: boolean; absent?: boolean; value?: string; kids?: Fake[] };
+type Fake = { name: string; type: string; list?: boolean; absent?: boolean; value?: string; edit?: string; kids?: Fake[] };
 
 /** A tree for `jumpTarget` made from nested objects. `asked` counts the
  *  nodes it was asked for. */
@@ -20,7 +20,7 @@ function fakeTree(root: Fake): JumpTree & { asked: number } {
     for (const k of path) n = n?.kids?.[k];
     return n ?? null;
   };
-  const one = (n: Fake): JumpNode => ({ name: n.name, type: n.type, list: n.list ?? false, childCount: n.kids?.length ?? 0, absent: n.absent ?? false });
+  const one = (n: Fake): JumpNode => ({ name: n.name, type: n.type, list: n.list ?? false, childCount: n.kids?.length ?? 0, absent: n.absent ?? false, ...(n.value === undefined ? {} : { value: n.value }), ...(n.edit === undefined ? {} : { edit: n.edit }) });
   const t = {
     asked: 0,
     node: (path: readonly number[]) => {
@@ -222,4 +222,183 @@ root T {
   assert.equal(at[lineOf(text, "e: u8be enum E {")], lineOf(text, "e: u8be enum E {"));
   assert.equal(at[lineOf(text, "0 = zero")], -1);
   assert.equal(at[lineOf(text, "root T {")], -1);
+});
+
+test("a field in an arm the file does not take says what the switch read instead", () => {
+  const idx = indexTemplate(SAME);
+  const size = lineOf(SAME, "size: u8be");
+  // Read once: the value, as the keys write it.
+  assert.deepEqual(missReason(idx, size, fakeTree(same("3"))), { kind: "is", on: "kind", value: "3" });
+  assert.deepEqual(missReason(idx, lineOf(SAME, "v: u8be"), fakeTree(same("3"))), { kind: "is", on: "kind", value: "3" });
+  // A value no arm has, in a switch with no `_` arm.
+  assert.deepEqual(missReason(idx, lineOf(SAME, "size: u16be"), fakeTree(same("7"))), { kind: "is", on: "kind", value: "7" });
+  // Not in an arm: no reason to give.
+  assert.equal(missReason(idx, lineOf(SAME, "opt: optional(when kind == 9) u8be"), fakeTree(same("1"))), null);
+  // Read many times in a list: the arm's keys, through a `type X = switch`.
+  const g = indexTemplate(GGUF);
+  const len2 = lineOf(GGUF, "len: u64le", lineOf(GGUF, "len: u64le") + 1);
+  assert.deepEqual(missReason(g, len2, fakeTree(gguf([entry(0, false), entry(1, false)]))), { kind: "none", on: "value_type", keys: ["8"] });
+  // A list read only in part may hold the key further on.
+  const many = Array.from({ length: 300 }, (_, k) => entry(k, false));
+  assert.equal(missReason(g, len2, fakeTree(gguf(many)), 100), null);
+});
+
+const MACHO = `template t
+
+root M {
+  cputype: u32le enum CpuType {
+    0x7 = x86, 0x1000007 = x86_64
+  }
+  body: switch cputype {
+    0x7 => Small {
+      a: u8be
+    }
+    _ => Big {
+      b: u8be
+    }
+  }
+  commands: Command[2]
+}
+
+type Command {
+  cmd: u32le
+  data: switch cmd {
+    0x19, 0x1A => Segment {
+      flavor: u8be
+      inner: switch flavor {
+        1 => One {
+          x: u8be
+        }
+        2 => same as case 1
+        3 => Three {
+          y: u8be
+        }
+      }
+    }
+    _ => bytes[0]
+  }
+  tail: switch peek(u8be) {
+    0 => Zero {
+      z: u8be
+    }
+  }
+}
+`;
+
+const macho = (cpu: string, cmds: Fake[], edit?: string): Fake => ({
+  name: "file",
+  type: "M",
+  kids: [
+    { name: "cputype", type: "u32 le", value: cpu, ...(edit === undefined ? {} : { edit }) },
+    cpu === "x86 (0x7)" ? { name: "body", type: "Small", kids: [{ name: "a", type: "u8" }] } : { name: "body", type: "Big", kids: [{ name: "b", type: "u8" }] },
+    { name: "commands", type: "Command[]", list: true, kids: cmds },
+  ],
+});
+
+const command = (k: number, cmd: string, flavor?: string): Fake => ({
+  name: `[${k}]`,
+  type: "Command",
+  kids: [
+    { name: "cmd", type: "u32 le", value: cmd },
+    flavor === undefined
+      ? { name: "data", type: "bytes" }
+      : {
+          name: "data",
+          type: "Segment",
+          kids: [
+            { name: "flavor", type: "u8", value: flavor },
+            { name: "inner", type: flavor === "3" ? "Three" : "One", kids: [{ name: flavor === "3" ? "y" : "x", type: "u8" }] },
+          ],
+        },
+  ],
+});
+
+test("the value is written in the base and case of the switch's keys", () => {
+  const idx = indexTemplate(MACHO);
+  const a = lineOf(MACHO, "a: u8be");
+  assert.deepEqual(missReason(idx, a, fakeTree(macho("x86_64 (0x1000007)", []))), { kind: "is", on: "cputype", value: "0x1000007" });
+  // An unnamed enum value is shown with its number in front.
+  assert.deepEqual(missReason(idx, a, fakeTree(macho("75668 (unrecognised)", [], "75668"))), { kind: "is", on: "cputype", value: "0x12794" });
+  // The default arm, when another arm was taken.
+  assert.deepEqual(missReason(idx, lineOf(MACHO, "b: u8be"), fakeTree(macho("x86 (0x7)", []))), { kind: "is", on: "cputype", value: "0x7" });
+  // Small keys in decimal and large ones in hex: written as the nearest key is.
+  const MIXED = `template t
+
+root M {
+  cpu_type: u32le
+  body: switch cpu_type {
+    7 => Small {
+      a: u8be
+    }
+    0x0100000c => Arm {
+      b: u8be
+    }
+  }
+}
+`;
+  const mixed = indexTemplate(MIXED);
+  const cpu = (value: string): Fake => ({ name: "file", type: "M", kids: [{ name: "cpu_type", type: "u32 le", value }] });
+  assert.deepEqual(missReason(mixed, lineOf(MIXED, "a: u8be"), fakeTree(cpu("16777223"))), { kind: "is", on: "cpu_type", value: "0x01000007" });
+  assert.deepEqual(missReason(mixed, lineOf(MIXED, "b: u8be"), fakeTree(cpu("12"))), { kind: "is", on: "cpu_type", value: "12" });
+  // Keys in a list: every key leading to the arm, as written.
+  const flavor = lineOf(MACHO, "flavor: u8be");
+  const tree = fakeTree(macho("x86 (0x7)", [command(0, "2"), command(1, "50")]));
+  assert.deepEqual(missReason(idx, flavor, tree), { kind: "none", on: "cmd", keys: ["0x19", "0x1A"] });
+});
+
+test("the outermost arm no read takes is the reason; an arm some read takes is passed through", () => {
+  const idx = indexTemplate(MACHO);
+  const x = lineOf(MACHO, "x: u8be");
+  const y = lineOf(MACHO, "y: u8be");
+  // No segment at all: the outer arm is the reason.
+  assert.deepEqual(missReason(idx, x, fakeTree(macho("x86 (0x7)", [command(0, "2"), command(1, "3")]))), { kind: "none", on: "cmd", keys: ["0x19", "0x1A"] });
+  // A segment of flavor 3: the inner arm is, with the arm `same as` it.
+  assert.deepEqual(missReason(idx, x, fakeTree(macho("x86 (0x7)", [command(0, "25", "3"), command(1, "3")]))), { kind: "none", on: "flavor", keys: ["1", "2"] });
+  // Every arm taken somewhere: no reason to give.
+  assert.equal(missReason(idx, y, fakeTree(macho("x86 (0x7)", [command(0, "25", "3"), command(1, "26", "1")]))), null);
+  // A switch on an expression gives no reason.
+  assert.equal(missReason(idx, lineOf(MACHO, "z: u8be"), fakeTree(macho("x86 (0x7)", [command(0, "2")]))), null);
+});
+
+const CHUNKS = `template t
+
+root P {
+  first: text[4] ascii
+  head: switch first {
+    'IHDR' => Head {
+      h: u8be
+    }
+    _ => bytes[0]
+  }
+  chunks: Chunk[2]
+}
+
+type Chunk {
+  type: text[4] ascii
+  data: switch type {
+    'IHDR' => IHDR {
+      width: u32be
+    }
+    'tEXt' => tEXt {
+      keyword: u8be
+    }
+    _ => bytes[0]
+  }
+}
+`;
+
+test("text keys: a whole quoted value no arm names still says which arm it is not", () => {
+  const idx = indexTemplate(CHUNKS);
+  const chunk = (k: number, type: string): Fake => ({ name: `[${k}] ${type}`, type: "Chunk", kids: [{ name: "type", type: "ascii", value: type }, { name: "data", type: "bytes" }] });
+  const file = (first: string, types: string[]): Fake => ({
+    name: "file",
+    type: "P",
+    kids: [{ name: "first", type: "ascii", value: first }, { name: "head", type: "bytes" }, { name: "chunks", type: "Chunk[]", list: true, kids: types.map((t, k) => chunk(k, t)) }],
+  });
+  const keyword = lineOf(CHUNKS, "keyword: u8be");
+  assert.deepEqual(missReason(idx, keyword, fakeTree(file('"IEND"', ["IDAT", "IEND"]))), { kind: "none", on: "type", keys: ["'tEXt'"] });
+  // Read once, the value is written in the keys' quotes.
+  assert.deepEqual(missReason(idx, lineOf(CHUNKS, "h: u8be"), fakeTree(file('"IEND"', []))), { kind: "is", on: "first", value: "'IEND'" });
+  // A value shown cut short may be the key.
+  assert.equal(missReason(idx, lineOf(CHUNKS, "h: u8be"), fakeTree(file('"IE…"', []))), null);
 });

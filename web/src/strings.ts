@@ -5085,6 +5085,16 @@ export const SIDEBAR = {
    *  when a click on it found no such field in this file: its switch arm is
    *  not the one taken, its list is empty, or it is optional and absent. */
   notInFile: "not in this file",
+  /** The same, when the field is in a switch arm the file does not take and
+   *  the switch is read once: `not in this file: cputype is 0x1000007`. The
+   *  field the switch reads and its value are written as the template writes
+   *  them, so the reader can find them on the lines above. */
+  notInFileIs: (on: string, value: string): string => `not in this file: ${on} is ${value}`,
+  /** The same, when the switch is read more than once (inside a list) and no
+   *  read takes the arm: `not in this file: no cmd is 0x19`. `keys` are the
+   *  arm's keys as written, at most three. */
+  notInFileNone: (on: string, keys: readonly string[]): string =>
+    `not in this file: no ${on} is ${keys.length < 2 ? (keys[0] ?? "") : `${keys.slice(0, -1).join(", ")} or ${keys.at(-1) ?? ""}`}`,
   /** The same, when the search stopped after `n` elements of the list `list`
    *  (a node's name as the Listing shows it), which has more. The list is
    *  named because the clicked field may be a list itself, and "elements"
