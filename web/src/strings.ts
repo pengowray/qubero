@@ -225,7 +225,7 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
    *  bytes. */
   "too-large-copy": "too large to unpack (over 64 MiB packed)",
   /** A run unpacked whole that comes to more than 64 MiB: every codec but
-   *  deflate, zlib, gzip and zstd, and an xz stream with a BCJ or delta
+   *  deflate, zlib, gzip, zstd and xz, and an xz stream with a BCJ or delta
    *  filter. */
   "too-large-output": "too large to unpack (over 64 MiB unpacked)",
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
@@ -294,9 +294,9 @@ export function unknownRefusal(refused: never): never {
 const PACKED_LIMITS =
   "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip or zstd stream that has no edited bytes and is not inside a joined stream.";
 /** The same for both unpacked-size reasons, 64 MiB and 1 GiB. A deflate,
- *  zlib, gzip or zstd stream read from a copy, in edited bytes or inside a
- *  joined stream, is still read a piece at a time, so it has no
- *  exceptions here. */
+ *  zlib, gzip or zstd stream whose packed bytes are a copy, in edited bytes
+ *  or inside a joined stream, is still unpacked a piece at a time from that
+ *  copy, so it has no exceptions here. */
 const UNPACKED_LIMITS =
   "The editor unpacks streams to at most 64 MiB. The limit is 1 GiB for a deflate, zlib, gzip or zstd stream, and for an xz stream without a BCJ or delta filter.";
 
