@@ -2541,12 +2541,15 @@ code differs from "Joined streams":
   container says will. `TooLargeWindow` (`too-large-zstd-window`) is a zstd
   frame asking for a window over 128 MiB, which `TooLarge` said before
   although nothing says how large such a frame is. Every size in the words
-  now says which size it is: "too large to unpack (over 64 MiB compressed)",
-  "(over 64 MiB unpacked)", "(over 1 GiB unpacked)" and "(over 512 MiB
-  compressed)". The hover on the two compressed reasons is the same text,
-  saying which streams may be 512 MiB compressed and which 64 MiB, and the
-  hover on the two unpacked reasons does the same for 1 GiB and 64 MiB, so
-  a reader who meets both limits in one file reads the same rule on either
+  now says which size it is: "too large to unpack (over 64 MiB packed)",
+  "(over 512 MiB packed)", "(over 64 MiB unpacked)" and "(over 1 GiB
+  unpacked)". "Packed", the size before unpacking, rather than
+  "compressed": a stored ZIP entry, a base64 run and a PNG's inflated
+  scanlines are refused past 64 MiB too, and one word for both packed
+  limits reads as one size with two limits. The hover on the two packed
+  reasons is the same text, saying which streams may be 512 MiB packed, and
+  the hover on the two unpacked reasons does the same for 1 GiB, so a
+  reader who meets both limits in one file reads the same rule on either
   row. See "Refusal tags" under "Limits".
 - Is the length check in `join_lazily` worth a walk across goes, or should a
   part of the wrong length show as a failed read when it is read?

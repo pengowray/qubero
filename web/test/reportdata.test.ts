@@ -367,7 +367,7 @@ test("a stream that would not decode says why, with its codec's verb", () => {
   );
   assert.equal(
     RV.streamFailedNote(codecWords("compression"), "lz4 frame", "too-large-copy"),
-    "The report could not unpack this stream: too large to unpack (over 64 MiB compressed).",
+    "The report could not unpack this stream: too large to unpack (over 64 MiB packed).",
   );
   assert.equal(
     RV.streamFailedNote(codecWords("compression"), "lz4 frame", "too-large-output"),
@@ -389,8 +389,8 @@ test("a stream that would not decode says why, with its codec's verb", () => {
 });
 
 test("a finding for a stream too large to unpack says which size passed which limit", () => {
-  assert.equal(RV.refused("too-large-copy"), "Too large to unpack (over 64 MiB compressed)");
-  assert.equal(RV.refused("too-large-input"), "Too large to unpack (over 512 MiB compressed)");
+  assert.equal(RV.refused("too-large-copy"), "Too large to unpack (over 64 MiB packed)");
+  assert.equal(RV.refused("too-large-input"), "Too large to unpack (over 512 MiB packed)");
   assert.equal(RV.refused("too-large-output"), "Too large to unpack (over 64 MiB unpacked)");
   assert.equal(RV.refused("too-large-lazy"), "Too large to unpack (over 1 GiB unpacked)");
   assert.equal(RV.refused("too-large-zstd-frame"), "A zstd frame is too large to unpack (over 64 MiB unpacked)");
@@ -404,7 +404,7 @@ test("a finding for a stream too large to unpack says which size passed which li
 
 test("every refusal tag the core gives has words, and a tag this build does not know reads as not unpacked", () => {
   for (const tag of REFUSAL_TAGS) assert.ok(DECODED_REFUSED[tag].length > 0, tag);
-  assert.equal(refusedText("too-large-copy"), "too large to unpack (over 64 MiB compressed)");
+  assert.equal(refusedText("too-large-copy"), "too large to unpack (over 64 MiB packed)");
   assert.equal(refusedText("new-reason"), DECODED_REFUSED_OTHER);
   assert.equal(isRefusalTag("too-large"), false);
 });
@@ -420,8 +420,8 @@ test("a limit is written as a whole number of its unit, and a refusal that leave
   // limits, so either row says which streams have which.
   assert.equal(refusedTitle("too-large-copy", "32 MiB"), refusedTitle("too-large-input", "32 MiB"));
   assert.equal(refusedTitle("too-large-output", "32 MiB"), refusedTitle("too-large-lazy", "32 MiB"));
-  assert.match(refusedTitle("too-large-copy", "32 MiB") ?? "", /512 MiB compressed.*64 MiB compressed/);
-  assert.match(refusedTitle("too-large-output", "32 MiB") ?? "", /1 GiB unpacked.*64 MiB unpacked/);
+  assert.match(refusedTitle("too-large-copy", "32 MiB") ?? "", /64 MiB packed.*512 MiB/);
+  assert.match(refusedTitle("too-large-output", "32 MiB") ?? "", /64 MiB.*1 GiB/);
   assert.equal(DECODED_REFUSED_TITLE["failed"], undefined);
   assert.equal(refusedTitle("new-reason", "32 MiB"), undefined);
 });

@@ -211,16 +211,19 @@ export const DECODED_INSIDE = "in the unpacked stream";
  * a tag the core adds fails `tsc` here until it has words. Look a tag from
  * the core up with `refusedText`, which takes any string.
  *
- * Every size says which size it is, compressed or unpacked: a reader can
- * meet 64 MiB and 512 MiB compressed, and 64 MiB and 1 GiB unpacked, in one
- * file. The hover, `DECODED_REFUSED_TITLE`, says which streams have which
- * limit. The core's `Refusal::message` has the same words.
+ * Every size says which size it is, packed or unpacked: a reader can meet
+ * 64 MiB and 512 MiB packed, and 64 MiB and 1 GiB unpacked, in one file.
+ * "Packed" is the size before unpacking, and not "compressed", since a
+ * stored ZIP entry, a base64 run and a PNG's inflated scanlines are held to
+ * 64 MiB as well. The hover, `DECODED_REFUSED_TITLE`, says which streams
+ * have which limit. The core's `Refusal::message` has the same words.
  */
 export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
-  /** A run whose compressed bytes are read into memory whole, past 64 MiB
+  /** A run whose bytes are read into memory whole, past 64 MiB
    *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip and
-   *  zstd, and any run in a joined stream or in edited bytes. */
-  "too-large-copy": "too large to unpack (over 64 MiB compressed)",
+   *  zstd, whatever kind it is, and any run in a joined stream or in edited
+   *  bytes. */
+  "too-large-copy": "too large to unpack (over 64 MiB packed)",
   /** A run unpacked whole that comes to more than 64 MiB: every codec but
    *  deflate, zlib, gzip and zstd, and an xz stream with a BCJ or delta
    *  filter. */
@@ -232,7 +235,7 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
    *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
    *  most such a run may take up. The limit is on the compressed size, not on
    *  what it unpacks to. Also said after a part's name, as "is …". */
-  "too-large-input": "too large to unpack (over 512 MiB compressed)",
+  "too-large-input": "too large to unpack (over 512 MiB packed)",
   /** A zstd run, or an xz stream, read a piece at a time: each frame or
    *  block of it is unpacked whole, and one of them unpacks to more than
    *  64 MiB. A file of one frame or one block, which plain `zstd` and `xz`
@@ -284,27 +287,30 @@ export function unknownRefusal(refused: never): never {
   throw new Error(`no words for the refusal ${String(refused)}`);
 }
 
-/** The hover on both compressed-size reasons, so that a reader who meets
+/** The hover on both packed-size reasons, so that a reader who meets
  *  64 MiB on one stream and 512 MiB on another reads the same rule from
  *  either. A deflate stream inside an unpacked stream is held to 512 MiB as
  *  well, so edited bytes and joined streams are the only exceptions. */
-const COMPRESSED_LIMITS =
-  "Deflate, zlib, gzip and zstd streams can be up to 512 MiB compressed. Other streams can be up to 64 MiB compressed, and so can any stream with edited bytes or inside a joined stream.";
-/** The same for both unpacked-size reasons, 64 MiB and 1 GiB. */
+const PACKED_LIMITS =
+  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip or zstd stream that has no edited bytes and is not inside a joined stream.";
+/** The same for both unpacked-size reasons, 64 MiB and 1 GiB. A deflate,
+ *  zlib, gzip or zstd stream read from a copy, in edited bytes or inside a
+ *  joined stream, is still read a piece at a time, so it has no
+ *  exceptions here. */
 const UNPACKED_LIMITS =
-  "Deflate, zlib, gzip and zstd streams, and xz streams with no BCJ or delta filter, can be up to 1 GiB unpacked. Other streams can be up to 64 MiB unpacked.";
+  "The editor unpacks streams to at most 64 MiB. The limit is 1 GiB for a deflate, zlib, gzip or zstd stream, and for an xz stream without a BCJ or delta filter.";
 
 /** The hover on a `DECODED_REFUSED` reason, for the reasons whose words leave
  *  out a limit the reader may want. `resident` is how much of the file the
  *  editor keeps in memory, as `formatLimit` writes it: `32 MiB`. */
 export const DECODED_REFUSED_TITLE: Readonly<Partial<Record<RefusalTag, (resident: string) => string>>> = {
-  "too-large-copy": (): string => COMPRESSED_LIMITS,
-  "too-large-input": (): string => COMPRESSED_LIMITS,
+  "too-large-copy": (): string => PACKED_LIMITS,
+  "too-large-input": (): string => PACKED_LIMITS,
   "too-large-output": (): string => UNPACKED_LIMITS,
   "too-large-lazy": (): string => UNPACKED_LIMITS,
   /** `can write`: zstd makes the window smaller for a small input, so not
    *  every file made with `--long=28` has one this large. */
-  "too-large-zstd-window": (): string => "The editor unpacks zstd frames with a window of up to 128 MiB. zstd --long=28 and higher can write a larger window.",
+  "too-large-zstd-window": (): string => "The editor unpacks zstd frames with a window of up to 128 MiB. zstd --long=28 and higher can write frames with a larger window.",
   "too-much-at-once": (resident: string): string => `The editor keeps at most ${resident} of the file in memory.`,
 };
 

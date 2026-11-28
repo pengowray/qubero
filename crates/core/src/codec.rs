@@ -656,16 +656,18 @@ impl Refusal {
     /// kinds, which say "which Qubero doesn't decode": see
     /// [`Unsupported::message`].
     ///
-    /// Each size says which size it is, compressed or unpacked, since a
-    /// reader can meet two limits for each in one file: 64 MiB and 512 MiB
-    /// compressed, 64 MiB and 1 GiB unpacked. The interface's hover on these
-    /// words says which streams have which limit.
+    /// Each size says which size it is, packed or unpacked, since a reader
+    /// can meet two limits for each in one file: 64 MiB and 512 MiB packed,
+    /// 64 MiB and 1 GiB unpacked. "Packed", the size before unpacking, and
+    /// not "compressed": a stored ZIP entry, a base64 run and a PNG's
+    /// inflated scanlines are refused past 64 MiB as well. The interface's
+    /// hover on these words says which streams have which limit.
     pub fn message(self) -> &'static str {
         match self {
-            Refusal::TooLargeCopy => "too large to unpack (over 64 MiB compressed)",
+            Refusal::TooLargeCopy => "too large to unpack (over 64 MiB packed)",
             Refusal::TooLargeOutput => "too large to unpack (over 64 MiB unpacked)",
             Refusal::TooLargeLazy => "too large to unpack (over 1 GiB unpacked)",
-            Refusal::TooLargeInput => "too large to unpack (over 512 MiB compressed)",
+            Refusal::TooLargeInput => "too large to unpack (over 512 MiB packed)",
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "a zstd frame is too large to unpack (over 64 MiB unpacked)",
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "an xz block is too large to unpack (over 64 MiB unpacked)",
             Refusal::TooLargeWindow => "zstd with a window over 128 MiB, not unpacked",
@@ -690,7 +692,7 @@ impl Refusal {
             }
             Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB unpacked)".into(),
             Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB unpacked)".into(),
-            Refusal::TooLargeWindow => "has a zstd frame with a window over 128 MiB, which Qubero doesn't unpack".into(),
+            Refusal::TooLargeWindow => "has a zstd frame that the editor doesn't unpack (window over 128 MiB)".into(),
             Refusal::Failed | Refusal::Settings | Refusal::Unaligned | Refusal::Unsupported(_) => return None,
         })
     }
