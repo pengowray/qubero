@@ -5,9 +5,10 @@ built (2026-11-26; "The smaller fix first (part 1)", "Gathering a run a
 window at a time (part 2)" and "Built (part 3)" say where the code differs
 from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
 "Order of work", "Built (part 5)" and "Built (part 6)"). Part 7 is split into
-7a, 7b and 7c (see "Review before part 7"), and 7a, 7b and the core half of
-7c are built (2026-11-28; see "Built (part 7a)", "Built (part 7b)" and
-"Built (part 7c, core)"). The web half of 7c and parts 8 to 11 are not. It
+7a, 7b and 7c (see "Review before part 7"), and all three are built
+(2026-11-28; see "Built (part 7a)", "Built (part 7b)", "Built (part 7c,
+core)" and, under "The browser", "Built (part 7c, web)"). Part 10 is built
+too (2026-11-28; see "Built (part 10)"). Parts 8, 9 and 11 are not. It
 follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
@@ -987,7 +988,9 @@ for ever, since both joins start again from the first part on every
 | `inflate_len`'s output cap | 64 MiB | Stays. |
 | `Limits::span` | 64 MiB of output per zstd frame or xz block | Stays. |
 | `INDEXED_RUN_BYTES` | 64 MiB of what indexes hold | Stays at 64 MiB. Since part 7c it weighs each index by what it holds for as long as it is kept (`Seekable::kept_bytes`): its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB), its block starts (at most 1 MiB) and an xz stream's list of blocks, about 9.1 MiB at most, and the copy of its run when it holds one. The caches inside each index are bounded as before, and not weighed. |
-| `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Since part 7c a packed part read through an index over a handle does not count against it. Stored parts, packed parts decoded whole, and packed parts whose index holds a copy still do; part 10 removes it. |
+| `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Since part 10 it counts only what the joined stream copies: a stored part or a packed part's run that no handle reaches (in a `MemSource`, a stitched space or an edited stretch), a packed run decoded whole that is too long to read from the store in one read (next row), and the run of a packed part read through an index that holds a copy. A part read through a handle counts nothing. Since part 7c a packed part read through an index over a handle counted nothing. |
+| A packed part's run read through a handle, for a part decoded whole (new) | the gather window (1 MiB in the browser), and an eighth of what the source keeps | Part 10 (`Evaluator::joined_input`). Each decode reads the whole run in one read. A longer run is copied, and counts against `whole_cap`. No limit when the source answers any read whole. A BGZF block is under 64 KiB. |
+| One read of a joined stream read a part at a time (new) | Half of what the source keeps, less two of those runs, over `expand` | Part 10 (`Joined::resident_limit`), when a part is read through a handle onto a source with a resident limit. `expand` is the most bytes of run a packed part read through a handle takes per byte it unpacks to, and at least 1. For a BAM in the browser it is 16 MiB less two blocks. The least of that and the span cache of each part read through an index. |
 | `Limits::input` (new) | 512 MiB of compressed input | Built in part 7c. A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB; a run of exactly 512 MiB is allowed. A longer run read through a handle is refused as `Refusal::TooLargeInput` (`too-large-input`) before anything is read, since the size of the field holding the run is known. |
 | `Limits::copy_input` (new) | 64 MiB (`CAP_BYTES`) of compressed input | Part 7c. The most a run may take up when its pass reads a copy of it. A longer one is refused as `TooLarge` before anything is read. A field of `Limits` so that a test can show a run past it opening through a handle. |
 | `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned, to at most 8 MiB. |
@@ -1382,6 +1385,15 @@ at most 64 MiB for the copies in `Gathers`, and never lets go of a copy it
 has started. An index pass reads its run into its own place in `Unfinished`,
 which holds the same copy once the pass starts.
 
+Since part 10, a joined stream read a part at a time holds no copy of a part
+that a handle reaches. Over handles it holds a `RunInput` for each part,
+about 60 bytes with its handle, its cache of decoded parts (16 MiB,
+`STITCH_CACHE_BYTES`), and one part's trace. A read of it holds, for the
+length of the read, the run of the packed part it decodes, under 64 KiB for
+a BGZF block, and that part's output until the cache takes it. The walk that joins it holds one
+packed run and its output at a time. A part no handle reaches is copied, as
+every part was before part 10, and the copies are held to `whole_cap`.
+
 ## Order of work
 
 Each part builds, passes its tests and can be merged on its own, in this
@@ -1469,12 +1481,18 @@ changes parts 6 to 10: read it first.
    missing, and `RunInput::read` asks it before it copies. So a .gz of one
    member and a zip entry past 64 MiB compressed open, natively and through
    the wasm `Editor`. See "Built (part 7c, core)" under "Review before part
-   7". The web half (the text loops, `fetchRun`, `readLoaded`) is not done.
+   7". The web half (the text loops, `fetchRun`, `readLoaded`) is built
+   too; see "Built (part 7c, web)" under "The browser".
 8. **xz's layout in steps.** xz joins `can_step`.
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
 10. **Joined streams through handles.** `JoinedBytes` over `RunInput`, and
-    `join_lazily` without its 64 MiB input limit.
+    `join_lazily` without its 64 MiB input limit. **Done 2026-11-28**: a
+    joined stream read a part at a time reads each stored part, and the
+    run of each packed part it decodes whole, through a handle onto the
+    file, and copies only what no handle reaches, so only those copies
+    count against `whole_cap`. "A joined stream walked twice" is fixed with
+    it. See "Built (part 10)" under "Review before part 7".
 11. **Bring DESIGN-lazy-unpacking up to date.** Its "State", the "Limits" row
     for `CAP_BYTES`, the paragraph at the end of "The browser", and "Still to
     do".
@@ -2191,16 +2209,218 @@ text above:
   rows and Open unpacked say `too-large-input`, and so does Open joined
   stream.
 
+### Built (part 10)
+
+**Built on 2026-11-28.** A joined stream read a part at a time now reads
+each stored part's bytes, and the run of each packed part that it decodes
+whole, through a handle onto the source those bytes are in. It copies a part
+only when no handle reaches the part. In the browser, a handle reaches every
+part of the file that no edit touched, through the file's chunk store.
+`whole_cap` (64 MiB) is the most a joined stream may come to and still be
+held whole, and also the most a joined stream read a part at a time may
+copy. So it no longer limits a BAM, a .gz of many members or a stream of
+stored pages read from the store. Where the code differs from "Joined
+streams":
+
+- **`JoinedBytes`.** `Held(Arc<Vec<u8>>)` is now `Stored(RunInput)`, and
+  `Packed { run, codec }` is now `Packed { input, codec }`. `Indexed`, a
+  packed part too large to decode whole, keeps its `Seekable`. A part that
+  no handle reaches gets a `RunInput::held` over the copy that `gather_run`
+  makes, the same copy as before part 10. So `Joined::read` reads a part
+  through a `RunInput` whether it has a handle or a copy.
+- **Which parts get a handle.** `Evaluator::joined_input` decides, and
+  `too_large_to_join` calls the same function, so the check made before the
+  walk counts the same copies that the walk then makes. A stored part gets a
+  handle whenever `shared_input` gives one. A packed part decoded whole gets
+  a handle only when its run is short, because each decode reads the whole
+  run in one read. Short is at most a gather window (1 MiB in the browser),
+  and at most an eighth of what the source keeps (4 MiB of the browser's
+  32 MiB store), whichever is less. A BGZF block, under 64 KiB, is always
+  short. Over a source with no resident limit, such as an `ArcSource`
+  natively, a run of any length gets a handle. The parts that are copied
+  are a part in a stitched space, a part in an edited stretch, a part of a
+  source that gives no handle (a `MemSource`), and a packed run that is not
+  short. The design set no limit on the length of a packed run read through
+  a handle. A run longer than the store keeps would never be in the store
+  all at once, so each read of it would ask for the same chunks for ever.
+- **The walk.** The walk does not read a stored part that has a handle. It
+  still reads and decodes each packed part decoded whole, to check its
+  length (see "Open questions"). After the decode it drops the copy of the
+  part's run when a handle reaches the run, and keeps the copy otherwise.
+  The walk now refuses as `too-large` a packed run decoded whole that is
+  longer than `CAP_BYTES` (64 MiB), as `unpack_run` refuses one. Before part
+  10, `too_large_to_join` refused such a run before the walk started; now it
+  counts no copy for a run with a handle onto a source with no resident
+  limit, and lets the run through. `probe_parts` skips stored parts that
+  have a handle. Each part's charge to the go is now worked out where the
+  part is read (`copy_cost`, `unpack_cost`), because a stored part with a
+  handle copies nothing and is charged one element. A walk that waits for
+  bytes now records how far it has got, as it does when a go runs out, so
+  `Evaluator::unpacking` answers after a "pending" reply from a walk, as it
+  does after one from an index pass (7b). Before, a walk recorded it only
+  when the part it waited on was read a window at a time.
+- **A read names every chunk it is missing at once.** When one part of a
+  `Joined::read` is missing chunks, the read only asks each later part which
+  chunks it would miss (`Source::missing` through the part's handle, or
+  `Seekable::missing`), and decodes nothing more. So one "pending" reply
+  names every chunk the read needs. A packed part that is in the cache needs
+  no chunks. `Joined::missing` names the same chunks, for every part the
+  read covers. Before, it named only the chunks of the first indexed part
+  that was missing some. `map_out` and `map_in` on a packed part read the
+  part's run through its handle to make the part's trace, so they too can
+  answer with missing chunks.
+- **The limit on one read.** `Joined::resident_limit` was the smallest span
+  cache of the stream's indexed parts, and no limit for a stream with no
+  indexed part. It now also counts the parts read through a handle onto a
+  source with a resident limit (`handle_limit` in `space.rs`). A read of `n`
+  bytes of the stream needs at most `n × expand + 2 × longest` bytes of the
+  file at once. `longest` is the longest packed run read through a handle.
+  `expand` is the most bytes of run that such a packed part takes for each
+  byte it unpacks to, and is at least 1, since a stored part takes one byte
+  of the file for each byte. The limit is the `n` for which that comes to
+  half of what the source keeps. For a BAM in the browser, `expand` is 1
+  and the limit is 16 MiB less two blocks; `Doc.readLoaded` reads 4 MiB at
+  a time. A tab's own reading takes its gather window from this limit, and
+  so does the check in `read_in` that refuses a read longer than the limit,
+  as over a stream read through an index. Without the limit, a tab's
+  reading over a stream of stored pages read through handles would read a
+  long run in one call, and never refuse a read that cannot fit, as "Review
+  before part 7" says of `ChunkStore::behind` before 7a.
+- **The bytes read to recognise a stream.** `template_for` reads a stream's
+  first 36 KiB in one read, to see what format they are. It now reads no
+  more than the stream's resident limit, which only a test's small store
+  makes less than 36 KiB. Before, opening a stream of stored pages over a
+  store of 4 KiB asked for the same chunks for ever, since the walk had read
+  none of the pages and 36 KiB never fits in that store.
+- **"A joined stream walked twice" is fixed**, as "Still to do" suggested.
+  When `template_for` answers `Pending`, `Evaluator::open_space` keeps the
+  stream that `unpack` made in a new field of the `Evaluator`, `unopened`,
+  with the space and path that were asked for. The next call for the same
+  stream opens the kept stream instead of joining it again. An edit or a
+  new template drops it. With part 10 the fix is needed for the stream to
+  open at all, and not only to save time: a walk over more of the file than
+  the store keeps pushes the stream's first chunks out of the store,
+  `template_for` then waits for those chunks, and a second walk pushed them
+  out again, so a stream of stored pages larger than the store asked for the
+  same chunks for ever. The stream is kept by the `Evaluator` that
+  `open_space` is called on, and not put back in `Spaces::joins` as a
+  finished join. That way it does not take one of the two places in
+  `Spaces::joins` that walks wait for, and a stream that a recognised tab's
+  own reading unpacked is kept the same way as one the file's reading
+  unpacked. One stream is kept at a time: when a call for another stream
+  also waits, its stream replaces the kept one.
+- **The cache of decoded parts** of a joined stream takes its cap from
+  `Spaces::cache_cap`, which is `STITCH_CACHE_BYTES` (16 MiB) unless a test
+  lowers it. A stitched space's cache takes its cap from there too.
+- **What a joined stream holds.** Before part 10, a joined stream read a
+  part at a time held a copy of every stored part's bytes and of the run of
+  every packed part that it decodes whole, up to `whole_cap` (64 MiB) in
+  total, besides its cache of decoded parts (16 MiB) and one part's trace.
+  Over handles it now holds a `RunInput` for each part, about 60 bytes with
+  its handle, the cache and the trace. While a read decodes a packed part,
+  it also holds that part's run, and the part's output until the cache
+  takes it.
+- **What is still held to 64 MiB.** The copies of parts that no handle
+  reaches are still held to `whole_cap` in total: every part of a
+  `MemSource` natively, a part in a stitched space, a part in an edited
+  stretch, and a packed run decoded whole that is not short. A joined stream
+  held whole, at most `whole_cap` of output, is unchanged.
+- **Strings and JSON.** No string, refusal tag or reply shape changed. A
+  "pending" reply to Open unpacked on a joined stream can now come with
+  progress from `unpacking`, as one on a stream read through an index can
+  since 7b.
+- **Tests.** In `eval/tests/resident.rs`, with the cap on a joined stream
+  held whole lowered through `Evaluator::set_stream_limits`, and stores of
+  chunks of 1 KiB:
+  - A BGZF file of 100 blocks, each of about 2 KiB of output, opens as a
+    joined stream read a part at a time. The blocks' runs come to about
+    60 KiB, more than three times a store of 16 chunks and more than the cap
+    of 16 KiB. The file is fed only the chunks each `Pending` names, once in
+    a single call with no limit on work and once in goes of 100 elements.
+    Each time, the stream is joined once, no answer names more than 6
+    chunks, and the stream holds no copy. Reads of 2,000 bytes at four
+    places, and of the whole stream 6 KiB at a time, give the blocks' bytes
+    and name the chunks that `Joined::missing` names; a read of 2,000 bytes
+    names at most 3 chunks, and one of 6 KiB at most 8. The cache holds at
+    most its lowered cap of 8 KiB. Four bytes map to the same decoder steps
+    as in the stream held whole. When one block's trailer claims one byte
+    more than the block unpacks to, the stream is refused as failed. In
+    memory, the copies come to more than the cap, and the stream is refused
+    as too large.
+  - 48 stored pages of 1 KiB, past a cap of 8 KiB, over a store of 16
+    chunks, open after one `Pending`, which names the 8 chunks of the first
+    8 KiB, and the stream is joined once. It holds no copy, its limit on one
+    read is 8 KiB, and reads at three places and of the whole stream in
+    8 KiB pieces give the pages. After an overwrite inside page 3, the
+    stream opens again with a copy of that one page, and reads the edited
+    bytes. In memory, the stream is refused as too large.
+  - With `open_space` changed back to keep nothing, the pages' test and
+    `a_gzip_past_the_cap_opens_as_a_joined_stream_read_from_the_store` join
+    their streams twice, and fail.
+
+  In `crates/wasm/tests/open_space_waits.rs`,
+  `a_joined_stream_past_the_cap_reads_its_blocks_through_the_store` opens a
+  BGZF file of 140 blocks, 3.5 MB of runs, over a store of 16 chunks of
+  64 KiB, with the cap lowered to 256 KiB through
+  `Editor::set_stream_limits`. Its tab reads the right bytes at four places
+  and for 300 KiB across several blocks. No reply names more than 6 chunks,
+  no chunk is asked for more than 3 times, and once a "pending" reply comes
+  with the walk's progress, every later one does.
+  `a_joined_stream_past_64_mib_compressed_opens_end_to_end`, marked
+  `#[ignore]`, opens a BGZF file of 66 MiB of noise under the default
+  limits, from a store of 4 MiB, and its tab reads the right bytes. Each
+  block's deflate is one stored block (deflate's block type that holds its
+  bytes as they are), so the file is past 64 MiB compressed.
+- **A test changed on purpose.**
+  `a_joined_stream_whose_parts_add_up_to_more_than_the_store_opens`
+  asserted that six pages past a cap of 5 KiB were refused as too large
+  over a store of 4 chunks of 1 KiB. The pages now open through handles,
+  the whole stream reads back, and the test asserts the refusal in memory.
+- **Speed and memory.** Measured on 2026-11-28 with
+  `examples/joined_timing.rs`, new in this part, and
+  `examples/listing_timing.rs`, in release builds with LTO off
+  (`CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units), pinned to one
+  core, before and after by turns, three runs of each. Each file is read
+  through a chunk store with room for the whole file, so that nothing is
+  pushed out, and from a `MemSource`. `joined_timing` opens a file's joined
+  stream as a document, and then reads the stream end to end in reads of
+  64 KiB; its heap row is the heap allocated by opening the stream, which
+  was the same in every try. `listing_timing` lists a file's tree depth
+  first: all 13,029 rows of `mpileup.1.bam`, and 3,000 rows of
+  `big100.bam` (3,024 with the last node's children) after opening its
+  joined stream. The real BAMs in the sample collection are under 72 KB, so
+  their joined streams are held whole and never read a part at a time.
+  `big100.bam` is made from `mpileup.1.bam` by repeating its records to
+  100 MiB and writing them in BGZF blocks of 65,280 bytes, as samtools does;
+  it packs to 32 MB in 1,610 blocks. The load average was 11 to 15 on 12
+  cores, and runs of one build varied by up to 30%. The table gives the
+  fastest run.
+
+  | File and what was timed | Rows | Chunk store, before | Chunk store, after | `MemSource`, before | `MemSource`, after |
+  |---|---|---|---|---|---|
+  | `big100.bam`: opening the joined stream | | 972 ms | 965 ms | 974 ms | 982 ms |
+  | `big100.bam`: reading the stream end to end | | 961 ms | 960 ms | 957 ms | 954 ms |
+  | `big100.bam`: heap held after opening | | 46,998,099 B | 15,114,808 B | 46,997,459 B | 47,087,635 B |
+  | `mpileup.1.bam`: the listing | 13,029 | 50.4 ms | 52.0 ms | 50.7 ms | 50.8 ms |
+  | `big100.bam`: opening the stream and listing | 3,024 | 1,003 ms | 1,014 ms | 1,007 ms | 1,030 ms |
+
+  Through the chunk store, the 31.9 MB of runs that the stream copied are
+  gone. A `MemSource` gives no handle, so the runs are copied before and
+  after, and the `RunInput`s of the 1,610 parts add about 90 KB. The times
+  are the same within the noise. A BGZF file's template declares what its
+  joined stream holds, so the listing reads the stream's records through
+  the file's own reading, from its stitched space, which this part did not
+  change. A tab's bytes, as the hex view shows them, are read from the
+  joined stream.
+
 ## Still to do
 
-- **A joined stream walked twice.** `join_whole` gives a finished walk to
-  its caller and keeps nothing. If `open_space` then answers `Pending`
-  because chunks under the stream's first bytes are missing
-  (`template_for`), the next call walks the joined stream again from its
-  first part. The second walk gives the same stream, so only time is lost.
-  This cannot happen before part 7. A fix: `open_space` keeps the joined
-  stream that `unpack` made until the next call for the same stream takes
-  it.
+- **The time a joined stream takes to open.** Over handles, nothing but
+  time limits a joined stream read a part at a time any more: the walk
+  that checks each packed part's length decodes every part once, charged
+  per part across goes, so a BAM of 4 GiB of output is 4 GiB of inflate
+  before its tab opens. Memory stays bounded, and no refusal was added for
+  it. See the answered question in "Open questions".
 - **Lift `unit_input`.** A zstd span decode could keep its frame decoder
   between reads, as xz's `Prefix` keeps its LZMA2 decoder, and xz's
   `lzma2_len` could read a block's LZMA2 chunk headers a window at a time,
@@ -2240,8 +2460,10 @@ text above:
 - **Runs that keep the 64 MiB limit.** A run read through a copy:
   an xz stream (part 8 lays it out in steps), a run in a stitched space or
   in an edited stretch, and a run in a source with too little room for two
-  windows. A joined stream's stored parts and packed parts decoded whole
-  still count against `whole_cap` (part 10).
+  windows. Since part 10, a joined stream read a part at a time counts
+  against `whole_cap` only the parts it copies: those no handle reaches, and
+  packed runs decoded whole that are longer than one read from the store may
+  take (see "Built (part 10)").
 
 ## Open questions
 
@@ -2254,6 +2476,12 @@ text above:
   64 MiB of output.
 - Is the length check in `join_lazily` worth a walk across goes, or should a
   part of the wrong length show as a failed read when it is read?
+  **Answered in part 10: the check stays.** Over handles it costs time and
+  no memory: the walk holds one packed run and its output at a time. The
+  tests in "Tests" expect a part of the wrong length to refuse the stream
+  as before. Without the check, the tab would open over that part and show
+  zeroes there, since `Joined::read` refuses the part and a refused read of
+  a space reads as zeroes with no chunks named.
 - Should gathering report a percentage, and with what string?
 
 ## What was checked
