@@ -67,13 +67,13 @@ struct Try {
 }
 
 /// One try: a fresh reading of `d`, the stream at `path` opened and then
-/// read end to end.
-fn once<S: Source>(d: &Document<S>, template: &str, path: &[usize], whole_cap: usize) -> Try {
+/// read end to end. The error is why the stream would not open.
+fn once<S: Source>(d: &Document<S>, template: &str, path: &[usize], whole_cap: usize) -> Result<Try, String> {
     let before = NOW.load(Ordering::Relaxed);
     let started = Instant::now();
     let mut ev = Evaluator::new(formats::template(template).expect("a template"));
     ev.set_stream_limits(Limits::default(), whole_cap);
-    let id = ev.open_space(d, 0, path).expect("opens").unwrap_or_else(|| panic!("refused: {:?}", ev.open_refusal(path)));
+    let Some(id) = ev.open_space(d, 0, path).expect("opens") else { return Err(format!("{:?}", ev.open_refusal(path))) };
     let open = started.elapsed();
     let held = NOW.load(Ordering::Relaxed).saturating_sub(before);
     let source = ev.space(id).expect("the space").source().clone();
@@ -87,10 +87,14 @@ fn once<S: Source>(d: &Document<S>, template: &str, path: &[usize], whole_cap: u
         sum = sum.wrapping_add(buf[..n].iter().map(|&b| b as u64).sum::<u64>());
     }
     std::hint::black_box(sum);
-    Try { open, read: started.elapsed(), held, len }
+    Ok(Try { open, read: started.elapsed(), held, len })
 }
 
-fn report(what: &str, tries: &[Try]) {
+fn report(what: &str, tries: &[Result<Try, String>]) {
+    let tries: Vec<&Try> = match tries.iter().map(Result::as_ref).collect::<Result<Vec<_>, _>>() {
+        Ok(tries) => tries,
+        Err(why) => return println!("{what}: refused as {why}"),
+    };
     let ms = |t: Duration| t.as_secs_f64() * 1000.0;
     let open = tries.iter().map(|t| t.open).min().unwrap();
     let read = tries.iter().map(|t| t.read).min().unwrap();

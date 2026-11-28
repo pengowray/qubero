@@ -1134,6 +1134,35 @@ fn a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles() {
     assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLarge));
 }
 
+/// The same kind of blocks read as a .gz of many members, whose joined
+/// stream says only that it holds bytes, so opening it reads the stream's
+/// first 36 KiB to see what they are. The walk over the members' runs, more
+/// than the store keeps, has pushed those first chunks out of the store by
+/// then, so opening the stream waits for them. The next call opens the
+/// stream the walk made. Joining it again, from the first member, would push
+/// the first chunks out again before they are read, and so on for ever.
+#[test]
+fn a_gzip_of_many_members_past_the_store_opens_once_its_first_bytes_are_loaded() {
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::{bgzf_block, EOF_BLOCK};
+    // 64 KiB of two bits of noise a byte in each member, which packs to
+    // about 16 KiB.
+    let pieces: Vec<Vec<u8>> = (0..40).map(|i| noise((64 << 10) - i).iter().map(|b| b & 3).collect()).collect();
+    let mut bytes: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
+    bytes.extend_from_slice(&EOF_BLOCK);
+    let capacity = 512;
+    assert!(bytes.len() > capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
+    let text = pieces.concat();
+    let mut d = stored(&bytes, capacity);
+    let mut ev = Evaluator::new(crate::formats::gzip());
+    ev.set_stream_limits(Limits::default(), 64 << 10);
+    let id = fed(&mut d, &bytes, |d| ev.open_space(d, 0, &[1])).unwrap().expect("the stream opened");
+    assert_eq!(ev.spaces.walks.get(), 1, "joined more than once");
+    let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+    assert_eq!(joined.owned_bytes(), 0, "the stream holds copies of runs");
+    assert!(joined_reads(&joined, &mut d, &bytes, 64 << 10).0 == text, "the stream read in pieces differs");
+}
+
 /// Pages stored as they sit, past the cap and three times the store, joined
 /// and read a part at a time: each page is read where it is in the store, so
 /// the walk reads none of them and the stream holds none of them. Opening
@@ -1170,6 +1199,17 @@ fn a_joined_stream_of_stored_pages_past_the_store_and_the_cap_opens_through_hand
     let (got, widest) = joined_reads(&joined, &mut d, &bytes, 8 << 10);
     assert!(got == bytes, "the stream read in pieces differs");
     assert_eq!(widest, 8);
+
+    // A reading over the stream, as a tab's own reading is, refuses a read
+    // in one call longer than that limit, and one within it waits and reads.
+    // The store holds the last 16 pages now.
+    let tab = Document::new(ChunkStore::behind(Box::new(SpaceSource::Joined(joined.clone())), CHUNK));
+    let reader = Evaluator::new(Template::new("t", T::structure("Root", vec![("all", T::bytes(E::Remaining))])));
+    match reader.read_in(&tab, 0, 0, 9 << 13) {
+        Err(EvalError::Failed(why)) => assert_eq!(why, "Can't load 9 KiB of the file at once: the editor keeps at most 8 KiB in memory"),
+        other => panic!("{other:?}"),
+    }
+    assert!(fed(&mut d, &bytes, |_| reader.read_in(&tab, 0, 0, 6 << 13)).unwrap() == bytes[..6 << 10], "6 KiB of the tab differ");
 
     // An edit inside page 3, and the stream opened again.
     d.overwrite_bytes(3 * 1024 + 10, b"edited");

@@ -2928,10 +2928,11 @@ impl Evaluator {
         // A stream joined from parts is read a part at a time where it is
         // declared, and held whole only here, when it is to be a document of
         // its own. Past the cap a decoded stream has, it is read a part at a
-        // time here too, from copies of what its parts are read from, and
-        // refused when those are past the cap. It still reads a part at a
-        // time in the listing either way, so the refusal is kept apart from
-        // the stream's own opening.
+        // time here too, each part through a handle onto where its bytes are,
+        // or from a copy where no handle reaches them, and refused when the
+        // copies come to more than the cap. It still reads a part at a time
+        // in the listing either way, so the refusal is kept apart from the
+        // stream's own opening.
         if let Ty::Stitched { inner, .. } = self.memo[path].ty.clone() {
             return Ok(match self.join_whole(doc, path)? {
                 Ok(stitch::Joining::Whole(whole)) => Some(Unpacked {

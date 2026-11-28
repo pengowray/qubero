@@ -605,9 +605,13 @@ impl Joined {
     }
 
     /// Bytes `at..at + out.len()`, from as many parts as they cover. When
-    /// a part finds chunks of the file missing, the parts after it are only
-    /// asked which chunks they would find missing, and the read names all of
-    /// them at once, so that one round loads everything the read needs.
+    /// a part finds chunks of the file missing, the stored and packed parts
+    /// after it are only asked which chunks they would find missing, and the
+    /// read names all of them at once, so that one round loads everything
+    /// those parts need. A part read through its index after that is not
+    /// asked: one span of an index can need 16 MiB of the file, so a read
+    /// names the chunks of at most one indexed part's span, as a read of a
+    /// stream read through an index does.
     pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let end = at + out.len() as u64;
         let mut pos = at;
@@ -619,7 +623,9 @@ impl Joined {
             let from = pos - range.start;
             let to = (pos - at) as usize;
             if !missing.is_empty() {
-                missing.extend(self.part_missing(i, from, take as u64));
+                if !matches!(self.parts[i].1, JoinedBytes::Indexed(_)) {
+                    missing.extend(self.part_missing(i, from, take as u64));
+                }
             } else {
                 match self.read_part(i, from, &mut out[to..to + take]) {
                     Ok(()) => {}
@@ -687,15 +693,25 @@ impl Joined {
     }
 
     /// The chunks of the file a [`Joined::read`] of `len` bytes at `at` would
-    /// name, found without decoding: those of every part the read covers.
+    /// name, found without decoding: those of every stored and packed part
+    /// the read covers, and those of the first part read through its index,
+    /// when no part before it is missing any. A part's index can name fewer
+    /// chunks than its read finds ([`Seekable::missing`]), so the parts read
+    /// through an index after the first are not asked, which keeps every
+    /// chunk named one that the read names.
     pub fn missing(&self, at: u64, len: u64) -> Vec<Missing> {
         let end = at.saturating_add(len).min(self.len);
         let mut pos = at;
         let mut missing = Vec::new();
+        let mut asked_an_index = false;
         while pos < end {
             let Some(i) = self.part_at(pos) else { break };
             let range = self.parts[i].0.clone();
-            missing.extend(self.part_missing(i, pos - range.start, range.end.min(end) - pos));
+            let indexed = matches!(self.parts[i].1, JoinedBytes::Indexed(_));
+            if !indexed || (missing.is_empty() && !asked_an_index) {
+                missing.extend(self.part_missing(i, pos - range.start, range.end.min(end) - pos));
+            }
+            asked_an_index |= indexed;
             pos = range.end;
         }
         missing.sort_unstable_by_key(|m| m.chunk);
