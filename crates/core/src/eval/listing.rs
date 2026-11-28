@@ -149,8 +149,8 @@ pub(super) fn brief(v: &Value) -> String {
         // row and the panel beside it do not word the same value two ways.
         Value::Enum { raw, name, hex } => match name {
             Some(n) => n.clone(),
-            None if *hex && *raw >= 0 => format!("0x{raw:02x} (unknown)"),
-            None => format!("{raw} (unknown)"),
+            None if *hex && *raw >= 0 => format!("0x{raw:02x} (unrecognised)"),
+            None => format!("{raw} (unrecognised)"),
         },
         Value::Flags { set, unnamed, .. } => {
             let mut s = set.join("|");

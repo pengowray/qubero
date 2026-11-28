@@ -16,7 +16,7 @@ The core already knows most of this and the web throws it away.
 - `Value::Magic { ok, bytes, expected }` (eval/read.rs) and
   `magic_reading` print `PK\3\4 does not match \x89PNG` into the value
   column. That is the only trace of a mismatch in any view.
-- `Value::Enum { name: None }` prints `{num} (unknown)` from the wasm node,
+- `Value::Enum { name: None }` prints `{num} (unrecognised)` from the wasm node,
   but the listing's own `brief` (eval/listing.rs:80) prints the bare number
   with no marker, so the two views disagree about the same field.
 - `Value::Flags { unnamed }` prints `+3 unnamed`.
@@ -164,7 +164,7 @@ and the table say the same words about the same bytes. The float text is
 built there too, and `showFloat` in lenses.ts is changed to print what core
 prints, so a double is spelled one way.
 The value column stops carrying the magic reason: `magic_reading` prints the
-bytes only, and the reason moves to `problem.text`. The `(unknown)` suffix on
+bytes only, and the reason moves to `problem.text`. The `(unrecognised)` suffix on
 an unnamed enum value and the `+{n} unnamed` suffix on flags stay in the
 value text, since that is how the rest of the app says it and the words
 already carry the fact. The listing's `brief` is made to print them too.
@@ -212,7 +212,7 @@ all; it has to, for this to work.
 **Listing.** An invalid leaf gets a glyph before the value, the value text in
 `--warn`, and the reason in the muted colour after it on the same row,
 truncated to the column with the full text on hover. An undefined leaf gets
-the glyph only, with the reason on hover: the value already says `(unknown)`
+the glyph only, with the reason on hover: the value already says `(unrecognised)`
 or `+2 unnamed`, and repeating it in a second phrase would make the quiet
 tier as long as the loud one. A structure or run row with `problems_within` above zero
 shows the count at the end of its row: `· 3 invalid`, `· 12 unrecognised`, both
@@ -308,7 +308,7 @@ State first, then cause, matching `Not checked · why`.
 | Problem text, set | `Unknown or invalid: must be one of {a}, {b}, {c}` | up to four listed, then `and {n} more` |
 | Problem text, equality | `Must be {value}` | |
 | Problem text, expression | `Fails the check: {msg}` | ImHex's assert message when given, else the expression in the template's own text; the expression always on hover; uncertain |
-| Problem text, enum, undefined | `Undefined in {enum}` | on hover and in the inspector; the value keeps `{num} (unknown)`; agreed 2026-09-17 |
+| Problem text, enum, undefined | `Undefined in {enum}` | on hover and in the inspector; the value keeps `{num} (unrecognised)`; agreed 2026-09-17 |
 | Problem text, enum, invalid (InEnum) | `Unknown or invalid: undefined in {enum}` | |
 | Problem text, flags | `{n} unnamed bits set` | replaces `+{n} unnamed` in the value |
 | Problem text, float | `Not a number (quiet NaN)` / `Not a number (signalling NaN, payload 0x{p})` / `Infinity` / `Negative infinity` | |
@@ -321,7 +321,7 @@ State first, then cause, matching `Not checked · why`.
 | Table header | `{column} · {n} invalid` / `· {n} undefined` / `· {n} invalid, {m} undefined`, with ` so far` while rows are unread | a dot, not brackets: the heading already spends its brackets on the unit (`left (dB)`). Both tiers are counted, so a column of undefined values is not silent while every cell in it wears a glyph |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 
-On `Undefined in {enum}`: the value text keeps `{num} (unknown)`, which is
+On `Undefined in {enum}`: the value text keeps `{num} (unrecognised)`, which is
 what the app says for an unnamed enum value elsewhere and is fine on a row.
 The problem text is for the hover and the inspector row, where naming the
 enum is the context that says whose table has no entry. `Not a named value

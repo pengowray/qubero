@@ -226,7 +226,7 @@ pub(crate) fn shown(v: &Value) -> (&'static str, String, String) {
             match name {
                 Some(n) => ("enum", format!("{n} ({num})"), n.clone()),
                 // A value the format does not define. Worth flagging, still editable.
-                None => ("enum", format!("{num} (unknown)"), num),
+                None => ("enum", format!("{num} (unrecognised)"), num),
             }
         }
     }

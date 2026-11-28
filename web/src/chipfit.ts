@@ -58,8 +58,8 @@ export function chipDetail(s: Span): string {
   if (s.count > 0) return runDetail(s.count, s.unit);
   if (s.gap || s.kind === "bytes" || s.value === "") return bitSizeText(s.size_bits);
   // A span has no `edit_text`; a number's value is its decimal digits.
-  // An enum value with no name arrives as `75668 (unknown)`.
-  const digits = s.kind === "enum" ? s.value.replace(/ \(unknown\)$/, "") : s.value;
+  // An enum value with no name arrives as `75668 (unrecognised)`.
+  const digits = s.kind === "enum" ? s.value.replace(/ \(unrecognised\)$/, "") : s.value;
   const shown = positionValue({ locates: s.locates ?? false, kind: s.kind, edit_text: digits }) ?? s.value;
   const value = shown.length > CHIP_VALUE ? `${shown.slice(0, CHIP_VALUE)}…` : shown;
   return withWorth(value, s);

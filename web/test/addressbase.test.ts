@@ -41,7 +41,7 @@ test("an offset value is written in hex only where it locates something and addr
 
 test("an enum-typed offset with no name for its value is written as an address", () => {
   setAddressBase("hex");
-  assert.equal(positionValue({ locates: true, kind: "enum", edit_text: "75668", value: "75668 (unknown)" }), "0x12794");
+  assert.equal(positionValue({ locates: true, kind: "enum", edit_text: "75668", value: "75668 (unrecognised)" }), "0x12794");
   assert.equal(positionValue({ locates: true, kind: "enum", edit_text: "18446744073709551615", value: "undefined (18446744073709551615)" }), null);
-  assert.equal(positionValue({ locates: false, kind: "enum", edit_text: "3", value: "3 (unknown)" }), null);
+  assert.equal(positionValue({ locates: false, kind: "enum", edit_text: "3", value: "3 (unrecognised)" }), null);
 });
