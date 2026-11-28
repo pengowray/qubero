@@ -115,7 +115,7 @@ pub fn huffman(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             break;
         }
         if out.len() >= CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         if !coarse {
             b.push(from, out.len() as u64, StepKind::Literal(node as u8));
@@ -359,7 +359,7 @@ pub fn adaptive(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             break;
         }
         if out.len() >= CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         if !coarse {
             b.push(from, out.len() as u64, StepKind::Literal(sym as u8));

@@ -158,7 +158,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                 let part = bits.read(PXA_LEN_LINK_BITS)?;
                 len = len.checked_add(part).ok_or(Refusal::Failed)?;
                 if len as usize > CAP_BYTES {
-                    return Err(Refusal::TooLarge);
+                    return Err(Refusal::TooLargeOutput);
                 }
                 if part != (1 << PXA_LEN_LINK_BITS) - 1 {
                     break;
@@ -267,7 +267,7 @@ pub fn old(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// it is here because a run of bytes that is not a cart may say anything.
 fn grow(out: &[u8], more: usize) -> Result<(), Refusal> {
     match out.len() + more > CAP_BYTES {
-        true => Err(Refusal::TooLarge),
+        true => Err(Refusal::TooLargeOutput),
         false => Ok(()),
     }
 }

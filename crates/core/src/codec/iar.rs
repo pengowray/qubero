@@ -83,7 +83,7 @@ pub fn lz77(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             return Err(Refusal::Failed);
         }
         if out.len() + literals > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         if literals > 0 {
             if !coarse {
@@ -110,7 +110,7 @@ pub fn lz77(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             return Err(Refusal::Failed);
         }
         if out.len() + len > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let from = out.len() - dist;
         let was = out.len();
@@ -163,7 +163,7 @@ pub fn packbits(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                 return Err(Refusal::Failed);
             }
             if out.len() + n > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             if !coarse {
                 b.push(bit(at), out.len() as u64, StepKind::Stored);
@@ -174,7 +174,7 @@ pub fn packbits(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             let n = -(control as isize) as usize;
             let &v = data.get(at).ok_or(Refusal::Failed)?;
             if out.len() + n > CAP_BYTES {
-                return Err(Refusal::TooLarge);
+                return Err(Refusal::TooLargeOutput);
             }
             if !coarse {
                 b.push(bit(at), out.len() as u64, StepKind::Opaque);

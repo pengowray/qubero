@@ -13,7 +13,8 @@ import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
 import { runPosition } from "../src/report/partrules.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { RV } from "../src/report/text.ts";
-import { codecWords, DECODED_REFUSED, DECODED_REFUSED_TITLE, REPORT } from "../src/strings.ts";
+import { codecWords, DECODED_REFUSED, DECODED_REFUSED_OTHER, DECODED_REFUSED_TITLE, refusedText, refusedTitle, REPORT } from "../src/strings.ts";
+import { isRefusalTag, REFUSAL_TAGS } from "../src/refusaltags.ts";
 import { formatLimit } from "../src/format.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
@@ -364,10 +365,21 @@ test("a stream that would not decode says why, with its codec's verb", () => {
     RV.streamFailedNote(codecWords("scrambling"), "tascam byte table", "failed"),
     "The report could not unscramble this stream: the tascam byte table decoder returned an error.",
   );
-  assert.equal(RV.streamFailedNote(codecWords("compression"), "zstd", "too-large"), "The report could not unpack this stream: too large to unpack (over 64 MiB).");
+  assert.equal(
+    RV.streamFailedNote(codecWords("compression"), "lz4 frame", "too-large-copy"),
+    "The report could not unpack this stream: too large to unpack (over 64 MiB compressed).",
+  );
+  assert.equal(
+    RV.streamFailedNote(codecWords("compression"), "lz4 frame", "too-large-output"),
+    "The report could not unpack this stream: too large to unpack (over 64 MiB unpacked).",
+  );
   assert.equal(
     RV.streamFailedNote(codecWords("compression"), "zstd", "too-large-zstd-frame"),
-    "The report could not unpack this stream: a zstd frame is too large to unpack (over 64 MiB).",
+    "The report could not unpack this stream: a zstd frame is too large to unpack (over 64 MiB unpacked).",
+  );
+  assert.equal(
+    RV.streamFailedNote(codecWords("compression"), "zstd", "too-large-zstd-window"),
+    "The report could not unpack this stream: zstd with a window over 128 MiB, not unpacked.",
   );
   assert.equal(RV.streamFailedNote(codecWords("stored"), "cfb-workbook", "failed"), "The report could not extract this stream: the cfb-workbook decoder returned an error.");
   // No reason from the core, or one this build does not know.
@@ -376,14 +388,25 @@ test("a stream that would not decode says why, with its codec's verb", () => {
   assert.equal(RV.streamNotMeasured, "not measured");
 });
 
-test("a finding for a stream left as bytes says it is too large past either limit", () => {
-  assert.equal(RV.refused("too-large"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-lazy"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-zstd-frame"), "Too large to unpack here");
-  assert.equal(RV.refused("too-large-xz-block"), "Too large to unpack here");
+test("a finding for a stream too large to unpack says which size passed which limit", () => {
+  assert.equal(RV.refused("too-large-copy"), "Too large to unpack (over 64 MiB compressed)");
+  assert.equal(RV.refused("too-large-input"), "Too large to unpack (over 512 MiB compressed)");
+  assert.equal(RV.refused("too-large-output"), "Too large to unpack (over 64 MiB unpacked)");
+  assert.equal(RV.refused("too-large-lazy"), "Too large to unpack (over 1 GiB unpacked)");
+  assert.equal(RV.refused("too-large-zstd-frame"), "A zstd frame is too large to unpack (over 64 MiB unpacked)");
+  assert.equal(RV.refused("too-large-xz-block"), "An xz block is too large to unpack (over 64 MiB unpacked)");
+  assert.equal(RV.refused("too-large-zstd-window"), "Did not unpack: zstd window over 128 MiB");
   assert.equal(RV.refused("too-much-at-once"), "Too large for the editor to keep in memory at once, so it was not unpacked");
   assert.equal(RV.refused("unaligned"), "Does not start on a byte boundary, so it was not unpacked");
   assert.equal(RV.refused("failed"), "Did not unpack");
+  assert.equal(RV.refused("new-reason"), "Did not unpack");
+});
+
+test("every refusal tag the core gives has words, and a tag this build does not know reads as not unpacked", () => {
+  for (const tag of REFUSAL_TAGS) assert.ok(DECODED_REFUSED[tag].length > 0, tag);
+  assert.equal(refusedText("too-large-copy"), "too large to unpack (over 64 MiB compressed)");
+  assert.equal(refusedText("new-reason"), DECODED_REFUSED_OTHER);
+  assert.equal(isRefusalTag("too-large"), false);
 });
 
 test("a limit is written as a whole number of its unit, and a refusal that leaves it out says it on hover", () => {
@@ -392,8 +415,15 @@ test("a limit is written as a whole number of its unit, and a refusal that leave
   assert.equal(formatLimit(2 ** 30), "1 GiB");
   assert.equal(formatLimit(1536 * 2 ** 10), "1.50 MiB");
   assert.equal(DECODED_REFUSED["too-much-at-once"], "too large for the editor to keep in memory at once");
-  assert.equal(DECODED_REFUSED_TITLE["too-much-at-once"]?.("32 MiB"), "The editor keeps at most 32 MiB of the file in memory.");
-  assert.equal(DECODED_REFUSED_TITLE["too-large"], undefined);
+  assert.equal(refusedTitle("too-much-at-once", "32 MiB"), "The editor keeps at most 32 MiB of the file in memory.");
+  // The two compressed limits share one hover, and so do the two unpacked
+  // limits, so either row says which streams have which.
+  assert.equal(refusedTitle("too-large-copy", "32 MiB"), refusedTitle("too-large-input", "32 MiB"));
+  assert.equal(refusedTitle("too-large-output", "32 MiB"), refusedTitle("too-large-lazy", "32 MiB"));
+  assert.match(refusedTitle("too-large-copy", "32 MiB") ?? "", /512 MiB compressed.*64 MiB compressed/);
+  assert.match(refusedTitle("too-large-output", "32 MiB") ?? "", /1 GiB unpacked.*64 MiB unpacked/);
+  assert.equal(DECODED_REFUSED_TITLE["failed"], undefined);
+  assert.equal(refusedTitle("new-reason", "32 MiB"), undefined);
 });
 
 test("the ribbon's sentences count no codes where there is not one, and say what writes no bytes", () => {

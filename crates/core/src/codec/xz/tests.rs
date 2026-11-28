@@ -532,7 +532,7 @@ fn a_chain_with_a_filter_in_it_is_not_read_a_block_at_a_time() {
     let limits = Limits { whole: 1, ..Limits::default() };
     for (name, stream) in [("delta", DELTA_LZMA2), ("x86 at 4096", X86_AT_4096)] {
         let got = decode_or_index_with(Codec::Xz, std::sync::Arc::new(stream.to_vec()), limits);
-        assert_eq!(got.err(), Some(Refusal::TooLarge), "{name}");
+        assert_eq!(got.err(), Some(Refusal::TooLargeOutput), "{name}");
     }
 }
 
@@ -638,7 +638,7 @@ fn a_stream_that_stops_early_is_refused_rather_than_guessed_at() {
                 trace.check_tiles().unwrap_or_else(|e| panic!("cut at {cut} gave a trace that does not tile: {e}"));
                 assert_eq!(trace.out_bytes(), out.len() as u64, "cut at {cut}");
             }
-            Err(Refusal::Failed | Refusal::TooLarge) => {}
+            Err(Refusal::Failed | Refusal::TooLargeOutput) => {}
             Err(e) => panic!("cut at {cut} gave {e:?}"),
         }
     }
@@ -661,7 +661,7 @@ fn a_stream_with_a_byte_changed_says_no_more_than_it_knows() {
                         .unwrap_or_else(|e| panic!("byte {at} ^ {xor:#x} gave a trace that does not tile: {e}"));
                     assert_eq!(trace.out_bytes(), out.len() as u64, "byte {at} ^ {xor:#x}");
                 }
-                Err(Refusal::Failed | Refusal::TooLarge) => {}
+                Err(Refusal::Failed | Refusal::TooLargeOutput) => {}
                 Err(e) => panic!("byte {at} ^ {xor:#x} gave {e:?}"),
             }
         }

@@ -35,7 +35,7 @@ use super::gather::Landing;
 use super::space::{Joined, JoinedBytes, JoinedRun, Opened, Part, PartSource, Stitch};
 use super::*;
 use crate::codec::lazy::{self, Seekable};
-use crate::codec::{Codec, SpanUnit, StepKind, Trace, TraceBuilder};
+use crate::codec::{Codec, StepKind, Trace, TraceBuilder};
 
 /// A stitched stream held whole: its bytes, the trace of every part end to
 /// end, and where each part's run is. See [`Evaluator::join_whole`].
@@ -195,26 +195,20 @@ pub(super) enum PartTrouble {
     /// Its decoder refused it, for this reason. From an index pass,
     /// [`Refusal::TooLargeLazy`] is a part that unpacks to more than
     /// [`lazy::LAZY_CAP_BYTES`], [`Refusal::TooLargeUnit`] one with a zstd
-    /// frame or xz block past 64 MiB, and [`Refusal::Failed`] one that will
-    /// not decode.
+    /// frame or xz block that unpacks to more than 64 MiB, and
+    /// [`Refusal::Failed`] one that will not decode.
     Refused(Refusal),
 }
 
 /// What a read of a packed part says after the part's name when the part's
-/// decoder refused it. A part too large, for the cap or for the file's chunk
-/// store, says "is" and [`Refusal::message`], the words a compressed run's own
-/// row has (`DECODED_REFUSED` in the web's `strings.ts`). A part with a frame
-/// or block too large says which it has, since that message names the frame
-/// or block and not the part. Any other refusal says "could not be unpacked":
-/// the other messages, such as "unpacking failed", do not read as a sentence
-/// after a field's name.
+/// decoder refused it. A part too large, for a limit or for the file's chunk
+/// store, says what [`Refusal::after_name`] says: the words a compressed
+/// run's own row has (`DECODED_REFUSED` in the web's `strings.ts`) after
+/// "is", or "has" and the frame that was too large. Any other refusal says
+/// "could not be unpacked": the other messages, such as "unpacking failed",
+/// do not read as a sentence after a field's name.
 fn part_refused(why: Refusal) -> String {
-    match why {
-        Refusal::TooLarge | Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooMuchAtOnce => format!("is {}", why.message()),
-        Refusal::TooLargeUnit(SpanUnit::ZstdFrame) => "has a zstd frame that is too large to unpack (over 64 MiB)".into(),
-        Refusal::TooLargeUnit(SpanUnit::XzBlock) => "has an xz block that is too large to unpack (over 64 MiB)".into(),
-        _ => "could not be unpacked".into(),
-    }
+    why.after_name().unwrap_or_else(|| "could not be unpacked".into())
 }
 
 /// What the walk to a stitched stream's parts has found so far.
@@ -506,9 +500,9 @@ impl Evaluator {
 
     /// A read of packed part `i` failing because its decoder refused it, said
     /// after the part's name: `blocks[0].compressed is too large to unpack
-    /// (over 1 GiB)`. Out of line, so that the `format!` adds nothing to the
-    /// stack frame of `read_stitched`, which a read deep inside an evaluation
-    /// can reach.
+    /// (over 1 GiB unpacked)`. Out of line, so that the `format!` adds
+    /// nothing to the stack frame of `read_stitched`, which a read deep
+    /// inside an evaluation can reach.
     #[cold]
     #[inline(never)]
     fn part_refusal<T>(&self, stitch: &Stitch, i: usize, why: Refusal) -> R<T> {
@@ -521,7 +515,7 @@ impl Evaluator {
     /// and decoded in one go.
     fn unpack_run<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, size: u64, codec: Codec) -> R<Result<Vec<u8>, Refusal>> {
         if size / 8 > crate::codec::CAP_BYTES as u64 {
-            return Ok(Err(Refusal::TooLarge));
+            return Ok(Err(Refusal::TooLargeCopy));
         }
         let packed = match self.gather_run(doc, space, at, size)? {
             Ok(packed) => packed,
@@ -771,7 +765,7 @@ impl Evaluator {
                     || stitch.parts.iter().any(|p| matches!(p.source, PartSource::Packed { size_bits, .. } if size_bits / 8 > crate::codec::CAP_BYTES as u64))
             }
         };
-        too_large.then_some(Refusal::TooLarge)
+        too_large.then_some(Refusal::TooLargeCopy)
     }
 
     /// Read the parts of the stitched stream in space `id`, opened by the
@@ -943,7 +937,7 @@ impl Evaluator {
                     Ok(None) => {
                         // As `unpack_run` refuses it.
                         if run_bits / 8 > crate::codec::CAP_BYTES as u64 {
-                            return Ok(Err(Refusal::TooLarge));
+                            return Ok(Err(Refusal::TooLargeCopy));
                         }
                         let run = match self.gather_run(doc, space, at_bits, run_bits)? {
                             Ok(run) => run,
@@ -1883,7 +1877,7 @@ mod tests {
         let mut e = Evaluator::new(crate::formats::bgzf());
         e.spaces.set_whole_cap(100);
         assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
-        assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::TooLarge));
+        assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::TooLargeCopy));
     }
 
     /// A part read through an index whose run is missing chunks of the file
@@ -2092,7 +2086,7 @@ mod tests {
         let mut e = Evaluator::new(paged(record(), false));
         e.spaces.set_whole_cap(19);
         assert_eq!(e.open_space(&d, 0, &[STREAM]).unwrap(), None);
-        assert_eq!(e.open_refusal(&[STREAM]), Some(crate::codec::Refusal::TooLarge));
+        assert_eq!(e.open_refusal(&[STREAM]), Some(crate::codec::Refusal::TooLargeCopy));
         // Where it is declared, it reads a part at a time as it did, and its
         // node says nothing of the refusal.
         assert_eq!(e.node(&d, &[STREAM]).unwrap().refused, None);
@@ -2145,7 +2139,7 @@ mod tests {
             Err(EvalError::Failed(why)) => why,
             other => panic!("{other:?}"),
         };
-        assert_eq!(why(&e, &d, space), "blocks[0].compressed is too large to unpack (over 1 GiB)");
+        assert_eq!(why(&e, &d, space), "blocks[0].compressed is too large to unpack (over 1 GiB unpacked)");
         assert_eq!(e.read_in(&d, space, 30_000 * 8, 24).unwrap(), b"and");
 
         // The same first block, its deflate made a block type that does not
@@ -2316,7 +2310,7 @@ mod tests {
         let super::Opened::Space(space) = e.open_stitched_at(&d, &[1]).unwrap() else { panic!("the stream did not open") };
         assert_eq!(e.spaces.len_bits(space), u64::from(claimed) * 8);
         match e.read_in(&d, space, 0, 8) {
-            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run is too large to unpack (over 64 MiB)"),
+            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run is too large to unpack (over 64 MiB unpacked)"),
             other => panic!("{other:?}"),
         }
     }
@@ -2344,7 +2338,7 @@ mod tests {
         assert_eq!(e.open_refusal(&[1]), Some(Refusal::TooLargeUnit(SpanUnit::ZstdFrame)));
         let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
         match e.read_in(&d, space, 0, 8) {
-            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run has a zstd frame that is too large to unpack (over 64 MiB)"),
+            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run has a zstd frame that is too large to unpack (over 64 MiB unpacked)"),
             other => panic!("{other:?}"),
         }
     }

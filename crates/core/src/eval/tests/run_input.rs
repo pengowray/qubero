@@ -254,7 +254,7 @@ fn a_copy_longer_than_the_cap_is_refused() {
     let ev = reading(after(0, 16));
     let key = (0, 0, (cap + 1) * 8);
     let small = Document::new(MemSource(vec![0; 16]));
-    assert!(matches!(ev.run_input(&small, key), Ok(Err(Refusal::TooLarge))));
+    assert!(matches!(ev.run_input(&small, key), Ok(Err(Refusal::TooLargeCopy))));
     let large = Document::new(ArcSource(Arc::new(vec![0; cap as usize + 1])));
     let Ok(Ok(input)) = ev.run_input(&large, key) else { panic!("no handle") };
     assert_eq!((input.len(), input.owned_bytes()), (cap + 1, 0));

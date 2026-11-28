@@ -76,7 +76,7 @@ fn sequences(data: &[u8], base: usize, out: &mut Vec<u8>, floor: usize, b: &mut 
             return Err(Refusal::Failed);
         }
         if out.len() + lit > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         if lit > 0 {
             if !coarse {
@@ -107,7 +107,7 @@ fn sequences(data: &[u8], base: usize, out: &mut Vec<u8>, floor: usize, b: &mut 
             len = len.checked_add(u32::try_from(more).map_err(|_| Refusal::Failed)?).ok_or(Refusal::Failed)?;
         }
         if out.len() + len as usize > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
         let from = out.len() - offset as usize;
         let was = out.len();
@@ -134,7 +134,7 @@ fn extra(data: &[u8], at: &mut usize) -> Result<usize, Refusal> {
             return Ok(total);
         }
         if total > CAP_BYTES {
-            return Err(Refusal::TooLarge);
+            return Err(Refusal::TooLargeOutput);
         }
     }
 }
@@ -271,7 +271,7 @@ pub fn frame(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             let body = &data[at..at + size];
             if stored {
                 if out.len() + size > CAP_BYTES {
-                    return Err(Refusal::TooLarge);
+                    return Err(Refusal::TooLargeOutput);
                 }
                 if size > 0 {
                     b.push(at as u64 * 8, out.len() as u64, StepKind::Stored);

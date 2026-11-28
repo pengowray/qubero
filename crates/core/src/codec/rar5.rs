@@ -323,7 +323,7 @@ pub fn entry(data: &[u8], window_bits: u8, unpacked: u64) -> Result<(Vec<u8>, Tr
 
 fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
     if unpacked > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     if !(17..=32).contains(&window_bits) {
         // 128K is the smallest dictionary RAR 5 has a code for and 4G the
@@ -943,6 +943,6 @@ mod tests {
 
     #[test]
     fn an_entry_larger_than_the_cap_is_not_opened() {
-        assert_eq!(refusal(b"anything", 17, CAP_BYTES as u64 + 1), Some(Refusal::TooLarge));
+        assert_eq!(refusal(b"anything", 17, CAP_BYTES as u64 + 1), Some(Refusal::TooLargeOutput));
     }
 }

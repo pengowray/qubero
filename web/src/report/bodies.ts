@@ -6,7 +6,7 @@ import type { Doc, TableFact, TemplateNode } from "../doc.ts";
 import { swatch } from "../colour.ts";
 import { problemGlyph } from "../dom.ts";
 import { fieldClass } from "../fieldstyle.ts";
-import { childWord, codecWords, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "../strings.ts";
+import { childWord, codecWords, refusedText } from "../strings.ts";
 import { formatOffset } from "../format.ts";
 import { factShown } from "../tablebar.ts";
 import type { TablePlan } from "../tableplan.ts";
@@ -56,7 +56,7 @@ function head(...names: string[]): HTMLTableSectionElement {
  * why it was not unpacked, and anything else says how many of what it holds.
  */
 export function valueText(doc: Doc, n: TemplateNode): string {
-  if (n.refused !== null) return DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
+  if (n.refused !== null) return refusedText(n.refused);
   if (n.line !== null) return n.line;
   if (!n.composite || n.kind !== "composite") return n.value;
   if (n.decoded) {

@@ -2698,8 +2698,8 @@ impl Evaluator {
         // A run that can be indexed is held to the limit of the way its pass
         // reads it, which `index_pass` decides; any other is read whole.
         if !crate::codec::lazy::can_index(codec) && size / 8 > crate::codec::CAP_BYTES as u64 {
-            self.spaces.refuse(path, Refusal::TooLarge);
-            return Ok(space::Opened::Refused(Refusal::TooLarge));
+            self.spaces.refuse(path, Refusal::TooLargeCopy);
+            return Ok(space::Opened::Refused(Refusal::TooLargeCopy));
         }
         // Deflate, zlib, gzip, zstd and xz are decoded whole when they fit and
         // indexed when they do not, and an index is shared by every node over

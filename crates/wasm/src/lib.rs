@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
+use qubero_core::codec::{inflate, Codec, Refusal, Step as MapStep, StepKind};
 use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, ReportWalk, SpaceId, Tab, TimeNote, Unpacking, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
@@ -729,14 +729,15 @@ impl Editor {
     /// the core's own word for it. A joined stream too long to hold whole says
     /// so only when asked, since its node still reads.
     fn refusal_at(&mut self, home: usize, path: &[usize]) -> String {
-        let Some(sh) = self.sheets.get_mut(home) else { return "failed".into() };
-        let Some(e) = &mut sh.eval else { return "failed".into() };
+        let failed = || Refusal::Failed.as_str().to_string();
+        let Some(sh) = self.sheets.get_mut(home) else { return failed() };
+        let Some(e) = &mut sh.eval else { return failed() };
         if let Some(why) = e.open_refusal(path) {
             return why.as_str().into();
         }
         match e.node(&sh.doc, path) {
-            Ok(n) => n.refused.unwrap_or_else(|| "failed".into()),
-            Err(_) => "failed".into(),
+            Ok(n) => n.refused.unwrap_or_else(failed),
+            Err(_) => failed(),
         }
     }
 

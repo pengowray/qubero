@@ -1803,7 +1803,7 @@ impl super::Evaluator {
     ///   kept: a run in a stitched space, in a stretch an edit touched, or in
     ///   a source that gives no handle, such as a [`MemSource`]. A run longer
     ///   than [`Limits::copy_input`], the cap, is refused as
-    ///   [`Refusal::TooLarge`] before anything of it is read. A handle is
+    ///   [`Refusal::TooLargeCopy`] before anything of it is read. A handle is
     ///   never refused here: a pass reading one is held to [`Limits::input`]
     ///   by [`Self::index_pass`].
     ///
@@ -2804,7 +2804,7 @@ mod tests {
             let runs: Vec<u64> = stepped.iter().filter(|f| f.0 == "compressed").map(|f| f.2).collect();
             assert_eq!(runs, [(file.len() as u64 - 10 - 8) * 8], "{members} members");
             let key = (0, 80, (file.len() as u64 - 10) * 8);
-            assert_eq!(e.spaces.measures.ended(key, crate::codec::Codec::Deflate), Some(Err(crate::codec::Refusal::TooLarge)));
+            assert_eq!(e.spaces.measures.ended(key, crate::codec::Codec::Deflate), Some(Err(crate::codec::Refusal::TooLargeOutput)));
         }
     }
 

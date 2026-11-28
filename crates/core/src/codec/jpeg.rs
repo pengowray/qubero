@@ -590,7 +590,7 @@ pub fn scan(run: &[u8], header: &Header) -> Result<(Vec<u8>, Trace), Refusal> {
     let per_mcu = f.blocks_per_mcu() as u64;
     let units = mcus * per_mcu;
     if units * BLOCK_BYTES as u64 > CAP_BYTES as u64 {
-        return Err(Refusal::TooLarge);
+        return Err(Refusal::TooLargeOutput);
     }
     let mut out = vec![0u8; units as usize * BLOCK_BYTES];
     let pieces = pieces(run);
