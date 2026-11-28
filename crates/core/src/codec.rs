@@ -487,13 +487,16 @@ impl CodecKind {
 pub enum Refusal {
     /// The compressed run is past [`CAP_BYTES`], the most of a run that is
     /// read from a copy of it held whole. Every decoder holds its run whole
-    /// but [`lazy`]'s index pass, and that pass too reads a copy of an xz
-    /// run, of a run no handle reaches (in a stitched space or an edited
-    /// stretch), and of a run in a source with too little room for two
-    /// windows: see [`lazy::Limits::copy_input`]. A joined stream whose
-    /// copies of its parts would come to more than its cap is refused this
-    /// way as well. Said before the run is decoded, since the field's size
-    /// says it.
+    /// but [`lazy`]'s index pass, and that pass too reads a copy of a run no
+    /// handle reaches (in a stitched space or an edited stretch), and of a
+    /// run in a source with too little room for two windows: see
+    /// [`lazy::Limits::copy_input`]. An xz pass copies its stream once it
+    /// finds the stream is to be decoded whole: it comes to no more than the
+    /// cap, or its index or footer does not hold together. A joined stream
+    /// whose copies of its parts would come to more than its cap is refused
+    /// this way as well. Said before the run is decoded, since the field's
+    /// size says it, except by an xz pass, which says it once it has read the
+    /// stream's index.
     TooLargeCopy,
     /// What a run decoded whole comes to is past the cap it was decoded
     /// under, [`CAP_BYTES`] for every decoder that holds its output whole.

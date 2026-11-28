@@ -220,9 +220,10 @@ export const DECODED_INSIDE = "in the unpacked stream";
  */
 export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
   /** A run whose bytes are read into memory whole, past 64 MiB
-   *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip and
-   *  zstd, whatever kind it is, and any run in a joined stream or in edited
-   *  bytes. */
+   *  (`CAP_BYTES` in the core): every codec but deflate, zlib, gzip, zstd
+   *  and xz, whatever kind it is; an xz stream that comes to 64 MiB or less
+   *  unpacked, or whose index is damaged, since it is decoded whole; and any
+   *  run in a joined stream or in edited bytes. */
   "too-large-copy": "too large to unpack (over 64 MiB packed)",
   /** A run unpacked whole that comes to more than 64 MiB: every codec but
    *  deflate, zlib, gzip, zstd and xz, and an xz stream with a BCJ or delta
@@ -231,7 +232,7 @@ export const DECODED_REFUSED: Readonly<Record<RefusalTag, string>> = {
   /** A deflate, zlib, gzip, zstd or xz run, which is read a piece at a time
    *  and so may unpack to more than 64 MiB, up to this. */
   "too-large-lazy": "too large to unpack (over 1 GiB unpacked)",
-  /** A deflate, zlib, gzip or zstd run read a piece at a time whose
+  /** A deflate, zlib, gzip, zstd or xz run read a piece at a time whose
    *  compressed bytes are over 512 MiB (`Limits::input` in the core), the
    *  most such a run may take up. The limit is on the compressed size, not on
    *  what it unpacks to. Also said after a part's name, as "is …". */
@@ -292,7 +293,7 @@ export function unknownRefusal(refused: never): never {
  *  either. A deflate stream inside an unpacked stream is held to 512 MiB as
  *  well, so edited bytes and joined streams are the only exceptions. */
 const PACKED_LIMITS =
-  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip or zstd stream that has no edited bytes and is not inside a joined stream.";
+  "The editor unpacks streams of up to 64 MiB packed, which is their size before unpacking. The limit is 512 MiB for a deflate, zlib, gzip, zstd or xz stream that has no edited bytes and is not inside a joined stream.";
 /** The same for both unpacked-size reasons, 64 MiB and 1 GiB. A deflate,
  *  zlib, gzip or zstd stream whose packed bytes are a copy, in edited bytes
  *  or inside a joined stream, is still unpacked a piece at a time from that
@@ -840,9 +841,11 @@ export const UNPACKED = {
    *  enough to take several goes, until the tab opens. `percent` is how much
    *  of the compressed data has been read and `size` what it has unpacked to
    *  so far; the final size is not known until the end. Only deflate, zlib,
-   *  gzip and zstd streams unpack in goes (`codec/lazy/`; an xz stream is
-   *  decoded or laid out in a single go), so these words are always the
-   *  ones for compression. */
+   *  gzip, zstd and xz streams unpack in goes (`codec/lazy/`), so these
+   *  words are always the ones for compression. An xz stream past 64 MiB
+   *  unpacked is laid out from its index and block headers and none of it is
+   *  unpacked, so `size` stays at 0 B while `percent` moves through the
+   *  block headers. */
   unpacking: (field: string, percent: string, size: string): string =>
     `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   /** In the status bar after Open unpacked, or Open joined stream, was

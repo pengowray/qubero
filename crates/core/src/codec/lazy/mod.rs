@@ -364,8 +364,8 @@ pub fn decode_or_index_through(codec: Codec, packed: Arc<Vec<u8>>, input: RunInp
     }
 }
 
-/// The pass [`decode_or_index`] makes over a deflate, zlib, gzip or zstd run,
-/// done a slice at a time: each [`Indexing::step`] decodes about as much
+/// The pass [`decode_or_index`] makes over a deflate, zlib, gzip, zstd or xz
+/// run, done a slice at a time: each [`Indexing::step`] decodes about as much
 /// output, or reads about as many bits of the run, as it is told to, stops at
 /// a place the decoder can carry on from, and the next step carries on from
 /// exactly there. A browser calls it between frames, so that indexing 500 MB

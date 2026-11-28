@@ -537,7 +537,7 @@ impl Editor {
     }
 
     /// Open the stream at `path` of sheet `home`'s own reading, one go's
-    /// worth of work at a time. A deflate, zlib, gzip or zstd stream large
+    /// worth of work at a time. A deflate, zlib, gzip, zstd or xz stream large
     /// enough to take more than a go is unpacked over several: the core keeps the
     /// half-done pass, the call hands back `Busy`, and asking again carries on.
     /// `unpacking` says how far it has got. Nothing when the sheet has no

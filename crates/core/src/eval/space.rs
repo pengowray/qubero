@@ -1730,8 +1730,8 @@ impl super::Evaluator {
         let windowed = self.shared_input(doc, key).filter(|input| lazy::reads_in_windows(codec, input, &limits));
         // Past `Limits::input` for a pass that reads the run through its
         // handle, and past `Limits::copy_input` for any other, which reads a
-        // copy: an xz run, a run no handle reaches, or a run in a source with
-        // too little room for two windows. Said before anything waits or is
+        // copy: a run no handle reaches, or a run in a source with too
+        // little room for two windows. Said before anything waits or is
         // gathered, so that a copy too long to make is refused as too large
         // and not as too much to gather at once.
         if let Some(why) = lazy::too_long_to_index(key.2 / 8, windowed.is_some(), &limits) {
