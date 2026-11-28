@@ -507,6 +507,19 @@ impl Source for SpaceSource {
         let (i, out, trouble) = joined.trouble_in(offset, len)?;
         Some(super::stitch::unreadable_part(&super::stitch::unnamed_part(i), out, trouble))
     }
+
+    fn unreadable_reads(&self) -> u64 {
+        match self {
+            SpaceSource::Joined(joined) => joined.refused_reads(),
+            SpaceSource::Whole(_) | SpaceSource::Lazy(_) => 0,
+        }
+    }
+
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        let SpaceSource::Joined(joined) = self else { return None };
+        let (i, out, trouble) = joined.last_refused()?;
+        Some(super::stitch::unreadable_part(&super::stitch::unnamed_part(i), out, trouble))
+    }
 }
 
 /// A stream joined from parts, too large to hold whole, read a part at a
@@ -538,6 +551,13 @@ pub struct Joined {
     /// the listing. See "Faster opening of joined streams" in
     /// `docs/DESIGN-lazy-compressed-input.md`.
     troubles: std::sync::Mutex<FxHashMap<usize, super::stitch::PartTrouble>>,
+    /// How many times a read has given zeroes for a part that will not read,
+    /// and the latest such part: its index, its bytes, and why. What
+    /// [`Source::unreadable_reads`] and [`Source::last_unreadable`] answer,
+    /// so that code reading the stream through other code can tell whether
+    /// any of its reads reached such a part.
+    refused: std::sync::atomic::AtomicU64,
+    last_refused: std::sync::Mutex<Option<(usize, std::ops::Range<u64>, super::stitch::PartTrouble)>>,
 }
 
 /// Where one part of a [`Joined`] stream's bytes come from.
@@ -615,7 +635,20 @@ impl Joined {
             cache: std::sync::Mutex::new(PartCache::new(cache)),
             traced: std::sync::Mutex::new(None),
             troubles: Default::default(),
+            refused: Default::default(),
+            last_refused: Default::default(),
         }
+    }
+
+    /// How many reads so far gave zeroes for a part that will not read.
+    pub(super) fn refused_reads(&self) -> u64 {
+        self.refused.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The part the latest of those reads reached: its index, its bytes, and
+    /// why.
+    pub(super) fn last_refused(&self) -> Option<(usize, std::ops::Range<u64>, super::stitch::PartTrouble)> {
+        lock(&self.last_refused).clone()
     }
 
     /// How many parts the stream is joined from.
@@ -711,6 +744,15 @@ impl Joined {
                     Err(ReadError::Refused(why)) => {
                         out[to..to + take].fill(0);
                         refused.get_or_insert(why);
+                        // A part read through its index that refuses a span
+                        // keeps no trouble, so the stretch read stands for it.
+                        let trouble = self.trouble(i).unwrap_or(super::stitch::PartTrouble::Refused(why));
+                        let stretch = match self.trouble(i) {
+                            Some(_) => range.clone(),
+                            None => pos..pos + take as u64,
+                        };
+                        *lock(&self.last_refused) = Some((i, stretch, trouble));
+                        self.refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }

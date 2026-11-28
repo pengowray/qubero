@@ -1217,6 +1217,51 @@ fn a_bgzf_block_whose_trailer_says_it_unpacks_to_nothing_refuses_the_stream() {
     }
 }
 
+/// The same blocks, with block 50's trailer claiming far more than the block
+/// holds. Past 64 MiB, the most a part decoded whole may be, the walk reads
+/// the block through an index pass, as before, which finds its real length
+/// and refuses the stream; so it does at the most a 32-bit trailer can say,
+/// past the 1 GiB a part read through an index may be. Under 64 MiB but past
+/// what the block's deflate run could unpack to, 1,032 bytes for each of its
+/// bytes, the walk decodes the block and refuses the stream too. So the
+/// stream is never longer than its runs can fill. A claim within that bound,
+/// twice what the block holds, opens, and the first read of the block is
+/// refused after unpacking the block once, into a buffer as long as what it
+/// holds and not as long as the claim.
+#[test]
+fn a_bgzf_block_claiming_a_huge_size_refuses_the_stream_or_its_reads() {
+    use crate::codec::decodes_on_this_thread;
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::bgzf_block;
+    let (pieces, bytes) = hundred_blocks();
+    let block = bgzf_block(&pieces[50]);
+    let end = pieces[..=50].iter().map(|p| bgzf_block(p).len()).sum::<usize>();
+    let run = block.len() - 26;
+    let n = pieces[50].len() as u32;
+    assert!(((run + 1) * 1032) < 40 << 20, "a run of {run} bytes could unpack to 40 MiB");
+    for (claim, opens) in [(u32::MAX, false), (65 << 20, false), (40 << 20, false), (2 * n, true)] {
+        let mut spoiled = bytes.clone();
+        spoiled[end - 4..end].copy_from_slice(&claim.to_le_bytes());
+        let mut d = stored(&spoiled, 16);
+        let mut ev = Evaluator::new(crate::formats::bgzf());
+        ev.set_stream_limits(Limits::default(), 16 << 10);
+        let id = fed(&mut d, &spoiled, |d| ev.open_space(d, 0, &[1])).unwrap();
+        assert_eq!(id.is_some(), opens, "a claim of {claim}: refused as {:?}", ev.open_refusal(&[1]));
+        let Some(id) = id else {
+            assert_eq!(ev.open_refusal(&[1]), Some(Refusal::Failed), "a claim of {claim}");
+            continue;
+        };
+        let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+        let start = pieces[..50].iter().map(Vec::len).sum::<usize>() as u64;
+        let before = decodes_on_this_thread();
+        let (_, refused) = joined_read_or_refused(&joined, &mut d, &spoiled, start, 100);
+        assert_eq!((refused, decodes_on_this_thread() - before), (Some(Refusal::Failed), 1));
+        let named = ev.unreadable(id, start, 100).expect("says why");
+        assert_eq!((named.at, named.len), (start, u64::from(claim)));
+        assert_eq!(named.why, format!("blocks[50].compressed unpacks to {n} bytes, not the {claim} the file says"));
+    }
+}
+
 /// The same blocks, with block 50 spoiled: its trailer says it unpacks to
 /// one byte more than it does, or the first byte of its deflate makes a
 /// block type that does not exist. Neither refuses the stream any more,
@@ -1271,6 +1316,11 @@ fn a_bgzf_block_that_lies_about_its_length_or_is_damaged_fails_where_it_is_read(
         let unnamed = space.source().unreadable(at as u64, len as u64).unwrap();
         assert_eq!(unnamed.why, said.replace("blocks[50].compressed", "part index 50"), "{what}");
         assert_eq!(ev.unreadable(id, 0, start as u64), None, "{what}: before block 50");
+        // Code that reads the stream through other code can tell that a read
+        // reached block 50, and why.
+        assert!(space.source().unreadable_reads() >= 3, "{what}: {} refused reads counted", space.source().unreadable_reads());
+        let last = ev.last_unreadable(id).unwrap_or_else(|| panic!("{what}: no latest refused read"));
+        assert_eq!((last.at, last.len, last.why.as_str()), (start as u64, claimed as u64, said.as_str()), "{what}");
         assert_eq!(space.map_out(start as u64 + 3), Ok(None), "{what}: a byte of block 50 maps to a step");
 
         // Away from block 50, reads give the blocks' bytes.

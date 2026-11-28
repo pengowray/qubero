@@ -271,6 +271,16 @@ impl<S: Source> Source for Document<S> {
         let (bits, why) = self.unreadable_bits(offset * 8, n)?;
         Some(crate::source::Unreadable { at: bits.start / 8, len: bits.end.div_ceil(8) - bits.start / 8, why })
     }
+
+    fn unreadable_reads(&self) -> u64 {
+        self.source.unreadable_reads()
+    }
+
+    /// What the source says, in the source's own offsets: a joined stream's
+    /// tab is never edited, so those are the document's too.
+    fn last_unreadable(&self) -> Option<crate::source::Unreadable> {
+        self.source.last_unreadable()
+    }
 }
 
 #[cfg(test)]

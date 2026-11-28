@@ -177,6 +177,30 @@ fn unpack_cost(len: u64) -> u64 {
     1 + len / (super::space::INDEX_STEP_BYTES / super::space::INDEX_STEP_ELEMENTS)
 }
 
+/// Whether a walk joining a stream to read a part at a time decodes packed
+/// part `p`, of `codec` with a run of `run_bytes`, to check its length,
+/// rather than leaving that to the first read of it. Two kinds of part are
+/// checked then:
+///
+/// - One the file says unpacks to nothing. It gives the stream no bytes, so
+///   no read lands on it, and a part whose trailer says 0 while it holds data
+///   would lose that data without a word. A BGZF file's end block is one, 28
+///   bytes.
+/// - One the file says unpacks to more than any run of its length could. A
+///   deflate run unpacks to at most 1,032 bytes for each of its bytes, a
+///   copy of 258 bytes in two bits. A part claiming more would make the
+///   stream longer than its runs can fill, and the walk catches that lie for
+///   the cost of one decode. Other codecs have no such bound here.
+///
+/// Every other part decoded whole is checked by its first read.
+fn checked_when_joined(p: &Part, codec: Codec, run_bytes: u64) -> bool {
+    let most = match codec {
+        Codec::Deflate | Codec::Zlib | Codec::Gzip => run_bytes.saturating_add(1).saturating_mul(1032),
+        _ => u64::MAX,
+    };
+    p.len == 0 || p.len > most
+}
+
 /// Where part `p`'s run is: the space, the bit it starts at there, and how
 /// many bits it is.
 fn part_run(p: &Part) -> (u32, u64, u64) {
@@ -954,10 +978,10 @@ impl Evaluator {
     /// every part here was most of the time a large BAM took to open, a
     /// whole inflate of the stream before its tab could show a byte. See
     /// "Faster opening of joined streams" in
-    /// `docs/DESIGN-lazy-compressed-input.md`. The exception is a part the
-    /// file says unpacks to nothing, which no read reaches: that one is
-    /// decoded here, and refuses the stream as failed when it unpacks to
-    /// anything.
+    /// `docs/DESIGN-lazy-compressed-input.md`. The exceptions are the parts
+    /// `checked_when_joined` names, one that unpacks to nothing and one
+    /// claiming more than its run could unpack to: those are decoded here,
+    /// and refuse the stream as failed when they unpack to another length.
     fn join_part_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize, walk: &mut JoinWalk) -> R<Result<u64, Refusal>> {
         let part = &stitch.parts[i];
         let (space, at_bits, run_bits) = part_run(part);
@@ -988,27 +1012,24 @@ impl Evaluator {
                         if run_bits / 8 > crate::codec::CAP_BYTES as u64 {
                             return Ok(Err(Refusal::TooLargeCopy));
                         }
-                        // A part the file says unpacks to nothing gives the
-                        // stream no bytes, so no read ever lands on it and
-                        // checks it. It is checked here, as every part was
-                        // before, and one that unpacks to something refuses
-                        // the stream, since those bytes would otherwise go
-                        // missing without a word. A BGZF file's end block is
-                        // one, 28 bytes.
-                        let empty = match part.len {
-                            0 => match self.gather_run(doc, space, at_bits, run_bits)? {
+                        // A part the file says unpacks to nothing, or to more
+                        // than its run could, is checked here, as every part
+                        // was before: see `checked_when_joined`. One that
+                        // unpacks to another length refuses the stream.
+                        let checked = match checked_when_joined(part, codec, run_bits / 8) {
+                            true => match self.gather_run(doc, space, at_bits, run_bits)? {
                                 Ok(run) => match crate::codec::decode(codec, &run) {
-                                    Ok(unpacked) if unpacked.is_empty() => Some(run),
+                                    Ok(unpacked) if unpacked.len() as u64 == part.len => Some(run),
                                     _ => return Ok(Err(Refusal::Failed)),
                                 },
                                 Err(why) => return Ok(Err(why)),
                             },
-                            _ => None,
+                            false => None,
                         };
                         match self.joined_input(doc, part) {
                             // Nothing of it is read until the stream is.
                             Some(input) => (JoinedBytes::Packed { input, codec }, 1),
-                            None => match empty.map_or_else(|| self.gather_run(doc, space, at_bits, run_bits), |run| Ok(Ok(run)))? {
+                            None => match checked.map_or_else(|| self.gather_run(doc, space, at_bits, run_bits), |run| Ok(Ok(run)))? {
                                 Ok(run) => (JoinedBytes::Packed { input: lazy::RunInput::held(Arc::new(run)), codec }, copy_cost(run_bits / 8)),
                                 Err(why) => return Ok(Err(why)),
                             },
@@ -1057,10 +1078,12 @@ impl Evaluator {
         let window = self.gather_window(doc);
         let mut reach = 0;
         let limits = self.spaces.lazy_limits();
-        // A packed part read through its index, or one the file says unpacks
-        // to nothing, is read by the walk all the same.
+        // A packed part read through its index, or one the walk checks, is
+        // read by the walk all the same.
         let read_anyway = |p: &Part| match p.source {
-            PartSource::Packed { codec: Ok(codec), .. } => p.len == 0 || (lazy::can_index(codec) && p.len > limits.whole as u64),
+            PartSource::Packed { codec: Ok(codec), size_bits, .. } => {
+                (lazy::can_index(codec) && p.len > limits.whole as u64) || checked_when_joined(p, codec, size_bits / 8)
+            }
             PartSource::Packed { .. } | PartSource::Stored { .. } => false,
         };
         for part in stitch.parts.iter().skip(from) {
@@ -1140,15 +1163,31 @@ impl Evaluator {
         let space = self.space(id)?;
         let super::space::SpaceSource::Joined(joined) = space.source() else { return None };
         let (i, out, trouble) = joined.trouble_in(at, len)?;
-        // The stream's parts are the stitched space's, in the same order,
-        // when that space is open in this reading under the same path: only
-        // a stream opened from the file's own fields is known to be.
+        Some(self.named_unreadable(space, joined, i, out, trouble))
+    }
+
+    /// The same for the part the latest read of the joined stream opened as
+    /// space `id` that gave zeroes reached: see
+    /// [`Source::last_unreadable`]. Nothing when no read has reached one.
+    pub fn last_unreadable(&self, id: SpaceId) -> Option<crate::source::Unreadable> {
+        let space = self.space(id)?;
+        let super::space::SpaceSource::Joined(joined) = space.source() else { return None };
+        let (i, out, trouble) = joined.last_refused()?;
+        Some(self.named_unreadable(space, joined, i, out, trouble))
+    }
+
+    /// Part `i` of the joined stream `space`, in trouble, as an
+    /// [`Unreadable`](crate::source::Unreadable) named as the listing names
+    /// the part. The stream's parts are the stitched space's, in the same
+    /// order, when that space is open in this reading under the same path:
+    /// only a stream opened from the file's own fields is known to be.
+    fn named_unreadable(&self, space: &super::Space, joined: &super::space::Joined, i: usize, out: std::ops::Range<u64>, trouble: PartTrouble) -> crate::source::Unreadable {
         let stitch = match (space.parent, self.spaces.get(&space.path)) {
             (0, Some(Opened::Space(stitched))) => self.spaces.stitch(stitched).filter(|s| s.parts.len() == joined.part_count()),
             _ => None,
         };
         let label = stitch.map_or_else(|| unnamed_part(i), |s| self.part_label(s, i));
-        Some(unreadable_part(&label, out, trouble))
+        unreadable_part(&label, out, trouble)
     }
 }
 

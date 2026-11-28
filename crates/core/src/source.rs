@@ -75,6 +75,20 @@ pub trait Source {
         let _ = (offset, len);
         None
     }
+    /// How many reads so far have given zeroes for bytes that cannot be made
+    /// (see [`Source::unreadable`]). Code that reads through other code, a
+    /// scan or a format's own reader, takes the count before and compares it
+    /// after: a count that moved means some read it made reached such bytes,
+    /// and what it made of them is not to be shown. 0 for every source that
+    /// holds or loads its bytes as they are.
+    fn unreadable_reads(&self) -> u64 {
+        0
+    }
+    /// The bytes the latest of those reads reached, and why, in the source's
+    /// own offsets. Nothing when no read has reached any.
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        None
+    }
 }
 
 /// Bytes a source gave zeroes for because it could not make them: see
@@ -116,6 +130,11 @@ impl<S: Source> Source for &S {
     }
     fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
         (*self).unreadable(offset, len)
+    }    fn unreadable_reads(&self) -> u64 {
+        (*self).unreadable_reads()
+    }
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        (*self).last_unreadable()
     }
 }
 
@@ -143,6 +162,11 @@ impl<S: Source + ?Sized> Source for Arc<S> {
     }
     fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
         (**self).unreadable(offset, len)
+    }    fn unreadable_reads(&self) -> u64 {
+        (**self).unreadable_reads()
+    }
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        (**self).last_unreadable()
     }
 }
 
@@ -406,6 +430,14 @@ impl Source for ChunkStore {
 
     fn unreadable(&self, offset: u64, len: u64) -> Option<Unreadable> {
         self.behind.as_ref()?.unreadable(offset, len)
+    }
+
+    fn unreadable_reads(&self) -> u64 {
+        self.behind.as_ref().map_or(0, |source| source.unreadable_reads())
+    }
+
+    fn last_unreadable(&self) -> Option<Unreadable> {
+        self.behind.as_ref()?.last_unreadable()
     }
 }
 
