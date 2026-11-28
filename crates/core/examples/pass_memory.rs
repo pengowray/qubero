@@ -1,22 +1,31 @@
-//! How long an index pass over a gzip takes, and the most heap it holds,
-//! when the run is read through a handle onto the file as the evaluator
-//! reads a run of the file.
+//! How long an index pass over a compressed file takes, and the most heap
+//! it holds, when the run is read through a handle onto the file as the
+//! evaluator reads a run of the file.
 //!
-//! `cargo run --release --example pass_memory -- <file.gz> [tries]`
+//! `cargo run --release --example pass_memory -- <file> [tries] [codec] [copy]`
 //!
-//! The file is one gzip member. Each try makes the pass, steps it to its end
-//! with the evaluator's step sizes (256 KiB of output or 2 Mibit of input),
-//! and prints the time and the peak of heap allocated over what was
-//! allocated before the try, which counts the pass, anything it copies and
-//! the index it makes. The file itself is allocated before.
+//! The file is one run: a gzip member by default, or the codec named
+//! (`deflate`, `zlib`, `gzip`, `zstd` or `xz`). Each try makes the pass,
+//! steps it to its end with the evaluator's step sizes (256 KiB of output or
+//! 2 Mibit of input), and prints the time and the peak of heap allocated
+//! over what was allocated before the try, which counts the pass, anything
+//! it copies and the index it makes. The file itself is allocated before.
+//!
+//! With `copy`, the pass reads a copy of the run made first, as the
+//! evaluator's gather made one before the pass could read the run through
+//! its handle: before part 7b of `docs/DESIGN-lazy-compressed-input.md` for
+//! deflate and zstd, and before part 8 for xz, whose layout was then made in
+//! one call of `decode_or_index_through`. A refusal is printed, not a
+//! failure: a file of one xz block past 64 MiB is refused after its layout
+//! is read.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use qubero_core::codec::lazy::{Decoded, Indexing, Limits, RunInput, Stepped};
-use qubero_core::codec::Codec;
+use qubero_core::codec::lazy::{decode_or_index_through, Decoded, Indexing, Limits, RunInput, Stepped};
+use qubero_core::codec::{Codec, Refusal};
 use qubero_core::source::{ArcSource, Source};
 
 struct Counting;
@@ -58,8 +67,17 @@ static ALLOCATOR: Counting = Counting;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let path = args.get(1).expect("a gzip file");
+    let path = args.get(1).expect("a compressed file");
     let tries: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let codec = match args.get(3).map(String::as_str) {
+        None | Some("gzip") => Codec::Gzip,
+        Some("deflate") => Codec::Deflate,
+        Some("zlib") => Codec::Zlib,
+        Some("zstd") => Codec::Zstd,
+        Some("xz") => Codec::Xz,
+        Some(other) => panic!("no codec {other}"),
+    };
+    let copy = args.get(4).is_some_and(|m| m == "copy");
     let bytes = Arc::new(std::fs::read(path).expect("reads"));
     let source: Arc<dyn Source + Send + Sync> = Arc::new(ArcSource(bytes.clone()));
     let mut best = (f64::MAX, usize::MAX);
@@ -68,34 +86,40 @@ fn main() {
         PEAK.store(base, Ordering::Relaxed);
         let t = Instant::now();
         let input = RunInput::new(source.clone(), 0, bytes.len() as u64);
-        let mut pass = make(input, &bytes);
-        let mut steps = 0usize;
-        let decoded = loop {
-            steps += 1;
-            match pass.step(256 << 10, (256 << 10) * 8) {
-                Ok(Stepped::Done(d)) => break d,
-                Ok(Stepped::Working) => {}
-                Ok(Stepped::NeedsInput(m)) => panic!("an ArcSource missing {m:?}"),
-                Err(why) => panic!("refused: {why:?}"),
-            }
+        let (got, steps) = match copy {
+            true => (decode_or_index_through(codec, Arc::new(bytes.to_vec()), input, Limits::default()), 1),
+            false => stepped(Indexing::through(codec, input, Limits::default())),
         };
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let peak = PEAK.load(Ordering::Relaxed) - base;
-        let (kind, held) = match &decoded {
-            Decoded::Indexed(s) => ("indexed", s.held_bytes()),
-            Decoded::Whole(b, _) => ("whole", b.len()),
+        let (kind, held) = match &got {
+            Ok(Decoded::Indexed(s)) => ("indexed".to_string(), s.held_bytes()),
+            Ok(Decoded::Whole(b, _)) => ("whole".to_string(), b.len()),
+            Err(why) => (format!("refused as {}", why.as_str()), 0),
         };
-        drop(decoded);
+        drop(got);
         println!("{kind}, {steps} steps: {ms:.1} ms, peak {peak} bytes over the file, index holds {held}");
         best = (best.0.min(ms), best.1.min(peak));
     }
     println!("fastest {:.1} ms, least peak {} bytes", best.0, best.1);
 }
 
-/// The pass as the evaluator makes it for a run of the file: reading the run
-/// through the handle a window at a time. Before part 7b of
-/// `docs/DESIGN-lazy-compressed-input.md`, the pass read a copy of the run
-/// that the evaluator gathered first, `Arc::new(bytes.to_vec())`.
-fn make(input: RunInput, _bytes: &Arc<Vec<u8>>) -> Indexing {
-    Indexing::through(Codec::Gzip, input, Limits::default()).expect("starts")
+/// The pass as the evaluator makes it for a run of the file, reading the run
+/// through the handle a window at a time, stepped to its end, and how many
+/// steps that took.
+fn stepped(made: Result<Indexing, Refusal>) -> (Result<Decoded, Refusal>, usize) {
+    let mut pass = match made {
+        Ok(pass) => pass,
+        Err(why) => return (Err(why), 0),
+    };
+    let mut steps = 0usize;
+    loop {
+        steps += 1;
+        match pass.step(256 << 10, (256 << 10) * 8) {
+            Ok(Stepped::Done(d)) => return (Ok(d), steps),
+            Ok(Stepped::Working) => {}
+            Ok(Stepped::NeedsInput(m)) => panic!("an ArcSource missing {m:?}"),
+            Err(why) => return (Err(why), steps),
+        }
+    }
 }
