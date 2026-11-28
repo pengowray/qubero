@@ -221,9 +221,14 @@ pub(super) enum PartTrouble {
     Length(u64),
     /// Its decoder refused it, for this reason. From an index pass,
     /// [`Refusal::TooLargeLazy`] is a part that unpacks to more than
-    /// [`lazy::LAZY_CAP_BYTES`], [`Refusal::TooLargeUnit`] one with a zstd
-    /// frame or xz block that unpacks to more than 64 MiB, and
-    /// [`Refusal::Failed`] one that will not decode.
+    /// [`lazy::LAZY_CAP_BYTES`], [`Refusal::TooLargeInput`] one whose run is
+    /// past [`lazy::Limits::input`], [`Refusal::TooLargeUnit`] one with a
+    /// zstd frame or xz block that unpacks to more than 64 MiB,
+    /// [`Refusal::TooManyXzBlocks`] an xz part whose index lists more blocks
+    /// than [`lazy::Limits::block_marks`], [`Refusal::TooMuchAtOnce`] one
+    /// that needs more of the file at once than the store keeps, and
+    /// [`Refusal::Failed`] one that will not decode. A part decoded whole can
+    /// give any refusal its decoder gives.
     Refused(Refusal),
 }
 
@@ -1005,9 +1010,12 @@ impl Evaluator {
                 match self.index_part(doc, stitch, i)? {
                     Ok(Some(index)) => (JoinedBytes::Indexed(index), unpack_cost(part.len)),
                     // A part past `LAZY_CAP_BYTES`, with a zstd frame or xz
-                    // block past 64 MiB, or whose run is past
-                    // `Limits::input`, refuses the stream for that.
-                    Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooLargeUnit(_) | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
+                    // block past 64 MiB, whose run is past `Limits::input`,
+                    // whose xz index lists more blocks than
+                    // `Limits::block_marks`, or that needs more of the file
+                    // at once than the store keeps, refuses the stream for
+                    // that.
+                    Err(PartTrouble::Refused(why @ (Refusal::TooLargeLazy | Refusal::TooLargeInput | Refusal::TooLargeUnit(_) | Refusal::TooManyXzBlocks | Refusal::TooMuchAtOnce))) => return Ok(Err(why)),
                     Err(_) => return Ok(Err(Refusal::Failed)),
                     Ok(None) => {
                         // As `unpack_run` refuses it.
@@ -2546,6 +2554,37 @@ mod tests {
         let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
         match e.read_in(&d, space, 0, 8) {
             Err(EvalError::Failed(why)) => assert_eq!(why, "member.run has a zstd frame that is too large to unpack (over 64 MiB unpacked)"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A packed part whose xz index lists more blocks than
+    /// `Limits::block_marks` refuses the joined stream as having too many xz
+    /// blocks, the refusal Open joined stream has words for, and a read of
+    /// the part says so.
+    #[test]
+    fn a_part_with_too_many_xz_blocks_says_so() {
+        use crate::codec::lazy::Limits;
+        use crate::codec::{Codec, Refusal};
+        use crate::eval::EvalError;
+        let text = crate::codec::lazy::tests::mixed(30_000, 41);
+        let mut file = (text.len() as u32).to_be_bytes().to_vec();
+        file.extend(crate::codec::lazy::tests::xz_of(&text, 1_000));
+        let member = T::structure("Member", vec![("claimed", T::u32(Big)), ("run", T::decoded(E::Remaining, Codec::Xz, T::bytes(E::Remaining)))]);
+        let joined = T::stitched(vec![Step::field("member"), Step::field("run")], Some(E::field("claimed")), None, T::bytes(E::Remaining));
+        let template = Template::new("xz-part", T::structure("File", vec![("member", member), ("joined", joined)]));
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(template);
+        // The stream is past the cap for one held whole, the part is past the
+        // cap for a part decoded whole, and its 30 blocks are more than the
+        // limit.
+        e.spaces.set_whole_cap(10_000);
+        e.spaces.set_lazy_limits(Limits { whole: 4096, span: 65_536, block_marks: 20, spacing: 2048, checkpoints: 8, span_cache: 8192, ..Limits::default() });
+        assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+        assert_eq!(e.open_refusal(&[1]), Some(Refusal::TooManyXzBlocks));
+        let Some(super::Opened::Space(space)) = e.spaces.get(&[1]) else { panic!("the stream did not open") };
+        match e.read_in(&d, space, 0, 8) {
+            Err(EvalError::Failed(why)) => assert_eq!(why, "member.run has too many xz blocks to unpack (over 65,536 blocks)"),
             other => panic!("{other:?}"),
         }
     }

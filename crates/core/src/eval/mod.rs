@@ -2706,8 +2706,8 @@ impl Evaluator {
         }
         // Deflate, zlib, gzip, zstd and xz are decoded whole when they fit and
         // indexed when they do not, and an index is shared by every node over
-        // the same run. Deflate's pass is done a step at a time. See
-        // `codec::lazy`.
+        // the same run. The pass over each of them is done a step at a time
+        // (`lazy::can_step`). See `codec::lazy`.
         if crate::codec::lazy::can_index(codec) {
             let key = (r.space, r.offset, size);
             if let Some(index) = self.spaces.indexed(key, codec) {
