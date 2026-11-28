@@ -2787,7 +2787,16 @@ read to type over, is read on a tab that cannot be typed in.
   could keep the refused span as a trouble of its own, by range rather than
   by part.
 - **The browser tests of the text view** (`web/test/textview.browser.mjs`)
-  were not extended; the marks were checked by hand in the browser pane.
+  were not extended. In the browser pane, on the BAM of 300 MiB with block
+  2's trailer one byte long, the text view's muted `?` with the reason on
+  hover and its `unreadable bytes` marks, the inspector's `can't read` boxes
+  for the 8-byte values that reach the block, the selection's reason, and
+  the strings view's `63.8 KiB not searched: …` were seen. The minimap's
+  reason was not: the pane was hidden, and the minimap draws on a frame.
+- **The reason is on hover**, over the `??` cells, the `?` characters and the
+  `can't read` boxes, which a touch screen never shows. The text view's
+  `unreadable bytes` mark and the inspector's selection line say that the
+  bytes cannot be read without a hover; only the reason itself needs one.
 - **The CRC-32 of a part when it is first read.** A part that inflates to
   the length its trailer says with the wrong bytes reads as those bytes.
   `Ty::Stitched` could name each part's checksum field beside `part_len`, a
