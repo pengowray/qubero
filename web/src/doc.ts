@@ -1,7 +1,7 @@
 // Document facade: owns the wasm Editor and streams chunks in from a File/Blob.
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
-import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "./pkg/qubero_wasm.js";
+import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode, trace_kinds } from "./pkg/qubero_wasm.js";
 import { byteDigits, formatBytes, formatOffset } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
@@ -2535,6 +2535,23 @@ export class EditorMissing extends Error {
   }
 }
 
+/** Every family's kinds, by full kind name. The tables are fixed in the
+ *  core, so they are parsed once, on first use. If the export fails the
+ *  answer is an empty table, not kept, and a caller shows a kind without its
+ *  description. */
+let traceKinds: Map<string, TraceKindShape> | null = null;
+function traceKindTable(): Map<string, TraceKindShape> {
+  if (traceKinds !== null) return traceKinds;
+  const table = new Map<string, TraceKindShape>();
+  try {
+    for (const f of JSON.parse(trace_kinds("")) as TraceKindFamily[]) for (const k of f.kinds) table.set(k.kind, k);
+  } catch {
+    return table;
+  }
+  traceKinds = table;
+  return table;
+}
+
 let wasmReady: Promise<unknown> | null = null;
 function ensureWasm(): Promise<unknown> {
   // A failure is forgotten rather than remembered, the same way `loadMagic`
@@ -3011,6 +3028,13 @@ export class Doc {
    */
   templateText(): string {
     return this.editor.template_text();
+  }
+
+  /** What one decoder kind is, by its full name (`deflate.literal`), from
+   *  the core's tables of every family. Undefined for a kind the core does
+   *  not list. */
+  traceKind(kind: string): TraceKindShape | undefined {
+    return traceKindTable().get(kind);
   }
 
   /** Which line of `templateText` each decoder kind is on. Empty when no

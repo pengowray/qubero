@@ -1517,6 +1517,44 @@ button.welcome-crystal {
 .tp-copied[hidden] {
   display: none;
 }
+/* A decoder kind's whole line and its description, for the kind line that is
+   marked or under the mouse. Decoder lines are longer than the sidebar is
+   wide, so the strip wraps the line that the text cuts off at the right edge.
+   It lies over the bottom of the text rather than taking space from it, so
+   the text does not move when it comes and goes; `bottom` and `right` are set
+   from the scroller's scrollbars in templatepanel.ts. The sidebar bar's fill
+   and the same rule line as the bar set it apart from the text. */
+.tp-detail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* A long description at 375px stays a strip and scrolls inside itself. */
+  max-height: 50%;
+  overflow: auto;
+  padding: 6px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.tp-detail[hidden] {
+  display: none;
+}
+/* The line's own font and colours, as in the text above, wrapped. */
+.tp-detail-line {
+  font-family: var(--mono);
+  line-height: var(--tp-line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tp-detail-about {
+  margin: 4px 0 0;
+  font-family: var(--sans);
+  line-height: 1.4;
+}
+.tp-detail-about[hidden] {
+  display: none;
+}
 .tp-field {
   color: var(--accent);
 }
