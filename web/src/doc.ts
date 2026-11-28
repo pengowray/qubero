@@ -3899,8 +3899,10 @@ export class Doc {
   async textIndex(encoding: string, from: number, to: number): Promise<TextIndex> {
     const got = await this.untilLoaded(() => {
       const packed = this.editor.text_index(this.space, encoding, from, to);
-      const missing = packed[4] ?? 0;
-      return { value: packed, missing: missing === 0 ? [] : Array.from(packed.subarray(5, 5 + missing)) };
+      const count = packed[4] ?? 0;
+      const missing = count === 0 ? [] : Array.from(packed.subarray(5, 5 + count));
+      this.readAhead(missing);
+      return { value: packed, missing };
     });
     if (!got.complete) return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
     const packed = got.value;
@@ -3944,6 +3946,7 @@ export class Doc {
     if (encodings === "") return { hits: [], missing: [], next: this.lengthBytes };
     const got = await this.untilLoaded(() => {
       const s = JSON.parse(this.editor.strings_scan(this.space, from, want, opts.minChars, encodings)) as StringScan;
+      this.readAhead(s.missing);
       return { value: s, missing: s.missing };
     });
     return got.complete ? got.value : { hits: [], missing: got.value.missing, next: from };
@@ -4017,6 +4020,18 @@ export class Doc {
    */
   private untilLoaded<T>(ask: () => Asked<T>): Promise<{ readonly value: T; readonly complete: boolean }> {
     return askUntilLoaded({ ask, load: (chunks) => this.fileChunks(chunks), wait: this.chunkWait() });
+  }
+
+  /**
+   * Start reading `READ_AHEAD` chunks of the file from the first chunk in
+   * `missing`, for a scan that reads front to back and stops at the first
+   * chunk it has not got. Without this, a scan of a large file loads one
+   * 64 KiB chunk per round. The wait still loads only the chunks named, and
+   * finds the ones after them already here or on their way.
+   */
+  private readAhead(missing: readonly number[]): void {
+    const first = missing[0];
+    if (first !== undefined) this.fetchRun(first, READ_AHEAD);
   }
 
   /** A new wait for chunks of the file, for `untilLoaded` and `readLoaded`. */
