@@ -2609,7 +2609,8 @@ through a `RunInput`":
   names xz: "The limit is 512 MiB for a deflate, zlib, gzip, zstd or xz
   stream that has no edited bytes and is not inside a joined stream." The
   status bar's `UNPACKED.unpacking` says "0 B unpacked so far" while an xz
-  stream is laid out; see "Still to do".
+  stream is laid out or copied, where it said `UNPACKED.loading` while a
+  stream was gathered; see "Still to do".
 - **Tests.** In `codec/lazy/tests.rs`, each pass reads a store of 1 KiB
   chunks, fed only the chunks each step names, with steps of 8 KiB, from a
   store with room for two steps (20 chunks) and from one of 200. Over xz
@@ -2707,10 +2708,13 @@ through a `RunInput`":
   can name the chunks of more than one span. Headers read are kept and
   count as progress, so the pass gets further each round, but no test
   covers it.
-- **The status bar while an xz stream is laid out.** `UNPACKED.unpacking`
-  says "{size} unpacked so far", and an xz layout unpacks nothing, so it
-  says 0 B until the tab opens, for the few rounds the block headers take.
-  `Unpacking` names no codec, so the web cannot word it differently yet.
+- **The status bar while an xz pass runs.** `UNPACKED.unpacking` says
+  "{size} unpacked so far", and an xz pass unpacks nothing until its end,
+  so it says 0 B. A stream past the cap is laid out in a few rounds. A
+  stream that fits is copied a piece at a time, so the percentage reaches
+  100% and the stream is then unpacked in one go; before part 8 the status
+  bar said `UNPACKED.loading` while such a stream was gathered. `Unpacking`
+  names no codec, so the web cannot word it differently yet.
 - **Lift `unit_input`.** A zstd span decode could keep its frame decoder
   between reads, as xz's `Prefix` keeps its LZMA2 decoder, and xz's
   `lzma2_len` could read a block's LZMA2 chunk headers a window at a time,

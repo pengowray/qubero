@@ -2361,8 +2361,9 @@ export type DecodedCode = {
  *  to back, so `read_bits` of `run_bits` is the share done; `unpacked_bytes`
  *  is what it has come to so far. The total is not known until the end. An
  *  xz stream past 64 MiB unpacked is laid out from its index and its block
- *  headers instead: `read_bits` is where the last block header read starts,
- *  and `unpacked_bytes` stays 0. */
+ *  headers instead, and `read_bits` is where the furthest block header read
+ *  starts; one that fits is copied a piece at a time, and `read_bits` is how
+ *  much is copied. For xz `unpacked_bytes` stays 0. */
 export type Unpacking = {
   readonly run_space: number;
   readonly run_offset_bits: number;

@@ -842,10 +842,12 @@ export const UNPACKED = {
    *  of the compressed data has been read and `size` what it has unpacked to
    *  so far; the final size is not known until the end. Only deflate, zlib,
    *  gzip, zstd and xz streams unpack in goes (`codec/lazy/`), so these
-   *  words are always the ones for compression. An xz stream past 64 MiB
-   *  unpacked is laid out from its index and block headers and none of it is
-   *  unpacked, so `size` stays at 0 B while `percent` moves through the
-   *  block headers. */
+   *  words are always the ones for compression. An xz stream is not
+   *  unpacked a go at a time, though: one past 64 MiB unpacked is laid out
+   *  from its index and block headers, and one that fits is copied a piece
+   *  at a time and then unpacked in a single go. So for xz `size` stays at
+   *  0 B while `percent` moves, and a stream that fits reaches 100% before
+   *  it is unpacked. */
   unpacking: (field: string, percent: string, size: string): string =>
     `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   /** In the status bar after Open unpacked, or Open joined stream, was
