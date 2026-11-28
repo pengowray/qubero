@@ -489,14 +489,20 @@ impl Source for SpaceSource {
 /// A stream joined from parts, too large to hold whole, read a part at a
 /// time. What [`SpaceSource::Joined`] reads.
 ///
-/// What it is read from is held here: the bytes of each stored part, and the
-/// compressed run of each packed one. A packed part small enough to decode
-/// whole is decoded when it is read and kept in a cache like a stitched
-/// space's; a larger one is read through its index, which reads its run
-/// through its [`lazy::RunInput`] and may find chunks of the file missing.
+/// Each part is read where its bytes are, through a [`lazy::RunInput`]: a
+/// stored part's bytes, and the compressed run of a packed part small enough
+/// to decode whole, which is decoded when it is read and kept in a cache
+/// like a stitched space's. A larger packed part is read through its index,
+/// which reads its run through a `RunInput` of its own. A `RunInput` is a
+/// handle onto the source the bytes are in wherever one reaches them, so
+/// that nothing here holds them, and a copy of them only where none does:
+/// see [`Evaluator::joined_input`](super::Evaluator). A read through a
+/// handle can find chunks of the file missing.
 pub struct Joined {
     parts: Vec<(std::ops::Range<u64>, JoinedBytes)>,
     len: u64,
+    /// The most one read may ask for: see [`Joined::resident_limit`].
+    limit: Option<u64>,
     cache: std::sync::Mutex<PartCache>,
     /// The trace of the packed part asked about most recently, which is
     /// decoded again to make it.
@@ -505,10 +511,11 @@ pub struct Joined {
 
 /// Where one part of a [`Joined`] stream's bytes come from.
 pub(super) enum JoinedBytes {
-    /// A part stored as it is, copied out of the file.
-    Held(Arc<Vec<u8>>),
-    /// A part small enough to decode whole: its compressed run.
-    Packed { run: Arc<Vec<u8>>, codec: Codec },
+    /// A part stored as it is: its bytes, where they are.
+    Stored(lazy::RunInput),
+    /// A part small enough to decode whole: its compressed run, read when
+    /// the part is decoded.
+    Packed { input: lazy::RunInput, codec: Codec },
     /// A part too large to decode whole.
     Indexed(Arc<Seekable>),
 }
@@ -517,9 +524,60 @@ fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The most bytes one read of a joined stream may ask for when some of its
+/// stored or packed parts are read through a handle onto a source that keeps
+/// only part of the file, as the browser's chunk store does. Nothing when
+/// none is.
+///
+/// Such a read needs every byte of the file it covers at once: a stored
+/// part's own bytes, and the whole run of each packed part it reaches, which
+/// it decodes. A packed part's run takes `run / len` bytes of the file for
+/// each byte the part unpacks to, and a read reaches into at most two parts
+/// it does not cover whole, whose runs are at most `longest`. So with
+/// `expand` the most of `run / len` over the packed parts, and at least 1
+/// for the stored ones, a read of `n` bytes needs at most `n × expand + 2 ×
+/// longest` bytes of the file. The limit is the `n` for which that comes to
+/// half of what the source keeps, as a read of a run is held to half of it
+/// (`RunInput::most_at_once`). The longest run a packed part read through a
+/// handle may have is an eighth of what the source keeps (see
+/// `Evaluator::joined_input`), so the limit is at least a quarter of it over
+/// `expand`. For a BAM in the browser, `expand` is 1 and the limit is 16 MiB
+/// less two blocks.
+fn handle_limit(parts: &[(std::ops::Range<u64>, JoinedBytes)]) -> Option<u64> {
+    let read_through_handle = |bytes: &JoinedBytes| match bytes {
+        JoinedBytes::Stored(input) => input.resident_limit().map(|keeps| (keeps, None)),
+        JoinedBytes::Packed { input, .. } => input.resident_limit().map(|keeps| (keeps, Some(input.len()))),
+        JoinedBytes::Indexed(_) => None,
+    };
+    let (mut keeps, mut longest) = (None::<u64>, 0);
+    for (_, bytes) in parts {
+        let Some((k, run)) = read_through_handle(bytes) else { continue };
+        keeps = Some(keeps.map_or(k, |was| was.min(k)));
+        longest = longest.max(run.unwrap_or(0));
+    }
+    let room = (keeps? / 2).saturating_sub(2 * longest);
+    // `room / expand`, worked out part by part as `room × len / run`, for
+    // each part a read can reach: a part of no bytes, such as the empty
+    // block a BGZF file ends with, is never reached.
+    let mut limit = room;
+    for (out, bytes) in parts {
+        if let Some((_, Some(run))) = read_through_handle(bytes) {
+            if run > 0 && out.end > out.start {
+                limit = limit.min((u128::from(room) * u128::from(out.end - out.start) / u128::from(run)) as u64);
+            }
+        }
+    }
+    Some(limit.max(1))
+}
+
 impl Joined {
     pub(super) fn new(parts: Vec<(std::ops::Range<u64>, JoinedBytes)>, len: u64, cache: usize) -> Joined {
-        Joined { parts, len, cache: std::sync::Mutex::new(PartCache::new(cache)), traced: std::sync::Mutex::new(None) }
+        let indexed = parts.iter().filter_map(|(_, bytes)| match bytes {
+            JoinedBytes::Indexed(index) => index.resident_limit(),
+            JoinedBytes::Stored(_) | JoinedBytes::Packed { .. } => None,
+        });
+        let limit = indexed.chain(handle_limit(&parts)).min();
+        Joined { parts, len, limit, cache: std::sync::Mutex::new(PartCache::new(cache)), traced: std::sync::Mutex::new(None) }
     }
 
     pub fn len(&self) -> u64 {
@@ -530,16 +588,15 @@ impl Joined {
         self.len == 0
     }
 
-    /// The least that any part read through its index keeps decoded at once,
-    /// when such a part reads its run from a store that keeps part of the
-    /// file. The other parts are held, or decoded from a copy of their run,
-    /// and never wait for bytes.
+    /// The most one read of the stream may ask for, when some part reads
+    /// from a source that keeps only part of the file: the least of what
+    /// each part read through its index keeps decoded at once
+    /// ([`Seekable::resident_limit`]), and of [`handle_limit`] for the parts
+    /// read through a handle. Nothing when every part is read from a copy,
+    /// or from a source that answers any read whole: those never wait for
+    /// bytes.
     pub fn resident_limit(&self) -> Option<u64> {
-        let indexed = self.parts.iter().filter_map(|(_, bytes)| match bytes {
-            JoinedBytes::Indexed(index) => index.resident_limit(),
-            JoinedBytes::Held(_) | JoinedBytes::Packed { .. } => None,
-        });
-        indexed.min()
+        self.limit
     }
 
     fn part_at(&self, byte: u64) -> Option<usize> {
@@ -547,73 +604,155 @@ impl Joined {
         self.parts.get(i).filter(|p| p.0.contains(&byte)).map(|_| i)
     }
 
-    /// Bytes `at..at + out.len()`, from as many parts as they cover. A part
-    /// read through its index that finds chunks of the file missing stops
-    /// the read there and names them.
+    /// Bytes `at..at + out.len()`, from as many parts as they cover. When
+    /// a part finds chunks of the file missing, the stored and packed parts
+    /// after it are only asked which chunks they would find missing, and the
+    /// read names all of them at once, so that one round loads everything
+    /// those parts need. A part read through its index after that is not
+    /// asked: one span of an index can need 16 MiB of the file, so a read
+    /// names the chunks of at most one indexed part's span, as a read of a
+    /// stream read through an index does.
     pub fn read(&self, at: u64, out: &mut [u8]) -> Result<(), ReadError> {
         let end = at + out.len() as u64;
         let mut pos = at;
+        let mut missing = Vec::new();
         while pos < end {
             let i = self.part_at(pos).ok_or(Refusal::Failed)?;
             let range = self.parts[i].0.clone();
             let take = (range.end.min(end) - pos) as usize;
             let from = pos - range.start;
             let to = (pos - at) as usize;
-            match &self.parts[i].1 {
-                JoinedBytes::Held(bytes) => out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]),
-                JoinedBytes::Indexed(index) => index.read(from, &mut out[to..to + take])?,
-                JoinedBytes::Packed { run, codec } => {
-                    let cached = lock(&self.cache).get(i);
-                    let bytes = match cached {
-                        Some(bytes) => bytes,
-                        None => {
-                            let bytes = Arc::new(crate::codec::decode(*codec, run)?);
-                            if bytes.len() as u64 != range.end - range.start {
-                                return Err(Refusal::Failed.into());
-                            }
-                            lock(&self.cache).put(i, bytes.clone());
-                            bytes
-                        }
-                    };
-                    out[to..to + take].copy_from_slice(&bytes[from as usize..from as usize + take]);
+            if !missing.is_empty() {
+                if !matches!(self.parts[i].1, JoinedBytes::Indexed(_)) {
+                    missing.extend(self.part_missing(i, from, take as u64));
+                }
+            } else {
+                match self.read_part(i, from, &mut out[to..to + take]) {
+                    Ok(()) => {}
+                    Err(ReadError::Missing(found)) => missing.extend(found),
+                    Err(refused) => return Err(refused),
                 }
             }
             pos += take as u64;
         }
-        Ok(())
+        if missing.is_empty() {
+            return Ok(());
+        }
+        missing.sort_unstable_by_key(|m| m.chunk);
+        missing.dedup();
+        Err(ReadError::Missing(missing))
+    }
+
+    /// Bytes `from..from + out.len()` of part `i`.
+    fn read_part(&self, i: usize, from: u64, out: &mut [u8]) -> Result<(), ReadError> {
+        match &self.parts[i].1 {
+            JoinedBytes::Stored(input) => Ok(input.read(from, out)?),
+            JoinedBytes::Indexed(index) => index.read(from, out),
+            JoinedBytes::Packed { input, codec } => {
+                let bytes = self.unpacked(i, input, *codec)?;
+                out.copy_from_slice(&bytes[from as usize..from as usize + out.len()]);
+                Ok(())
+            }
+        }
+    }
+
+    /// Everything packed part `i` unpacks to: from the cache, or read
+    /// through `input` and decoded now, and kept in the cache. The run is
+    /// read whole, in one read, and goes once it is decoded.
+    fn unpacked(&self, i: usize, input: &lazy::RunInput, codec: Codec) -> Result<Arc<Vec<u8>>, ReadError> {
+        let cached = lock(&self.cache).get(i);
+        if let Some(bytes) = cached {
+            return Ok(bytes);
+        }
+        let run = whole_run(input)?;
+        let bytes = Arc::new(crate::codec::decode(codec, &run)?);
+        let out = &self.parts[i].0;
+        if bytes.len() as u64 != out.end - out.start {
+            return Err(Refusal::Failed.into());
+        }
+        lock(&self.cache).put(i, bytes.clone());
+        Ok(bytes)
+    }
+
+    /// The chunks of the file a read of `len` bytes of part `i` from `from`
+    /// would name, found without decoding: those of a stored part's bytes,
+    /// of a packed part's whole run unless the part is in the cache, and
+    /// what a part's index says.
+    fn part_missing(&self, i: usize, from: u64, len: u64) -> Vec<Missing> {
+        match &self.parts[i].1 {
+            JoinedBytes::Stored(input) => input.missing(from as usize..(from + len) as usize),
+            JoinedBytes::Indexed(index) => index.missing(from, len),
+            JoinedBytes::Packed { input, .. } => {
+                let cached = lock(&self.cache).get(i).is_some();
+                match cached {
+                    true => Vec::new(),
+                    false => input.missing(0..input.len() as usize),
+                }
+            }
+        }
     }
 
     /// The chunks of the file a [`Joined::read`] of `len` bytes at `at` would
-    /// name, found without decoding: those of the first part read through
-    /// its index that is missing some. The other parts are held in memory.
+    /// name, found without decoding: those of every stored and packed part
+    /// the read covers, and those of the first part read through its index,
+    /// when no part before it is missing any. A part's index can name fewer
+    /// chunks than its read finds ([`Seekable::missing`]), so the parts read
+    /// through an index after the first are not asked, which keeps every
+    /// chunk named one that the read names.
     pub fn missing(&self, at: u64, len: u64) -> Vec<Missing> {
         let end = at.saturating_add(len).min(self.len);
         let mut pos = at;
+        let mut missing = Vec::new();
+        let mut asked_an_index = false;
         while pos < end {
             let Some(i) = self.part_at(pos) else { break };
             let range = self.parts[i].0.clone();
-            if let JoinedBytes::Indexed(index) = &self.parts[i].1 {
-                let found = index.missing(pos - range.start, range.end.min(end) - pos);
-                if !found.is_empty() {
-                    return found;
-                }
+            let indexed = matches!(self.parts[i].1, JoinedBytes::Indexed(_));
+            if !indexed || (missing.is_empty() && !asked_an_index) {
+                missing.extend(self.part_missing(i, pos - range.start, range.end.min(end) - pos));
             }
+            asked_an_index |= indexed;
             pos = range.end;
         }
-        Vec::new()
+        missing.sort_unstable_by_key(|m| m.chunk);
+        missing.dedup();
+        missing
     }
 
-    /// The trace of packed part `i`, decoded again with its trace on.
-    fn part_trace(&self, i: usize, run: &[u8], codec: Codec) -> Option<Arc<Trace>> {
+    /// How many bytes of the file the stream holds copies of: the stored
+    /// parts and packed runs no handle reached, and the runs the indexes
+    /// of packed parts copied. Nothing for a stream whose parts are all read
+    /// through handles.
+    #[cfg(test)]
+    pub(super) fn owned_bytes(&self) -> u64 {
+        let owned = |bytes: &JoinedBytes| match bytes {
+            JoinedBytes::Stored(input) | JoinedBytes::Packed { input, .. } => input.owned_bytes(),
+            JoinedBytes::Indexed(index) => index.input().owned_bytes(),
+        };
+        self.parts.iter().map(|(_, bytes)| owned(bytes)).sum()
+    }
+
+    /// The parts held decoded in the cache, and the most bytes it has held.
+    #[cfg(test)]
+    pub(super) fn cached(&self) -> (Vec<usize>, usize) {
+        let cache = lock(&self.cache);
+        (cache.held().0, cache.peak)
+    }
+
+    /// The trace of packed part `i`, decoded again with its trace on from
+    /// its run, read through `input`. Missing chunks as for
+    /// [`Joined::read`]; nothing when the decoder refuses the run.
+    fn part_trace(&self, i: usize, input: &lazy::RunInput, codec: Codec) -> Result<Option<Arc<Trace>>, Vec<Missing>> {
         if let Some((held, t)) = lock(&self.traced).as_ref() {
             if *held == i {
-                return Some(t.clone());
+                return Ok(Some(t.clone()));
             }
         }
-        let (_, t) = crate::codec::decode_traced(codec, run).ok()?;
+        let run = whole_run(input)?;
+        let Ok((_, t)) = crate::codec::decode_traced(codec, &run) else { return Ok(None) };
         let t = Arc::new(t);
         *lock(&self.traced) = Some((i, t.clone()));
-        Some(t)
+        Ok(Some(t))
     }
 
     /// A step of part `i` with its output moved to where the part is in the
@@ -625,19 +764,20 @@ impl Joined {
     }
 
     /// Which step of which part produced byte `byte`, as
-    /// [`Space::map_out`] gives it for a joined stream held whole. A part
-    /// read through its index may be missing chunks of the file, and the
-    /// error is those chunks.
+    /// [`Space::map_out`] gives it for a joined stream held whole. A packed
+    /// part's trace is made from its run, which may be missing chunks of the
+    /// file, and the error is those chunks. A stored part's step needs none
+    /// of its bytes.
     pub fn map_out(&self, byte: u64) -> Result<Option<Step>, Vec<Missing>> {
         let Some(i) = self.part_at(byte) else { return Ok(None) };
         let (range, bytes) = &self.parts[i];
         let at = byte - range.start;
         let step = match bytes {
-            JoinedBytes::Held(_) => {
+            JoinedBytes::Stored(_) => {
                 Some(Step { in_bits: 0..(range.end - range.start) * 8, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })
             }
             JoinedBytes::Indexed(index) => index.map_out(at)?,
-            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec).and_then(|t| t.map_out(at)),
+            JoinedBytes::Packed { input, codec } => self.part_trace(i, input, *codec)?.and_then(|t| t.map_out(at)),
         };
         Ok(step.map(|step| self.shifted(i, step)))
     }
@@ -647,15 +787,26 @@ impl Joined {
     pub fn map_in(&self, i: usize, bit: u64) -> Result<Option<Step>, Vec<Missing>> {
         let Some((range, bytes)) = self.parts.get(i) else { return Ok(None) };
         let step = match bytes {
-            JoinedBytes::Held(_) => {
+            JoinedBytes::Stored(_) => {
                 let bits = (range.end - range.start) * 8;
                 (bit < bits).then(|| Step { in_bits: 0..bits, out_bytes: 0..range.end - range.start, kind: StepKind::Stored })
             }
             JoinedBytes::Indexed(index) => index.map_in(bit)?,
-            JoinedBytes::Packed { run, codec } => self.part_trace(i, run, *codec).and_then(|t| t.map_in(bit)),
+            JoinedBytes::Packed { input, codec } => self.part_trace(i, input, *codec)?.and_then(|t| t.map_in(bit)),
         };
         Ok(step.map(|step| self.shifted(i, step)))
     }
+}
+
+/// The whole of the run `input` reads, in one read: the copy itself, for an
+/// input that holds one.
+fn whole_run(input: &lazy::RunInput) -> Result<std::borrow::Cow<'_, [u8]>, Vec<Missing>> {
+    if let Some(copy) = input.held_copy() {
+        return Ok(std::borrow::Cow::Borrowed(copy.as_slice()));
+    }
+    let mut run = vec![0u8; input.len() as usize];
+    input.read(0, &mut run)?;
+    Ok(std::borrow::Cow::Owned(run))
 }
 
 /// A step of a joined stream's trace with its bits counted from the start of
@@ -1244,6 +1395,11 @@ pub(super) struct Spaces {
     /// a test that wants to see a part is not decoded twice.
     #[cfg(test)]
     pub(super) decodes: std::cell::Cell<u32>,
+    /// How many walks joining a stitched stream to open as a document of its
+    /// own have been started, for a test that wants to see a stream is not
+    /// joined twice.
+    #[cfg(test)]
+    pub(super) walks: std::cell::Cell<u32>,
     /// Deflate streams being measured to find where they end, and the ends
     /// found.
     measures: Measures,
@@ -1277,6 +1433,8 @@ impl Default for Spaces {
             passes: Default::default(),
             #[cfg(test)]
             decodes: Default::default(),
+            #[cfg(test)]
+            walks: Default::default(),
             measures: Default::default(),
             stamps: Default::default(),
             gathers: Default::default(),
@@ -1388,6 +1546,13 @@ impl Spaces {
     #[cfg(test)]
     pub(super) fn set_cache_cap(&mut self, bytes: usize) {
         self.cache_cap = bytes;
+    }
+
+    /// How many unpacked bytes a stitched space, or a joined stream read a
+    /// part at a time, keeps: [`STITCH_CACHE_BYTES`] unless a test said
+    /// otherwise.
+    pub(super) fn cache_cap(&self) -> usize {
+        self.cache_cap
     }
 
     /// The most a stitched stream may come to and still open as a document of

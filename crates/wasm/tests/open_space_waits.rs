@@ -619,6 +619,55 @@ fn a_joined_stream_whose_parts_come_to_more_than_the_store_opens() {
     assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
 }
 
+/// The same blocks, past a lowered cap on a joined stream held whole, so
+/// that the stream opens read a part at a time. Each block's run is read
+/// through the store when the block is read, and none is copied, so the
+/// cap on what a joined stream copies, which these runs come to more than,
+/// does not refuse it. The walk that checks each block's length says how
+/// far it has got on its "pending" replies as on its "working" ones. Each
+/// read of the tab names the chunks of every block it reaches, and gives the
+/// blocks' bytes once they are fed, near the front, the middle and the end,
+/// and across many blocks at once.
+#[test]
+fn a_joined_stream_past_the_cap_reads_its_blocks_through_the_store() {
+    let pieces: Vec<Vec<u8>> = (0..140).map(|i| lines(2_000 + i)).collect();
+    let mut file: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
+    file.extend_from_slice(&BGZF_EOF);
+    assert!(file.len() > 3 * 16 * CHUNK, "{} bytes is too few for a store of 16 chunks", file.len());
+    assert!(file.len() > 4 * WHOLE_CAP, "{} bytes of runs would fit under the cap", file.len());
+    let joined = pieces.concat();
+    let mut ed = unfed(&file, 16, "bgzf");
+    ed.set_stream_limits(Limits::default(), WHOLE_CAP);
+    let mut feeder = Feeder::new(&file);
+    // The waits that said how far the walk had got, and those after the
+    // first of them that did not. The waits for the blocks' headers, which
+    // say where each run is, come before the walk and say nothing.
+    let (mut said, mut silent) = (0, 0);
+    let reply = feeder.ask(&mut ed, |ed| {
+        let reply = ed.open_space(0, &[1]);
+        if parse(&reply)["status"] == "pending" {
+            match parse(&ed.unpacking(0))["node"].is_object() {
+                true => said += 1,
+                false if said > 0 => silent += 1,
+                false => {}
+            }
+        }
+        reply
+    });
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), joined.len() as f64);
+    assert!(said > 0 && silent == 0, "{said} waits said how far the walk had got, and {silent} after them did not");
+    for at in [joined.len() / 2, 0, joined.len() - 100, joined.len() / 3] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == joined[at..at + 100], "100 bytes at {at} differ");
+    }
+    let at = joined.len() / 4;
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, 300 << 10) == joined[at..at + (300 << 10)], "300 KiB at {at} differ");
+    assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
+    // A window of the file is 4 chunks, and the run a walk waits on may
+    // straddle it.
+    assert!(feeder.widest <= 6, "a reply named {} chunks", feeder.widest);
+}
+
 /// Bits in the order deflate packs them, from the low bit of each byte up.
 #[derive(Default)]
 struct Bits {
@@ -1351,4 +1400,43 @@ fn a_gzip_member_and_a_zip_entry_past_64_mib_open_end_to_end() {
     let content = noise(65 << 20);
     a_gzip_member_opens(&content, 64, None);
     a_zip_entry_opens(&content, 64, None);
+}
+
+/// A BGZF block of `data`, its deflate stored blocks, which cost nothing to
+/// write or to inflate.
+fn bgzf_stored_block(data: &[u8]) -> Vec<u8> {
+    let deflated = stored_blocks(data);
+    let total = 12 + 6 + deflated.len() + 8;
+    let mut v = vec![0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, b'B', b'C', 2, 0];
+    v.extend_from_slice(&((total - 1) as u16).to_le_bytes());
+    v.extend_from_slice(&deflated);
+    v.extend_from_slice(&crc32(data).to_le_bytes());
+    v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    v
+}
+
+/// A BGZF file of 66 MiB of noise in blocks of 65,280 bytes, the size
+/// samtools writes, under the default limits: past the 64 MiB a joined
+/// stream may be held whole, and its runs past the 64 MiB a joined stream
+/// read a part at a time could copy before part 10. It opens from a store
+/// of 4 MiB, its blocks read through the store, and its tab reads the right
+/// bytes. Run on purpose, as the test before it is:
+/// `cargo test -p qubero-wasm --test open_space_waits -- --ignored`.
+#[test]
+#[ignore]
+fn a_joined_stream_past_64_mib_compressed_opens_end_to_end() {
+    let content = noise(66 << 20);
+    let mut file: Vec<u8> = content.chunks(65_280).flat_map(bgzf_stored_block).collect();
+    file.extend_from_slice(&BGZF_EOF);
+    let mut ed = unfed(&file, 64, "bgzf");
+    let mut feeder = Feeder::new(&file);
+    let reply = feeder.ask(&mut ed, |ed| ed.open_space(0, &[1]));
+    let tab = reply["node"]["space"].as_f64().unwrap_or_else(|| panic!("no tab: {reply}")) as u32;
+    assert_eq!(ed.len_bytes(tab), content.len() as f64);
+    for at in [content.len() / 2, 0, content.len() - 100, content.len() / 3] {
+        assert!(tab_bytes_fed(&mut ed, &file, tab, at, 100) == content[at..at + 100], "100 bytes at {at} differ");
+    }
+    let at = content.len() / 4;
+    assert!(tab_bytes_fed(&mut ed, &file, tab, at, 1 << 20) == content[at..at + (1 << 20)], "1 MiB at {at} differ");
+    assert!(feeder.most_times() <= 3, "{:?}", feeder.times);
 }

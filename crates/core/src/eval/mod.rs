@@ -849,6 +849,14 @@ pub struct Evaluator {
     /// one number and this says which one it means. A slot is taken out while
     /// something is being asked of it, which is why they are options.
     open: Vec<Option<Box<space::Space>>>,
+    /// A stream [`Evaluator::open_space`] unpacked and could not open yet,
+    /// because the bytes it looks at to see what they are were not loaded,
+    /// kept by the space and path it was asked for until the next call for
+    /// the same stream takes it. A joined stream is joined by a walk over
+    /// every part, which would otherwise be made again, and a walk over
+    /// more of the file than the store keeps pushes out the very bytes it
+    /// waited for.
+    unopened: Option<(SpaceId, Vec<usize>, Unpacked)>,
     /// The types [`Ty::Schema`] nodes were built as, by kind and key, and the
     /// builds under way. See [`schema`].
     schemas: schema::Schemas,
@@ -934,6 +942,7 @@ impl Evaluator {
             positions: std::cell::RefCell::default(),
             spaces: space::Spaces::default(),
             open: Vec::new(),
+            unopened: None,
             schemas: schema::Schemas::default(),
             lining: false,
             problems: problems::Tally::default(),
@@ -1099,6 +1108,7 @@ impl Evaluator {
             // stream that is gone opens it again, which is one inflate.
             self.open.clear();
         }
+        self.unopened = None;
         self.memo.forget_after(bit);
         // A value read again may not be the value it was, so the running count
         // of wrong ones starts over rather than keeping a verdict on bytes
@@ -1119,6 +1129,7 @@ impl Evaluator {
         self.placed.forget();
         self.spaces.forget();
         self.open.clear();
+        self.unopened = None;
         self.problems.forget();
         self.sums.clear();
         self.journals.clear();
@@ -2882,9 +2893,11 @@ impl Evaluator {
             },
         };
         let at = [within.root.as_slice(), path].concat();
-        let unpacked = match within.reading {
-            0 => self.unpack(doc, &at)?,
-            id => {
+        let kept = self.unopened.take_if(|(s, p, _)| *s == space && p == path).map(|(_, _, unpacked)| unpacked);
+        let unpacked = match (kept, within.reading) {
+            (Some(kept), _) => Some(kept),
+            (None, 0) => self.unpack(doc, &at)?,
+            (None, id) => {
                 let mut held = self.take(id).expect("a space that was just there");
                 let got = match held.reading() {
                     Some((ev, sub)) => ev.unpack(sub, &at),
@@ -2894,8 +2907,17 @@ impl Evaluator {
                 got?
             }
         };
-        let Some(Unpacked { source, trace, codec, inner, runs, run }) = unpacked else { return Ok(None) };
-        let (template, recognised) = self.template_for(&inner, &source)?;
+        let Some(unpacked) = unpacked else { return Ok(None) };
+        let (template, recognised) = match self.template_for(&unpacked.inner, &unpacked.source) {
+            Ok(found) => found,
+            Err(e) => {
+                if e.interrupted() {
+                    self.unopened = Some((space, path.to_vec(), unpacked));
+                }
+                return Err(e);
+            }
+        };
+        let Unpacked { source, trace, codec, runs, run, .. } = unpacked;
         // A template the stream declared reads the stream where it was
         // declared, under the node that holds what the stream opened to. One
         // that came from looking at the bytes needs nothing outside them.
@@ -2924,10 +2946,11 @@ impl Evaluator {
         // A stream joined from parts is read a part at a time where it is
         // declared, and held whole only here, when it is to be a document of
         // its own. Past the cap a decoded stream has, it is read a part at a
-        // time here too, from copies of what its parts are read from, and
-        // refused when those are past the cap. It still reads a part at a
-        // time in the listing either way, so the refusal is kept apart from
-        // the stream's own opening.
+        // time here too, each part through a handle onto where its bytes are,
+        // or from a copy where no handle reaches them, and refused when the
+        // copies come to more than the cap. It still reads a part at a time
+        // in the listing either way, so the refusal is kept apart from the
+        // stream's own opening.
         if let Ty::Stitched { inner, .. } = self.memo[path].ty.clone() {
             return Ok(match self.join_whole(doc, path)? {
                 Ok(stitch::Joining::Whole(whole)) => Some(Unpacked {
@@ -3024,14 +3047,17 @@ impl Evaluator {
     /// something more than "bytes" is believed: a ROOT record's object is an
     /// object whatever a sniffer would make of the first four bytes of it.
     ///
-    /// The bytes looked at are the stream's first 36 KiB. A stream read
-    /// through an index may find chunks of the file its run is in missing,
-    /// and then this answers `Pending` with them rather than look at zeroes.
-    /// A stream the decoder refuses is looked at as zeroes, as before.
+    /// The bytes looked at are the stream's first 36 KiB, or as many as one
+    /// read of the stream may ask for when that is less
+    /// ([`Source::resident_limit`]), which only a test's small store makes
+    /// it. A stream read through an index or through handles onto the file
+    /// may find chunks of the file missing, and then this answers `Pending`
+    /// with them rather than look at zeroes. A stream the decoder refuses is
+    /// looked at as zeroes, as before.
     fn template_for(&self, inner: &Ty, source: &space::SpaceSource) -> R<(Template, bool)> {
         if says_only_bytes(inner) {
             let len = source.len_bytes();
-            let mut head = vec![0u8; len.min(0x9000) as usize];
+            let mut head = vec![0u8; len.min(0x9000).min(source.resident_limit().unwrap_or(u64::MAX)) as usize];
             if let Err(crate::codec::lazy::ReadError::Missing(missing)) = source.read(0, &mut head) {
                 return Err(EvalError::Pending(missing));
             }
