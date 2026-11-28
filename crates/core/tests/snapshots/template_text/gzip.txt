@@ -36,3 +36,46 @@ root Gzip {
     text: text[remaining] utf8
   }
 }
+
+decoder deflate {
+  blocks: traced blocks {
+    block: repeat(any number) traced block {
+      bfinal: width(fixed) computed enum DeflateFinal {
+        0 = more blocks follow, 1 = the last block
+      }
+      btype: width(fixed) computed enum DeflateBlockType {
+        0 = stored, 1 = fixed Huffman, 2 = dynamic Huffman, 3 = reserved
+      }
+      hlit: computed
+      hdist: computed
+      hclen: computed
+      code_length_code_length: repeat(any number) computed
+      code_length: repeat(any number) computed
+      distance_code_length: repeat(any number) computed
+      code_length_repeat: repeat(any number) computed
+      code_length_zeros: repeat(any number) computed
+      padding: computed
+      stored_len: computed
+      stored_nlen: computed
+      codes: traced symbols {
+        stored_data: Symbol {
+          kind: computed 3 enum SymbolKind {
+            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+            6 = padding, 7 = base64 group, 8 = ignored
+          }
+          length: computed
+        }
+        literal: repeat(any number) codebits Huffman code (fixed or table)
+        match: repeat(any number) codebits length and distance codes (encoded)
+        end_of_block: codebits Huffman code (fixed or table)
+        unnamed_codes: Symbol {
+          kind: computed 4 enum SymbolKind {
+            0 = literal, 1 = match, 2 = end of block, 3 = stored, 4 = not named, 5 = pixel,
+            6 = padding, 7 = base64 group, 8 = ignored
+          }
+          length: computed
+        }
+      }
+    }
+  }
+}
