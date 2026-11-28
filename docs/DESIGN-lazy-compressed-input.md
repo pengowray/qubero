@@ -972,7 +972,8 @@ for ever, since both joins start again from the first part on every
   `Evaluator::unpacking`. The alternative is to drop this check and rely on
   the check `Joined::read` already makes when it first decodes a part. That
   is cheaper, but the tab would open over a part of the wrong length and show
-  zeroes there.
+  zeroes there. Since "Faster opening of joined streams" the walk does not
+  make the check, and a read of such a part fails and says why.
 - `unpacked_part` reads a packed part whole through `unpack_run`. For a codec
   that can be indexed, `unpacked_part` calls `index_run` instead, which steps;
   for any other codec, `unpack_run`'s read is gathered.
@@ -2465,14 +2466,241 @@ code differs from "Joined streams":
   `MemSource` it is
   refused as too large before and after.
 
+### Faster opening of joined streams
+
+**Built on 2026-11-28, after part 10.** A joined stream read a part at a
+time now opens without unpacking any of its parts. Each packed part is
+checked when a read first unpacks it, and a part that fails the check makes
+every read of its bytes fail, with the reason shown to the reader.
+
+**Where the time went.** Measured with `examples/joined_timing.rs`, which now
+times the walk to the stream's parts apart from the rest of the open, on a
+BAM made with `examples/big_bam.rs` from `mpileup.1.bam`: 314,588,858 bytes
+of BAM in 95,790,072 bytes of file and 4,821 blocks. The build was release
+with LTO off and 16 codegen units, pinned to one core, and the file was read
+through a chunk store with room for all of it. The load average was 17 to 25
+on 12 cores. Before this change the open took 3.4 to 4.7 s:
+
+- The walk to the parts (`open_stitched_at`, which reads every block's
+  header and trailer): about 0.3 s, 8 to 10% of the open.
+- The rest, 3.3 to 3.6 s, was `join_lazily`'s length check: each block's run
+  read and decoded with `codec::decode`, which runs the traced inflate and
+  throws the trace away. Decoding every block's run on its own, outside the
+  evaluator, took 3.8 s. Copying the runs took 12 ms. `template_for` reads
+  nothing for a BGZF stream, whose template declares what the stream holds.
+  So the check was about 90% of the open.
+- For comparison, `inflate_len`, which counts the output and keeps none,
+  took 2.8 s over the same runs, and `miniz_oxide` took 0.8 s.
+
+**The rule now.** A packed part small enough to decode whole is not decoded
+before the stream opens. Its length is the one the file gives for it, which
+`reach_part` already used to lay the stream out: for a BGZF block or a gzip
+member, `original_size`, the trailer's ISIZE. The first read that unpacks the
+part checks it, in `Joined::unpacked`. A part that will not unpack, or
+unpacks to another length than the file says, is kept in `Joined::troubles`
+with the reason, as `Stitch::troubles` keeps one for the listing, and is not
+decoded again. Its bytes read as zeroes and every read that covers them is
+refused. Nothing after it moves, since the stream was laid out from the
+lengths the file gives: a part of the wrong length never shifts the bytes
+after it, and its own bytes are never shown as bytes.
+
+How the reader is told, by each path that reads a tab's bytes:
+
+- `Joined::read` reads past a part in trouble. It fills that part's bytes
+  with zeroes, reads the parts after it, and fails as refused. Missing chunks
+  still come first. `SpaceSource::read` keeps the other parts' bytes rather
+  than zeroing the whole read, as it still does for a stream read through an
+  index.
+- `Source` has two new methods with defaults, `may_be_unreadable` and
+  `unreadable`, which `SpaceSource`, `ChunkStore` (for the source behind it),
+  `Document`, `&S` and `Arc<S>` pass on. `unreadable(offset, len)` names the
+  first part in trouble among the bytes asked about: where its bytes are, and
+  why. It decodes nothing, since the read before it found the part out.
+  `Document::unreadable_bits` maps it through the piece table.
+- `read_in` on a document whose source may be unreadable (`#[cold]`
+  `read_or_unreadable`) fails with the reason instead of handing back the
+  zeroes. That is the reading of a tab whose stream was recognised, such as
+  a .gz of many members holding a gzip or a tar, over its own bytes. Every
+  other document says `false` and pays one call per read.
+- `template_for` looks only at the bytes before the first part in trouble
+  when it recognises a stream from its first 36 KiB. A stream whose first
+  part fails opens as the bytes it declares.
+- `Evaluator::unreadable(space, at, len)` says the same with the part named
+  as the listing names it, through the stitched space at the stream's path.
+  The words are the ones a read of the part in the listing has, built by the
+  new `trouble_said`, which `part_trouble` now uses too:
+  `blocks[50].compressed unpacks to 2098 bytes, not the 2099 the file says`
+  and `blocks[50].compressed could not be unpacked`. Where the stitched
+  space cannot say, the part is named `part index 50`, the fallback
+  `part_label` already had.
+- `Joined::map_out` and `map_in` give no step for a byte of a part in
+  trouble, and the trace they make of a part checks its length too.
+- The wasm has `Editor::unreadable(space, at, len)`, which answers
+  `{status:"ok",node:{at,len,why}}` or a null node. `search_step` steps past a
+  match on unreadable bytes. `read_bytes` and `read_bits` are unchanged.
+- The web's `Doc.read` and `readBits` ask `unreadable` after a read of a
+  joined tab that found no chunk missing, and give `unreadable` in the
+  `ReadResult`, with `complete` false. `readLoaded` stops at the first piece
+  with unreadable bytes and names them. The hex view draws those bytes as
+  `??`, muted, with the reason on hover, and a copy that reaches them says
+  `Couldn't copy: {reason}.`
+
+What did not change:
+
+- A joined stream held whole, up to `whole_cap` (64 MiB of output), still
+  decodes every part with its trace before it opens, and a part that will
+  not unpack, or unpacks to another length, refuses it, as before. So there
+  are two rules by size: held whole, a bad part refuses the stream when it
+  opens; read a part at a time, it fails the reads that reach it.
+- A packed part too large to decode whole is still read through an index
+  whose pass runs in the walk and checks the part's length.
+- A packed part that no handle reaches is still copied by the walk, and the
+  copy is not decoded. A part read through a handle is charged one element,
+  as a stored part is, and `probe_parts` skips it, so the walk asks for no
+  chunk of it. In the browser the open waits only for the chunks that hold
+  the blocks' headers and trailers, and since the walk reads no run, no
+  "pending" reply says how far unpacking has got.
+
+**Why this, and not the alternatives.**
+
+- Check after the tab opens, in goes in the background. A reader can read a
+  part before the check gets to it, so every read would still need the check
+  and the failure this change adds. On top of that it would cost the whole
+  inflate again, about a minute in the browser for this file, competing with
+  the reader's own reads, to find parts that no read has reached.
+- A sampled check, of the first, the last and some parts between. It
+  guarantees nothing for the parts it skips, so the read would still need
+  the check and the failure.
+- Check only the parts under a read. This is the one built: a read unpacks
+  the part anyway, so the check costs one length comparison per part, and
+  nothing when the stream opens.
+- A faster inflater for the check, such as `miniz_oxide`, at about a fifth of
+  the time. The bytes a reader sees would then come from one decoder and the
+  check from another, which `codec::decode` exists to avoid, and the open
+  would still be one inflate of the whole stream.
+
+**CRC-32 is not checked.** A part that inflates to its stated length with
+the wrong bytes reads as those bytes, as it did before this change: the old
+check compared lengths only. The file's own listing has the CRC-32 check on
+each block's `crc32` field. Checking it here would need `Ty::Stitched` to
+name each part's checksum field, beside `part_len`, and would add a CRC-32 of
+each part to its first read: the table-driven `crc32` reads about 0.5 GB/s
+here, about a fifth more on top of the inflate. See "Still to do".
+
+**Time before and after.** `joined_timing` on the same BAM, before and
+after by turns, three tries a run, three runs each, with the load average
+at 21 to 24. The fastest try of each run; the binary from before this change
+does not split the open.
+
+| Run | Open, before | Open, after | Walk to the parts, after | Rest of the open, after | Read end to end, before | Read end to end, after |
+|---|---|---|---|---|---|---|
+| 1 | 4,707 ms | 215 ms | 213 ms | 1.8 ms | 4,465 ms | 3,509 ms |
+| 2 | 3,770 ms | 251 ms | 250 ms | 1.3 ms | 3,644 ms | 3,782 ms |
+| 3 | 3,586 ms | 205 ms | 204 ms | 1.2 ms | 3,465 ms | 3,528 ms |
+
+An earlier set of three runs, with the load at 17 to 25, gave 3,401 to
+3,854 ms before and 221 to 391 ms after. Timed apart by a throwaway example,
+before the change the walk took 0.35 to 0.7 s and the rest of `open_space`
+4.7 to 4.8 s. Reading the whole stream after opening is the same work before
+and after, since each block is decoded by the first read that reaches it in
+both. The heap the opened stream holds is the same, 57.5 MB.
+
+**In the browser.** The same BAM with block 2's trailer one byte long and
+block 3000's deflate damaged, served by the dev server from the worktree's
+own wasm build: from loading the page, the file was open at 1.3 s, Open
+joined stream was offered at 4.7 s, once the walk to the parts had loaded
+every chunk of the file, and the tab opened 0.19 s after the press. Pressed
+again on a page where the walk had already run, the tab opened in 0.75 s.
+Part 10 reported 61 s for the press before this change; that was not
+measured again here.
+
+**What a reader sees for a damaged part.** In a BAM's tab, the listing's run
+of records stops where the bad block begins, with
+`blocks[2].compressed unpacks to 65280 bytes, not the 65281 the file says`,
+as it did in the file's own tab before. The hex view shows the block's bytes
+as `??`, or `????????` in binary, with the same words on hover, and the
+bytes either side as they are: in the browser, the last `??` is at
+`0x2fd00` and the next block's bytes start at `0x2fd01`, where its trailer
+says. A copy of a selection that reaches the block says
+`Couldn't copy: blocks[3000].compressed could not be unpacked.` A search
+steps past it. Before, the tab would not open, and Open unpacked said it
+was refused as failed.
+
+**What still reads the zeroes.** The text view (`text_window`, `text_index`
+and `text_back` in the wasm) and the inspector's reading of a selection as
+text read a tab's document through `Source::read_bytes` and show the zeroes
+as text, and so does any other wasm call that reads a tab's bytes without
+asking `unreadable`: the strings scan, the byte census and the disassembly.
+A .vcf.gz is read in the text view, so that one matters most. See "Still to
+do".
+
+**Tests.**
+
+- `eval/tests/resident.rs`:
+  `opening_a_joined_stream_of_many_blocks_unpacks_none_of_them` counts
+  decodes, through a counter in `codec::decode_traced` that every deflate
+  decode passes, while a stream of 100 blocks opens from the store and from
+  copies: none, where the old walk made 101. A read of one block then makes
+  one, and a read of it again none.
+  `a_bgzf_block_that_lies_about_its_length_or_is_damaged_fails_where_it_is_read`
+  spoils block 50 of 100 with a trailer one byte long and, separately, with a
+  deflate block type that does not exist. The stream opens; a read across
+  blocks 49 to 51 is refused, gives the bytes of 49 and 51 and zeroes for 50,
+  and decodes block 50 once in three reads; `unreadable` names block 50's
+  bytes in the listing's words, and `part index 50` without the stitched
+  space; reads elsewhere are not touched; a byte of block 50 maps to no step.
+  `a_tab_reading_its_own_fields_fails_where_a_member_will_not_unpack` reads a
+  recognised gzip inside a .gz of members, through the tab's own reading,
+  and a read across the bad member fails with the reason; with the first
+  member bad, the stream opens unrecognised. The spoiled-trailer case of
+  `a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles`, which
+  expected the stream to be refused, moved into the second test.
+- `eval/stitch.rs`:
+  `a_joined_stream_past_the_cap_with_a_part_that_will_not_unpack_refuses_reads_of_that_part`
+  does the same over handles with no limit, for a BAM of three blocks.
+  `a_joined_stream_with_a_part_that_will_not_unpack_is_refused_as_a_document`
+  still holds for a stream held whole.
+- `crates/wasm/tests/open_space_waits.rs`:
+  `a_joined_stream_past_the_cap_reads_its_blocks_through_the_store` now
+  expects no "pending" reply to say how far unpacking has got, where it
+  expected some.
+  `a_joined_stream_with_a_block_that_lies_about_its_length_says_which_bytes_will_not_read`
+  opens 140 blocks with block 70 one byte long, reads around it through the
+  store, checks what `unreadable` says, and searches for zeroes forward and
+  backward and finds none.
+- `web/test/hexcell.test.ts` draws an unreadable byte as `??` in hex, and
+  `web/test/chunkwait.test.ts` has `readInPieces` stop at a piece with
+  unreadable bytes and name them.
+
 ## Still to do
 
-- **The time a joined stream takes to open.** Over handles, nothing but
-  time limits a joined stream read a part at a time any more: the walk
-  that checks each packed part's length decodes every part once, charged
-  per part across goes, so a BAM of 4 GiB of output is 4 GiB of inflate
-  before its tab opens. Memory stays bounded, and no refusal was added for
-  it. See the answered question in "Open questions".
+- **The time a joined stream takes to open.** Since "Faster opening of
+  joined streams" no part is unpacked to open a stream read a part at a
+  time. What is left is the walk to the parts, which reads every block's
+  header and trailer: about 0.3 s natively for a BAM of 4,821 blocks, and in
+  the browser it loads every chunk of the file, 96 MB for that BAM, before
+  the tab opens. A BAI, CSI or GZI index beside the file names where the
+  blocks are, and could stand in for reading them. Not measured in the
+  browser after this change.
+- **The text view and the other readers of a joined tab.** The text view,
+  the inspector's text of a selection, the strings scan, the byte census and
+  the disassembly read a joined tab's bytes without asking `unreadable`, so a
+  part that will not unpack shows there as zeroes. Each could ask, as
+  `search_step` does, and mark or skip those bytes. The text view needs a
+  way to show a line it cannot read, which it has none of yet.
+- **The CRC-32 of a part when it is first read.** A part that inflates to
+  the length its trailer says with the wrong bytes reads as those bytes.
+  `Ty::Stitched` could name each part's checksum field beside `part_len`, a
+  BGZF block's `crc32`, and `Joined::unpacked` and `unpacked_part` compare it
+  when they first decode the part, as they compare its length. It costs a
+  CRC-32 of each part on its first read, about a fifth on top of the inflate
+  with the table-driven `crc32`.
+- **The listing and the tab decode the same parts twice.** A BAM's tab reads
+  its records through the stitched space's cache (`Stitch::cache`) and its
+  bytes through the joined stream's (`Joined::cache`), so a part on screen
+  in both is decoded once for each, and a part in trouble is found once by
+  each. One cache, and one record of the parts in trouble, shared by the two
+  would halve that.
 - **A joined stream's limit on one read is set by its worst part.**
   `handle_limit` takes the largest ratio of run to output over every packed
   part read through a handle, so one short part that packs badly lowers the
@@ -2559,6 +2787,16 @@ code differs from "Joined streams":
   as before. Without the check, the tab would open over that part and show
   zeroes there, since `Joined::read` refuses the part and a refused read of
   a space reads as zeroes with no chunks named.
+  **Answered again, after part 10: a failed read, when the part is read.**
+  The check was about 90% of the time a BAM of 300 MiB took to open, so the
+  walk no longer makes it. The reason it stayed, zeroes shown for the part,
+  is answered by making the zeroes say what they are: the read is refused,
+  `Source::unreadable` and `Evaluator::unreadable` name the part's bytes and
+  why, a tab's own reading fails with those words, and the hex view shows
+  the bytes as `??` with the words on hover. A part of the wrong length never
+  shifts the bytes after it, since the stream is laid out from the lengths
+  the file gives. A stream held whole still refuses a bad part when it
+  opens. See "Faster opening of joined streams".
 - Should gathering report a percentage, and with what string?
 
 ## What was checked
