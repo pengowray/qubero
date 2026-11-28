@@ -603,6 +603,15 @@ export class TemplatePanel {
 
   private hover(kind: number): void {
     if (kind === this.hovered) return;
+    // The kind line the strip is about gets the hover frame, also when the
+    // pointer is on one of its record's lines, so the strip names a line
+    // that is marked on screen.
+    const line = (k: number): HTMLElement | undefined => {
+      const at = this.kindLines[k]?.line;
+      return at === undefined ? undefined : this.lineEls[at];
+    };
+    line(this.hovered)?.classList.remove("is-hover");
+    line(kind)?.classList.add("is-hover");
     this.hovered = kind;
     this.showDetail();
   }

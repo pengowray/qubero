@@ -1420,7 +1420,11 @@ button.welcome-crystal {
 .tp-line.is-field {
   cursor: pointer;
 }
-.tp-line.is-field:not(.is-at):hover {
+.tp-line.is-field:not(.is-at):hover,
+/* The decoder kind line the strip under the text shows while the mouse is on
+   it or on its record's lines: the same frame, without the pointer cursor,
+   since the line is not a link. */
+.tp-line.is-hover:not(.is-at) {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 40%, transparent);
 }
 /* A click that found no such field in the file: the line's fill flashes once
