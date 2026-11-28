@@ -93,9 +93,11 @@ fn laid_out(l: xz::Layout, input: &RunInput, limits: Limits) -> Result<Decoded, 
 /// How many block headers one step of an [`XzPass`] reads at most. The
 /// chunks those headers are missing are all named in one answer of
 /// [`Stepped::NeedsInput`], so in the browser a stream of a thousand blocks
-/// spread over 300 MiB loads its headers in about 20 rounds, not a thousand.
-/// The span of the stream one step's headers cover is also bounded: see
-/// [`XzPass`].
+/// spread over 300 MiB loads its headers in about 20 rounds, not a thousand:
+/// 64 headers a step would be 16 rounds, but one step's headers also lie
+/// within half of what the store keeps, 16 MiB, of each other, which at
+/// 0.3 MiB a block is about 53 headers, so 19 rounds, and one more for the
+/// stream's ends. See [`XzPass`].
 const HEADERS_PER_STEP: usize = 64;
 
 /// How many times [`Limits::step_input`] one step reads, at most, when the

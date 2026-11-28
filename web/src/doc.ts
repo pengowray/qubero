@@ -2721,12 +2721,13 @@ export class Doc {
    * a part that will not unpack is found by the first read of its bytes: see
    * `ReadResult.unreadable`.
    *
-   * A large deflate stream is unpacked over several calls, a go at a time, so
-   * that the page keeps drawing. Until it is done this comes back as how far
-   * it has got, and the caller asks again. A stream whose compressed bytes
-   * are not all loaded yet comes back as the chunks of the file it waits on,
-   * which are already being read: see `fileChunks`. Null when there was no
-   * answer.
+   * A large deflate, zlib, gzip, zstd or xz stream is unpacked over several
+   * calls, a go at a time, so that the page keeps drawing. Until it is done
+   * this comes back as how far it has got, and the caller asks again. A call
+   * that waits on chunks of the file comes back as those chunks, which are
+   * already being read (see `fileChunks`), with how far the pass has got
+   * when a pass reading its run a window at a time is what waits. Null when
+   * there was no answer.
    */
   openSpace(
     path: readonly number[],

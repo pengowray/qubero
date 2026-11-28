@@ -557,8 +557,10 @@ enum Start {
         /// A copy of that header and its tables: the bytes of the run from
         /// the one `block` is in, [`MAX_HEAD_BYTES`] of them or to the run's
         /// end. So a decode starting here reads only the run from here on,
-        /// however far back the block starts. Made when the pass finishes,
-        /// for the checkpoints it keeps; nothing until then.
+        /// however far back the block starts. Made by the step that takes
+        /// the checkpoint, from the step's window or from the copy the pass
+        /// already holds for the block (`DeflatePass::copy_heads`), so a
+        /// checkpoint can be without one only until its step ends.
         ///
         /// [`MAX_HEAD_BYTES`]: crate::codec::inflate::MAX_HEAD_BYTES
         head: Option<Arc<[u8]>>,
