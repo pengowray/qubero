@@ -845,11 +845,15 @@ export const UNPACKED = {
    *  words are always the ones for compression. An xz stream is not
    *  unpacked a go at a time, though: one past 64 MiB unpacked is laid out
    *  from its index and block headers, and one that fits is copied a piece
-   *  at a time and then unpacked in a single go. So for xz `size` stays at
-   *  0 B while `percent` moves, and a stream that fits reaches 100% before
-   *  it is unpacked. */
-  unpacking: (field: string, percent: string, size: string): string =>
-    `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
+   *  at a time and then unpacked in a single go. So for xz nothing is
+   *  unpacked while `percent` moves, and a stream that fits reaches 100%
+   *  before it is unpacked. `size` is left out while nothing has been
+   *  unpacked, rather than saying "0 B unpacked so far" for the whole of an
+   *  xz stream's wait. */
+  unpacking: (field: string, percent: string, size: string | null): string =>
+    size === null
+      ? `Unpacking ${field}… ${percent} through the compressed data. A new tab opens when unpacking finishes.`
+      : `Unpacking ${field}… ${percent} through the compressed data, ${size} unpacked so far. A new tab opens when unpacking finishes.`,
   /** In the status bar after Open unpacked, or Open joined stream, was
    *  pressed on a stream whose bytes have not been read from the file yet.
    *  They are read and the tab opens without a second press; a large stream

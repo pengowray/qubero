@@ -888,7 +888,8 @@ function buildDocument(tab: Tab): Page {
     let shown: Unpacking | null = null;
     const sayUnpacking = (u: Unpacking | null): void => {
       shown = u ?? shown;
-      waitSays(UNPACKED.unpacking(node.name, percentText(shown?.read_bits ?? 0, shown?.run_bits ?? 0), formatBytes(shown?.unpacked_bytes ?? 0)));
+      const unpacked = shown?.unpacked_bytes ?? 0;
+      waitSays(UNPACKED.unpacking(node.name, percentText(shown?.read_bits ?? 0, shown?.run_bits ?? 0), unpacked > 0 ? formatBytes(unpacked) : null));
     };
     waitToOpen(first, () => askOpen(path), (chunks) => doc.fileChunks(chunks), {
       live: () => waiting === wait,

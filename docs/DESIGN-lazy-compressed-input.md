@@ -2608,9 +2608,9 @@ through a `RunInput`":
   the two packed-size reasons, `PACKED_LIMITS` in `web/src/strings.ts`, now
   names xz: "The limit is 512 MiB for a deflate, zlib, gzip, zstd or xz
   stream that has no edited bytes and is not inside a joined stream." The
-  status bar's `UNPACKED.unpacking` says "0 B unpacked so far" while an xz
-  stream is laid out or copied, where it said `UNPACKED.loading` while a
-  stream was gathered; see "Still to do".
+  status bar's `UNPACKED.unpacking` leaves out "{size} unpacked so far"
+  while nothing has been unpacked, which for xz is the whole wait, where it
+  said `UNPACKED.loading` while a stream was gathered; see "Still to do".
 - **Tests.** In `codec/lazy/tests.rs`, each pass reads a store of 1 KiB
   chunks, fed only the chunks each step names, with steps of 8 KiB, from a
   store with room for two steps (20 chunks) and from one of 200. Over xz
@@ -2708,9 +2708,10 @@ through a `RunInput`":
   can name the chunks of more than one span. Headers read are kept and
   count as progress, so the pass gets further each round, but no test
   covers it.
-- **The status bar while an xz pass runs.** `UNPACKED.unpacking` says
-  "{size} unpacked so far", and an xz pass unpacks nothing until its end,
-  so it says 0 B. A stream past the cap is laid out in a few rounds. A
+- **The status bar while an xz pass runs.** An xz pass unpacks nothing
+  until its end, so `UNPACKED.unpacking` gives only the percentage (it
+  leaves out "{size} unpacked so far" while that is 0, rather than saying
+  0 B). A stream past the cap is laid out in a few rounds. A
   stream that fits is copied a piece at a time, so the percentage reaches
   100% and the stream is then unpacked in one go; before part 8 the status
   bar said `UNPACKED.loading` while such a stream was gathered. `Unpacking`
