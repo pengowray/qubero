@@ -697,13 +697,13 @@ const LOW_BITS: &[KindEntry] = &[
 
 /// NASA CDF's Huffman and adaptive Huffman coding, read by `codec::cdfhuff`.
 const CDF_HUFFMAN: &[KindEntry] = &[
-    r(R::Blocks, "cdfhuffman.blocks", "The coded run as one block.", BLOCKS, &[R::Block]),
-    r(R::Block, "cdfhuffman.block", "The byte counts the tree is built from, if any, then the codes.", BLOCK, &[R::Field(F::FrequencyTable), R::Codes]),
-    k(R::Field(F::FrequencyTable), "cdfhuffman.frequency_table", "The runs of byte counts the Huffman tree is built from.", &[NUMBER]),
+    r(R::Blocks, "cdfhuffman.blocks", "The whole compressed stream as one block; CDF's Huffman coding has no blocks of its own.", BLOCKS, &[R::Block]),
+    r(R::Block, "cdfhuffman.block", "For Huffman (type 2), the counts the tree is built from and then the codes; for adaptive Huffman (type 3), only the codes.", BLOCK, &[R::Field(F::FrequencyTable), R::Codes]),
+    k(R::Field(F::FrequencyTable), "cdfhuffman.frequency_table", "Counts: runs of a first byte value, a last byte value and a 1-byte count per value from first to last, ended by a first value of 0.", &[NUMBER]),
     r(R::Codes, "cdfhuffman.codes", "The block's codes.", CODES, &[R::Literal, R::EndOfBlock, R::Field(F::Padding), R::Unnamed]),
-    k(R::Literal, "cdfhuffman.literal", "A Huffman code: one byte of output.", &[HUFFMAN_TABLE]),
-    k(R::EndOfBlock, "cdfhuffman.end_of_stream", "The code that ends the stream.", &[HUFFMAN_TABLE]),
-    k(R::Field(F::Padding), "cdfhuffman.padding", "The bits after the end code, to the end of the run.", &[PADDING_RECORD]),
+    k(R::Literal, "cdfhuffman.literal", "A Huffman code for one byte; in adaptive Huffman, a new byte is the ESCAPE code (symbol 257) and then the byte in 8 bits.", &[HUFFMAN_TABLE]),
+    k(R::EndOfBlock, "cdfhuffman.end_of_stream", "END_OF_STREAM: the code for symbol 256, which ends the compressed data.", &[HUFFMAN_TABLE]),
+    k(R::Field(F::Padding), "cdfhuffman.padding", "The zero bits that fill out the byte holding END_OF_STREAM, and any bytes after that byte to the end of the compressed data.", &[PADDING_RECORD]),
     k(R::Unnamed, "cdfhuffman.unnamed_codes", "The rest of the codes, as one node after the trace's limit of named steps.", &[UNNAMED_RECORD]),
 ];
 
@@ -711,10 +711,10 @@ const CDF_HUFFMAN: &[KindEntry] = &[
 const PICO8: &[KindEntry] = &[
     r(R::Blocks, "pico8.blocks", "The compressed code as one block.", BLOCKS, &[R::Block]),
     r(R::Block, "pico8.block", "The compressed code's literals and matches.", BLOCK, &[R::Codes]),
-    r(R::Codes, "pico8.codes", "The block's literals and matches.", CODES, &[R::Literal, R::Match, R::EndOfBlock]),
-    k(R::Literal, "pico8.literal", "One character of the code.", &[LITERAL_RECORD]),
-    k(R::Match, "pico8.match", "A copy of earlier output.", &[MATCH_RECORD]),
-    k(R::EndOfBlock, "pico8.end", "The end of the code: a zero byte after a pxa raw run, or two zero bytes in the old format.", &[END_RECORD]),
+    r(R::Codes, "pico8.codes", "The block's literals, back-references and end markers.", CODES, &[R::Literal, R::Match, R::EndOfBlock]),
+    k(R::Literal, "pico8.literal", "One byte of the code: in pxa, a move-to-front table index or a raw run byte; in the old format, a table index 0x01 to 0x3B, or 0x00 and the byte.", &[LITERAL_RECORD]),
+    k(R::Match, "pico8.match", "A back-reference: an offset and a length, a copy of earlier output; in the old format, 2 bytes, the first 0x3C or above.", &[MATCH_RECORD]),
+    k(R::EndOfBlock, "pico8.end", "In pxa, the zero byte that ends a raw run, after which decoding continues; in the old format, the two zero bytes that end the code.", &[END_RECORD]),
 ];
 
 /// Every kind a codec's nodes can be. Empty for a codec whose nodes have no
