@@ -1036,23 +1036,31 @@ fn a_gzip_member_past_the_copy_limit_opens_as_a_joined_stream_through_its_handle
 
 // ----- joined streams read through handles onto the store -----
 
+/// A hundred BGZF blocks of a couple of kilobytes each, in two bits of noise
+/// a byte, which packs to about a quarter: what each block holds, and the
+/// file.
+fn hundred_blocks() -> (Vec<Vec<u8>>, Vec<u8>) {
+    use crate::formats::bam::tests::{bgzf_block, EOF_BLOCK};
+    let pieces: Vec<Vec<u8>> = (0..100).map(|i| noise(2048 + i).iter().map(|b| b & 3).collect()).collect();
+    let mut bytes: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
+    bytes.extend_from_slice(&EOF_BLOCK);
+    (pieces, bytes)
+}
+
 /// BGZF blocks of a couple of kilobytes each, read as a stream joined a part
 /// at a time because the stream is past the cap, whose runs come to three
 /// times the store and to more than the cap. Each block's run is read
 /// through a handle onto the store, so the joined stream holds no copy of
-/// any of them, and the cap on copies does not refuse it as it did. The walk
-/// that checks each block's length reads every run once, a window of runs a
-/// round, and the stream then reads a block at a time from the store: each
-/// read names the chunks of every block it reaches, all at once, and gives
-/// the bytes and steps the same stream gives held whole.
+/// any of them, and the cap on copies does not refuse it as it did. Opening
+/// the stream reads every block's header and trailer, which say where its
+/// run is and what it unpacks to, and none of the runs. The stream then
+/// reads a block at a time from the store: each read names the chunks of
+/// every block it reaches, all at once, and gives the bytes and steps the
+/// same stream gives held whole.
 #[test]
 fn a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles() {
     use crate::codec::lazy::Limits;
-    use crate::formats::bam::tests::{bgzf_block, EOF_BLOCK};
-    // Two bits of noise a byte, which packs to about a quarter.
-    let pieces: Vec<Vec<u8>> = (0..100).map(|i| noise(2048 + i).iter().map(|b| b & 3).collect()).collect();
-    let mut bytes: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
-    bytes.extend_from_slice(&EOF_BLOCK);
+    let (pieces, bytes) = hundred_blocks();
     let capacity = 16;
     assert!(bytes.len() > 3 * capacity * CHUNK as usize, "{} bytes is too few for a store of {capacity} chunks", bytes.len());
     let text = pieces.concat();
@@ -1116,22 +1124,180 @@ fn a_bgzf_stream_past_the_store_and_the_cap_opens_through_handles() {
             assert_eq!(step, held.map_out(byte).unwrap(), "goes of {slice:?}: byte {byte}");
         }
     }
-    // A block whose trailer claims one byte more than it unpacks to refuses
-    // the stream, as it does read from copies.
-    let mut spoiled = bytes.clone();
-    let end = (0..=50).map(|i| bgzf_block(&pieces[i]).len()).sum::<usize>();
-    spoiled[end - 4..end].copy_from_slice(&(pieces[50].len() as u32 + 1).to_le_bytes());
-    let mut d = stored(&spoiled, capacity);
-    let mut ev = Evaluator::new(crate::formats::bgzf());
-    ev.set_stream_limits(Limits::default(), whole_cap);
-    assert_eq!(fed(&mut d, &spoiled, |d| ev.open_space(d, 0, &[1])).unwrap(), None);
-    assert_eq!(ev.open_refusal(&[1]), Some(Refusal::Failed));
     // In memory, with no handle onto the file, the blocks' runs are copied,
     // which comes to more than the cap.
     let mut ev = Evaluator::new(crate::formats::bgzf());
     ev.set_stream_limits(Limits::default(), whole_cap);
     assert_eq!(ev.open_space(&doc(&bytes), 0, &[1]).unwrap(), None);
     assert_eq!(ev.open_refusal(&[1]), Some(Refusal::TooLargeCopy));
+}
+
+/// `n` bytes of the joined stream `joined` at `at`, as [`joined_read`]
+/// reads them, for a read that may be refused: what it gave, and the
+/// refusal. A refused read gives the bytes of the parts that read, and
+/// zeroes for the one that did not.
+fn joined_read_or_refused(joined: &crate::eval::Joined, d: &mut Document<ChunkStore>, bytes: &[u8], at: u64, n: usize) -> (Vec<u8>, Option<Refusal>) {
+    use crate::codec::lazy::ReadError;
+    fed(d, bytes, |_| {
+        let mut out = vec![0xee; n];
+        match joined.read(at, &mut out) {
+            Ok(()) => Ok((out, None)),
+            Err(ReadError::Missing(missing)) => Err(EvalError::Pending(missing)),
+            Err(ReadError::Refused(why)) => Ok((out, Some(why))),
+        }
+    })
+    .unwrap()
+}
+
+/// Opening a joined stream of a hundred blocks as a document unpacks none
+/// of them, from the store or from copies: each block is as long as its
+/// trailer says, and is checked when a read first unpacks it. A read of one
+/// block then unpacks that block, and a read of it again unpacks nothing.
+/// Before, opening unpacked every block once to check its length, which is
+/// most of what a BAM of 300 MiB took to open.
+#[test]
+fn opening_a_joined_stream_of_many_blocks_unpacks_none_of_them() {
+    use crate::codec::decodes_on_this_thread;
+    use crate::codec::lazy::Limits;
+    let (pieces, bytes) = hundred_blocks();
+    let text = pieces.concat();
+    for in_store in [true, false] {
+        let mut d = stored(&bytes, bytes.len().div_ceil(CHUNK as usize));
+        for chunk in 0..bytes.len().div_ceil(CHUNK as usize) {
+            feed(&mut d, &bytes, chunk as u64);
+        }
+        let held = doc(&bytes);
+        let mut ev = Evaluator::new(crate::formats::bgzf());
+        // Past the cap, which the copies in memory, about 60 KiB, are not.
+        ev.set_stream_limits(Limits::default(), 100 << 10);
+        let before = decodes_on_this_thread();
+        let id = match in_store {
+            true => ev.open_space(&d, 0, &[1]),
+            false => ev.open_space(&held, 0, &[1]),
+        };
+        let id = id.unwrap().unwrap_or_else(|| panic!("in the store: {in_store}: refused as {:?}", ev.open_refusal(&[1])));
+        assert_eq!(decodes_on_this_thread() - before, 0, "in the store: {in_store}");
+        let SpaceSource::Joined(joined) = ev.space(id).unwrap().source().clone() else { panic!("held whole") };
+        assert_eq!(joined.owned_bytes() > 0, !in_store);
+        let at = pieces[..30].iter().map(Vec::len).sum::<usize>() + 10;
+        for decoded in [1, 0] {
+            let before = decodes_on_this_thread();
+            let mut out = vec![0u8; 100];
+            joined.read(at as u64, &mut out).expect("reads");
+            assert_eq!(out, text[at..at + 100]);
+            assert_eq!(decodes_on_this_thread() - before, decoded, "in the store: {in_store}");
+        }
+    }
+}
+
+/// The same blocks, with block 50 spoiled: its trailer says it unpacks to
+/// one byte more than it does, or the first byte of its deflate makes a
+/// block type that does not exist. Neither refuses the stream any more,
+/// since opening it unpacks no block. A read that reaches block 50 is
+/// refused. It gives the bytes of the blocks either side, zeroes for block
+/// 50 and nothing shifted, and the stream says which bytes those zeroes are
+/// and why, naming the block as the listing does. Reads of other blocks are
+/// not touched, block 50 is unpacked once however often it is read, and its
+/// bytes map to no step.
+#[test]
+fn a_bgzf_block_that_lies_about_its_length_or_is_damaged_fails_where_it_is_read() {
+    use crate::codec::decodes_on_this_thread;
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::bgzf_block;
+    let (pieces, bytes) = hundred_blocks();
+    let text = pieces.concat();
+    let in_file = pieces[..50].iter().map(|p| bgzf_block(p).len()).sum::<usize>();
+    let end = in_file + bgzf_block(&pieces[50]).len();
+    let start = pieces[..50].iter().map(Vec::len).sum::<usize>();
+    let n = pieces[50].len();
+    let long: &dyn Fn(&mut Vec<u8>) = &|f| f[end - 4..end].copy_from_slice(&(n as u32 + 1).to_le_bytes());
+    let damaged: &dyn Fn(&mut Vec<u8>) = &|f| f[in_file + 18] = 0xff;
+    for (what, spoil, claimed, said) in [
+        ("a trailer one byte long", long, n + 1, format!("blocks[50].compressed unpacks to {n} bytes, not the {} the file says", n + 1)),
+        ("a damaged deflate", damaged, n, "blocks[50].compressed could not be unpacked".to_string()),
+    ] {
+        let mut spoiled = bytes.clone();
+        spoil(&mut spoiled);
+        let mut d = stored(&spoiled, 16);
+        let mut ev = Evaluator::new(crate::formats::bgzf());
+        ev.set_stream_limits(Limits::default(), 16 << 10);
+        let id = fed(&mut d, &spoiled, |d| ev.open_space(d, 0, &[1])).unwrap();
+        let id = id.unwrap_or_else(|| panic!("{what}: refused as {:?}", ev.open_refusal(&[1])));
+        let space = ev.space(id).unwrap();
+        let SpaceSource::Joined(joined) = space.source().clone() else { panic!("held whole") };
+        // The blocks after block 50 start where its trailer says it ends.
+        let stream = [&text[..start], &vec![0; claimed][..], &text[start + n..]].concat();
+        assert_eq!(joined.len(), stream.len() as u64, "{what}");
+
+        // The last 100 bytes of block 49, block 50, and the first 100 of 51.
+        let (at, len) = (start - 100, claimed + 200);
+        let before = decodes_on_this_thread();
+        for _ in 0..3 {
+            let (got, refused) = joined_read_or_refused(&joined, &mut d, &spoiled, at as u64, len);
+            assert_eq!(refused, Some(Refusal::Failed), "{what}");
+            assert!(got == stream[at..at + len], "{what}: the bytes either side of block 50 differ, or its own are not zeroes");
+        }
+        assert_eq!(decodes_on_this_thread() - before, 3, "{what}: blocks 49 and 51 once each, and block 50 once");
+        let named = ev.unreadable(id, at as u64, len as u64).unwrap_or_else(|| panic!("{what}: nothing said why"));
+        assert_eq!((named.at, named.len, named.why.as_str()), (start as u64, claimed as u64, said.as_str()), "{what}");
+        // A reading with nothing but the stream names the block by its index.
+        let unnamed = space.source().unreadable(at as u64, len as u64).unwrap();
+        assert_eq!(unnamed.why, said.replace("blocks[50].compressed", "part index 50"), "{what}");
+        assert_eq!(ev.unreadable(id, 0, start as u64), None, "{what}: before block 50");
+        assert_eq!(space.map_out(start as u64 + 3), Ok(None), "{what}: a byte of block 50 maps to a step");
+
+        // Away from block 50, reads give the blocks' bytes.
+        for at in [0, start / 2, start + claimed + 3000, stream.len() - 2000] {
+            let (got, refused) = joined_read_or_refused(&joined, &mut d, &spoiled, at as u64, 2000);
+            assert_eq!(refused, None, "{what}: 2000 bytes at {at}");
+            assert!(got == stream[at..at + 2000], "{what}: 2000 bytes at {at} differ");
+        }
+    }
+}
+
+/// A .gz of several members, whose joined stream is a gzip of its own and
+/// is recognised as one, so the tab over it reads its fields with a reading
+/// of its own, over the stream's bytes. When one member's trailer says it
+/// unpacks to more than it does, a read of the tab's reading that reaches
+/// that member fails with the reason, rather than reading zeroes, and reads
+/// before it still read. When the first member is the one, the stream's
+/// first bytes cannot be looked at, and it opens as the bytes it declares.
+#[test]
+fn a_tab_reading_its_own_fields_fails_where_a_member_will_not_unpack() {
+    use crate::codec::lazy::Limits;
+    use crate::formats::bam::tests::bgzf_block;
+    use crate::source::ArcSource;
+    let inner = gzip_member(&noise(6000));
+    let pieces: Vec<&[u8]> = inner.chunks(1000).collect();
+    let blocks: Vec<Vec<u8>> = pieces.iter().map(|p| bgzf_block(p)).collect();
+    for bad in [2, 0] {
+        let mut file = Vec::new();
+        for (i, block) in blocks.iter().enumerate() {
+            let mut block = block.clone();
+            if i == bad {
+                let at = block.len() - 4;
+                block[at..].copy_from_slice(&(pieces[i].len() as u32 + 1).to_le_bytes());
+            }
+            file.extend(block);
+        }
+        let d = Document::new(ArcSource(std::sync::Arc::new(file)));
+        let mut ev = Evaluator::new(crate::formats::gzip());
+        ev.set_stream_limits(Limits::default(), 1000);
+        let id = ev.open_space(&d, 0, &[1]).unwrap().unwrap_or_else(|| panic!("member {bad}: refused as {:?}", ev.open_refusal(&[1])));
+        let space = ev.space_mut(id).unwrap();
+        assert!(matches!(space.source(), SpaceSource::Joined(_)), "member {bad}: held whole");
+        if bad == 0 {
+            assert!(!space.recognised, "the first member's zeroes were looked at");
+            continue;
+        }
+        assert_eq!((space.template.as_str(), space.recognised), ("gzip", true));
+        let (tab, tab_doc) = space.reading().expect("a recognised stream has a reading of its own");
+        assert_eq!(tab.read_in(tab_doc, 0, 0, 16).unwrap(), inner[..2]);
+        match tab.read_in(tab_doc, 0, 1500 * 8, 3000 * 8) {
+            Err(EvalError::Failed(why)) => assert_eq!(why, "part index 2 unpacks to 1000 bytes, not the 1001 the file says"),
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 /// The same kind of blocks read as a .gz of many members, whose joined

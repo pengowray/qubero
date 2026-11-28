@@ -211,6 +211,37 @@ impl PieceTable {
         missing
     }
 
+    /// The first stretch of the source under document bits `at..at + n`
+    /// that the source could not make ([`Source::unreadable`]), as document
+    /// bits: where it starts and where it ends, cut to the piece it was
+    /// found through. Only the original's pieces are asked, since added
+    /// bytes are always there.
+    pub fn unreadable_bits(&self, src: &dyn Source, at: u64, n: u64) -> Option<(std::ops::Range<u64>, String)> {
+        if n == 0 || at >= self.len_bits() {
+            return None;
+        }
+        let end = (at + n).min(self.len_bits());
+        let mut cur = at;
+        let mut i = self.locate(cur);
+        while cur < end && i < self.pieces.len() {
+            let p = self.pieces[i];
+            let in_piece = cur - self.starts[i];
+            let take = (p.bit_len - in_piece).min(end - cur);
+            if p.src == Src::Orig {
+                let src_bit = p.bit_off + in_piece;
+                let first_byte = src_bit / 8;
+                if let Some(u) = src.unreadable(first_byte, (src_bit + take).div_ceil(8) - first_byte) {
+                    let from = (u.at * 8).max(p.bit_off) - p.bit_off;
+                    let to = ((u.at + u.len) * 8).min(p.bit_off + p.bit_len).saturating_sub(p.bit_off).max(from);
+                    return Some((self.starts[i] + from..self.starts[i] + to, u.why));
+                }
+            }
+            cur += take;
+            i += 1;
+        }
+        None
+    }
+
     /// Read `n` bits starting at document bit `at` into `out` (MSB-first, from bit 0).
     /// `out` must hold at least `bytes_for(n)` bytes. Reports unloaded original chunks.
     pub fn read_bits(

@@ -187,7 +187,8 @@ fn part_run(p: &Part) -> (u32, u64, u64) {
 }
 
 /// Why a packed part could not be read, through an index or decoded whole.
-/// Kept in [`Stitch::troubles`] once found.
+/// Kept in [`Stitch::troubles`] once found, and by a joined stream read a
+/// part at a time in `Joined::troubles`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PartTrouble {
     /// It unpacks to this many bytes, which is not what the file says.
@@ -198,6 +199,47 @@ pub(super) enum PartTrouble {
     /// frame or xz block that unpacks to more than 64 MiB, and
     /// [`Refusal::Failed`] one that will not decode.
     Refused(Refusal),
+}
+
+impl PartTrouble {
+    /// The refusal a read of the part fails with: the decoder's own, or
+    /// failed for a part of the wrong length.
+    pub(super) fn refusal(self) -> Refusal {
+        match self {
+            PartTrouble::Length(_) => Refusal::Failed,
+            PartTrouble::Refused(why) => why,
+        }
+    }
+}
+
+/// What a read of a packed part named `label` that the file says gives
+/// `claimed` bytes says when it fails for `trouble`, in the file's own
+/// voice: `blocks[2].compressed unpacks to 20 bytes, not the 25 the file
+/// says`, or `blocks[0].compressed could not be unpacked`. The listing says
+/// it over the bytes a run of records could not read, and a joined stream's
+/// tab over the bytes of the part.
+#[cold]
+#[inline(never)]
+pub(super) fn trouble_said(label: &str, trouble: PartTrouble, claimed: u64) -> String {
+    match trouble {
+        PartTrouble::Length(n) => format!("{label} unpacks to {n} bytes, not the {claimed} the file says"),
+        PartTrouble::Refused(why) => format!("{label} {}", part_refused(why)),
+    }
+}
+
+/// Part `i` named by its index, marked as one so that `2` is not read as
+/// the second, for where the field it is cannot be said.
+#[cold]
+#[inline(never)]
+pub(super) fn unnamed_part(i: usize) -> String {
+    format!("part index {i}")
+}
+
+/// The bytes `out` of a joined stream, which part `label` gives, read as
+/// zeroes for `trouble`: see [`Source::unreadable`].
+pub(super) fn unreadable_part(label: &str, out: std::ops::Range<u64>, trouble: PartTrouble) -> crate::source::Unreadable {
+    let len = out.end - out.start;
+    crate::source::Unreadable { at: out.start, len, why: trouble_said(label, trouble, len) }
 }
 
 /// What a read of a packed part says after the part's name when the part's
@@ -490,12 +532,7 @@ impl Evaluator {
     #[cold]
     #[inline(never)]
     fn part_trouble<T>(&self, stitch: &Stitch, i: usize, trouble: PartTrouble) -> R<T> {
-        match trouble {
-            PartTrouble::Length(n) => {
-                fail(format!("{} unpacks to {} bytes, not the {} the file says", self.part_label(stitch, i), n, stitch.parts[i].len))
-            }
-            PartTrouble::Refused(why) => self.part_refusal(stitch, i, why),
-        }
+        fail(trouble_said(&self.part_label(stitch, i), trouble, stitch.parts[i].len))
     }
 
     /// A read of packed part `i` failing because its decoder refused it, said
@@ -506,7 +543,7 @@ impl Evaluator {
     #[cold]
     #[inline(never)]
     fn part_refusal<T>(&self, stitch: &Stitch, i: usize, why: Refusal) -> R<T> {
-        fail(format!("{} {}", self.part_label(stitch, i), part_refused(why)))
+        self.part_trouble(stitch, i, PartTrouble::Refused(why))
     }
 
     /// The bytes of a packed run, unpacked. The outer error is the run's bytes
@@ -906,9 +943,18 @@ impl Evaluator {
     /// index. Refused as [`Refusal::TooLargeLazy`] when a part unpacks to
     /// more than [`lazy::LAZY_CAP_BYTES`], as [`Refusal::TooLargeUnit`] when
     /// a part has a zstd frame or xz block past 64 MiB, and as failed when a
-    /// part will not read or unpacks to another length than its run claimed.
-    /// A packed part small enough to decode whole is decoded here to check
-    /// that, and nothing of it is kept but its handle or its run.
+    /// part read through its index will not read or unpacks to another
+    /// length than its run claimed.
+    ///
+    /// A packed part small enough to decode whole is not decoded here. Its
+    /// length is the one the file gives for it, a BGZF block's trailer, and
+    /// it is checked when a read first unpacks it (`Joined::unpacked`): a
+    /// part that will not unpack, or unpacks to another length, makes every
+    /// read of its bytes fail, and [`Self::unreadable`] says why. Decoding
+    /// every part here was most of the time a large BAM took to open, a
+    /// whole inflate of the stream before its tab could show a byte. See
+    /// "Faster opening of joined streams" in
+    /// `docs/DESIGN-lazy-compressed-input.md`.
     fn join_part_lazily<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, i: usize, walk: &mut JoinWalk) -> R<Result<u64, Refusal>> {
         let part = &stitch.parts[i];
         let (space, at_bits, run_bits) = part_run(part);
@@ -939,16 +985,14 @@ impl Evaluator {
                         if run_bits / 8 > crate::codec::CAP_BYTES as u64 {
                             return Ok(Err(Refusal::TooLargeCopy));
                         }
-                        let run = match self.gather_run(doc, space, at_bits, run_bits)? {
-                            Ok(run) => run,
-                            Err(why) => return Ok(Err(why)),
-                        };
-                        match crate::codec::decode(codec, &run) {
-                            Ok(unpacked) if unpacked.len() as u64 == part.len => {}
-                            _ => return Ok(Err(Refusal::Failed)),
+                        match self.joined_input(doc, part) {
+                            // Nothing of it is read until the stream is.
+                            Some(input) => (JoinedBytes::Packed { input, codec }, 1),
+                            None => match self.gather_run(doc, space, at_bits, run_bits)? {
+                                Ok(run) => (JoinedBytes::Packed { input: lazy::RunInput::held(Arc::new(run)), codec }, copy_cost(run_bits / 8)),
+                                Err(why) => return Ok(Err(why)),
+                            },
                         }
-                        let input = self.joined_input(doc, part).unwrap_or_else(|| lazy::RunInput::held(Arc::new(run)));
-                        (JoinedBytes::Packed { input, codec }, unpack_cost(part.len))
                     }
                 }
             }
@@ -987,12 +1031,15 @@ impl Evaluator {
     /// are missing, as far as a window of the file goes: read here only to
     /// ask for them, and read again when the walk reaches them. A walk
     /// joining a stream to read a part at a time (`lazily`) reads nothing of
-    /// a stored part with a handle, so nothing is asked for it.
+    /// a part with a handle, stored or decoded whole, so nothing is asked
+    /// for it.
     fn probe_parts<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, from: usize, mut missing: Vec<crate::source::Missing>, lazily: bool) -> Vec<crate::source::Missing> {
         let window = self.gather_window(doc);
         let mut reach = 0;
+        let limits = self.spaces.lazy_limits();
+        let indexed = |p: &Part| matches!(p.source, PartSource::Packed { codec: Ok(codec), .. } if lazy::can_index(codec) && p.len > limits.whole as u64);
         for part in stitch.parts.iter().skip(from) {
-            if lazily && matches!(part.source, PartSource::Stored { .. }) && self.joined_input(doc, part).is_some() {
+            if lazily && !indexed(part) && self.joined_input(doc, part).is_some() {
                 continue;
             }
             let (space, at_bits, run_bits) = part_run(part);
@@ -1052,7 +1099,31 @@ impl Evaluator {
             Some(Ty::Stitched { from, .. }) => self.walk_label_here(&stitch.path, from, &stitch.parts[i].path),
             _ => String::new(),
         };
-        if label.is_empty() { format!("part index {i}") } else { label }
+        if label.is_empty() { unnamed_part(i) } else { label }
+    }
+
+    /// The first stretch of bytes `at..at + len` of the joined stream opened
+    /// as space `id` that a read gave zeroes for, because the part they are
+    /// in will not unpack or unpacks to another length than the file says,
+    /// and why, with the part named as the listing names it:
+    /// `blocks[50].compressed unpacks to 2098 bytes, not the 2099 the file
+    /// says`. Asked after a read of those bytes that found no chunk of the
+    /// file missing, since the read is what finds a part out: see
+    /// [`Source::unreadable`]. Nothing for bytes that read, and for a space
+    /// that is not a joined stream read a part at a time.
+    pub fn unreadable(&self, id: SpaceId, at: u64, len: u64) -> Option<crate::source::Unreadable> {
+        let space = self.space(id)?;
+        let super::space::SpaceSource::Joined(joined) = space.source() else { return None };
+        let (i, out, trouble) = joined.trouble_in(at, len)?;
+        // The stream's parts are the stitched space's, in the same order,
+        // when that space is open in this reading under the same path: only
+        // a stream opened from the file's own fields is known to be.
+        let stitch = match (space.parent, self.spaces.get(&space.path)) {
+            (0, Some(Opened::Space(stitched))) => self.spaces.stitch(stitched).filter(|s| s.parts.len() == joined.part_count()),
+            _ => None,
+        };
+        let label = stitch.map_or_else(|| unnamed_part(i), |s| self.part_label(s, i));
+        Some(unreadable_part(&label, out, trouble))
     }
 }
 
@@ -2098,12 +2169,53 @@ mod tests {
         assert_eq!(e.open_refusal(&[STREAM]), None);
     }
 
+    /// Held whole, a joined stream is unpacked part by part before it opens,
+    /// so a part that will not unpack refuses it then.
     #[test]
     fn a_joined_stream_with_a_part_that_will_not_unpack_is_refused_as_a_document() {
         let d = Document::new(MemSource(bam_in_blocks(|b| b[18] = 0xff)));
         let mut e = Evaluator::new(crate::formats::bgzf());
         assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
         assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::Failed));
+    }
+
+    /// Read a part at a time, past the cap, a joined stream opens without
+    /// unpacking a part, so a part that will not unpack, or comes to another
+    /// length than its trailer says, does not refuse it. A read of the
+    /// stream that reaches the part is refused instead, gives the other
+    /// blocks' bytes and zeroes for that one, and the stream says why in the
+    /// words a read of the part in the listing has.
+    #[test]
+    fn a_joined_stream_past_the_cap_with_a_part_that_will_not_unpack_refuses_reads_of_that_part() {
+        use crate::codec::lazy::ReadError;
+        use crate::codec::Refusal;
+        use crate::source::ArcSource;
+        let (odd, even) = crate::formats::bam::tests::two_records();
+        let got = odd.len() + even.len();
+        let long = |b: &mut Vec<u8>| {
+            let at = b.len() - 4;
+            b[at..].copy_from_slice(&(got as u32 + 5).to_le_bytes());
+        };
+        let good = bam_in_blocks(|_| {});
+        let mut whole = Evaluator::new(crate::formats::bgzf());
+        let held = whole.open_space(&Document::new(MemSource(good)), 0, &[1]).unwrap().expect("opens whole");
+        let text = whole.space(held).unwrap().bytes().to_vec();
+        for (file, claimed, said) in [
+            (bam_in_blocks(|b| b[18] = 0xff), got, "blocks[2].compressed could not be unpacked".to_string()),
+            (bam_in_blocks(long), got + 5, format!("blocks[2].compressed unpacks to {got} bytes, not the {} the file says", got + 5)),
+        ] {
+            let d = Document::new(ArcSource(std::sync::Arc::new(file)));
+            let mut e = Evaluator::new(crate::formats::bgzf());
+            e.spaces.set_whole_cap(10);
+            let id = e.open_space(&d, 0, &[1]).unwrap().unwrap_or_else(|| panic!("{said}: refused as {:?}", e.open_refusal(&[1])));
+            let source = e.space(id).unwrap().source().clone();
+            let start = text.len() - got;
+            let mut out = vec![0xee; start + claimed];
+            assert_eq!(source.read(0, &mut out), Err(ReadError::Refused(Refusal::Failed)), "{said}");
+            assert!(out[..start] == text[..start] && out[start..].iter().all(|&b| b == 0), "{said}");
+            let why = e.unreadable(id, 0, out.len() as u64).expect("says why");
+            assert_eq!((why.at, why.len, why.why), (start as u64, claimed as u64, said));
+        }
     }
 
     /// A joined stream past the cap with a part that unpacks to more than

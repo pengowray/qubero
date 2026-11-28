@@ -1781,6 +1781,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
     if data.len() > CAP_BYTES {
         return Err(Refusal::TooLargeCopy);
     }
+    #[cfg(test)]
+    DECODES.with(|n| n.set(n.get() + 1));
     let (out, trace) = match codec {
         Codec::CfbWorkbook => {
             let out = cfb::workbook(data)?;
@@ -1940,6 +1942,19 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         return Err(Refusal::TooLargeOutput);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+thread_local! {
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many runs [`decode_traced`] has been asked to decode on this thread,
+/// which every decode of a deflate, zlib or gzip run goes through, whoever
+/// asks: for a test that says how many a step took.
+#[cfg(test)]
+pub(crate) fn decodes_on_this_thread() -> usize {
+    DECODES.with(|n| n.get())
 }
 
 #[cfg(test)]
