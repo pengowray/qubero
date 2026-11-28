@@ -8,7 +8,8 @@ from this text). Parts 4 to 6 are built too (2026-11-28; see part 4 in
 7a, 7b and 7c (see "Review before part 7"), and all three are built
 (2026-11-28; see "Built (part 7a)", "Built (part 7b)", "Built (part 7c,
 core)" and, under "The browser", "Built (part 7c, web)"). Part 10 is built
-too (2026-11-28; see "Built (part 10)"). Parts 8, 9 and 11 are not. It
+too (2026-11-28; see "Built (part 10)"), and so is part 8 (2026-11-28; see
+"Built (part 8)"). Parts 9 and 11 are not. It
 follows
 `docs/DESIGN-lazy-unpacking.md`, which describes how a compressed run whose
 output is past `codec::CAP_BYTES` (64 MiB) is indexed in steps and its output
@@ -331,7 +332,7 @@ changes.
 the stream's index, whose length the footer gives, and the header of every
 block, to learn the header's length and whether `plain_lzma2` holds. It takes
 all of these from a slice of the whole stream. Part 8 makes it a pass in
-steps; see "xz" below.
+steps; see "xz" below and "Built (part 8)".
 
 The LZMA2 decoder (`codec::lzma::Lzma2`) already decodes one LZMA2 chunk per
 call and keeps its state between calls. An LZMA2 chunk is at most 64 KiB
@@ -640,7 +641,8 @@ is charged and reports progress like the others:
 A block whose compressed size passes `Limits::unit_input` is refused as
 `TooLarge` (part 6 adds this, checked from the gathered copy until part 8).
 Until part 8 lands, an xz run is gathered whole (part 2) and laid out from the
-copy as today.
+copy as today. Part 8 was built on 2026-11-28; see "Built (part 8)" for where
+the code differs from this list.
 
 ## A `Seekable` reading through its `RunInput`
 
@@ -983,21 +985,23 @@ for ever, since both joins start again from the first part on every
 |---|---|---|
 | `LAZY_CAP_BYTES` | 1 GiB of output | Stays. The zip-bomb guard. Refused past it as `TooLargeLazy` (`too-large-lazy`). |
 | `CAP_BYTES`, as the output of a run held whole | 64 MiB | Stays. Refused past it as `TooLargeOutput` (`too-large-output`). |
-| `CAP_BYTES`, as the compressed size of a run that can be indexed | 64 MiB | Since part 7c, replaced by `Limits::input`, 512 MiB, for a pass that reads its run through a handle a window at a time. A pass that reads a copy of its run keeps 64 MiB, as `Limits::copy_input`: an xz run, a run no handle reaches, and a run in a source with too little room for two windows. |
+| `CAP_BYTES`, as the compressed size of a run that can be indexed | 64 MiB | Since part 7c, replaced by `Limits::input`, 512 MiB, for a pass that reads its run through a handle a window at a time. A pass that reads a copy of its run keeps 64 MiB, as `Limits::copy_input`: a run no handle reaches, and a run in a source with too little room for two windows. Since part 8 an xz stream read through a handle is laid out a step at a time and takes `Limits::input` too; one decoded whole (64 MiB or less unpacked, or with an index or footer that does not hold together) is copied and keeps 64 MiB. |
 | `CAP_BYTES`, as the input and output of a codec that cannot be indexed | 64 MiB | Stays. The input is gathered a window at a time (part 2). Refused past it as `TooLargeCopy` (`too-large-copy`) for the input and `TooLargeOutput` for the output. |
 | `inflate_len`'s output cap | 64 MiB | Stays. |
 | `Limits::span` | 64 MiB of output per zstd frame or xz block | Stays. Refused past it as `TooLargeUnit` (`too-large-zstd-frame`, `too-large-xz-block`). |
 | `MAX_WINDOW` in `codec/frames.rs` | a zstd window of 128 MiB | Stays. A frame asking for more is refused as `TooLargeWindow` (`too-large-zstd-window`) before any of it is decoded, so nothing says how large it is. |
-| `INDEXED_RUN_BYTES` | 64 MiB of what indexes hold | Stays at 64 MiB. Since part 7c it weighs each index by what it holds for as long as it is kept (`Seekable::kept_bytes`): its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB), its block starts (at most 1 MiB) and an xz stream's list of blocks, about 9.1 MiB at most, and the copy of its run when it holds one. The caches inside each index are bounded as before, and not weighed. |
+| `INDEXED_RUN_BYTES` | 64 MiB of what indexes hold | Stays at 64 MiB. Since part 7c it weighs each index by what it holds for as long as it is kept (`Seekable::kept_bytes`): its checkpoints' 32 KiB windows (at most 8 MiB), its header copies (under 72 KiB), its block starts (at most 1 MiB), and the copy of its run when it holds one: about 9.1 MiB at most for deflate and zstd. An xz stream's list of blocks is weighed too, at 32 bytes a block natively and 24 in wasm. Since part 8 a stream read through a handle may list up to 8 Mi blocks (see `Limits::unit_input`), 256 MiB of list natively. `xz -T0 -6` writes a block for every 24 MiB of output, 43 blocks for 1 GiB. The caches inside each index are bounded as before, and not weighed. |
 | `whole_cap`, as the input of a joined document read a part at a time | 64 MiB | Since part 10 it counts only what the joined stream copies: a stored part or a packed part's run that no handle reaches (in a `MemSource`, a stitched space or an edited stretch), a packed run decoded whole that is too long to read from the store in one read (next row), and the run of a packed part read through an index that holds a copy. A part read through a handle counts nothing. Since part 7c a packed part read through an index over a handle counted nothing. |
 | A packed part's run read through a handle, for a part decoded whole (new) | the gather window (1 MiB in the browser), and an eighth of what the source keeps | Part 10 (`Evaluator::joined_input`). Each decode reads the whole run in one read. A longer run is copied, and counts against `whole_cap`. No limit when the source answers any read whole. A BGZF block is under 64 KiB. |
 | One read of a joined stream read a part at a time (new) | Half of what the source keeps, less two of those runs, over `expand` | Part 10 (`Joined::resident_limit`), when a part is read through a handle onto a source with a resident limit. `expand` is the most bytes of run a packed part read through a handle takes per byte it unpacks to, and at least 1. For a BAM in the browser it is 16 MiB less two blocks. The least of that and the span cache of each part read through an index. |
-| `Limits::input` (new) | 512 MiB of compressed input | Built in part 7c. A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB; a run of exactly 512 MiB is allowed. A longer run read through a handle is refused as `Refusal::TooLargeInput` (`too-large-input`) before anything is read, since the size of the field holding the run is known. |
+| `Limits::input` (new) | 512 MiB of compressed input | Built in part 7c, for deflate, zlib, gzip and zstd, and in part 8 for xz. A trace keeps each step's bit in 32 bits (`RawStep.in_start`, and `pack` truncates without a word), and 2^32 bits is 512 MiB; a run of exactly 512 MiB is allowed. A longer run read through a handle is refused as `Refusal::TooLargeInput` (`too-large-input`) before anything is read, since the size of the field holding the run is known. |
 | `Limits::copy_input` (new) | 64 MiB (`CAP_BYTES`) of compressed input | Part 7c. The most a run may take up when its pass reads a copy of it. A longer one is refused as `TooLargeCopy` (`too-large-copy`) before anything is read. A field of `Limits` so that a test can show a run past it opening through a handle. |
 | `IN_SPACING_START` (new) | 1 MiB of compressed input between checkpoints | Doubled with `SPACING_START` when checkpoints are thinned, to at most 8 MiB. |
-| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). Since part 6, a frame, block or stretch over it is refused as `TooMuchAtOnce` (`too-much-at-once`), and only when the source has a resident limit. |
+| `Limits::unit_input` (new) | 16 MiB of compressed input | The most one zstd frame (without the skippable frames in front of it) or one xz block may be, and the most one stretch between two kept deflate block starts may be (`group`). Since part 6, a frame, block or stretch over it is refused as `TooMuchAtOnce` (`too-much-at-once`), and only when the source has a resident limit. Since part 8 it is also the longest index an xz stream read through a handle may have, whatever the source; a longer index sends the stream to the decoder of whole streams, which copies it and so refuses it past 64 MiB as `too-large-copy`. 16 MiB of index lists at most 8 Mi blocks, since a record takes at least 2 bytes. |
 | `Limits::span_input` (new) | 16 MiB of compressed input | The most one read of a zstd or xz span may gather at once. Since part 6, a span over it is refused when read, as `TooMuchAtOnce`, and only when the source has a resident limit. Deflate spans never reach it (8.5 MiB at most). |
-| `STEP_INPUT` (new) | 256 KiB of compressed input | How far past its start a step may stop; its window reaches `DEFLATE_MARGIN` further. Beside `INDEX_STEP_BYTES`, 256 KiB of output. |
+| `STEP_INPUT` (new) | 256 KiB of compressed input | How far past its start a step may stop; its window reaches `DEFLATE_MARGIN` further. Beside `INDEX_STEP_BYTES`, 256 KiB of output. An xz step reads this much of the stream's index, with no margin. |
+| `HEADERS_PER_STEP` (new) | 64 xz block headers | Part 8. The most block headers one xz step reads, and names the missing chunks of in one answer. The headers of one step also lie within half of what the source keeps of the first, so that their chunks fit in the store together. |
+| `COPY_STEPS` (new) | 4 times `STEP_INPUT`, 1 MiB | Part 8. The most of an xz stream one step copies when the stream is decoded whole, cut to a quarter of what the source keeps when that is less, though never to less than `STEP_INPUT`. The copy decodes nothing until it is complete, so a step can copy more than a step of a decode reads. |
 | `DEFLATE_MARGIN`, and the zstd margin (new) | 65,541 bytes; 128 KiB + 25 bytes | How far past where a step stops its window has to reach. |
 | `MAX_HEAD_BYTES` (new) | 287 bytes | A deflate block header and its tables, from the header's first byte. |
 | `GATHER_WINDOW` (new) | 1 MiB, or a quarter of what the store keeps when that is less | Part 2, built without the floor of one chunk the proposal had. |
@@ -1390,7 +1394,9 @@ the node tests load without the wasm.
 For an indexed run, besides DESIGN-lazy-unpacking's table:
 
 - the index pass's window: at most about 320 KiB for deflate and 384 KiB for
-  zstd, while the pass runs;
+  zstd, while the pass runs. An xz pass holds the stream's index while it
+  reads the block headers, at most `Limits::unit_input` and a few hundred
+  bytes for most streams, or its copy of a stream decoded whole;
 - the header copies: under 72 KiB per run, for as long as the index is kept;
 - the trailer: 8 bytes, while the pass runs;
 - what a span read gathers: at most 8.5 MiB for deflate and 16 MiB for zstd
@@ -1504,7 +1510,12 @@ changes parts 6 to 10: read it first.
    the wasm `Editor`. See "Built (part 7c, core)" under "Review before part
    7". The web half (the text loops, `fetchRun`, `readLoaded`) is built
    too; see "Built (part 7c, web)" under "The browser".
-8. **xz's layout in steps.** xz joins `can_step`.
+8. **xz's layout in steps.** xz joins `can_step`. **Done 2026-11-28**: an
+   xz stream read through a handle is laid out a step at a time from its
+   footer, its index and its block headers, holds no copy of the stream,
+   and may be up to 512 MiB packed. A stream decoded whole is copied a
+   piece at a time and keeps the 64 MiB limit. See "Built (part 8)" under
+   "Review before part 7".
 9. **Measure a gzip member in steps.** `lazy::Measuring` replaces the
    gathered copy in `stream_len_at`.
 10. **Joined streams through handles.** `JoinedBytes` over `RunInput`, and
@@ -2465,6 +2476,186 @@ code differs from "Joined streams":
   `MemSource` it is
   refused as too large before and after.
 
+### Built (part 8)
+
+**Built on 2026-11-28.** An xz stream read through a handle is now laid out
+by a pass in steps, `XzPass` in `codec/lazy/xz.rs`, which reads the stream
+through its `RunInput` a piece at a time and holds no copy of it. It is
+stepped, charged and kept across `Pending` in `Unfinished` as the deflate
+and zstd passes are, and `Evaluator::unpacking` says how far it has got.
+So `lazy::can_step` now says yes to every codec `can_index` does, an xz
+stream read through a handle takes `Limits::input` (512 MiB packed) and is
+refused past it as `too-large-input`, and an xz stream read from a copy
+keeps `Limits::copy_input` (64 MiB) as before. Each block's limits
+(`Limits::span`, `unit_input`, `span_input`) and their refusals are
+unchanged. Where the code differs from "xz" under "The index pass reads
+through a `RunInput`":
+
+- **One layout, in pieces.** `codec::xz::layout` is split into the pieces a
+  stepped pass needs: `xz::ends` reads the stream's header and footer,
+  `xz::Records` reads the index's records one at a time, and
+  `xz::block_at` reads one block's header. `layout` puts them together over
+  a whole stream, and the stepped pass over the bytes it reads, so the two
+  come to the same `Layout`. The checks once every block is placed
+  (`laid_out`: a filter, a block past `Limits::span`, a stream past
+  `Limits::lazy`, a block too long to read at once) are the same function
+  and in the same order for both.
+- **The steps.** The first step reads the stream's first and last 12
+  bytes, the header and the footer. The next reads the index, whose length
+  the footer gives, `Limits::step_input` bytes a step and none of the
+  stream before it; in the browser the index is nearly always in the
+  footer's chunk of the file, which the first step loaded. Then come the
+  block headers. The design did not say how much of a header to read: each
+  is read in two reads, its first byte, which gives its length, and then
+  the header, so that no read names a chunk of the file that holds only a
+  block's data. A step reads at most 64 headers (`HEADERS_PER_STEP`), and,
+  which the design did not have, the last of them ends no more than
+  `RunInput::most_at_once` bytes (half of what the source keeps) past the
+  start of the first, so that their chunks fit in the store together: 16 MiB
+  of the stream in the browser. A header that has been read is kept while
+  its step waits for the others, so a store that cannot hold all of a
+  step's headers, or a tab's source that decodes as it reads, still gets
+  further each round.
+- **Which streams are decoded whole.** As over a copy, a stream whose index
+  says it unpacks to the cap or less, or whose header, footer, index or a
+  block header does not hold together, goes to the decoder of whole
+  streams. The pass decides from the index alone whether the stream fits
+  under the cap, and reads no block header then. The design did not say
+  how such a stream is read: the pass copies it, a piece of up to four
+  times `step_input` (1 MiB) a step and at most a quarter of what the
+  source keeps (`COPY_STEPS`), and decodes it once the copy is complete.
+  The copy is held to `Limits::copy_input`, and a longer stream is refused
+  as `too-large-copy`, as before. A damaged index or footer is refused the
+  way it was: past 64 MiB packed as `too-large-copy`, and up to it with
+  whatever the decoder of whole streams says.
+- **The index's length.** The design sends an index longer than
+  `Limits::unit_input` (16 MiB) to the decoder of whole streams. The pass
+  does that whatever the source, while elsewhere `unit_input` applies only
+  when the source has a resident limit, because it is what bounds the list
+  of blocks an index keeps: a record takes at least 2 bytes, so 16 MiB of
+  index lists at most 8 Mi blocks. Over a copy the index is not limited, as
+  before.
+- **A copy in memory, and a short stream.** A pass over a copy of the
+  stream, and one over a stream no longer than `step_input`, lays the
+  stream out in one step from the whole stream with the code it had before
+  (`index_xz`), so what `decode_or_index_with` and `Indexing::new` give for
+  xz is unchanged. A short stream is read in one read.
+- **A refusal said later.** A stream past 64 MiB packed was refused as
+  `too-large-copy` before any of it was read. Read through a handle, a
+  stream that lays out and has a BCJ or delta filter in a block past the
+  cap is now refused as `too-large-output` once its block headers are read,
+  as it is under 64 MiB packed; one that is to be decoded whole is refused
+  as `too-large-copy` once its index is read.
+- **Progress.** `Progress::read_bits` is where the last block header read
+  starts, or how much of the stream is copied, and never goes back: a
+  stream whose headers were read and that is then copied whole keeps the
+  furthest bit reached until the copy passes it. Nothing is unpacked, so
+  `unpacked` is 0 until the pass ends. An xz step decodes nothing, so it
+  takes no share of output or input from `Indexing::step`'s arguments, and
+  `known_large` changes nothing for xz.
+- **Which passes read in windows.** `Limits::step_window` has no margin for
+  xz, so `reads_in_windows` says yes for xz from a source that keeps at
+  least twice `step_input`, 512 KiB under the default limits.
+- **In the evaluator** the branch that called `decode_or_index_through` for
+  xz, with nothing charged and no place taken, is gone. An xz pass takes a
+  place in `Unfinished` and is charged `INDEX_STEP_ELEMENTS` a step, as the
+  other passes are. A stream no handle reaches is gathered into its place
+  first (`Held::Gathering`), as other runs are.
+- **What a pass holds.** Before part 8 the pass read a copy of the whole
+  stream, gathered first. Now it holds the stream's index while it reads
+  the block headers, the blocks placed so far and up to 64 being read, and,
+  for a stream decoded whole, its copy. See "Speed and memory" below.
+- **Speed and memory.** Measured on 2026-11-28 with `examples/pass_memory.rs`,
+  which now takes the codec to read and, with `copy`, makes the pass read a
+  copy of the run made first, as the evaluator's gather made one before
+  this part: for xz that is the copy and one call of
+  `decode_or_index_through`, which is what `index_pass` did. Release builds
+  with LTO off (`CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units),
+  pinned to one core, the before build from 84589d49 with the new example.
+  Five tries before and seven after; the table gives the fastest try. The peak was the
+  same in every try. The load average was 18 to 38 on 12 cores. "Peak heap"
+  is as in "Built (part 7b)": the most heap allocated during the pass over
+  what was allocated before it, the file not counted. The before times
+  include copying the file once, as the gather did, and not reading it
+  through a chunk store. The files were made with `xz` 5.4.5: `seq 1
+  30000000` through `xz -T1 -6` and `xz -T4 -6`, and base64 lines of random
+  bytes through `xz -T1 -6` and `xz -T4 --block-size=8MiB -6`.
+
+  | File | Packed | Unpacked | Blocks | Came to | Steps after | Time, before | Time, after | Peak heap, before | Peak heap, after |
+  |---|---|---|---|---|---|---|---|---|---|
+  | `seq`, `-T1` | 6,450,604 B | 258,888,897 B | 1 | `too-large-xz-block` | 4 | 1.2 ms | 0.001 ms | 6,450,772 B | 560 B |
+  | `seq`, `-T4` | 3,541,316 B | 258,888,897 B | 11 | indexed | 4 | 0.2 ms | 0.003 ms | 3,543,020 B | 2,932 B |
+  | base64, one block | 31,143,724 B | 40,526,316 B | 1 | held whole | 32 | 3,074 ms | 2,236 ms | 382,594,152 B | 382,594,112 B |
+  | base64, 8 MiB blocks | 53,994,828 B | 70,245,617 B | 9 | indexed | 4 | 55.8 ms | 0.003 ms | 53,996,532 B | 2,928 B |
+  | base64, 8 MiB blocks | 93,460,168 B | 121,578,948 B | 15 | before `too-large-copy`, after indexed | 4 | refused | 0.004 ms | refused | 2,976 B |
+
+  An index keeps the same before and after: 32 bytes a block of
+  `Seekable::kept_bytes`, 352 B for 11 blocks, and no checkpoint windows. A
+  stream past the cap now costs the pass its index's bytes and a few
+  hundred bytes besides, where it cost a copy of the stream. Read through a
+  chunk store, the first steps can each wait for chunks: the one that reads
+  the ends, the one that reads the index, and one for each 64 block
+  headers. The last step reads nothing and checks the layout. A stream
+  held whole costs what it did, since it is copied and decoded whole as
+  before; its time is the decode, the same within the noise. Its peak is the copy, the output and the trace. Read through a
+  handle, the copy is now made by the pass and held in its place in
+  `Unfinished`; before this part it came from `gather_run` and counted
+  against `GATHER_BYTES`.
+- **Strings and JSON.** No refusal tag or reply shape changed. The hover on
+  the two packed-size reasons, `PACKED_LIMITS` in `web/src/strings.ts`, now
+  names xz: "The limit is 512 MiB for a deflate, zlib, gzip, zstd or xz
+  stream that has no edited bytes and is not inside a joined stream." The
+  status bar's `UNPACKED.unpacking` says "0 B unpacked so far" while an xz
+  stream is laid out; see "Still to do".
+- **Tests.** In `codec/lazy/tests.rs`, each pass reads a store of 1 KiB
+  chunks, fed only the chunks each step names, with steps of 8 KiB, from a
+  store with room for two steps (20 chunks) and from one of 200. Over xz
+  streams of one block, of 300 blocks, of blocks of many LZMA2 chunks, and
+  of blocks with CRC64, SHA-256 and no check, each pass comes to the index
+  the copy in memory comes to: the same `Layout` field by field, which is
+  also `xz::layout`'s over the whole stream, the same checkpoints, members,
+  weight, spans and span traces, and the bytes read back. No step names a
+  chunk that lies wholly inside a block's LZMA2 data, none names more than
+  half the store and three chunks, no chunk is asked for more than twice,
+  the pass holds no more than the index and one piece, and progress never
+  goes back (now checked for every pass `fed_pass` steps). The store of 200
+  takes no more rounds than one for each 64 blocks, one for each half store
+  of the stream, and one for the ends. Under a larger cap the stream is
+  copied a piece at a time and comes back whole with the same bytes and
+  trace. A block with a delta or an x86 filter among plain ones is refused
+  as too large past the cap and as failed under it, from the store as from
+  memory, and so are the streams `liblzma` wrote with those filters, read a
+  few bytes a piece. One block past the span limit, a stream past
+  `Limits::lazy` and, from the store only, a block too long to read at once
+  are refused as from memory. A stream under the cap past `copy_input` is
+  refused as too large from the store, and one past the cap opens. With
+  each byte of the stream's header, index and footer changed in turn, the
+  pass from the store comes to what the pass from memory does. An index
+  longer than `unit_input` read from the store is decoded whole. In
+  `eval/tests/resident.rs`, an xz stream of 38 blocks of noise, more than
+  three times a store of 160 chunks, opens in goes past the cap: each wait
+  names at most half the store, `Evaluator::unpacking` answers after each
+  with progress that never goes back, no refusal is kept, the pass starts
+  once, the index holds no copy and is the one made in memory, and fewer
+  than a quarter of the file's chunks are read to lay it out; under a cap
+  it fits under, it opens held whole. In
+  `crates/wasm/tests/open_space_waits.rs`,
+  `open_unpacked_on_an_xz_stream_longer_than_the_store_lays_it_out_a_few_headers_at_a_time`
+  opens an xz stream of 25 blocks of 256 KiB, written by hand in stored
+  LZMA2 chunks, about 100 chunks of 64 KiB, over a store of 16. Laid out
+  past a lowered cap, opening it asks for 29 of the 100 chunks; decoded
+  whole under the default cap, it asks for every chunk. Either way no chunk
+  is asked for more than twice, no reply names more than 10 chunks, the
+  status says how far unpacking has got and that never goes back, and the
+  tab reads the stream's bytes. The real `xz-T0-blocks.xz` in the sample
+  collection reads as before (`lazy_frames_real`).
+- **Tests changed on purpose.**
+  `a_pass_reads_in_windows_only_from_a_store_with_room_for_two` asserted
+  that an xz pass never reads in windows; it now checks xz's window of
+  `STEP_INPUT` with the others. `a_pass_is_held_to_the_limit_of_the_way_it_reads_its_run`
+  said an xz stream's layout always reads a copy; xz now goes through the
+  same checks as zlib and zstd.
+
 ## Still to do
 
 - **The time a joined stream takes to open.** Over handles, nothing but
@@ -2480,6 +2671,19 @@ code differs from "Joined streams":
   store keeps for a part whose run is twice its output. A limit worked out
   for each read, from the parts it covers, would avoid that, but
   `Source::resident_limit` is one number for the whole source.
+- **The block list of an xz stream.** Since part 8 an xz stream read
+  through a handle may be 512 MiB packed, and its index up to
+  `Limits::unit_input`, 16 MiB, which can list 8 Mi blocks, since a record
+  takes at least 2 bytes. The index's `xz::Layout` keeps 32 bytes a block
+  natively and 24 in wasm, so such a stream's index holds 256 MiB or
+  192 MiB, and laying it out takes 131,072 steps of 64 headers. Over a copy
+  a hostile stream of 64 MiB could list millions of blocks as well. A limit on the number of blocks, such as
+  `Limits::block_marks` (65,536, 2 MiB of list), would bound it; `xz -T0
+  --block-size=16KiB` on 1 GiB writes that many.
+- **The status bar while an xz stream is laid out.** `UNPACKED.unpacking`
+  says "{size} unpacked so far", and an xz layout unpacks nothing, so it
+  says 0 B until the tab opens, for the few rounds the block headers take.
+  `Unpacking` names no codec, so the web cannot word it differently yet.
 - **Lift `unit_input`.** A zstd span decode could keep its frame decoder
   between reads, as xz's `Prefix` keeps its LZMA2 decoder, and xz's
   `lzma2_len` could read a block's LZMA2 chunk headers a window at a time,
@@ -2517,9 +2721,11 @@ code differs from "Joined streams":
   CRC-32 of a zip entry stored as it is, past 64 MiB, is not checked. It
   could be summed a window at a time, as `gather_run` reads.
 - **Runs that keep the 64 MiB limit.** A run read through a copy:
-  an xz stream (part 8 lays it out in steps), a run in a stitched space or
-  in an edited stretch, and a run in a source with too little room for two
-  windows. Since part 10, a joined stream read a part at a time counts
+  a run in a stitched space or in an edited stretch, a run in a source with
+  too little room for two windows, and an xz stream decoded whole, which is
+  one of 64 MiB or less unpacked, or one whose index or footer does not hold
+  together. Since part 8 an xz stream read through a handle and laid out
+  from its index takes `Limits::input`. Since part 10, a joined stream read a part at a time counts
   against `whole_cap` only the parts it copies: those no handle reaches, and
   packed runs decoded whole that are longer than one read from the store may
   take (see "Built (part 10)").

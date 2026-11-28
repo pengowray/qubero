@@ -9,7 +9,9 @@
 //! steps it to its end with the evaluator's step sizes (256 KiB of output or
 //! 2 Mibit of input), and prints the time and the peak of heap allocated
 //! over what was allocated before the try, which counts the pass, anything
-//! it copies and the index it makes. The file itself is allocated before.
+//! it copies and the index it makes, and what the index keeps for as long
+//! as it is kept (`Seekable::kept_bytes`), or the length of a run held
+//! whole. The file itself is allocated before.
 //!
 //! With `copy`, the pass reads a copy of the run made first, as the
 //! evaluator's gather made one before the pass could read the run through
@@ -93,15 +95,15 @@ fn main() {
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let peak = PEAK.load(Ordering::Relaxed) - base;
         let (kind, held) = match &got {
-            Ok(Decoded::Indexed(s)) => ("indexed".to_string(), s.held_bytes()),
+            Ok(Decoded::Indexed(s)) => ("indexed".to_string(), s.kept_bytes() as usize),
             Ok(Decoded::Whole(b, _)) => ("whole".to_string(), b.len()),
             Err(why) => (format!("refused as {}", why.as_str()), 0),
         };
         drop(got);
-        println!("{kind}, {steps} steps: {ms:.1} ms, peak {peak} bytes over the file, index holds {held}");
+        println!("{kind}, {steps} steps: {ms:.3} ms, peak {peak} bytes over the file, index keeps {held}");
         best = (best.0.min(ms), best.1.min(peak));
     }
-    println!("fastest {:.1} ms, least peak {} bytes", best.0, best.1);
+    println!("fastest {:.3} ms, least peak {} bytes", best.0, best.1);
 }
 
 /// The pass as the evaluator makes it for a run of the file, reading the run

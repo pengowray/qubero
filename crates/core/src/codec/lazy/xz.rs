@@ -73,10 +73,12 @@ fn laid_out(l: xz::Layout, input: &RunInput, limits: Limits) -> Result<Decoded, 
     Ok(Decoded::Indexed(seekable(Codec::Xz, input.clone(), Kind::Xz(l), len, marks.list, limits)))
 }
 
-/// How many block headers one step of an [`XzPass`] reads at most, and how
-/// many one answer of [`Stepped::NeedsInput`] names the chunks of. A stream
-/// of a thousand blocks spread over 300 MiB loads its headers in about 16
-/// rounds, not a thousand.
+/// How many block headers one step of an [`XzPass`] reads at most. The
+/// chunks those headers are missing are all named in one answer of
+/// [`Stepped::NeedsInput`], so in the browser a stream of a thousand blocks
+/// spread over 300 MiB loads its headers in about 20 rounds, not a thousand.
+/// The span of the stream one step's headers cover is also bounded: see
+/// [`XzPass`].
 const HEADERS_PER_STEP: usize = 64;
 
 /// How many times [`Limits::step_input`] one step reads, at most, when the
@@ -100,19 +102,20 @@ const COPY_STEPS: usize = 4;
 /// 2. The index, whose length the footer gives, `step_input` bytes a step,
 ///    and none of the stream before it: in the browser the index is nearly
 ///    always in the footer's chunk of the file, which the first step loaded.
-///    An index longer than [`Limits::unit_input`]
-///    is treated as one [`xz::layout`] cannot read, since the blocks it lists
-///    are held for as long as the index is kept: 16 MiB of index is at most
-///    8 Mi blocks. A stream whose index adds up to the cap or less, or whose
-///    index or footer does not hold together, goes to the decoder of whole
-///    streams without its block headers being read, as it would over a copy.
+///    An index longer than [`Limits::unit_input`] is treated as one
+///    [`xz::layout`] cannot read, since the blocks it lists are held for as
+///    long as the index is kept: 16 MiB of index lists at most 8 Mi blocks.
+///    A stream whose index says it unpacks to the cap or less, or whose index
+///    or footer does not hold together, goes to the decoder of whole streams
+///    without its block headers being read, as it would over a copy.
 /// 3. The block headers, up to [`HEADERS_PER_STEP`] a step, each read where
 ///    the index puts it, and the missing chunks of all of them named in one
-///    answer. The headers of one step all lie within one read's worth of the
-///    stream ([`RunInput::most_at_once`]) of the first, so that their chunks
-///    fit in the store together, and a header read is kept when the step
-///    waits for others, so that a store that cannot hold them all still gets
-///    further each round.
+///    answer. The last header of a step ends no more than
+///    [`RunInput::most_at_once`] bytes, half of what the source keeps, past
+///    the start of the first, so that their chunks fit in the store
+///    together. A header that is read is kept while the step waits for the
+///    others, so that a store that cannot hold them all still gets further
+///    each round.
 /// 4. Once every block is placed, the same checks as over a copy, in the same
 ///    order (see [`laid_out`]).
 ///
@@ -194,10 +197,11 @@ impl XzPass {
     }
 
     /// Read the next piece of the stream's layout, or of its copy; or finish.
-    /// A step whose piece is missing chunks of the file does nothing and
-    /// names them, except that block headers it has read are kept. Nothing
-    /// is decoded but a stream copied whole, so the step reads what its phase
-    /// reads whatever output and input it is offered.
+    /// A step whose piece is missing chunks of the file names them and keeps
+    /// nothing it read, except the block headers it read. A step decodes
+    /// nothing, except the last step of a stream copied whole, so it ignores
+    /// the share of output and input its caller offers, which bounds a
+    /// deflate or zstd step.
     pub(super) fn step(&mut self) -> Result<Stepped, Refusal> {
         let stepped = self.step_on();
         let at = match &self.phase {
@@ -220,8 +224,9 @@ impl XzPass {
         }
     }
 
-    /// The first step: the whole stream laid out from a copy, or its ends
-    /// read and the index after them where they hold it.
+    /// The first step: the whole stream laid out from a copy, or from one
+    /// read of a stream no longer than a piece; or the stream's header and
+    /// footer read, and the index read next.
     fn start(&mut self) -> Result<Stepped, Refusal> {
         let len = self.reads.len() as usize;
         if let Some(copy) = self.reads.held_copy() {
